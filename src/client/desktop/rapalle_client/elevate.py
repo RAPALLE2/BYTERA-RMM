@@ -84,7 +84,7 @@ def create_task() -> tuple[bool, str]:
   <RegistrationInfo><Description>RAPALLE.net RMM Client als Administrator (VPN ohne Rückfrage)</Description></RegistrationInfo>
   <Principals><Principal id="Author"><UserId>{user}</UserId><LogonType>InteractiveToken</LogonType>
     <RunLevel>HighestAvailable</RunLevel></Principal></Principals>
-  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+  <Settings><MultipleInstancesPolicy>Parallel</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
     <AllowStartOnDemand>true</AllowStartOnDemand><Priority>5</Priority></Settings>
   <Actions Context="Author"><Exec><Command>{exe}</Command><Arguments>{params.replace('&', '&amp;').replace('<', '&lt;')}</Arguments></Exec></Actions>
@@ -142,16 +142,11 @@ def install_mode() -> str | None:
     return None
 
 
-def ensure_desktop_shortcut(store) -> None:
-    """Die .exe (ohne Installation) legt beim ersten Start eine Desktop-Verknuepfung an.
-    Bei der MSI-Installation macht das der Installer (dann hier nichts)."""
-    if not (IS_WINDOWS and getattr(sys, "frozen", False)) or store.get("desktop_lnk_done"):
+def create_desktop_shortcut() -> None:
+    """Desktop-Verknuepfung "RAPALLE.net RMM" auf diese .exe (wie bei der MSI-Installation)."""
+    if not (IS_WINDOWS and getattr(sys, "frozen", False)):
         return
     exe = sys.executable
-    pf = [os.environ.get(k, "") for k in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432")]
-    store.set(desktop_lnk_done=True)
-    if any(p and exe.lower().startswith(p.lower()) for p in pf):
-        return                                         # per MSI installiert -> Verknuepfung hat der Installer
     ps = ("$s = (New-Object -ComObject WScript.Shell).CreateShortcut("
           "(Join-Path ([Environment]::GetFolderPath('Desktop')) 'RAPALLE.net RMM.lnk')); "
           f"$s.TargetPath = '{exe}'; $s.WorkingDirectory = '{os.path.dirname(exe)}'; "
@@ -163,9 +158,64 @@ def ensure_desktop_shortcut(store) -> None:
         pass
 
 
+def installed_by_msi() -> bool:
+    exe = sys.executable.lower()
+    return any(p and exe.startswith(p.lower()) for p in
+               (os.environ.get(k, "") for k in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432")))
+
+
+def first_run_setup(store) -> None:
+    """Die .exe ohne Installation verhaelt sich wie die MSI: beim ersten Start derselbe Assistent
+    (mit/ohne Administratorrechte) und eine Desktop-Verknuepfung."""
+    if not (IS_WINDOWS and getattr(sys, "frozen", False)) or store.get("setup_done") or installed_by_msi():
+        return
+    choice = {"mode": "1"}
+    try:
+        import tkinter as tk
+        from tkinter import ttk
+        root = tk.Tk()
+        root.title("RAPALLE.net RMM Client – Einrichtung")
+        root.resizable(False, False)
+        f = ttk.Frame(root, padding=18)
+        f.pack(fill="both", expand=True)
+        ttk.Label(f, text="RAPALLE.net RMM Client einrichten", font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        ttk.Label(f, text="Wie soll die App laufen? VPN-Tunnel (WireGuard) brauchen unter Windows "
+                          "Administratorrechte.", wraplength=420, justify="left").pack(anchor="w", pady=(6, 10))
+        v = tk.StringVar(value="1")
+        ttk.Radiobutton(f, variable=v, value="1", text="Mit Administratorrechten (empfohlen): startet immer als "
+                        "Administrator, VPN ohne Rückfragen").pack(anchor="w", pady=2)
+        ttk.Radiobutton(f, variable=v, value="0", text="Ohne Administratorrechte: keine Rückfragen beim Start, "
+                        "VPN ist dann nicht verfügbar").pack(anchor="w", pady=2)
+        lnk = tk.BooleanVar(value=True)
+        ttk.Checkbutton(f, variable=lnk, text="Verknüpfung auf dem Desktop anlegen").pack(anchor="w", pady=(10, 0))
+        row = ttk.Frame(f)
+        row.pack(fill="x", pady=(14, 0))
+
+        def ok():
+            choice["mode"] = v.get()
+            choice["lnk"] = lnk.get()
+            root.destroy()
+        ttk.Button(row, text="Weiter", command=ok).pack(side="right")
+        root.protocol("WM_DELETE_WINDOW", ok)
+        root.mainloop()
+    except Exception:
+        choice["lnk"] = True
+    if choice.get("lnk", True):
+        create_desktop_shortcut()
+    store.set(setup_done=True, install_mode=choice["mode"])
+
+
+def ensure_desktop_shortcut(store) -> None:      # (aeltere Aufrufe)
+    first_run_setup(store)
+
+
+def _mode(store) -> str | None:
+    return install_mode() or store.get("install_mode")
+
+
 def _apply_install_mode(argv: list[str], store, extra: list[str]) -> bool:
-    """Auswahl aus dem Installer einmalig umsetzen. True = Admin-Instanz gestartet (diese beenden)."""
-    mode = install_mode()
+    """Auswahl (MSI-Assistent bzw. Einrichtung der .exe) einmalig umsetzen. True = Admin-Instanz gestartet."""
+    mode = _mode(store)
     if mode is None or store.get("install_mode_applied") == mode:
         return False
     if mode == "0":                                    # „Ohne Administratorrechte“: nie nachfragen
@@ -184,30 +234,75 @@ def _apply_install_mode(argv: list[str], store, extra: list[str]) -> bool:
     return relaunch_elevated(extra)                    # einmalige Abfrage zum Einrichten
 
 
-def startup(argv: list[str], store) -> bool:
-    """Beim Start aufrufen. Rueckgabe True = diese Instanz soll sich beenden (Admin-Instanz laeuft).
-    Setzt store-unabhaengig das Ergebnis in os.environ["RMM_ADMIN"] ("1"/"0")."""
+# ------------------------------------------------------------------ Startmarke (Start wirklich erfolgt?)
+def _marker(data_dir: Path) -> Path:
+    return Path(data_dir) / "started.marker"
+
+
+def mark_started(data_dir: Path) -> None:
+    """Ganz am Anfang jeder Instanz: zeigt der startenden Instanz, dass die Admin-Instanz wirklich laeuft."""
+    try:
+        _marker(data_dir).write_text(f"{os.getpid()} {int(is_admin())} {time.time()}")
+    except OSError:
+        pass
+
+
+def _wait_started(data_dir: Path, since: float, timeout: float = 10) -> bool:
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            if _marker(data_dir).stat().st_mtime >= since - 0.5:
+                return True
+        except OSError:
+            pass
+        time.sleep(0.25)
+    return False
+
+
+def startup(argv: list[str], store, data_dir: Path | None = None) -> bool:
+    """Beim Start aufrufen. True = diese Instanz beenden (eine Admin-Instanz laeuft NACHWEISLICH).
+    Startet die Admin-Instanz nicht (Aufgabe haengt, Abfrage abgelehnt …), laeuft diese normal weiter -
+    die App startet also IMMER."""
     if not IS_WINDOWS:
         return False
-    extra0 = [a for a in argv if a not in ("--elevated", "--from-task", "--setup-admin", "--remove-admin")]
+    extra = [a for a in argv if a not in ("--elevated", "--from-task", "--setup-admin", "--remove-admin")]
     try:
-        ensure_desktop_shortcut(store)
-        if _apply_install_mode(argv, store, extra0):
-            return True
+        first_run_setup(store)
     except Exception:
         pass
     if is_admin():
         os.environ["RMM_ADMIN"] = "1"
+        try:
+            _apply_install_mode(argv, store, extra)    # als Admin: Aufgabe ggf. anlegen
+        except Exception:
+            pass
         return False
     os.environ["RMM_ADMIN"] = "0"
-    if "--elevated" in argv:                 # Admin-Start wurde versucht, ist aber nicht admin -> nicht nochmal
+    if "--elevated" in argv:                           # Admin-Start versucht, aber nicht admin -> nicht nochmal
         return False
-    extra = [a for a in argv if a not in ("--elevated", "--from-task", "--setup-admin", "--remove-admin")]
-    if task_exists() and run_task():         # „Immer als Administrator“: ohne Rueckfrage
-        time.sleep(0.5)
-        return True
-    if store.get("admin_prompt", True):
-        if relaunch_elevated(extra):
-            return True
-        store.set(admin_denied_ts=time.time())
+    t0 = time.time()
+    try:
+        recent_fail = time.time() - float(store.get("task_start_failed", 0) or 0) < 86400
+        if not recent_fail and task_exists() and run_task():   # „Immer als Administrator“: ohne Rueckfrage
+            if data_dir is None or _wait_started(data_dir, t0):
+                return True
+            # Aufgabe gestartet, aber keine Admin-Instanz -> normal weiter (statt "nichts passiert")
+            store.set(task_start_failed=time.time())
+            return False
+        mode = _mode(store)
+        want = store.get("admin_prompt", True) and mode != "0"
+        if want and store.get("install_mode_applied") != mode and mode == "1":
+            t1 = time.time()
+            if _apply_install_mode(argv, store, extra):
+                return data_dir is None or _wait_started(data_dir, t1, 15)
+            return False
+        if want:
+            t1 = time.time()
+            if relaunch_elevated(extra):
+                if data_dir is None or _wait_started(data_dir, t1, 15):
+                    return True
+                return False                           # Admin-Instanz kam nicht hoch -> normal weiter
+            store.set(admin_denied_ts=time.time())
+    except Exception:
+        pass
     return False

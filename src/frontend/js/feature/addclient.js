@@ -169,7 +169,7 @@ function fmtSize(bytes) {
 // Gerät direkt beim gewählten Tenant/Standort landet.
 function installHint(name, token, backendUrl) {
   const n = name.toLowerCase();
-  if (n.endsWith(".exe")) return `RapalleRmmAgent-Setup.exe /S /TOKEN=${token}`;
+  if (n.endsWith(".exe")) return `ByteraRmmAgent-Setup.exe /S /TOKEN=${token}`;
   // MSI: der Windows Installer reicht eigene Eigenschaften nicht an die
   // (deferred) Aktion durch -> das Gerät landet in "Uncategorized".
   if (n.endsWith(".msi")) return `msiexec /i ${name} /qn   (→ Uncategorized)`;

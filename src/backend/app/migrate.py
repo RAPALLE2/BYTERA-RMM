@@ -49,7 +49,8 @@ from app.paths import (
     MODULES_STATE_FILE, MODULES_DATA_DIR, STORAGE_DIR, DBCONFIG_FILE,
 )
 MANIFEST_NAME = "manifest.json"
-ARCHIVE_MARK = "rapalle-rmm-migration"
+ARCHIVE_MARK = "bytera-rmm-migration"
+LEGACY_ARCHIVE_MARKS = (ARCHIVE_MARK, "rapalle-rmm-migration")   # Archive vom Server vor der Umbenennung
 
 # Ordner, die mitwandern können. Schlüssel = Name im Archiv.
 DATA_DIRS = {
@@ -263,8 +264,8 @@ def read_manifest(archive: Path) -> dict:
             raise ValueError("Im Archiv fehlt die manifest.json - das ist kein "
                              "Umzugs-Archiv dieser Anwendung.")
         data = json.loads(zf.read(MANIFEST_NAME).decode("utf-8"))
-        if data.get("kind") != ARCHIVE_MARK:
-            raise ValueError("Das Archiv gehoert nicht zu RAPALLE.net RMM.")
+        if data.get("kind") not in LEGACY_ARCHIVE_MARKS:
+            raise ValueError("Das Archiv gehoert nicht zu BYTERA RMM.")
         if "data.sqlite" not in zf.namelist():
             raise ValueError("Im Archiv fehlt die Datenbank.")
     return data

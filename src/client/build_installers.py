@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 """
-build_installers.py - baut ALLE Pakete des RAPALLE.net RMM Clients
+build_installers.py - baut ALLE Pakete des BYTERA RMM Clients
 ===================================================================
 (Gegenstueck zu src/backend/app/build_installers.py fuer den Agenten.)
 
 Ergebnis in src/client/release/  (das Modul "client" bietet sie unter
 Profil -> Client-App & Geraete und per Einzeiler zum Download an):
 
-  Windows  RapalleClient-<v>-windows.exe   PyInstaller-Onefile (keine Abhaengigkeiten)
-           RapalleClient-<v>-windows.msi   Installer (Programme + Startmenue/Desktop), per GPO/Intune verteilbar
-           RapalleClient-<v>-windows.zip   die .exe zum Entpacken (ohne Installation)
-  Linux    rapalle-client_<v>_all.deb      Debian/Ubuntu/Mint (Python 3 + Tk vom System)
-           rapalle-client-<v>-1.noarch.rpm Fedora/RHEL/openSUSE
-           rapalle-client-<v>-1-any.pkg.tar.xz   Arch/Manjaro
-           rapalle-client-<v>-linux.tar.gz / .tgz / .tar   fuer alle Distributionen (install.sh liegt bei)
-  Android  RapalleClient-<v>-android.apk   native App (Android 6+), dauerhaft signiert
+  Windows  ByteraClient-<v>-windows.exe   PyInstaller-Onefile (keine Abhaengigkeiten)
+           ByteraClient-<v>-windows.msi   Installer (Programme + Startmenue/Desktop), per GPO/Intune verteilbar
+           ByteraClient-<v>-windows.zip   die .exe zum Entpacken (ohne Installation)
+  Linux    bytera-client_<v>_all.deb      Debian/Ubuntu/Mint (Python 3 + Tk vom System)
+           bytera-client-<v>-1.noarch.rpm Fedora/RHEL/openSUSE
+           bytera-client-<v>-1-any.pkg.tar.xz   Arch/Manjaro
+           bytera-client-<v>-linux.tar.gz / .tgz / .tar   fuer alle Distributionen (install.sh liegt bei)
+  Android  ByteraClient-<v>-android.apk   native App (Android 6+), dauerhaft signiert
 
 Werkzeuge:
   Am einfachsten: Modul "Client-App" im Docker-Betrieb aktivieren - das Modul laedt dann ein
-  Bau-Image (rapalle/rmm-client-builder) mit ALLEN Werkzeugen und baut darin (wie die Agent-Pakete
+  Bau-Image (bytera/rmm-client-builder) mit ALLEN Werkzeugen und baut darin (wie die Agent-Pakete
   per Knopfdruck, aber fuer alle Formate).
   Von Hand (Linux, z.B. Ubuntu 24.04):
   exe   wine64 + Windows-Python mit PyInstaller  (--winpython C:\\pfad\\python.exe unter Wine)
@@ -67,7 +67,7 @@ def set_version(v: str) -> None:
     import re as _re
     if not _re.fullmatch(r"\d+\.\d+\.\d+", v):
         raise SystemExit(f"Ungueltige Version: {v} (Format 1.2.3)")
-    p = DESKTOP / "rapalle_client" / "__init__.py"
+    p = DESKTOP / "bytera_client" / "__init__.py"
     s = p.read_text(encoding="utf-8")
     s = _re.sub(r'__version__\s*=\s*"[^"]*"', f'__version__ = "{v}"', s)
     p.write_text(s, encoding="utf-8")
@@ -145,7 +145,7 @@ def version() -> str:
     (Frueher wurde alles hinter "=" genommen: mit Kommentar landeten Anfuehrungszeichen und "/"
     in den Paketnamen -> Bau scheiterte, "Versionsnummer setzen" meldete Fehler.)"""
     import re as _re
-    s = (DESKTOP / "rapalle_client" / "__init__.py").read_text(encoding="utf-8")
+    s = (DESKTOP / "bytera_client" / "__init__.py").read_text(encoding="utf-8")
     m = _re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', s, _re.M)
     return m.group(1).strip() if m else "1.0.0"
 
@@ -169,10 +169,10 @@ def desktop_files() -> list[tuple[Path, str]]:
 
 # ============================================================== Windows
 def build_exe(v: str, winpython: str | None) -> Path:
-    out = RELEASE / f"RapalleClient-{v}-windows.exe"
-    args = ["-m", "PyInstaller", "--noconfirm", "--clean", "--onefile", "--windowed", "--name", "RapalleClient",
-            "--icon", "rapalle_client/resources/rmmclient.ico",
-            "--add-data", "rapalle_client/resources;rapalle_client/resources", "rapalle-client.py"]
+    out = RELEASE / f"ByteraClient-{v}-windows.exe"
+    args = ["-m", "PyInstaller", "--noconfirm", "--clean", "--onefile", "--windowed", "--name", "ByteraClient",
+            "--icon", "bytera_client/resources/rmmclient.ico",
+            "--add-data", "bytera_client/resources;bytera_client/resources", "bytera-client.py"]
     with tempfile.TemporaryDirectory() as td:
         work = Path(td) / "src"
         shutil.copytree(DESKTOP, work, ignore=shutil.ignore_patterns("__pycache__"))
@@ -190,20 +190,20 @@ def build_exe(v: str, winpython: str | None) -> Path:
             p = subprocess.Popen([wine, py, *args], cwd=work, env=env, stdout=subprocess.PIPE,
                                  stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True)
             log = p.communicate(timeout=1800)[0]
-            if p.returncode != 0 or not (work / "dist" / "RapalleClient.exe").exists():
+            if p.returncode != 0 or not (work / "dist" / "ByteraClient.exe").exists():
                 raise RuntimeError("PyInstaller (Wine) fehlgeschlagen:\n" + log[-3000:])
-        shutil.copy2(work / "dist" / "RapalleClient.exe", out)
+        shutil.copy2(work / "dist" / "ByteraClient.exe", out)
     return out
 
 
 def build_zip(v: str, exe: Path) -> Path:
-    out = RELEASE / f"RapalleClient-{v}-windows.zip"
-    readme = ("RAPALLE.net RMM Client\r\n======================\r\n\r\n"
-              "RapalleClient.exe starten - keine Installation noetig (Windows 10/11).\r\n"
+    out = RELEASE / f"ByteraClient-{v}-windows.zip"
+    readme = ("BYTERA RMM Client\r\n======================\r\n\r\n"
+              "ByteraClient.exe starten - keine Installation noetig (Windows 10/11).\r\n"
               "Fuer Startmenue/Desktop-Verknuepfung lieber die .msi verwenden.\r\n")
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-        z.write(exe, "RapalleClient/RapalleClient.exe")
-        z.writestr("RapalleClient/LIESMICH.txt", readme)
+        z.write(exe, "ByteraClient/ByteraClient.exe")
+        z.writestr("ByteraClient/LIESMICH.txt", readme)
     return out
 
 
@@ -212,49 +212,49 @@ def build_msi(v: str, exe: Path) -> Path:
     if not wixl and os.name != "nt":
         raise RuntimeError("wixl fehlt (apt install wixl)")
     wix = ensure_wix() if os.name == "nt" and not wixl else None
-    out = RELEASE / f"RapalleClient-{v}-windows.msi"
+    out = RELEASE / f"ByteraClient-{v}-windows.msi"
     ver4 = ".".join((v.split(".") + ["0", "0", "0"])[:3])
     wxs = f"""<?xml version="1.0" encoding="utf-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="RAPALLE.net RMM Client" Language="1031" Codepage="1252" Version="{ver4}"
-           Manufacturer="RAPALLE.net" UpgradeCode="6B3F0E5A-2C4D-4E8B-9A71-5D2C8F1E0A34">
+  <Product Id="*" Name="BYTERA RMM Client" Language="1031" Codepage="1252" Version="{ver4}"
+           Manufacturer="BYTERA" UpgradeCode="6B3F0E5A-2C4D-4E8B-9A71-5D2C8F1E0A34">
     <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine"
-             Description="RAPALLE.net RMM Client" Manufacturer="RAPALLE.net" />
+             Description="BYTERA RMM Client" Manufacturer="BYTERA" />
     <MajorUpgrade DowngradeErrorMessage="Eine neuere Version ist bereits installiert." />
     <Media Id="1" Cabinet="client.cab" EmbedCab="yes" />
     <Icon Id="AppIcon" SourceFile="rmmclient.ico" />
     <Property Id="ARPPRODUCTICON" Value="AppIcon" />
     <!-- Auswahl im Installationsassistenten: 1 = mit Administratorrechten (VPN ohne Rueckfrage), 0 = ohne.
-         Unbeaufsichtigt: msiexec /i RapalleClient.msi /qn ADMINMODE=0 -->
+         Unbeaufsichtigt: msiexec /i ByteraClient.msi /qn ADMINMODE=0 -->
     <Property Id="ADMINMODE" Value="1" />
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALLDIR" Name="RAPALLE.net RMM Client">
+        <Directory Id="INSTALLDIR" Name="BYTERA RMM Client">
           <Component Id="MainExe" Guid="7D1A2B3C-4E5F-4A6B-8C7D-9E0F1A2B3C4D" Win64="yes">
-            <File Id="RapalleClientExe" Source="RapalleClient.exe" KeyPath="yes" />
+            <File Id="ByteraClientExe" Source="ByteraClient.exe" KeyPath="yes" />
           </Component>
           <Component Id="ModeReg" Guid="5A4B3C2D-1E0F-4A9B-8C7D-6E5F4A3B2C1D" Win64="yes">
-            <RegistryValue Root="HKLM" Key="Software\\RAPALLE.net\\RMMClient" Name="AdminMode" Type="string"
+            <RegistryValue Root="HKLM" Key="Software\\BYTERA\\RMMClient" Name="AdminMode" Type="string"
                            Value="[ADMINMODE]" KeyPath="yes" />
           </Component>
         </Directory>
       </Directory>
       <Directory Id="ProgramMenuFolder">
         <Component Id="StartShortcut" Guid="8E2B3C4D-5F6A-4B7C-9D8E-0F1A2B3C4D5E">
-          <Shortcut Id="StartMenuShortcut" Name="RAPALLE.net RMM" Target="[INSTALLDIR]RapalleClient.exe"
+          <Shortcut Id="StartMenuShortcut" Name="BYTERA RMM" Target="[INSTALLDIR]ByteraClient.exe"
                     WorkingDirectory="INSTALLDIR" Icon="AppIcon" />
-          <RegistryValue Root="HKCU" Key="Software\\RAPALLE.net\\RMMClient" Name="startmenu" Type="integer" Value="1" KeyPath="yes" />
+          <RegistryValue Root="HKCU" Key="Software\\BYTERA\\RMMClient" Name="startmenu" Type="integer" Value="1" KeyPath="yes" />
         </Component>
       </Directory>
       <Directory Id="DesktopFolder">
         <Component Id="DesktopShortcut" Guid="9F3C4D5E-6A7B-4C8D-0E9F-1A2B3C4D5E6F">
-          <Shortcut Id="DesktopShortcutLnk" Name="RAPALLE.net RMM" Target="[INSTALLDIR]RapalleClient.exe"
+          <Shortcut Id="DesktopShortcutLnk" Name="BYTERA RMM" Target="[INSTALLDIR]ByteraClient.exe"
                     WorkingDirectory="INSTALLDIR" Icon="AppIcon" />
-          <RegistryValue Root="HKCU" Key="Software\\RAPALLE.net\\RMMClient" Name="desktop" Type="integer" Value="1" KeyPath="yes" />
+          <RegistryValue Root="HKCU" Key="Software\\BYTERA\\RMMClient" Name="desktop" Type="integer" Value="1" KeyPath="yes" />
         </Component>
       </Directory>
     </Directory>
-    <Feature Id="Main" Level="1" Title="RAPALLE.net RMM Client">
+    <Feature Id="Main" Level="1" Title="BYTERA RMM Client">
       <ComponentRef Id="MainExe" />
       <ComponentRef Id="ModeReg" />
       <ComponentRef Id="StartShortcut" />
@@ -265,7 +265,7 @@ def build_msi(v: str, exe: Path) -> Path:
 """
     with tempfile.TemporaryDirectory() as td:
         t = Path(td)
-        shutil.copy2(exe, t / "RapalleClient.exe")
+        shutil.copy2(exe, t / "ByteraClient.exe")
         shutil.copy2(RES / "rmmclient.ico", t / "rmmclient.ico")
         (t / "client.wxs").write_text(wxs, encoding="utf-8")
         if wix:     # Windows: WiX 3 (candle + light)
@@ -279,7 +279,7 @@ def build_msi(v: str, exe: Path) -> Path:
 
 def _msi_add_wizard(msi: Path, t: Path, v: str) -> None:
     """Installationsassistent nachtraeglich in die MSI (wixl kann keine Dialoge): Auswahl
-    „mit Administratorrechten“ / „ohne“ -> Property ADMINMODE -> HKLM\\Software\\RAPALLE.net\\RMMClient\\AdminMode.
+    „mit Administratorrechten“ / „ohne“ -> Property ADMINMODE -> HKLM\\Software\\BYTERA\\RMMClient\\AdminMode.
     Die App wertet das beim ersten Start aus (geplante Aufgabe bzw. nie nachfragen)."""
     msibuild = shutil.which("msibuild")
     if not msibuild and shutil.which("apt-get") and hasattr(os, "geteuid") and os.geteuid() == 0:
@@ -303,19 +303,19 @@ def _msi_add_wizard(msi: Path, t: Path, v: str) -> None:
         idt("Dialog", ["Dialog", "HCentering", "VCentering", "Width", "Height", "Attributes", "Title", "Control_First",
                        "Control_Default", "Control_Cancel"],
             ["s72", "i2", "i2", "i2", "i2", "I4", "L128", "s50", "S50", "S50"], ["Dialog"],
-            [["ModeDlg", 50, 50, W, H, 3, "RAPALLE.net RMM Client " + v, "Mode", "Install", "Cancel"],
-             ["FinishDlg", 50, 50, W, 160, 3, "RAPALLE.net RMM Client " + v, "Done", "Done", "Done"]]),
+            [["ModeDlg", 50, 50, W, H, 3, "BYTERA RMM Client " + v, "Mode", "Install", "Cancel"],
+             ["FinishDlg", 50, 50, W, 160, 3, "BYTERA RMM Client " + v, "Done", "Done", "Done"]]),
         idt("Control", ["Dialog_", "Control", "Type", "X", "Y", "Width", "Height", "Attributes", "Property", "Text",
                         "Control_Next", "Help"],
             ["s72", "s50", "s20", "i2", "i2", "i2", "i2", "I4", "S72", "L0", "S50", "L50"], ["Dialog_", "Control"],
-            [["ModeDlg", "Title", "Text", 20, 14, 330, 20, 3, None, "{\\DlgTitle}RAPALLE.net RMM Client installieren", None, None],
+            [["ModeDlg", "Title", "Text", 20, 14, 330, 20, 3, None, "{\\DlgTitle}BYTERA RMM Client installieren", None, None],
              ["ModeDlg", "Intro", "Text", 20, 40, 330, 34, 3, None,
               "Wie soll die App laufen? VPN-Tunnel (WireGuard) brauchen unter Windows Administratorrechte.", None, None],
              ["ModeDlg", "Mode", "RadioButtonGroup", 20, 80, 330, 110, 3, "ADMINMODE", None, "Install", None],
              ["ModeDlg", "Install", "PushButton", 230, 238, 60, 18, 3, None, "Installieren", "Cancel", None],
              ["ModeDlg", "Cancel", "PushButton", 296, 238, 56, 18, 3, None, "Abbrechen", "Mode", None],
              ["FinishDlg", "Text", "Text", 20, 20, 330, 80, 3, None,
-              "Der RAPALLE.net RMM Client ist installiert. Die Verknüpfung liegt auf dem Desktop und im Startmenü.", None, None],
+              "Der BYTERA RMM Client ist installiert. Die Verknüpfung liegt auf dem Desktop und im Startmenü.", None, None],
              ["FinishDlg", "Done", "PushButton", 296, 132, 56, 18, 3, None, "Fertig", None, None]]),
         idt("RadioButton", ["Property", "Order", "Value", "X", "Y", "Width", "Height", "Text", "Help"],
             ["s72", "i2", "s64", "i2", "i2", "i2", "i4", "L0", "L50"], ["Property", "Order"],
@@ -352,41 +352,61 @@ def _msi_add_wizard(msi: Path, t: Path, v: str) -> None:
 
 # ============================================================== Linux
 LINUX_LAUNCHER = """#!/bin/sh
-# Startet den RAPALLE.net RMM Client (Python 3 + Tk vom System)
-exec python3 /opt/rapalle-client/rapalle-client.py "$@"
+# Startet den BYTERA RMM Client (Python 3 + Tk vom System)
+exec python3 /opt/bytera-client/bytera-client.py "$@"
 """
 DESKTOP_ENTRY = """[Desktop Entry]
 Type=Application
-Name=RAPALLE.net RMM
+Name=BYTERA RMM
 Comment=RMM-Dashboard, Relay-Laufwerk, Remote-Shell und Fernbild
-Exec=rapalle-client %u
-Icon=rapalle-client
+Exec=bytera-client %u
+Icon=bytera-client
 Terminal=false
 Categories=Network;RemoteAccess;
-MimeType=x-scheme-handler/rapalle-rmm;
+MimeType=x-scheme-handler/bytera-rmm;
 StartupWMClass=Tk
 """
+# Uebergangs-Starter (Umbenennung RAPALLE.net RMM -> BYTERA RMM): Eine alte .tar-Installation
+# aktualisiert sich mit ihrem alten Update-Code - der sucht den Ordner "rapalle-client-*/app"
+# (im Paket ein Verweis auf den neuen Ordner) und startet danach "rapalle-client.py". Dieser
+# Starter ruft die neue App auf, die dann selbst an den neuen Ort umzieht (legacy.py).
+LEGACY_SHIM = """#!/usr/bin/env python3
+# Uebergangs-Starter: startet den BYTERA RMM Client (frueher RAPALLE.net RMM).
+import os
+import sys
+here = os.path.dirname(os.path.abspath(__file__))
+os.execv(sys.executable, [sys.executable, os.path.join(here, "bytera-client.py"), *sys.argv[1:]])
+"""
+LEGACY_LAUNCHER = """#!/bin/sh
+# Uebergangs-Starter (frueher RAPALLE.net RMM) - startet den BYTERA RMM Client
+exec /usr/bin/bytera-client "$@"
+"""
 TAR_INSTALL = """#!/bin/sh
-# Installiert den RAPALLE.net RMM Client fuer den aktuellen Benutzer (ohne root):
-#   ~/.local/share/rapalle-client, ~/.local/bin/rapalle-client, Startmenue-Eintrag.
+# Installiert den BYTERA RMM Client fuer den aktuellen Benutzer (ohne root):
+#   ~/.local/share/bytera-client, ~/.local/bin/bytera-client, Startmenue-Eintrag.
 # Systemweit (nach /opt):  sudo ./install.sh --system
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 if [ "$1" = "--system" ]; then
-  DEST=/opt/rapalle-client; BIN=/usr/local/bin; APPS=/usr/share/applications; ICONS=/usr/share/icons/hicolor/256x256/apps
+  DEST=/opt/bytera-client; BIN=/usr/local/bin; APPS=/usr/share/applications; ICONS=/usr/share/icons/hicolor/256x256/apps
 else
-  DEST="$HOME/.local/share/rapalle-client"; BIN="$HOME/.local/bin"; APPS="$HOME/.local/share/applications"
+  DEST="$HOME/.local/share/bytera-client"; BIN="$HOME/.local/bin"; APPS="$HOME/.local/share/applications"
   ICONS="$HOME/.local/share/icons/hicolor/256x256/apps"
 fi
 command -v python3 >/dev/null || { echo "python3 fehlt (z.B. sudo apt install python3 python3-tk)"; exit 1; }
 python3 -c "import tkinter" 2>/dev/null || echo "Hinweis: Tk fehlt - bitte python3-tk (Debian/Ubuntu) bzw. python3-tkinter (Fedora) installieren."
 mkdir -p "$DEST" "$BIN" "$APPS" "$ICONS"
 cp -r "$HERE/app/." "$DEST/"
-printf '#!/bin/sh\\nexec python3 "%s/rapalle-client.py" "$@"\\n' "$DEST" > "$BIN/rapalle-client"
-chmod +x "$BIN/rapalle-client"
-cp "$HERE/rapalle-client.png" "$ICONS/rapalle-client.png"
-sed "s|^Exec=.*|Exec=$BIN/rapalle-client %u|" "$HERE/rapalle-client.desktop" > "$APPS/rapalle-client.desktop"
-echo "Installiert. Start ueber das Anwendungsmenue oder: $BIN/rapalle-client"
+rm -f "$DEST/rapalle-client.py"          # Uebergangs-Starter nur fuer Auto-Updates alter Installationen
+# Umbenennung: Installation unter altem Namen (RAPALLE.net RMM) entfernen
+OLD="$(dirname "$DEST")/rapalle-client"
+if [ -d "$OLD" ]; then rm -rf "$OLD"; fi
+rm -f "$BIN/rapalle-client" "$APPS/rapalle-client.desktop" "$ICONS/rapalle-client.png"
+printf '#!/bin/sh\\nexec python3 "%s/bytera-client.py" "$@"\\n' "$DEST" > "$BIN/bytera-client"
+chmod +x "$BIN/bytera-client"
+cp "$HERE/bytera-client.png" "$ICONS/bytera-client.png"
+sed "s|^Exec=.*|Exec=$BIN/bytera-client %u|" "$HERE/bytera-client.desktop" > "$APPS/bytera-client.desktop"
+echo "Installiert. Start ueber das Anwendungsmenue oder: $BIN/bytera-client"
 """
 
 
@@ -411,33 +431,43 @@ def _tar_add(tf: tarfile.TarFile, name: str, data: bytes, mode: int = 0o644):
     tf.addfile(ti, io.BytesIO(data))
 
 
+def _tar_legacy(tf: tarfile.TarFile, base: str, v: str) -> None:
+    """Uebergang fuer alte .tar-Installationen (siehe LEGACY_SHIM)."""
+    _tar_add(tf, f"{base}/app/rapalle-client.py", LEGACY_SHIM.encode(), 0o755)
+    ti = tarfile.TarInfo(f"rapalle-client-{v}")
+    ti.type, ti.linkname, ti.mode, ti.mtime, ti.uname, ti.gname = tarfile.SYMTYPE, base, 0o777, int(time.time()), "root", "root"
+    tf.addfile(ti)
+
+
 def build_tar(v: str) -> list[Path]:
-    base = f"rapalle-client-{v}"
+    base = f"bytera-client-{v}"
     outs = []
     for suffix, mode in ((".tar.gz", "w:gz"), (".tar", "w")):
-        out = RELEASE / f"rapalle-client-{v}-linux{suffix}"
+        out = RELEASE / f"bytera-client-{v}-linux{suffix}"
         with tarfile.open(out, mode) as tf:
             for src, rel in desktop_files():
-                _tar_add(tf, f"{base}/app/{rel}", src.read_bytes(), 0o755 if rel.endswith("rapalle-client.py") else 0o644)
-            _tar_add(tf, f"{base}/app/.rapalle-install", b"tar\n")              # Auto-Update: Installationsart
+                _tar_add(tf, f"{base}/app/{rel}", src.read_bytes(), 0o755 if rel.endswith("bytera-client.py") else 0o644)
+            _tar_add(tf, f"{base}/app/.bytera-install", b"tar\n")              # Auto-Update: Installationsart
             _tar_add(tf, f"{base}/install.sh", TAR_INSTALL.encode(), 0o755)
-            _tar_add(tf, f"{base}/rapalle-client.desktop", DESKTOP_ENTRY.encode())
-            _tar_add(tf, f"{base}/rapalle-client.png", (RES / "rmmclient-256.png").read_bytes())
+            _tar_add(tf, f"{base}/bytera-client.desktop", DESKTOP_ENTRY.encode())
+            _tar_add(tf, f"{base}/bytera-client.png", (RES / "rmmclient-256.png").read_bytes())
+            _tar_legacy(tf, base, v)
         outs.append(out)
     return outs
 
 
 def build_tgz(v: str) -> Path:
     """Wie .tar.gz, nur mit der Endung .tgz (manche Werkzeuge erwarten sie)."""
-    base = f"rapalle-client-{v}"
-    out = RELEASE / f"rapalle-client-{v}-linux.tgz"
+    base = f"bytera-client-{v}"
+    out = RELEASE / f"bytera-client-{v}-linux.tgz"
     with tarfile.open(out, "w:gz") as tf:
         for src, rel in desktop_files():
-            _tar_add(tf, f"{base}/app/{rel}", src.read_bytes(), 0o755 if rel.endswith("rapalle-client.py") else 0o644)
-        _tar_add(tf, f"{base}/app/.rapalle-install", b"tar\n")
+            _tar_add(tf, f"{base}/app/{rel}", src.read_bytes(), 0o755 if rel.endswith("bytera-client.py") else 0o644)
+        _tar_add(tf, f"{base}/app/.bytera-install", b"tar\n")
         _tar_add(tf, f"{base}/install.sh", TAR_INSTALL.encode(), 0o755)
-        _tar_add(tf, f"{base}/rapalle-client.desktop", DESKTOP_ENTRY.encode())
-        _tar_add(tf, f"{base}/rapalle-client.png", (RES / "rmmclient-256.png").read_bytes())
+        _tar_add(tf, f"{base}/bytera-client.desktop", DESKTOP_ENTRY.encode())
+        _tar_add(tf, f"{base}/bytera-client.png", (RES / "rmmclient-256.png").read_bytes())
+        _tar_legacy(tf, base, v)
     return out
 
 
@@ -445,11 +475,12 @@ def _system_tree(kind: str) -> list[tuple[str, bytes, int]]:
     """Dateien einer systemweiten Installation (/opt + /usr) - fuer .deb, .rpm und .pkg gleich."""
     files = []
     for src, rel in desktop_files():
-        files.append((f"opt/rapalle-client/{rel}", src.read_bytes(), 0o755 if rel.endswith("rapalle-client.py") else 0o644))
-    files.append(("opt/rapalle-client/.rapalle-install", f"{kind}\n".encode(), 0o644))   # Auto-Update: Installationsart
-    files.append(("usr/bin/rapalle-client", LINUX_LAUNCHER.encode(), 0o755))
-    files.append(("usr/share/applications/rapalle-client.desktop", DESKTOP_ENTRY.encode(), 0o644))
-    files.append(("usr/share/icons/hicolor/256x256/apps/rapalle-client.png", (RES / "rmmclient-256.png").read_bytes(), 0o644))
+        files.append((f"opt/bytera-client/{rel}", src.read_bytes(), 0o755 if rel.endswith("bytera-client.py") else 0o644))
+    files.append(("opt/bytera-client/.bytera-install", f"{kind}\n".encode(), 0o644))   # Auto-Update: Installationsart
+    files.append(("usr/bin/bytera-client", LINUX_LAUNCHER.encode(), 0o755))
+    files.append(("usr/bin/rapalle-client", LEGACY_LAUNCHER.encode(), 0o755))   # Uebergang: alter Neustart-Befehl
+    files.append(("usr/share/applications/bytera-client.desktop", DESKTOP_ENTRY.encode(), 0o644))
+    files.append(("usr/share/icons/hicolor/256x256/apps/bytera-client.png", (RES / "rmmclient-256.png").read_bytes(), 0o644))
     return files
 
 
@@ -457,7 +488,7 @@ def build_rpm(v: str) -> Path:
     """.rpm (noarch) per rpmbuild - Fedora, RHEL/Alma/Rocky, openSUSE."""
     if not shutil.which("rpmbuild"):
         raise RuntimeError("rpmbuild fehlt (apt install rpm / dnf install rpm-build)")
-    out_name = f"rapalle-client-{v}-1.noarch.rpm"
+    out_name = f"bytera-client-{v}-1.noarch.rpm"
     with tempfile.TemporaryDirectory() as td:
         top = Path(td) / "rpmbuild"
         for d in ("SPECS", "SOURCES", "BUILD", "RPMS", "SRPMS", "BUILDROOT"):
@@ -468,10 +499,10 @@ def build_rpm(v: str) -> Path:
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_bytes(data)
             p.chmod(mode)
-        spec = f"""Name:           rapalle-client
+        spec = f"""Name:           bytera-client
 Version:        {v}
 Release:        1
-Summary:        RAPALLE.net RMM Client
+Summary:        BYTERA RMM Client
 License:        MIT
 BuildArch:      noarch
 Requires:       python3
@@ -479,6 +510,8 @@ Requires:       (python3-tkinter or python3-tk)
 Recommends:     (chromium or google-chrome-stable or microsoft-edge-stable or firefox)
 Recommends:     libsecret
 AutoReqProv:    no
+Obsoletes:      rapalle-client
+Provides:       rapalle-client
 
 %description
 Das RMM-Dashboard als App: gespeicherte Anmeldung, Relay als Laufwerk im
@@ -493,12 +526,13 @@ command -v update-desktop-database >/dev/null && update-desktop-database -q /usr
 
 %files
 %defattr(-,root,root,-)
-/opt/rapalle-client
+/opt/bytera-client
+/usr/bin/bytera-client
 /usr/bin/rapalle-client
-/usr/share/applications/rapalle-client.desktop
-/usr/share/icons/hicolor/256x256/apps/rapalle-client.png
+/usr/share/applications/bytera-client.desktop
+/usr/share/icons/hicolor/256x256/apps/bytera-client.png
 """
-        specfile = top / "SPECS" / "rapalle-client.spec"
+        specfile = top / "SPECS" / "bytera-client.spec"
         specfile.write_text(spec, encoding="utf-8")
         run(["rpmbuild", "-bb", "--define", f"_topdir {top}", "--define", "__os_install_post %{nil}",
              "--define", "_build_id_links none", str(specfile)])
@@ -513,12 +547,13 @@ command -v update-desktop-database >/dev/null && update-desktop-database -q /usr
 def build_pkg(v: str) -> Path:
     """Arch-/Manjaro-Paket (.pkg.tar.xz) - selbst gebaut, ohne makepkg (wie beim Agenten)."""
     pv = v.replace("-", "_")
-    out = RELEASE / f"rapalle-client-{pv}-1-any.pkg.tar.xz"
+    out = RELEASE / f"bytera-client-{pv}-1-any.pkg.tar.xz"
     tree = _system_tree("pkg")
     size = sum(len(d) for _, d, _ in tree)
-    pkginfo = (f"pkgname = rapalle-client\npkgver = {pv}-1\npkgdesc = RAPALLE.net RMM Client\n"
-               f"url = https://rapalle.net\nbuilddate = {int(time.time())}\npackager = RAPALLE.net\n"
-               f"size = {size}\narch = any\nlicense = MIT\ndepend = python\ndepend = tk\n"
+    pkginfo = (f"pkgname = bytera-client\npkgver = {pv}-1\npkgdesc = BYTERA RMM Client\n"
+               f"url = https://rapalle.net\nbuilddate = {int(time.time())}\npackager = BYTERA\n"
+               f"size = {size}\narch = any\nlicense = MIT\nreplaces = rapalle-client\nconflict = rapalle-client\n"
+               f"depend = python\ndepend = tk\n"
                f"optdepend = chromium: Dashboard als App-Fenster\noptdepend = libsecret: Anmeldung im Schluesselbund\n"
                f"optdepend = freerdp: Fernbild per RDP\noptdepend = tigervnc: Fernbild per VNC\n")
     install = ("post_install() {\n  command -v update-desktop-database >/dev/null && "
@@ -534,20 +569,21 @@ def build_pkg(v: str) -> Path:
 
 def build_deb(v: str) -> Path:
     """.deb ohne dpkg-deb (ar + tar), laeuft also auf jedem Bausystem."""
-    out = RELEASE / f"rapalle-client_{v}_all.deb"
+    out = RELEASE / f"bytera-client_{v}_all.deb"
     data = io.BytesIO()
     size = 0
     with tarfile.open(fileobj=data, mode="w:gz") as tf:
         for rel, b, mode in _system_tree("deb"):
             size += len(b)
             _tar_add(tf, f"./{rel}", b, mode)
-    control = (f"Package: rapalle-client\nVersion: {v}\nSection: net\nPriority: optional\nArchitecture: all\n"
+    control = (f"Package: bytera-client\nVersion: {v}\nSection: net\nPriority: optional\nArchitecture: all\n"
                f"Depends: python3 (>= 3.8), python3-tk\n"
+               f"Replaces: rapalle-client\nConflicts: rapalle-client\nProvides: rapalle-client\n"
                f"Recommends: chromium | chromium-browser | google-chrome-stable | microsoft-edge-stable | firefox | firefox-esr, "
                f"libglib2.0-bin, libsecret-tools\n"
                f"Suggests: freerdp3-x11 | freerdp2-x11 | remmina, tigervnc-viewer\n"
-               f"Installed-Size: {max(1, size // 1024)}\nMaintainer: RAPALLE.net <support@rapalle.net>\n"
-               f"Description: RAPALLE.net RMM Client\n"
+               f"Installed-Size: {max(1, size // 1024)}\nMaintainer: BYTERA <support@rapalle.net>\n"
+               f"Description: BYTERA RMM Client\n"
                f" Das RMM-Dashboard als App: gespeicherte Anmeldung, Relay als Laufwerk im\n"
                f" Dateimanager, Remote-Shell im eigenen Fenster und Fernbild per RDP/VNC.\n")
     ctl = io.BytesIO()
@@ -579,7 +615,7 @@ def build_apk(v: str) -> Path:
     ks, kspass = ANDROID / "signing" / "release.jks", ANDROID / "signing" / "keystore.pass"
     if not ks.exists():
         raise RuntimeError("Signier-Schluessel fehlt: src/client/android/signing/release.jks")
-    out = RELEASE / f"RapalleClient-{v}-android.apk"
+    out = RELEASE / f"ByteraClient-{v}-android.apk"
     code = int("".join(f"{int(x):02d}" for x in (v.split(".") + ["0", "0"])[:3]))   # 1.0.0 -> 10000
     with tempfile.TemporaryDirectory() as td:
         t = Path(td)
@@ -589,15 +625,15 @@ def build_apk(v: str) -> Path:
         man = man.replace('android:versionCode="1"', f'android:versionCode="{code}"').replace(
             'android:versionName="1.0.0"', f'android:versionName="{v}"')
         (t / "AndroidManifest.xml").write_text(man, encoding="utf-8")
-        java = (ANDROID / "src/net/rapalle/rmmclient/MainActivity.java").read_text(encoding="utf-8")
+        java = (ANDROID / "src/net/bytera/rmmclient/MainActivity.java").read_text(encoding="utf-8")
         java = java.replace('static final String VERSION = "1.0.0";', f'static final String VERSION = "{v}";')
-        jdir = t / "java/net/rapalle/rmmclient"
+        jdir = t / "java/net/bytera/rmmclient"
         jdir.mkdir(parents=True)
         (jdir / "MainActivity.java").write_text(java, encoding="utf-8")
         run(["aapt", "package", "-f", "-m", "-M", "AndroidManifest.xml", "-S", str(ANDROID / "res"),
              "-A", str(ANDROID / "assets"), "-I", str(jar), "-J", "gen", "-F", "unsigned.apk"], cwd=t)
         run(["javac", "-source", "8", "-target", "8", "-encoding", "UTF-8", "-Xlint:-options", "-bootclasspath", str(jar),
-             "-d", "classes", "gen/net/rapalle/rmmclient/R.java", "java/net/rapalle/rmmclient/MainActivity.java"], cwd=t)
+             "-d", "classes", "gen/net/bytera/rmmclient/R.java", "java/net/bytera/rmmclient/MainActivity.java"], cwd=t)
         run(["dalvik-exchange", "--dex", "--min-sdk-version=23", "--output=classes.dex", "classes"], cwd=t)
         run(["aapt", "add", "unsigned.apk", "classes.dex"], cwd=t)
         run(["zipalign", "-f", "4", "unsigned.apk", "aligned.apk"], cwd=t)
@@ -611,7 +647,7 @@ def build_apk(v: str) -> Path:
 
 # ============================================================== main
 def main():
-    ap = argparse.ArgumentParser(description="Baut die Pakete des RAPALLE.net RMM Clients")
+    ap = argparse.ArgumentParser(description="Baut die Pakete des BYTERA RMM Clients")
     ap.add_argument("--targets", default=",".join(ALL), help="Komma-Liste aus: " + ",".join(ALL))
     ap.add_argument("--winpython", help="Windows-python.exe (unter Wine) mit PyInstaller")
     ap.add_argument("--list", action="store_true", help="vorhandene Pakete anzeigen")
@@ -656,13 +692,13 @@ def main():
                 "rpm": ".noarch.rpm", "pkg": "-any.pkg.tar.xz", "tar": "-linux.tar", "tgz": "-linux.tgz",
                 "apk": "-android.apk"}
         for p in RELEASE.iterdir():
-            if not p.is_file() or v in p.name or not p.name.lower().startswith("rapalle"):
+            if not p.is_file() or v in p.name or not p.name.lower().startswith(("bytera", "rapalle")):
                 continue
             if any(t in targets and (p.name.endswith(sfx) or (t == "tar" and p.name.endswith("-linux.tar.gz")))
                    for t, sfx in exts.items()):
                 p.unlink()
-    print(f"RAPALLE.net RMM Client {v} -> {RELEASE}")
-    ok, failed, exe = [], [], RELEASE / f"RapalleClient-{v}-windows.exe"
+    print(f"BYTERA RMM Client {v} -> {RELEASE}")
+    ok, failed, exe = [], [], RELEASE / f"ByteraClient-{v}-windows.exe"
     steps = [("exe", lambda: build_exe(v, a.winpython)), ("zip", lambda: build_zip(v, exe)),
              ("msi", lambda: build_msi(v, exe)), ("deb", lambda: build_deb(v)), ("rpm", lambda: build_rpm(v)),
              ("pkg", lambda: build_pkg(v)), ("tar", lambda: build_tar(v)), ("tgz", lambda: build_tgz(v)),

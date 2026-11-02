@@ -83,7 +83,7 @@ def test_webhook(webhook_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(404, "Webhook nicht gefunden")
     try:
         notification = build_notification(
-            "This is a Test-Notification from RAPALLE.net RMM.",
+            "This is a Test-Notification from BYTERA RMM.",
             head="🔔 Test-Notification",
             tenant="Test-Tenant",
             location="Test-Location",

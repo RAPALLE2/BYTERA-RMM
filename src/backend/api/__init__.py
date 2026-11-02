@@ -1,5 +1,5 @@
 """
-REST-API des RAPALLE.net RMM (/api/v1).
+REST-API des BYTERA RMM (/api/v1).
 
 Dieser Ordner wird NICHT vom Core geladen. Das Modul "api"
 (src/modules/backend/api) haengt die Router ein, wenn es aktiviert ist:

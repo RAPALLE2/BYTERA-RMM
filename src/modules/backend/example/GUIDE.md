@@ -78,7 +78,7 @@ src/modules/frontend/example/
   "name": "Beispiel-Modul",         // Anzeigename
   "version": "1.0.0",               // Anzeige in der Modul-App
   "description": "…",
-  "author": "RAPALLE.net",
+  "author": "BYTERA",
   "category": "Entwicklung",        // Gruppe in der Modul-App
   "icon": "🧪",
   "available": true,                // false = in der Modul-App nicht aktivierbar

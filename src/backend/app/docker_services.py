@@ -18,7 +18,7 @@ Der Container spricht ueber den Docker-Socket (/var/run/docker.sock) mit dem
 Docker-Dienst des Hosts und legt die Container als GESCHWISTER an - nicht
 verschachtelt. Damit sie erreichbar sind, haengt das Backend sie in sein
 EIGENES Netzwerk; angesprochen werden sie dann ueber ihren Containernamen
-(z.B. "rapalle-rmm-guacd:4822"), ganz ohne veroeffentlichte Ports.
+(z.B. "bytera-rmm-guacd:4822"), ganz ohne veroeffentlichte Ports.
 
 Voraussetzung: In docker-compose.yml muss der Socket eingehaengt sein:
 
@@ -55,19 +55,28 @@ SERVICES: dict[str, dict[str, Any]] = {
         "label": "Guacamole (guacd)",
         "purpose": "Remote-Desktop im Browser: RDP, VNC, SSH und Telnet.",
         "image": "guacamole/guacd:1.5.5",
-        "container": "rapalle-rmm-guacd",
+        "container": "bytera-rmm-guacd",
         "port": 4822,
     },
     "db": {
         "label": "SQL-Datenbank (MariaDB)",
         "purpose": "Externe Datenbank statt der lokalen SQLite-Datei.",
         "image": "mariadb:11",
-        "container": "rapalle-rmm-db",
+        "container": "bytera-rmm-db",
         "port": 3306,
-        "volume": "rapalle-rmm-dbdata",
-        "database": "rapalle_rmm",
+        "volume": "bytera-rmm-dbdata",
+        "database": "bytera_rmm",
         "user": "rmm",
     },
+}
+
+# Namen vor der Umbenennung (RAPALLE.net RMM -> BYTERA RMM). Vorhandene Container
+# werden umbenannt (migrate_legacy), das Datenbank-Volume wird beim naechsten
+# Neuanlegen des Containers in das neue Volume kopiert (das alte bleibt als
+# Sicherung liegen).
+LEGACY: dict[str, dict[str, str]] = {
+    "guacd": {"container": "rapalle-rmm-guacd"},
+    "db": {"container": "rapalle-rmm-db", "volume": "rapalle-rmm-dbdata"},
 }
 
 
@@ -200,8 +209,71 @@ def _find_container(name: str) -> dict | None:
     return None
 
 
+_migrated = False
+
+
+def migrate_legacy() -> list[str]:
+    """
+    Container mit altem Namen (rapalle-rmm-*) auf den neuen Namen umbenennen und
+    die Einstellungen nachziehen, die den Containernamen als Host enthalten.
+    Umbenennen geht im laufenden Betrieb - das Docker-DNS kennt danach den neuen
+    Namen. Idempotent; laeuft beim Start und vor jeder Aktion hoechstens einmal.
+    """
+    global _migrated
+    done: list[str] = []
+    if _migrated:
+        return done
+    if not (is_docker() and socket_available()):
+        return done
+    _migrated = True
+    for key, old in LEGACY.items():
+        new = SERVICES[key]["container"]
+        try:
+            if _find_container(old["container"]) and not _find_container(new):
+                _api("POST", f"/containers/{old['container']}/rename?name={new}", timeout=30)
+                done.append(f"{old['container']} -> {new}")
+        except DockerError as e:
+            done.append(f"{old['container']}: {e}")
+            continue
+        setting = "guacd_host" if key == "guacd" else "docker_db_host"
+        try:
+            if (db.get_setting(setting) or "") == old["container"]:
+                db.set_setting(setting, new)
+        except Exception:
+            pass
+    return done
+
+
+def _volume_exists(name: str) -> bool:
+    try:
+        _api("GET", f"/volumes/{name}", timeout=15)
+        return True
+    except DockerError:
+        return False
+
+
+def _copy_volume(src: str, dst: str, image: str) -> None:
+    """Inhalt eines Volumes in ein anderes kopieren (Hilfscontainer, Dienst steht dabei)."""
+    _create_volume(dst)
+    cfg = {"Image": image, "Entrypoint": ["sh", "-c"], "Cmd": ["cp -a /from/. /to/"],
+           "HostConfig": {"Binds": [f"{src}:/from:ro", f"{dst}:/to"]}}
+    c = _api("POST", "/containers/create", cfg, timeout=60)
+    cid = c["Id"]
+    try:
+        _api("POST", f"/containers/{cid}/start", timeout=60)
+        res = _api("POST", f"/containers/{cid}/wait", timeout=1800) or {}
+        if int(res.get("StatusCode", 1)) != 0:
+            raise DockerError(f"Kopieren von Volume {src} nach {dst} fehlgeschlagen")
+    finally:
+        try:
+            _api("DELETE", f"/containers/{cid}?force=1", timeout=60)
+        except DockerError:
+            pass
+
+
 def status() -> dict:
     """Zustand aller Zusatzdienste - Grundlage fuer die Anzeige im Dashboard."""
+    migrate_legacy()
     available = is_docker() and socket_available()
     out = {
         "is_docker": is_docker(),
@@ -265,6 +337,7 @@ def enable(key: str) -> dict:
             "aktivieren und 'docker compose up -d' ausfuehren."
         )
 
+    migrate_legacy()
     network = _self_network()
     name = spec["container"]
     existing = _find_container(name)
@@ -286,10 +359,14 @@ def enable(key: str) -> dict:
         elif key == "db":
             password = db.get_setting("docker_db_password") or _gen_password()
             root_pw = db.get_setting("docker_db_root_password") or _gen_password()
+            old_vol = LEGACY["db"]["volume"]
+            if not _volume_exists(spec["volume"]) and _volume_exists(old_vol):
+                # Umbenennung: Daten aus dem alten Volume uebernehmen (altes bleibt als Sicherung)
+                _copy_volume(old_vol, spec["volume"], spec["image"])
             _create_volume(spec["volume"])
             cfg["Env"] = [
                 f"MARIADB_ROOT_PASSWORD={root_pw}",
-                f"MARIADB_DATABASE={spec['database']}",
+                f"MARIADB_DATABASE={db.get_setting('docker_db_name') or spec['database']}",
                 f"MARIADB_USER={spec['user']}",
                 f"MARIADB_PASSWORD={password}",
             ]
@@ -310,7 +387,9 @@ def enable(key: str) -> dict:
         db.set_setting("docker_db_host", name)
         db.set_setting("docker_db_port", str(spec["port"]))
         db.set_setting("docker_db_user", spec["user"])
-        db.set_setting("docker_db_name", spec["database"])
+        # Vorhandenen Namen behalten: eine uebernommene Datenbank (z.B. aus der Zeit
+        # vor der Umbenennung: rapalle_rmm) heisst im Server weiter so.
+        db.set_setting("docker_db_name", db.get_setting("docker_db_name") or spec["database"])
 
     return {"ok": True, "service": key, "container": name}
 
@@ -391,5 +470,5 @@ def db_credentials() -> dict:
         "port": int(db.get_setting("docker_db_port") or 3306),
         "user": db.get_setting("docker_db_user") or "rmm",
         "password": db.get_setting("docker_db_password") or "",
-        "database": db.get_setting("docker_db_name") or "rapalle_rmm",
+        "database": db.get_setting("docker_db_name") or "bytera_rmm",
     }

@@ -4,7 +4,7 @@
   "name": "Webserver",
   "version": "1.0.0",
   "description": "Mehrere Websites direkt aus dem RMM ausliefern: jede unter rmm.url.de/<name>, mit eigenem Ordner (bearbeitbar in der App, im Explorer/Relay unter „Websites“ und per Netzlaufwerk) und eigenen Rechten für Benutzer und Gruppen. Dient auch dem Deployment-Server als Hosting-Grundlage. Websites können auch Weiterleitungen sein (Reverse-Proxy, z. B. für Docker-Container).",
-  "author": "RAPALLE.net",
+  "author": "BYTERA",
   "category": "Verteilung",
   "icon": "🌍",
   "requires": [],

@@ -510,7 +510,7 @@ async def update_client_agent(client_id: str, wait: bool = False,
         if (state.update_jobs.get(client_id) or {}).get("updated"):
             return {"ok": True, "updated": True}
     raise HTTPException(504, "Der Agent hat innerhalb von 55 Sekunden kein erfolgreiches "
-                             "Update bestaetigt - bitte /tmp/rapalle-agent-update.log pruefen.")
+                             "Update bestaetigt - bitte /tmp/bytera-agent-update.log pruefen.")
 
 
 @router.get("/{client_id}/update-agent/status")

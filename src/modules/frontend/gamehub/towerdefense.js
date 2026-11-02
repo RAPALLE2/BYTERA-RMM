@@ -481,7 +481,7 @@ export function renderTowerDefense(body, win) {
   function showMapSelect(initial) {
     overlay.style.display = "flex";
     overlay.innerHTML = `
-      <h2 style="color:#4da6ff;margin:0 0 4px">🛡️ RAPALLE Defense</h2>
+      <h2 style="color:#4da6ff;margin:0 0 4px">🛡️ BYTERA Defense</h2>
       <p style="color:#9fb3c8;max-width:460px;font-size:13px;margin:0 0 12px">
         ${initial ? tr("u_wahle_eine_map") : tr("u_map_wechseln_setzt_das_laufende_sp")}
         ${tr("td_rules")}

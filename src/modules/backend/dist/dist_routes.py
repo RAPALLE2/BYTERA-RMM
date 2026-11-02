@@ -79,7 +79,7 @@ def dist_index():
             f'<span class="t"><b>{html.escape(f["label"])}</b>'
             f'<span class="m">{f["files"]} Datei(en) · {_sz(f["size"])}</span></span>'
             f'<span class="dl">Öffnen</span></a>' for f in pub)
-    return _render("RAPALLE.net RMM · Downloads", rows)
+    return _render("BYTERA RMM · Downloads", rows)
 
 
 @router.get("/dist/{folder}", include_in_schema=False)

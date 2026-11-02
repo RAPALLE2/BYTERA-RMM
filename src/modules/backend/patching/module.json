@@ -4,7 +4,7 @@
   "name": "Patching",
   "version": "1.0.0",
   "description": "Software-Patching: Scans und Installationen von Updates auf den Clients, Verlauf und Planung.",
-  "author": "RAPALLE.net",
+  "author": "BYTERA",
   "category": "Betrieb",
   "icon": "🩹",
   "requires": [],

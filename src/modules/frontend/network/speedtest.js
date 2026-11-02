@@ -251,7 +251,7 @@ export function renderSpeedtest(body, win) {
   // Naechstgelegene M-Lab-Server holen (liefert wss-URLs fuer download/upload)
   async function locateServers() {
     const url = "https://locate.measurementlab.net/v2/nearest/ndt/ndt7"
-      + "?client_name=rapalle-rmm&client_version=1.0";
+      + "?client_name=bytera-rmm&client_version=1.0";
     let r;
     try {
       r = await fetch(url, { cache: "no-store" });

@@ -148,7 +148,7 @@ def _make_server_class():
             return True
 
         def get_kbdint_challenge(self, username, lang, submethods):
-            return ("RAPALLE.net RMM", "Anmeldung (Einmalcode nur bei Zwei-Faktor-Anmeldung)", "",
+            return ("BYTERA RMM", "Anmeldung (Einmalcode nur bei Zwei-Faktor-Anmeldung)", "",
                     [("Passwort: ", False), ("Einmalcode (sonst leer lassen): ", True)])
 
         async def validate_kbdint_response(self, username, responses):

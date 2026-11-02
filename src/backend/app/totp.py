@@ -37,7 +37,7 @@ from urllib.parse import quote
 DIGITS = 6
 PERIOD = 30          # Sekunden je Code
 WINDOW = 1           # ± ein Zeitschritt Toleranz
-ISSUER = "RAPALLE.net RMM"
+ISSUER = "BYTERA RMM"
 
 # Bereits verbrauchte (Benutzer, Zeitschritt)-Paare. Klein und kurzlebig,
 # deshalb im Arbeitsspeicher - nach einem Neustart ist der Schutz kurz weg,

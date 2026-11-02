@@ -341,7 +341,7 @@ class FTPSession:
                 self.peer_ip = info[0]
         except Exception:
             pass
-        await self.send("220 RAPALLE.net RMM Relay (FTP)")
+        await self.send("220 BYTERA RMM Relay (FTP)")
         try:
             while True:
                 raw = await self.reader.readline()

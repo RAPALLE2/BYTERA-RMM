@@ -64,7 +64,7 @@ def _check(name: str) -> str:
 
 def _conf_dir() -> Path:
     if IS_WINDOWS:
-        d = Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "Rapalle" / "wireguard"
+        d = Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "Bytera" / "wireguard"
     else:
         d = Path("/etc/wireguard")
     d.mkdir(parents=True, exist_ok=True)

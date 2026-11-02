@@ -136,19 +136,22 @@ def install_ps1(request: Request):
     if not exe:
         return PlainTextResponse('Write-Host "Auf dem Server liegt noch kein Windows-Paket (.exe)." -ForegroundColor Red\n')
     settings = json.dumps({"server": base})
-    return PlainTextResponse(f"""# RAPALLE.net RMM Client - Installation fuer den aktuellen Benutzer (Windows 10/11)
+    return PlainTextResponse(f"""# BYTERA RMM Client - Installation fuer den aktuellen Benutzer (Windows 10/11)
 #   irm {base}/client-dist/install.ps1 | iex
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$dir  = Join-Path $env:LOCALAPPDATA 'Programs\\RapalleClient'
-$exe  = Join-Path $dir 'RapalleClient.exe'
+$dir  = Join-Path $env:LOCALAPPDATA 'Programs\\ByteraClient'
+$exe  = Join-Path $dir 'ByteraClient.exe'
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
-Write-Host 'Lade RAPALLE.net RMM Client {exe["version"]} ...'
-Get-Process RapalleClient -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Write-Host 'Lade BYTERA RMM Client {exe["version"]} ...'
+Get-Process ByteraClient -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Invoke-WebRequest -UseBasicParsing -Uri '{base}{exe["url"]}' -OutFile $exe
 # Server-Adresse vorbelegen (nur wenn noch nichts eingerichtet ist)
-$cfgDir = Join-Path $env:APPDATA 'RapalleClient'
+$cfgDir = Join-Path $env:APPDATA 'ByteraClient'
 $cfg = Join-Path $cfgDir 'settings.json'
+# Umbenennung: Einstellungen der Installation unter altem Namen (RAPALLE.net RMM) uebernehmen
+$oldCfg = Join-Path $env:APPDATA 'RapalleClient'
+if ((Test-Path $oldCfg) -and -not (Test-Path $cfgDir)) {{ Copy-Item $oldCfg $cfgDir -Recurse -Force }}
 if (-not (Test-Path $cfg)) {{
   New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
   [IO.File]::WriteAllText($cfg, '{settings}')
@@ -156,8 +159,14 @@ if (-not (Test-Path $cfg)) {{
 # Verknuepfungen: Startmenue + Desktop
 $sh = New-Object -ComObject WScript.Shell
 foreach ($lnkDir in @([Environment]::GetFolderPath('Programs'), [Environment]::GetFolderPath('Desktop'))) {{
-  $l = $sh.CreateShortcut((Join-Path $lnkDir 'RAPALLE.net RMM.lnk'))
+  $l = $sh.CreateShortcut((Join-Path $lnkDir 'BYTERA RMM.lnk'))
   $l.TargetPath = $exe; $l.WorkingDirectory = $dir; $l.IconLocation = "$exe,0"; $l.Save()
+}}
+# Alte Programmdatei + Verknuepfungen (RAPALLE.net RMM) entfernen
+Get-Process RapalleClient -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA 'Programs\\RapalleClient') -ErrorAction SilentlyContinue
+foreach ($lnkDir in @([Environment]::GetFolderPath('Programs'), [Environment]::GetFolderPath('Desktop'))) {{
+  Remove-Item -Force (Join-Path $lnkDir 'RAPALLE.net RMM.lnk') -ErrorAction SilentlyContinue
 }}
 Write-Host 'Installiert. Starte den Client ...' -ForegroundColor Green
 Start-Process $exe
@@ -169,7 +178,7 @@ def install_cmd(request: Request):
     base = _base(request)
     return PlainTextResponse(
         "@echo off\r\n"
-        "rem RAPALLE.net RMM Client - Installation (ruft das PowerShell-Skript auf)\r\n"
+        "rem BYTERA RMM Client - Installation (ruft das PowerShell-Skript auf)\r\n"
         f"powershell -NoProfile -ExecutionPolicy Bypass -Command \"irm '{base}/client-dist/install.ps1' | iex\"\r\n"
         "if errorlevel 1 pause\r\n", media_type="text/plain; charset=utf-8")
 
@@ -188,7 +197,7 @@ def install_sh(request: Request):
     u = lambda f: f"{base}{f['url']}" if f else ""          # noqa: E731
     n = lambda f: f["name"] if f else ""                     # noqa: E731
     return PlainTextResponse(f"""#!/bin/sh
-# RAPALLE.net RMM Client - Installation (Linux)
+# BYTERA RMM Client - Installation (Linux)
 #   curl -fsSL {base}/client-dist/install.sh | sh
 # Mit root/sudo: Paket der Distribution inkl. Abhaengigkeiten (python3-tk):
 #   Debian/Ubuntu .deb (apt) | Fedora/RHEL .rpm (dnf/yum) | openSUSE .rpm (zypper) | Arch .pkg.tar.xz (pacman)
@@ -201,29 +210,31 @@ ROOT=0; {{ [ "$(id -u)" -eq 0 ] || [ -n "$SUDO" ]; }} && ROOT=1
 DEB_URL="{u(deb)}"; RPM_URL="{u(rpm)}"; PKG_URL="{u(pkg)}"; TGZ_URL="{u(tgz)}"
 DONE=0
 if [ $ROOT = 1 ] && [ -n "$DEB_URL" ] && command -v apt-get >/dev/null; then
-  echo "Lade {n(deb)} ..."; dl "$DEB_URL" "$TMP/rapalle-client.deb"
-  $SUDO apt-get install -y "$TMP/rapalle-client.deb" && DONE=1
+  echo "Lade {n(deb)} ..."; dl "$DEB_URL" "$TMP/bytera-client.deb"
+  $SUDO apt-get install -y "$TMP/bytera-client.deb" && DONE=1
 elif [ $ROOT = 1 ] && [ -n "$RPM_URL" ] && {{ command -v dnf >/dev/null || command -v yum >/dev/null || command -v zypper >/dev/null; }}; then
-  echo "Lade {n(rpm)} ..."; dl "$RPM_URL" "$TMP/rapalle-client.rpm"
-  if command -v dnf >/dev/null; then $SUDO dnf install -y "$TMP/rapalle-client.rpm" && DONE=1
-  elif command -v zypper >/dev/null; then $SUDO zypper --non-interactive install --allow-unsigned-rpm "$TMP/rapalle-client.rpm" && DONE=1
-  else $SUDO yum install -y "$TMP/rapalle-client.rpm" && DONE=1; fi
+  echo "Lade {n(rpm)} ..."; dl "$RPM_URL" "$TMP/bytera-client.rpm"
+  if command -v dnf >/dev/null; then $SUDO dnf install -y "$TMP/bytera-client.rpm" && DONE=1
+  elif command -v zypper >/dev/null; then $SUDO zypper --non-interactive install --allow-unsigned-rpm "$TMP/bytera-client.rpm" && DONE=1
+  else $SUDO yum install -y "$TMP/bytera-client.rpm" && DONE=1; fi
 elif [ $ROOT = 1 ] && [ -n "$PKG_URL" ] && command -v pacman >/dev/null; then
-  echo "Lade {n(pkg)} ..."; dl "$PKG_URL" "$TMP/rapalle-client.pkg.tar.xz"
-  $SUDO pacman -U --noconfirm "$TMP/rapalle-client.pkg.tar.xz" && DONE=1
+  echo "Lade {n(pkg)} ..."; dl "$PKG_URL" "$TMP/bytera-client.pkg.tar.xz"
+  $SUDO pacman -U --noconfirm "$TMP/bytera-client.pkg.tar.xz" && DONE=1
 fi
 if [ $DONE = 0 ]; then
   [ -n "$TGZ_URL" ] || {{ echo "Kein passendes Paket fuer dieses System auf dem Server."; exit 1; }}
   echo "Lade {n(tgz)} ..."
   dl "$TGZ_URL" "$TMP/client.tar.gz"
   tar xf "$TMP/client.tar.gz" -C "$TMP"
-  sh "$TMP"/rapalle-client-*/install.sh
+  sh "$TMP"/*-client-*/install.sh
   command -v python3 >/dev/null && python3 -c "import tkinter" 2>/dev/null || \\
     echo "Bitte noch Python-Tk installieren: sudo apt install python3-tk  |  sudo dnf install python3-tkinter  |  sudo pacman -S tk"
 fi
-CFG="${{XDG_CONFIG_HOME:-$HOME/.config}}/rapalle-client"
+CFG="${{XDG_CONFIG_HOME:-$HOME/.config}}/bytera-client"
+OLDCFG="${{XDG_CONFIG_HOME:-$HOME/.config}}/rapalle-client"           # Umbenennung: alte Einstellungen uebernehmen
+if [ -d "$OLDCFG" ] && [ ! -d "$CFG" ]; then cp -a "$OLDCFG" "$CFG"; fi
 if [ ! -f "$CFG/settings.json" ]; then mkdir -p "$CFG"; printf '%s' '{settings}' > "$CFG/settings.json"; fi
-echo "Fertig. Start über das Anwendungsmenü: „RAPALLE.net RMM“ (oder: rapalle-client)."
+echo "Fertig. Start über das Anwendungsmenü: „BYTERA RMM“ (oder: bytera-client)."
 """, media_type="text/plain; charset=utf-8")
 
 

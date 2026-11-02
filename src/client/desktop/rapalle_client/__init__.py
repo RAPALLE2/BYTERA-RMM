@@ -1,4 +1,5 @@
 """RAPALLE.net RMM Client - das Dashboard als eigene App (Windows, Linux, Android)."""
+# 1.7.2: Start immer sichtbar (Admin-Start wird geprueft, sonst normal), .exe = MSI (Einrichtung + Verknuepfung), Fehlerprotokoll
 # 1.7.1: MSI-Assistent (mit/ohne Administratorrechte), .exe legt Desktop-Verknuepfung an
 # 1.7.0: Adminrechte einmal beim Start (VPN dann ohne Rueckfragen, abgelehnt = VPN aus), „Immer als Administrator starten“
 # 1.6.9: alte RMM-Tunnel mit gleicher Adresse werden vor dem Start entfernt (Ursache "Objekt bereits vorhanden")
@@ -11,4 +12,4 @@
 # 1.6.2: keine WireGuard-Fehlerfenster mehr ("kein installierter Dienst"), Tunnel zuverlaessig in der App
 # 1.6.1: WireGuard-Tunnel in der WireGuard-App sichtbar, "DLL nicht gefunden" behoben
 # 1.6.0: RDP/SSH/VNC + VPN direkt aus dem Dashboard, WireGuard-Datei aktivieren, Netzlaufwerk Windows 11
-__version__ = "1.7.1"
+__version__ = "1.7.2"

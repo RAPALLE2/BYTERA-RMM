@@ -4,7 +4,7 @@
   "name": "Canary & IP-Tracker",
   "version": "1.0.0",
   "description": "Honeypot-Werkzeuge: IP-Tracker-Links (öffentlicher Link sammelt IP, Standort, Browser/OS u. a. und leitet sofort auf ein Ziel weiter) und Canary-Tokens (Web-Link, E-Mail-Pixel, Köder-Datei in Word/PDF/Excel, QR-Code und DNS), die bei Aufruf Alarm schlagen – im Dashboard und (mit Modul „Benachrichtigungen“) per Webhook/E-Mail.",
-  "author": "RAPALLE.net",
+  "author": "BYTERA",
   "category": "Sicherheit",
   "icon": "🕵️",
   "requires": [],

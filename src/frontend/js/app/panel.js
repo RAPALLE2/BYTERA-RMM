@@ -1156,7 +1156,7 @@ export async function handleQuickAction(action, client) {
       }
     }
     window.notify?.(t("pn_update_failed") + ": Der Agent hat sich nach 4 Minuten nicht mit einem Update zurückgemeldet. "
-      + "Log auf dem Client prüfen (Linux: /tmp/rapalle-agent-update.log, Windows: Ereignisanzeige/Aufgabenplanung „RapalleRmmUpdate“).",
+      + "Log auf dem Client prüfen (Linux: /tmp/bytera-agent-update.log, Windows: Ereignisanzeige/Aufgabenplanung „ByteraRmmUpdate“).",
       "error", 30000, tag);
     return;
   }

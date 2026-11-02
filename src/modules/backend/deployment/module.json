@@ -4,7 +4,7 @@
   "name": "Deployment-Server",
   "version": "1.0.0",
   "description": "Veröffentlicht den Ordner „Deployment“ als kleine Webseite unter /deployment (Installer, Skripte, Logos per Link weitergeben - auf Wunsch ohne Anmeldung). Mit eigener Dateiverwaltung; bei aktivem Relay-Modul zusätzlich als Bereich im Relay/Netzlaufwerk. Nutzt das Webhosting des Moduls „Webserver“ (wird automatisch mit aktiviert).",
-  "author": "RAPALLE.net",
+  "author": "BYTERA",
   "category": "Verteilung",
   "icon": "🚀",
   "requires": [

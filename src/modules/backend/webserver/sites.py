@@ -159,7 +159,7 @@ def create(name: str, title: str, user: dict, kind: str = "static", upstream: di
     if not any(f.iterdir()):
         (f / "index.html").write_text(
             f"<!doctype html><meta charset=utf-8><title>{d[name]['title']}</title>"
-            f"<h1>{d[name]['title']}</h1><p>Diese Website wird mit dem RAPALLE.net RMM betrieben.</p>\n", encoding="utf-8")
+            f"<h1>{d[name]['title']}</h1><p>Diese Website wird mit dem BYTERA RMM betrieben.</p>\n", encoding="utf-8")
     sync_routes()
     return get(name)
 

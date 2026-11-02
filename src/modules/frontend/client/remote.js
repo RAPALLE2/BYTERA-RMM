@@ -9,7 +9,7 @@
 //
 // Ziel: lokale IP + Standard-Port | eigene Adresse/Port | über RMM (Cloudflare-Tunnel ->
 // Backend -> Agent; Lebensdauer: bis Nutzungsende / Minuten / dauerhaft) | RMM-Gateway.
-// Ablauf: POST /api/client/launch -> Startschein -> rapalle-rmm://launch?s=…&t=…
+// Ablauf: POST /api/client/launch -> Startschein -> bytera-rmm://launch?s=…&t=…
 //         (die App löst den Schein mit IHRER Anmeldung ein: fremde Seiten können nichts starten)
 // Profil: "Standardmäßig extern / im Browser / jedes Mal fragen" (GET/PUT /api/client/prefs).
 
@@ -47,7 +47,7 @@ export function clientAppKind() {
 
 // Im NORMALEN Browser: Ist die PC-App auf diesem Rechner installiert? (Merker nach dem ersten
 // erfolgreichen Start bzw. per Haken im Profil.) Dann oeffnen auch hier RDP/SSH/VNC direkt die App –
-// der Link rapalle-rmm:// ist systemweit registriert.
+// der Link bytera-rmm:// ist systemweit registriert.
 export function hasPcApp() {
   try { return localStorage.getItem("rmm_has_pc_app") === "1"; } catch { return false; }
 }
@@ -96,7 +96,7 @@ async function openExternal(action, client, { ask }) {
   dialog(action, client, remembered);
 }
 
-// rapalle-rmm://-Link oeffnen. Im normalen Browser pruefen, ob die App wirklich startete
+// bytera-rmm://-Link oeffnen. Im normalen Browser pruefen, ob die App wirklich startete
 // (das Fenster verliert dann den Fokus); sonst Hinweis mit Download.
 export function openAppLink(url, ticket) {
   if (clientAppKind() === "android") { window.RMM.launch(ticket); return; }

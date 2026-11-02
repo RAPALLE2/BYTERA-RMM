@@ -27,7 +27,7 @@
 #   POST   /api/client/tunnel/{lease}/ping | DELETE /api/client/tunnel/{lease}   Nutzung melden / beenden
 #   POST   /api/client/tunnels/{route_id}/close     Fernzugriff sofort schliessen
 #   GET|PUT /api/client/prefs                        {open_mode: web|external|ask} (Profil)
-#   POST   /api/client/launch                        Dashboard -> Startschein fuer die Client-App (rapalle-rmm://)
+#   POST   /api/client/launch                        Dashboard -> Startschein fuer die Client-App (bytera-rmm://)
 #   POST   /api/client/launch/{ticket}               Client-App loest den Startschein ein (einmalig, 2 Min.)
 
 from __future__ import annotations
@@ -359,7 +359,7 @@ def put_prefs(body: PrefsBody, user: dict = Depends(get_current_user)):
 
 # ------------------------------------------------------------------ Startschein Dashboard -> Client-App
 # Das Dashboard (im App-Fenster der Client-App) holt einen Startschein und oeffnet
-# rapalle-rmm://launch?s=<server>&t=<schein>. Die App loest ihn mit IHRER Anmeldung ein -
+# bytera-rmm://launch?s=<server>&t=<schein>. Die App loest ihn mit IHRER Anmeldung ein -
 # fremde Webseiten koennen so nichts starten (der Schein gehoert zum angemeldeten Benutzer).
 _tickets: dict[str, dict] = {}
 
@@ -398,7 +398,7 @@ def launch(body: LaunchBody, request: Request, user: dict = Depends(get_current_
     except Exception:
         base = str(request.base_url).rstrip("/")
     from urllib.parse import urlencode
-    return {"ticket": t, "url": "rapalle-rmm://launch?" + urlencode({"s": base, "t": t}), "params": params}
+    return {"ticket": t, "url": "bytera-rmm://launch?" + urlencode({"s": base, "t": t}), "params": params}
 
 
 class LaunchVpnBody(BaseModel):
@@ -419,7 +419,7 @@ def launch_vpn(body: LaunchVpnBody, request: Request, user: dict = Depends(get_c
     except Exception:
         base = str(request.base_url).rstrip("/")
     from urllib.parse import urlencode
-    return {"ticket": t, "url": "rapalle-rmm://launch?" + urlencode({"s": base, "t": t})}
+    return {"ticket": t, "url": "bytera-rmm://launch?" + urlencode({"s": base, "t": t})}
 
 
 @router.post("/launch/{ticket}")

@@ -1,21 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- RAPALLE.net RMM Client fuer Android 6+ (ausgelegt fuer die aktuellen Versionen 10-15). -->
+<!-- BYTERA RMM Client fuer Android 6+ (ausgelegt fuer die aktuellen Versionen 10-15). -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="net.rapalle.rmmclient"
+    package="net.bytera.rmmclient"
     android:versionCode="1"
     android:versionName="1.0.0">
 
     <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="33" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Umbenennung: alte App (net.rapalle.rmmclient) zum Deinstallieren anbieten -->
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
     <!-- WireGuard-Tunnel ein-/ausschalten (WireGuard-App: "Fernsteuerung durch Apps erlauben") -->
     <uses-permission android:name="com.wireguard.android.permission.CONTROL_TUNNELS" />
     <!-- Android 11+: WireGuard-App sichtbar machen (pruefen, ob installiert) -->
     <queries>
         <package android:name="com.wireguard.android" />
+        <package android:name="net.rapalle.rmmclient" />
     </queries>
 
     <application
-        android:label="RAPALLE.net RMM"
+        android:label="BYTERA RMM"
         android:icon="@drawable/icon"
         android:allowBackup="false"
         android:usesCleartextTraffic="true"
@@ -34,7 +37,7 @@
         <!-- liefert VPN-Konfigurationen an die WireGuard-App (nur per Freigabe) -->
         <provider
             android:name=".MainActivity$ConfProvider"
-            android:authorities="net.rapalle.rmmclient.conf"
+            android:authorities="net.bytera.rmmclient.conf"
             android:exported="false"
             android:grantUriPermissions="true" />
     </application>

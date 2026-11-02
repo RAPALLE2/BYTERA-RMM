@@ -299,7 +299,7 @@ def enrollment_landing_page(token: str, request: Request):
     <html lang="de">
     <head>
       <meta charset="UTF-8">
-      <title>RAPALLE.net RMM — Agent-Installation</title>
+      <title>BYTERA RMM — Agent-Installation</title>
       <style>
         body {{ font-family: system-ui, sans-serif; background: #0c1420; color: #dbe4f0;
                 max-width: 720px; margin: 40px auto; padding: 0 20px; line-height: 1.5; }}
@@ -313,7 +313,7 @@ def enrollment_landing_page(token: str, request: Request):
       </style>
     </head>
     <body>
-      <h1>RAPALLE.net RMM — Agent installieren</h1>
+      <h1>BYTERA RMM — Agent installieren</h1>
       <p>Dieser Link installiert den Überwachungs-Agenten auf diesem Rechner
          und verbindet ihn automatisch mit deinem RMM-Dashboard.</p>
 
@@ -398,7 +398,7 @@ async def download_agent_zip(token: str, request: Request):
     return StreamingResponse(
         buffer,
         media_type="application/zip",
-        headers={"Content-Disposition": "attachment; filename=rapalle-rmm-agent.zip"},
+        headers={"Content-Disposition": "attachment; filename=bytera-rmm-agent.zip"},
     )
 
 
@@ -414,9 +414,9 @@ def install_script_linux(token: str, request: Request, lang: str = ""):
         return _t(key, _L, **kw)
 
     script = f"""#!/bin/bash
-# RAPALLE.net RMM - automatische Agent-Installation (Linux)
+# BYTERA RMM - automatische Agent-Installation (Linux)
 set -e
-INSTALL_DIR="/opt/rapalle-rmm-agent"
+INSTALL_DIR="/opt/bytera-rmm-agent"
 
 # --- Rootrechte: notfalls SELBST ueber sudo neu starten -------------------
 # Wird das Skript aus einer Pipe gelesen ("curl ... | bash"), gibt es kein $0
@@ -468,12 +468,31 @@ ensure_pkgs
 
 echo "Lade Agent herunter..."
 sudo mkdir -p "$INSTALL_DIR"
-curl -sSL "{backend_url}/enroll/{token}/agent.zip" -o /tmp/rapalle-agent.zip
-sudo unzip -o /tmp/rapalle-agent.zip -d /tmp/rapalle-agent-extract
+
+# --- Umbenennung: Altinstallation (RAPALLE.net RMM) uebernehmen -----------
+# Laeuft hier noch ein Agent unter dem alten Namen, wird er gestoppt und
+# entfernt. Die Geraete-ID (.device-id) wandert mit, damit das Geraet im
+# Dashboard KEIN neuer Client wird.
+LEGACY_DIR="/opt/rapalle-rmm-agent"
+if [ -d "$LEGACY_DIR" ] || [ -f /etc/systemd/system/rapalle-agent.service ]; then
+  echo "Altinstallation (RAPALLE.net RMM) gefunden - ziehe nach $INSTALL_DIR um..."
+  sudo systemctl disable --now rapalle-agent 2>/dev/null || true
+  sudo systemctl disable --now rapalle-node 2>/dev/null || true
+  sudo pkill -f "$LEGACY_DIR/" 2>/dev/null || true
+  if [ -f "$LEGACY_DIR/.device-id" ] && [ ! -f "$INSTALL_DIR/.device-id" ]; then
+    sudo cp "$LEGACY_DIR/.device-id" "$INSTALL_DIR/.device-id"
+  fi
+  sudo rm -f /etc/systemd/system/rapalle-agent.service /etc/systemd/system/rapalle-node.service
+  sudo systemctl daemon-reload 2>/dev/null || true
+  sudo systemctl reset-failed rapalle-agent rapalle-node 2>/dev/null || true
+  sudo rm -rf "$LEGACY_DIR"
+fi
+curl -sSL "{backend_url}/enroll/{token}/agent.zip" -o /tmp/bytera-agent.zip
+sudo unzip -o /tmp/bytera-agent.zip -d /tmp/bytera-agent-extract
 # Laufenden Agenten stoppen, bevor Dateien ersetzt werden (sonst bleibt die
 # alte Version aktiv, bis der Dienst manuell neu startet).
-sudo systemctl stop rapalle-agent 2>/dev/null || true
-sudo cp -r /tmp/rapalle-agent-extract/agent/. "$INSTALL_DIR/"
+sudo systemctl stop bytera-agent 2>/dev/null || true
+sudo cp -r /tmp/bytera-agent-extract/agent/. "$INSTALL_DIR/"
 
 # .env auf die echte Backend-Adresse setzen (der Rechner, der dieses Skript ausführt,
 # kennt die Backend-Adresse ja schon, weil er sie gerade aufgerufen hat)
@@ -495,9 +514,9 @@ else
 fi
 
 echo "Richte Autostart-Dienst ein..."
-sudo tee /etc/systemd/system/rapalle-agent.service > /dev/null <<EOF
+sudo tee /etc/systemd/system/bytera-agent.service > /dev/null <<EOF
 [Unit]
-Description=RAPALLE.net RMM Agent
+Description=BYTERA RMM Agent
 After=network.target
 
 [Service]
@@ -511,7 +530,7 @@ WantedBy=multi-user.target
 EOF
 
 sudo systemctl daemon-reload
-sudo systemctl enable --now rapalle-agent
+sudo systemctl enable --now bytera-agent
 
 # --- Abschluss-Pruefung -----------------------------------------------------
 # Bisher stand hier bedingungslos "Fertig!". Das war eine Behauptung, keine
@@ -539,16 +558,16 @@ fi
 # 2. Laeuft der Dienst nach ein paar Sekunden noch? Ein Absturz beim Start
 #    (fehlende Abhaengigkeit, falsches Token) zeigt sich genau hier.
 sleep 6
-if sudo systemctl is-active --quiet rapalle-agent; then
-  echo "[OK]     Dienst rapalle-agent laeuft"
+if sudo systemctl is-active --quiet bytera-agent; then
+  echo "[OK]     Dienst bytera-agent laeuft"
 else
-  echo "[FEHLER] Dienst rapalle-agent laeuft NICHT (mehr)"
+  echo "[FEHLER] Dienst bytera-agent laeuft NICHT (mehr)"
   FAIL=1
 fi
 
 # 3. Was sagt der Agent selbst? Seine letzten Zeilen sind aussagekraeftiger
 #    als jede Vermutung des Installers.
-if sudo journalctl -u rapalle-agent -n 15 --no-pager 2>/dev/null | grep -qiE "Ungueltiges Agent-Token|Ungültiges Agent-Token|Invalid.*token"; then
+if sudo journalctl -u bytera-agent -n 15 --no-pager 2>/dev/null | grep -qiE "Ungueltiges Agent-Token|Ungültiges Agent-Token|Invalid.*token"; then
   echo "[FEHLER] Das Backend lehnt das AGENT_TOKEN ab."
   FAIL=1
 fi
@@ -560,10 +579,10 @@ if [ "$FAIL" = "0" ]; then
 else
   echo "INSTALLATION UNVOLLSTAENDIG - der Agent wird NICHT im Dashboard erscheinen."
   echo "Letzte Meldungen des Agenten:"
-  sudo journalctl -u rapalle-agent -n 25 --no-pager 2>/dev/null || \
+  sudo journalctl -u bytera-agent -n 25 --no-pager 2>/dev/null || \
     sudo tail -n 25 "$INSTALL_DIR/agent.log" 2>/dev/null || true
 fi
-echo "Status jederzeit pruefen mit: sudo systemctl status rapalle-agent"
+echo "Status jederzeit pruefen mit: sudo systemctl status bytera-agent"
 exit $FAIL
 """
     return PlainTextResponse(script, media_type="text/x-sh")
@@ -580,9 +599,9 @@ def install_script_windows(token: str, request: Request, lang: str = ""):
     def L(key, **kw):
         return _t(key, _L, **kw)
 
-    script = f"""# RAPALLE.net RMM - automatische Agent-Installation (Windows)
+    script = f"""# BYTERA RMM - automatische Agent-Installation (Windows)
 $ErrorActionPreference = "Stop"
-$InstallDir = "C:\\Program Files\\RapalleRmmAgent"
+$InstallDir = "C:\\Program Files\\ByteraRmmAgent"
 
 # --- Adminrechte: notfalls SELBST per UAC neu starten ---------------------
 # Wichtig fuer den Ein-Zeiler "iwr ... | iex": dabei gibt es keine Skriptdatei,
@@ -630,17 +649,38 @@ if (-not $python) {{
 
 # --- 2. Agent herunterladen und entpacken ---
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+
+# --- Umbenennung: Altinstallation (RAPALLE.net RMM) uebernehmen -----------
+# Laeuft noch ein Agent unter dem alten Namen, wird er gestoppt und entfernt.
+# Die Geraete-ID (.device-id) wandert mit -> kein neuer Client im Dashboard.
+$LegacyDir = "C:\\Program Files\\RapalleRmmAgent"
+$LegacyFound = (Test-Path $LegacyDir) -or [bool](Get-ScheduledTask -TaskName "RapalleRmmAgent" -ErrorAction SilentlyContinue)
+if ($LegacyFound) {{
+    Write-Host "Altinstallation (RAPALLE.net RMM) gefunden - ziehe nach $InstallDir um..."
+    foreach ($t in @("RapalleRmmAgent", "RapalleNode")) {{
+        try {{ Stop-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue }} catch {{}}
+        try {{ Unregister-ScheduledTask -TaskName $t -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
+    }}
+    try {{
+        Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" |
+            Where-Object {{ $_.CommandLine -like "*RapalleRmmAgent*" }} |
+            ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}
+    }} catch {{}}
+    if ((Test-Path "$LegacyDir\\.device-id") -and -not (Test-Path "$InstallDir\\.device-id")) {{
+        Copy-Item "$LegacyDir\\.device-id" "$InstallDir\\.device-id" -Force
+    }}
+}}
 Write-Host "Lade Agent herunter..."
-Invoke-WebRequest -Uri "{backend_url}/enroll/{token}/agent.zip" -OutFile "$env:TEMP\\rapalle-agent.zip"
-if (Test-Path "$env:TEMP\\rapalle-agent-extract") {{ Remove-Item -Recurse -Force "$env:TEMP\\rapalle-agent-extract" }}
-Expand-Archive -Path "$env:TEMP\\rapalle-agent.zip" -DestinationPath "$env:TEMP\\rapalle-agent-extract" -Force
+Invoke-WebRequest -Uri "{backend_url}/enroll/{token}/agent.zip" -OutFile "$env:TEMP\\bytera-agent.zip"
+if (Test-Path "$env:TEMP\\bytera-agent-extract") {{ Remove-Item -Recurse -Force "$env:TEMP\\bytera-agent-extract" }}
+Expand-Archive -Path "$env:TEMP\\bytera-agent.zip" -DestinationPath "$env:TEMP\\bytera-agent-extract" -Force
 
 # --- Laufenden Agenten STOPPEN, bevor Dateien ersetzt werden ---------------
 # WICHTIG: Sonst laeuft nach dem Update weiter die ALTE agent.py im Speicher
 # (neue Funktionen wie das interaktive Terminal fehlen dann). Erst Task
 # anhalten, dann alle pythonw/python-Prozesse killen, die agent.py ausfuehren.
 Write-Host "Stoppe evtl. laufenden Agenten..."
-try {{ Stop-ScheduledTask -TaskName "RapalleRmmAgent" -ErrorAction SilentlyContinue }} catch {{}}
+try {{ Stop-ScheduledTask -TaskName "ByteraRmmAgent" -ErrorAction SilentlyContinue }} catch {{}}
 try {{
     Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" |
         Where-Object {{ $_.CommandLine -like "*agent.py*" }} |
@@ -648,7 +688,7 @@ try {{
 }} catch {{}}
 Start-Sleep -Seconds 2
 
-Copy-Item -Path "$env:TEMP\\rapalle-agent-extract\\agent\\*" -Destination $InstallDir -Recurse -Force
+Copy-Item -Path "$env:TEMP\\bytera-agent-extract\\agent\\*" -Destination $InstallDir -Recurse -Force
 
 # .env auf die echte Backend-Adresse setzen
 (Get-Content "$InstallDir\\.env") -replace 'BACKEND_URL=.*', 'BACKEND_URL={backend_url}' | Set-Content "$InstallDir\\.env"
@@ -685,13 +725,13 @@ $TrigWatch = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (
 $Principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
 $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0)  # 0 = KEIN Zeitlimit! Ohne das killt der Task-Scheduler die Aufgabe nach 72h LAUTLOS (kein Log, kein Neustart, da kein "Fehler")
 # Alten (benutzergebundenen) Task entfernen, damit kein zweiter Agent startet.
-try {{ Unregister-ScheduledTask -TaskName "RapalleRmmAgent" -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
-Register-ScheduledTask -TaskName "RapalleRmmAgent" -Action $Action -Trigger $TrigBoot,$TrigWatch -Principal $Principal -Settings $Settings -Force | Out-Null
+try {{ Unregister-ScheduledTask -TaskName "ByteraRmmAgent" -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
+Register-ScheduledTask -TaskName "ByteraRmmAgent" -Action $Action -Trigger $TrigBoot,$TrigWatch -Principal $Principal -Settings $Settings -Force | Out-Null
 
 # --- 5. Agent SOFORT starten (unsichtbar, als SYSTEM) ---
-Start-ScheduledTask -TaskName "RapalleRmmAgent"
+Start-ScheduledTask -TaskName "ByteraRmmAgent"
 Start-Sleep -Seconds 3
-$chk = Get-ScheduledTask -TaskName "RapalleRmmAgent" -ErrorAction SilentlyContinue
+$chk = Get-ScheduledTask -TaskName "ByteraRmmAgent" -ErrorAction SilentlyContinue
 if ($chk -and $chk.Principal.UserId -notmatch "SYSTEM") {{
     Write-Host "WARNUNG: Autostart laeuft nicht als SYSTEM - der Agent startet dann nur nach Anmeldung." -ForegroundColor Yellow
 }}
@@ -711,6 +751,15 @@ Write-Host "Du kannst dieses Fenster schliessen - der Agent laeuft weiter."
 Write-Host "Der Client sollte in wenigen Sekunden im Dashboard erscheinen."
 Write-Host ""
 Write-Host "(Log-Datei bei Problemen: $InstallDir\\agent.log)"
+
+# --- Umbenennung: Reste der Altinstallation (RAPALLE.net RMM) entfernen ----
+# Bewusst ganz am Ende: das alte Wartungs-Task kann genau dieses Skript
+# gestartet haben. Was hier haengen bleibt, raeumt der neue Agent beim Start auf.
+if ($LegacyFound) {{
+    Remove-Item -LiteralPath $LegacyDir -Recurse -Force -ErrorAction SilentlyContinue
+    try {{ if ([System.Diagnostics.EventLog]::SourceExists("RapalleRMM")) {{ Remove-EventLog -Source "RapalleRMM" }} }} catch {{}}
+    foreach ($t in @("RapalleRmmUninstall", "RapalleRmmUpdate")) {{ schtasks /delete /tn $t /f 2>$null | Out-Null }}
+}}
 """
     return PlainTextResponse(script, media_type="text/plain")
 
@@ -740,7 +789,7 @@ async def agent_dist_zip(request: Request):
     return StreamingResponse(
         buffer,
         media_type="application/zip",
-        headers={"Content-Disposition": "attachment; filename=rapalle-rmm-agent.zip"},
+        headers={"Content-Disposition": "attachment; filename=bytera-rmm-agent.zip"},
     )
 
 
@@ -761,9 +810,9 @@ def agent_update_sh(request: Request, lang: str = ""):
         return _t(key, _L, **kw)
 
     script = f"""#!/bin/bash
-# RAPALLE.net RMM - Agent-Update (Linux)
+# BYTERA RMM - Agent-Update (Linux)
 set -e
-INSTALL_DIR="/opt/rapalle-rmm-agent"
+INSTALL_DIR="/opt/bytera-rmm-agent"
 
 # Rootrechte: notfalls selbst per sudo neu starten (wenn es eine Skriptdatei
 # gibt - beim Aufruf durch eine Pipe greifen die sudo-Aufrufe weiter unten).
@@ -778,24 +827,37 @@ echo "=== {L('ins_upd_title')} ($(date)) ==="
 
 # --- 1. Neues Paket holen ---------------------------------------------------
 echo "{L('ins_downloading')}"
-curl -sSL "{backend_url}/agent-dist/agent.zip" -o /tmp/rapalle-agent.zip
-rm -rf /tmp/rapalle-agent-extract
-mkdir -p /tmp/rapalle-agent-extract
-unzip -o /tmp/rapalle-agent.zip -d /tmp/rapalle-agent-extract >/dev/null
+curl -sSL "{backend_url}/agent-dist/agent.zip" -o /tmp/bytera-agent.zip
+rm -rf /tmp/bytera-agent-extract
+mkdir -p /tmp/bytera-agent-extract
+unzip -o /tmp/bytera-agent.zip -d /tmp/bytera-agent-extract >/dev/null
 
 # --- 2. Laufenden Agenten stoppen -------------------------------------------
 echo "{L('ins_stopping')}"
-sudo systemctl stop rapalle-agent 2>/dev/null || true
+sudo systemctl stop bytera-agent 2>/dev/null || true
 sudo pkill -f "$INSTALL_DIR/agent.py" 2>/dev/null || true
+# Umbenennung: Agent unter altem Namen (RAPALLE.net RMM) ebenfalls stoppen -
+# er wird hier in den neuen Ordner umgezogen (Identitaet bleibt erhalten).
+LEGACY_DIR="/opt/rapalle-rmm-agent"
+if [ -d "$LEGACY_DIR" ] || [ -f /etc/systemd/system/rapalle-agent.service ]; then
+  echo "Altinstallation (RAPALLE.net RMM) gefunden - ziehe nach $INSTALL_DIR um."
+  sudo systemctl disable --now rapalle-agent 2>/dev/null || true
+  sudo systemctl disable --now rapalle-node 2>/dev/null || true
+  sudo pkill -f "$LEGACY_DIR/" 2>/dev/null || true
+fi
 sleep 2
 
 # --- 3. Identitaet sichern --------------------------------------------------
 # .env und .device-id MUESSEN erhalten bleiben, sonst erscheint das Geraet
 # nach dem Neuausrollen als NEUER Client im Dashboard.
-KEEP=/tmp/rapalle-agent-keep
+KEEP=/tmp/bytera-agent-keep
 sudo rm -rf "$KEEP"; sudo mkdir -p "$KEEP"
 for f in .env .device-id; do
-  [ -f "$INSTALL_DIR/$f" ] && sudo cp "$INSTALL_DIR/$f" "$KEEP/$f"
+  if [ -f "$INSTALL_DIR/$f" ]; then
+    sudo cp "$INSTALL_DIR/$f" "$KEEP/$f"
+  elif [ -f "$LEGACY_DIR/$f" ]; then
+    sudo cp "$LEGACY_DIR/$f" "$KEEP/$f"          # aus der Altinstallation uebernehmen
+  fi
 done
 
 # --- 4. Programmordner leeren (KOMPLETTES Neuausrollen) ---------------------
@@ -807,7 +869,7 @@ sudo find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
 
 # --- 5. Neue Dateien auslegen (rekursiv) ------------------------------------
 echo "{L('ins_deploying')}"
-sudo cp -a /tmp/rapalle-agent-extract/agent/. "$INSTALL_DIR/"
+sudo cp -a /tmp/bytera-agent-extract/agent/. "$INSTALL_DIR/"
 for f in .env .device-id; do
   [ -f "$KEEP/$f" ] && sudo cp "$KEEP/$f" "$INSTALL_DIR/$f"
 done
@@ -844,9 +906,9 @@ else
 fi
 
 # Autostart-Unit (neu) schreiben -> garantiert vorhanden fuer den Neustart.
-sudo tee /etc/systemd/system/rapalle-agent.service > /dev/null <<UNIT
+sudo tee /etc/systemd/system/bytera-agent.service > /dev/null <<UNIT
 [Unit]
-Description=RAPALLE.net RMM Agent
+Description=BYTERA RMM Agent
 After=network.target
 
 [Service]
@@ -860,11 +922,19 @@ WantedBy=multi-user.target
 UNIT
 
 sudo systemctl daemon-reload
-sudo systemctl enable rapalle-agent 2>/dev/null || true
+sudo systemctl enable bytera-agent 2>/dev/null || true
 # Marker anlegen: nach dem Neustart meldet der Agent dem Backend "updated".
 sudo touch "$INSTALL_DIR/.updated"
 # NEU STARTEN (nicht nur start) - bringt den Agenten mit neuer Version hoch.
-sudo systemctl restart rapalle-agent
+sudo systemctl restart bytera-agent
+# Umbenennung: Reste der Altinstallation entfernen.
+if [ -d "$LEGACY_DIR" ] || [ -f /etc/systemd/system/rapalle-agent.service ]; then
+  sudo rm -f /etc/systemd/system/rapalle-agent.service /etc/systemd/system/rapalle-node.service
+  sudo systemctl daemon-reload 2>/dev/null || true
+  sudo systemctl reset-failed rapalle-agent rapalle-node 2>/dev/null || true
+  sudo rm -rf "$LEGACY_DIR"
+  echo "Altinstallation (RAPALLE.net RMM) entfernt."
+fi
 echo "Update fertig - Agent neu gestartet."
 """
     return PlainTextResponse(script, media_type="text/x-sh")
@@ -883,9 +953,9 @@ def agent_update_ps1(request: Request, lang: str = ""):
     def L(key, **kw):
         return _t(key, _L, **kw)
 
-    script = f"""# RAPALLE.net RMM - Agent-Update (Windows) - als Administrator ausfuehren
+    script = f"""# BYTERA RMM - Agent-Update (Windows) - als Administrator ausfuehren
 $ErrorActionPreference = "Stop"
-$InstallDir = "C:\\Program Files\\RapalleRmmAgent"
+$InstallDir = "C:\\Program Files\\ByteraRmmAgent"
 # Adminrechte: notfalls per UAC neu starten (Program Files + Aufgabenplanung).
 $id = [Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
@@ -905,19 +975,30 @@ Write-Host "=== {L('ins_upd_title')} ($(Get-Date)) ==="
 
 # --- 1. Neues Paket holen ---------------------------------------------------
 Write-Host "{L('ins_downloading')}"
-Invoke-WebRequest -Uri "{backend_url}/agent-dist/agent.zip" -OutFile "$env:TEMP\\rapalle-agent.zip"
-if (Test-Path "$env:TEMP\\rapalle-agent-extract") {{ Remove-Item -Recurse -Force "$env:TEMP\\rapalle-agent-extract" }}
-Expand-Archive -Path "$env:TEMP\\rapalle-agent.zip" -DestinationPath "$env:TEMP\\rapalle-agent-extract" -Force
-$Src = "$env:TEMP\\rapalle-agent-extract\\agent"
+Invoke-WebRequest -Uri "{backend_url}/agent-dist/agent.zip" -OutFile "$env:TEMP\\bytera-agent.zip"
+if (Test-Path "$env:TEMP\\bytera-agent-extract") {{ Remove-Item -Recurse -Force "$env:TEMP\\bytera-agent-extract" }}
+Expand-Archive -Path "$env:TEMP\\bytera-agent.zip" -DestinationPath "$env:TEMP\\bytera-agent-extract" -Force
+$Src = "$env:TEMP\\bytera-agent-extract\\agent"
 
 # --- 2. Laufenden Agenten UND Bildschirm-Helfer beenden ---------------------
 # Der Helfer (_screen_helper.py) laeuft in der Benutzersitzung und haelt sonst
 # eine alte Datei offen -> die neue Fassung wuerde erst nach Reboot greifen.
 Write-Host "{L('ins_stopping')}"
-try {{ Stop-ScheduledTask -TaskName "RapalleRmmAgent" -ErrorAction SilentlyContinue }} catch {{}}
+try {{ Stop-ScheduledTask -TaskName "ByteraRmmAgent" -ErrorAction SilentlyContinue }} catch {{}}
+# Umbenennung: Agent unter altem Namen (RAPALLE.net RMM) stoppen und abmelden -
+# er wird hier in den neuen Ordner umgezogen (Identitaet bleibt erhalten).
+$LegacyDir = "C:\\Program Files\\RapalleRmmAgent"
+$LegacyFound = (Test-Path $LegacyDir) -or [bool](Get-ScheduledTask -TaskName "RapalleRmmAgent" -ErrorAction SilentlyContinue)
+if ($LegacyFound) {{
+    Write-Host "Altinstallation (RAPALLE.net RMM) gefunden - ziehe nach $InstallDir um."
+    foreach ($t in @("RapalleRmmAgent", "RapalleNode")) {{
+        try {{ Stop-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue }} catch {{}}
+        try {{ Unregister-ScheduledTask -TaskName $t -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
+    }}
+}}
 try {{
     Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" |
-        Where-Object {{ $_.CommandLine -like "*RapalleRmmAgent*" -or $_.CommandLine -like "*agent.py*" -or $_.CommandLine -like "*_screen_helper.py*" }} |
+        Where-Object {{ $_.CommandLine -like "*ByteraRmmAgent*" -or $_.CommandLine -like "*RapalleRmmAgent*" -or $_.CommandLine -like "*agent.py*" -or $_.CommandLine -like "*_screen_helper.py*" }} |
         ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}
 }} catch {{}}
 Start-Sleep -Seconds 3
@@ -925,11 +1006,12 @@ Start-Sleep -Seconds 3
 # --- 3. Identitaet sichern --------------------------------------------------
 # .env (Token/Backend) und .device-id (Client-Identitaet) MUESSEN das
 # Neuausrollen ueberleben, sonst taucht das Geraet als NEUER Client auf.
-$Keep = "$env:TEMP\\rapalle-agent-keep"
+$Keep = "$env:TEMP\\bytera-agent-keep"
 if (Test-Path $Keep) {{ Remove-Item -Recurse -Force $Keep }}
 New-Item -ItemType Directory -Force -Path $Keep | Out-Null
 foreach ($f in @(".env", ".device-id")) {{
     if (Test-Path "$InstallDir\\$f") {{ Copy-Item "$InstallDir\\$f" "$Keep\\$f" -Force }}
+    elseif (Test-Path "$LegacyDir\\$f") {{ Copy-Item "$LegacyDir\\$f" "$Keep\\$f" -Force }}   # aus der Altinstallation
 }}
 
 # --- 4. Programmordner leeren (KOMPLETTES Neuausrollen) ---------------------
@@ -1010,17 +1092,26 @@ $TrigBoot  = New-ScheduledTaskTrigger -AtStartup
 $TrigWatch = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
 $Principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
 $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0)  # 0 = KEIN Zeitlimit (sonst stiller Kill nach 72h)
-try {{ Unregister-ScheduledTask -TaskName "RapalleRmmAgent" -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
-Register-ScheduledTask -TaskName "RapalleRmmAgent" -Action $Action -Trigger $TrigBoot,$TrigWatch -Principal $Principal -Settings $Settings -Force | Out-Null
+try {{ Unregister-ScheduledTask -TaskName "ByteraRmmAgent" -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
+Register-ScheduledTask -TaskName "ByteraRmmAgent" -Action $Action -Trigger $TrigBoot,$TrigWatch -Principal $Principal -Settings $Settings -Force | Out-Null
 
 # --- 8. Wartungs-Tasks nachziehen -------------------------------------------
 try {{ iwr "{backend_url}/agent-dist/elevate.ps1" -UseBasicParsing | iex }} catch {{ Write-Host "  (Wartungs-Tasks: $_)" }}
 
 # --- 9. NEU STARTEN ---------------------------------------------------------
 New-Item -ItemType File -Force "$InstallDir\\.updated" | Out-Null
-Start-ScheduledTask -TaskName "RapalleRmmAgent"
+Start-ScheduledTask -TaskName "ByteraRmmAgent"
 Write-Host "=== {L('ins_done')} ==="
 try {{ Stop-Transcript | Out-Null }} catch {{}}
+
+# --- Umbenennung: Reste der Altinstallation (RAPALLE.net RMM) entfernen ----
+# Bewusst ganz am Ende: das alte Wartungs-Task kann genau dieses Skript
+# gestartet haben. Was hier haengen bleibt, raeumt der neue Agent beim Start auf.
+if ($LegacyFound) {{
+    Remove-Item -LiteralPath $LegacyDir -Recurse -Force -ErrorAction SilentlyContinue
+    try {{ if ([System.Diagnostics.EventLog]::SourceExists("RapalleRMM")) {{ Remove-EventLog -Source "RapalleRMM" }} }} catch {{}}
+    foreach ($t in @("RapalleRmmUninstall", "RapalleRmmUpdate")) {{ schtasks /delete /tn $t /f 2>$null | Out-Null }}
+}}
 """
     # Waehrend eines Umzugs mit neuem Token: exakt dieselbe Zeile wie fuer BACKEND_URL, nur fuer AGENT_TOKEN
     if new_token:
@@ -1037,8 +1128,8 @@ def agent_elevate_ps1(request: Request):
     """
     Richtet EINMALIG (elevated auszuführen) zwei vorautorisierte SYSTEM-Tasks ein,
     die per Windows-Event ausgelöst werden:
-        RapalleRmmUpdate    (EventID 812)  -> update.ps1
-        RapalleRmmUninstall (EventID 811)  -> uninstall.ps1
+        ByteraRmmUpdate    (EventID 812)  -> update.ps1
+        ByteraRmmUninstall (EventID 811)  -> uninstall.ps1
     Danach kann der Agent Update/Uninstall auslösen, indem er nur ein Event
     schreibt - die Aufgabenplanung führt das Skript dann als SYSTEM aus.
 
@@ -1054,16 +1145,16 @@ def agent_elevate_ps1(request: Request):
     template = r'''$ErrorActionPreference = "Continue"
 $Backend = "__BACKEND__"
 
-Write-Host "RapalleRMM: richte elevated Update/Uninstall (SYSTEM, per Event ausgeloest) ein..."
+Write-Host "ByteraRMM: richte elevated Update/Uninstall (SYSTEM, per Event ausgeloest) ein..."
 
 # Event-Quelle anlegen (idempotent). Der Agent schreibt spaeter Events dieser
 # Quelle; die SYSTEM-Tasks werden dadurch getriggert.
 try {
-    if (-not [System.Diagnostics.EventLog]::SourceExists("RapalleRMM")) {
-        New-EventLog -LogName Application -Source "RapalleRMM" -ErrorAction Stop
-        Write-Host "  Event-Quelle 'RapalleRMM' angelegt."
+    if (-not [System.Diagnostics.EventLog]::SourceExists("ByteraRMM")) {
+        New-EventLog -LogName Application -Source "ByteraRMM" -ErrorAction Stop
+        Write-Host "  Event-Quelle 'ByteraRMM' angelegt."
     } else {
-        Write-Host "  Event-Quelle 'RapalleRMM' vorhanden."
+        Write-Host "  Event-Quelle 'ByteraRMM' vorhanden."
     }
 } catch {
     Write-Host "  WARNUNG: Event-Quelle konnte nicht angelegt werden: $_"
@@ -1072,18 +1163,18 @@ try {
 function Register-RmmSystemTask($name, $eventId, $scriptName) {
     # Task-Definition als XML (robust ueber alle Windows-Versionen; kein CIM noetig).
     # SYSTEM = SID S-1-5-18. EventTrigger horcht auf Application-Events der Quelle
-    # 'RapalleRMM' mit der passenden EventID.
+    # 'ByteraRMM' mit der passenden EventID.
     $argLine = "-NoProfile -ExecutionPolicy Bypass -Command ""iwr '$Backend/agent-dist/$scriptName' -UseBasicParsing | iex"""
     $xml = @"
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>RapalleRMM $name</Description>
+    <Description>ByteraRMM $name</Description>
   </RegistrationInfo>
   <Triggers>
     <EventTrigger>
       <Enabled>true</Enabled>
-      <Subscription>&lt;QueryList&gt;&lt;Query Id="0" Path="Application"&gt;&lt;Select Path="Application"&gt;*[System[Provider[@Name='RapalleRMM'] and (EventID=$eventId)]]&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;</Subscription>
+      <Subscription>&lt;QueryList&gt;&lt;Query Id="0" Path="Application"&gt;&lt;Select Path="Application"&gt;*[System[Provider[@Name='ByteraRMM'] and (EventID=$eventId)]]&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;</Subscription>
     </EventTrigger>
   </Triggers>
   <Principals>
@@ -1129,8 +1220,8 @@ function Register-RmmSystemTask($name, $eventId, $scriptName) {
     }
 }
 
-$ok1 = Register-RmmSystemTask "RapalleRmmUpdate" 812 "update.ps1"
-$ok2 = Register-RmmSystemTask "RapalleRmmUninstall" 811 "uninstall.ps1"
+$ok1 = Register-RmmSystemTask "ByteraRmmUpdate" 812 "update.ps1"
+$ok2 = Register-RmmSystemTask "ByteraRmmUninstall" 811 "uninstall.ps1"
 
 Write-Host ""
 if ($ok1 -and $ok2) {
@@ -1138,7 +1229,7 @@ if ($ok1 -and $ok2) {
 } else {
     Write-Host "ACHTUNG: Mindestens ein Task konnte nicht angelegt werden. Bitte dieses Fenster ALS ADMINISTRATOR ausfuehren." -ForegroundColor Yellow
 }
-Write-Host "Pruefen mit:  schtasks /query /tn RapalleRmmUninstall"
+Write-Host "Pruefen mit:  schtasks /query /tn ByteraRmmUninstall"
 '''
     script = template.replace("__BACKEND__", backend_url)
     return PlainTextResponse(script, media_type="text/plain")
@@ -1158,19 +1249,28 @@ def agent_uninstall_sh(request: Request, lang: str = ""):
         return _t(key, _L, **kw)
 
     script = """#!/bin/bash
-# RAPALLE.net RMM - Agent-Deinstallation (Linux)
+# BYTERA RMM - Agent-Deinstallation (Linux)
 # Laeuft in einem eigenen systemd-Scope (siehe agent.py) und ueberlebt daher
 # den Stop des eigenen Dienstes. Reihenfolge: Dienst stoppen/entfernen ->
 # Prozesse killen -> Programmordner loeschen (mit Wiederholung).
-INSTALL_DIR="/opt/rapalle-rmm-agent"
+INSTALL_DIR="/opt/bytera-rmm-agent"
 
 echo "1) Stoppe und entferne Agent-Dienst..."
-sudo systemctl stop rapalle-agent 2>/dev/null || true
-sudo systemctl disable rapalle-agent 2>/dev/null || true
-sudo systemctl kill rapalle-agent 2>/dev/null || true
-sudo rm -f /etc/systemd/system/rapalle-agent.service
+sudo systemctl stop bytera-agent 2>/dev/null || true
+sudo systemctl disable bytera-agent 2>/dev/null || true
+sudo systemctl kill bytera-agent 2>/dev/null || true
+sudo rm -f /etc/systemd/system/bytera-agent.service
 sudo systemctl daemon-reload 2>/dev/null || true
-sudo systemctl reset-failed rapalle-agent 2>/dev/null || true
+sudo systemctl reset-failed bytera-agent 2>/dev/null || true
+# Installation unter altem Namen (RAPALLE.net RMM) gleich mit entfernen
+LEGACY_DIR="/opt/rapalle-rmm-agent"
+for u in rapalle-agent rapalle-node; do
+  sudo systemctl disable --now "$u" 2>/dev/null || true
+  sudo rm -f "/etc/systemd/system/$u.service"
+done
+sudo systemctl daemon-reload 2>/dev/null || true
+sudo pkill -9 -f "$LEGACY_DIR" 2>/dev/null || true
+sudo rm -rf "$LEGACY_DIR" 2>/dev/null || true
 
 echo "2) Beende Agent-Prozesse..."
 # Mehrere Muster, damit der Prozess sicher getroffen wird (venv-Pfad, agent.py,
@@ -1178,7 +1278,7 @@ echo "2) Beende Agent-Prozesse..."
 for i in 1 2 3; do
   sudo pkill -9 -f "$INSTALL_DIR/agent.py" 2>/dev/null || true
   sudo pkill -9 -f "$INSTALL_DIR" 2>/dev/null || true
-  sudo pkill -9 -f "rapalle-rmm-agent" 2>/dev/null || true
+  sudo pkill -9 -f "bytera-rmm-agent" 2>/dev/null || true
   sleep 1
   if ! pgrep -f "$INSTALL_DIR/agent.py" >/dev/null 2>&1; then break; fi
 done
@@ -1212,11 +1312,11 @@ def agent_uninstall_ps1(request: Request, lang: str = ""):
     def L(key, **kw):
         return _t(key, _L, **kw)
 
-    script = """# RAPALLE.net RMM - Agent-Deinstallation (Windows)
+    script = """# BYTERA RMM - Agent-Deinstallation (Windows)
 # Wird bevorzugt als SYSTEM-Task ausgefuehrt (elevated). Reihenfolge:
 # Autostart entfernen -> Prozesse hart beenden -> alle Daten loeschen.
 $ErrorActionPreference = "SilentlyContinue"
-$InstallDir = "C:\\Program Files\\RapalleRmmAgent"
+$InstallDir = "C:\\Program Files\\ByteraRmmAgent"
 
 # Adminrechte: notfalls per UAC neu starten. Als SYSTEM-Task laeuft das Skript
 # ohnehin schon erhoeht - dann greift der Block nicht.
@@ -1234,16 +1334,26 @@ if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
 }
 
 Write-Host "1) Stoppe und entferne Agent-Autostart..."
-schtasks /end /tn "RapalleRmmAgent" 2>$null | Out-Null
-schtasks /delete /tn "RapalleRmmAgent" /f 2>$null | Out-Null
-Unregister-ScheduledTask -TaskName "RapalleRmmAgent" -Confirm:$false
+schtasks /end /tn "ByteraRmmAgent" 2>$null | Out-Null
+schtasks /delete /tn "ByteraRmmAgent" /f 2>$null | Out-Null
+Unregister-ScheduledTask -TaskName "ByteraRmmAgent" -Confirm:$false
+# Installation unter altem Namen (RAPALLE.net RMM) gleich mit entfernen
+$LegacyDir = "C:\\Program Files\\RapalleRmmAgent"
+foreach ($t in @("RapalleRmmAgent", "RapalleNode")) {
+    schtasks /end /tn $t 2>$null | Out-Null
+    schtasks /delete /tn $t /f 2>$null | Out-Null
+}
+Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*RapalleRmmAgent*" } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Start-Sleep -Seconds 1
+Remove-Item -LiteralPath $LegacyDir -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host "2) Beende Agent-Prozesse..."
 for ($i = 0; $i -lt 4; $i++) {
     $ids = @()
     $ids += (Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path -like "$InstallDir*" }).Id
     $ids += (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-        $_.CommandLine -like "*RapalleRmmAgent*" -or $_.CommandLine -like "*agent.py*" -or
+        $_.CommandLine -like "*ByteraRmmAgent*" -or $_.CommandLine -like "*agent.py*" -or
         ($_.ExecutablePath -and $_.ExecutablePath -like "$InstallDir*")
     }).ProcessId
     $ids = $ids | Where-Object { $_ } | Sort-Object -Unique
@@ -1267,6 +1377,9 @@ for ($i = 0; $i -lt 6; $i++) {
 }
 
 # Falls per SYSTEM-Task/Event gestartet: Hilfstasks + Event-Quelle wieder entfernen.
+schtasks /delete /tn "ByteraRmmUninstall" /f 2>$null | Out-Null
+schtasks /delete /tn "ByteraRmmUpdate" /f 2>$null | Out-Null
+try { Remove-EventLog -Source "ByteraRMM" -ErrorAction SilentlyContinue } catch {}
 schtasks /delete /tn "RapalleRmmUninstall" /f 2>$null | Out-Null
 schtasks /delete /tn "RapalleRmmUpdate" /f 2>$null | Out-Null
 try { Remove-EventLog -Source "RapalleRMM" -ErrorAction SilentlyContinue } catch {}
@@ -1290,8 +1403,8 @@ if (Test-Path $InstallDir) {
 #
 # Der Onboarding-Token steckt NICHT im Paket (das wäre pro Token ein eigener
 # Build). Stattdessen bekommt der Installer ihn beim Aufruf mit:
-#     Windows:  RapalleRmmAgent-Setup.exe /S /TOKEN=<token>
-#     Linux:    sudo RMM_ENROLLMENT_TOKEN=<token> ./rapalle-rmm-agent.run
+#     Windows:  ByteraRmmAgent-Setup.exe /S /TOKEN=<token>
+#     Linux:    sudo RMM_ENROLLMENT_TOKEN=<token> ./bytera-rmm-agent.run
 # Ohne Token landet das Gerät in "Uncategorized" und kann später zugeordnet
 # werden.
 # ==========================================================================
@@ -1304,7 +1417,7 @@ def _installer_hint(name: str, token: str, backend_url: str = "") -> str:
     """
     n = name.lower()
     if n.endswith(".exe"):
-        return f"RapalleRmmAgent-Setup.exe /S /TOKEN={token}"
+        return f"ByteraRmmAgent-Setup.exe /S /TOKEN={token}"
     if n.endswith(".msi"):
         # Der Windows Installer reicht eigene Eigenschaften nicht an die
         # (deferred) Aktion durch -> das Geraet landet in "Uncategorized".

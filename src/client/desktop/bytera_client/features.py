@@ -1,0 +1,352 @@
+# features.py - Plattform-Funktionen: Relay als Laufwerk, Fernbild per RDP/VNC
+# ----------------------------------------------------------------------------
+# Die Befehle werden von REINEN Funktionen gebaut (build_*), damit sie sich ohne
+# Windows/Android testen lassen (tests/test_logic.py). Ausgefuehrt wird mit
+# subprocess OHNE Shell (keine Probleme mit Leer-/Sonderzeichen).
+#
+# Relay als Laufwerk (WebDAV, Anmeldung mit Benutzername + GERAETETOKEN):
+#   Windows  net use <X>: \\host@SSL@port\dav  -> erscheint im Explorer
+#   Linux    gio mount davs://user@host:port/dav/ -> erscheint im Dateimanager (GVFS)
+# Fernbild:
+#   Windows  mstsc (.rdp-Datei) / VNC-Viewer (TightVNC, RealVNC, UltraVNC, TigerVNC)
+#   Linux    xfreerdp3/xfreerdp/remmina  bzw. vncviewer/remmina
+#   (Android: eigene App unter src/client/android)
+
+from __future__ import annotations
+
+import os
+import platform
+import shutil
+import string
+import subprocess
+import tempfile
+import urllib.parse
+from pathlib import Path
+
+
+
+def system() -> str:
+    return {"Windows": "windows", "Linux": "linux", "Darwin": "macos"}.get(platform.system(), "other")
+
+
+class FeatureError(Exception):
+    pass
+
+
+# ============================================================== Relay-Laufwerk
+def server_parts(server: str) -> tuple[str, str, int]:
+    p = urllib.parse.urlparse(server)
+    scheme = p.scheme or "https"
+    port = p.port or (443 if scheme == "https" else 80)
+    return scheme, p.hostname or "", port
+
+
+def build_windows_unc(server: str) -> str:
+    """https://rmm.firma.de:8443 -> \\\\rmm.firma.de@SSL@8443\\dav"""
+    scheme, host, port = server_parts(server)
+    ssl = scheme == "https"
+    default = 443 if ssl else 80
+    unc = "\\\\" + host + ("@SSL" if ssl else "") + (f"@{port}" if port != default else "") + "\\dav"
+    return unc
+
+
+def build_windows_mount(server: str, letter: str, username: str, token: str) -> list[str]:
+    return ["net", "use", f"{letter}:", build_windows_unc(server), token, f"/user:{username}", "/persistent:yes"]
+
+
+def build_windows_unmount(letter: str) -> list[str]:
+    return ["net", "use", f"{letter}:", "/delete", "/y"]
+
+
+def build_linux_uri(server: str, username: str) -> str:
+    scheme, host, port = server_parts(server)
+    dav = "davs" if scheme == "https" else "dav"
+    default = 443 if scheme == "https" else 80
+    user = urllib.parse.quote(username, safe="")
+    return f"{dav}://{user}@{host}" + (f":{port}" if port != default else "") + "/dav/"
+
+
+def free_drive_letter(used: set[str] | None = None) -> str:
+    """Freien Laufwerksbuchstaben von Z abwaerts suchen."""
+    if used is None:
+        used = {c for c in string.ascii_uppercase if os.path.exists(f"{c}:\\")}
+    for c in reversed(string.ascii_uppercase[3:]):   # Z..D
+        if c not in used:
+            return c
+    raise FeatureError("Kein freier Laufwerksbuchstabe")
+
+
+_current: subprocess.Popen | None = None      # laufender Befehl (fuer den Stopp-Knopf)
+
+
+def cancel_current() -> None:
+    """Laufenden Befehl abbrechen (Stopp-Knopf im Kontrollfenster)."""
+    p = _current
+    if p is not None and p.poll() is None:
+        try:
+            p.kill()
+        except Exception:
+            pass
+
+
+def _run(cmd: list[str], input_text: str | None = None, timeout: int = 60) -> subprocess.CompletedProcess:
+    global _current
+    kw = {}
+    if os.name == "nt":
+        kw["creationflags"] = 0x08000000   # CREATE_NO_WINDOW
+    p = subprocess.Popen(cmd, stdin=subprocess.PIPE if input_text is not None else None, stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE, text=True, **kw)
+    _current = p
+    try:
+        out, err = p.communicate(input=input_text, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        out, err = p.communicate()
+    finally:
+        _current = None
+    if p.returncode is not None and p.returncode < 0:
+        raise FeatureError("Abgebrochen")
+    return subprocess.CompletedProcess(cmd, p.returncode, out, err)
+
+
+def build_windows_url(server: str) -> str:
+    """Zweite Schreibweise fuer net use (manche Windows-11-Staende kommen damit besser zurecht)."""
+    scheme, host, port = server_parts(server)
+    default = 443 if scheme == "https" else 80
+    return f"{scheme}://{host}" + (f":{port}" if port != default else "") + "/dav/"
+
+
+def _win_service_running(name: str) -> bool | None:
+    try:
+        r = _run(["sc", "query", name], timeout=15)
+    except Exception:
+        return None
+    if r.returncode != 0:
+        return None                                   # Dienst gibt es nicht
+    return "RUNNING" in (r.stdout or "")
+
+
+def _win_prepare_webdav(http: bool) -> str:
+    """Windows 11: Der Dienst „WebClient“ (WebDAV-Mini-Redirector) ist oft gestoppt bzw. auf
+    „Manuell“ und startet nicht von selbst -> net use scheitert mit Systemfehler 67.
+    Einmalig mit Administratorrechten (UAC): Dienst auf Automatisch + starten, Dateigroessen-
+    Grenze (Standard 50 MB) aufheben, bei HTTP Basic-Anmeldung erlauben."""
+    state = _win_service_running("WebClient")
+    if state is None:
+        return ("Der Windows-Dienst „WebClient“ fehlt. Unter Windows Server: Feature „WebDAV-Redirector“ installieren "
+                "(Server-Manager → Features → WebDAV-Redirector).")
+    if state and not http:
+        return ""
+    from .vpn import _elevated
+    lines = ["Set-Service -Name WebClient -StartupType Automatic",
+             "Start-Service -Name WebClient",
+             "New-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\WebClient\\Parameters' "
+             "-Name FileSizeLimitInBytes -PropertyType DWord -Value 4294967295 -Force | Out-Null"]
+    if http:
+        lines.append("New-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\WebClient\\Parameters' "
+                     "-Name BasicAuthLevel -PropertyType DWord -Value 2 -Force | Out-Null")
+        lines.append("Restart-Service -Name WebClient")
+    _elevated(lines)
+    import time as _t
+    for _ in range(10):
+        if _win_service_running("WebClient"):
+            return ""
+        _t.sleep(1)
+    return "Der Dienst „WebClient“ konnte nicht gestartet werden (Administratorrechte abgelehnt?)."
+
+
+_WIN_ERRORS = {
+    "67": "Netzwerkname nicht gefunden – WebClient-Dienst läuft nicht oder der Server ist per HTTPS nicht erreichbar.",
+    "53": "Netzwerkpfad nicht gefunden – Server-Adresse/Port prüfen.",
+    "5": "Zugriff verweigert – Anmeldung abgelehnt (Gerät im Dashboard entfernt? neu anmelden).",
+    "86": "Anmeldung abgelehnt – Gerät neu anmelden.",
+    "1244": "Anmeldung abgelehnt – Gerät neu anmelden.",
+    "1326": "Anmeldung abgelehnt – Gerät neu anmelden.",
+    "85": "Der Laufwerksbuchstabe ist schon belegt.",
+    "1219": "Zu diesem Server besteht schon eine Verbindung mit anderen Anmeldedaten (net use * /delete hilft).",
+    "2148073478": "Das Server-Zertifikat ist nicht vertrauenswürdig – WebDAV unter Windows braucht ein gültiges Zertifikat.",
+}
+
+
+def _win_error_hint(text: str) -> str:
+    import re as _re
+    m = _re.search(r"(?:Systemfehler|System error)\s+(\d+)", text or "")
+    return _WIN_ERRORS.get(m.group(1), "") if m else ""
+
+
+def mount_relay(server: str, username: str, token: str, store) -> str:
+    """Verbindet das Relay als Laufwerk. -> Meldung fuer den Benutzer."""
+    sysname = system()
+    if sysname == "windows":
+        letter = store.get("drive_letter") or free_drive_letter()
+        scheme, _, _ = server_parts(server)
+        problem = _win_prepare_webdav(scheme == "http")
+        if problem:
+            raise FeatureError(f"Laufwerk konnte nicht verbunden werden:\n{problem}")
+        _run(build_windows_unmount(letter))                    # alte/halbe Verbindung auf dem Buchstaben weg
+        errors = []
+        for target in (build_windows_unc(server), build_windows_url(server)):
+            r = _run(["net", "use", f"{letter}:", target, token, f"/user:{username}", "/persistent:yes"], timeout=90)
+            if r.returncode == 0:
+                store.set(drive_letter=letter)
+                try:
+                    os.startfile(f"{letter}:\\")   # type: ignore[attr-defined]
+                except Exception:
+                    pass
+                return f"Das Relay ist jetzt Laufwerk {letter}: im Explorer."
+            errors.append(((r.stderr or r.stdout) or "").strip())
+        msg = errors[-1] or errors[0]
+        hint = _win_error_hint(" ".join(errors))
+        if scheme == "http" and not hint:
+            hint = "Windows erlaubt WebDAV ohne HTTPS nur mit BasicAuthLevel = 2 – besser den Server per HTTPS erreichbar machen."
+        if store.get("insecure", False):
+            hint += "\nHinweis: Die App ist auf „Zertifikat nicht prüfen“ gestellt – Windows-WebDAV akzeptiert keine ungültigen Zertifikate."
+        raise FeatureError(f"Laufwerk konnte nicht verbunden werden:\n{msg}" + (f"\n\n{hint}" if hint else ""))
+    if sysname == "linux":
+        if not shutil.which("gio"):
+            raise FeatureError("„gio“ fehlt (Paket glib2/libglib2.0-bin). Damit wird das Laufwerk im Dateimanager eingebunden.")
+        uri = build_linux_uri(server, username)
+        # gio fragt je nach Version nur das Passwort oder Benutzer + Passwort ab.
+        for answer in (f"{token}\n", f"{username}\n{token}\n", f"{username}\n\n{token}\n"):
+            r = _run(["gio", "mount", uri], input_text=answer)
+            out = (r.stderr or "") + (r.stdout or "")
+            if r.returncode == 0 or "already mounted" in out.lower() or "bereits eingeh" in out.lower():
+                store.set(linux_mount=uri)
+                if shutil.which("xdg-open"):
+                    subprocess.Popen(["xdg-open", uri], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return "Das Relay ist im Dateimanager eingebunden (Seitenleiste / „Andere Orte“)."
+        raise FeatureError(f"Einbinden fehlgeschlagen:\n{out.strip()}")
+    raise FeatureError("Auf diesem System wird das Laufwerk nicht unterstützt.")
+
+
+def unmount_relay(store) -> str:
+    sysname = system()
+    if sysname == "windows":
+        letter = store.get("drive_letter")
+        if not letter:
+            return "Es ist kein Laufwerk verbunden."
+        _run(build_windows_unmount(letter))
+        store.set(drive_letter="")
+        return f"Laufwerk {letter}: getrennt."
+    if sysname == "linux":
+        uri = store.get("linux_mount")
+        if not uri:
+            return "Es ist nichts eingebunden."
+        _run(["gio", "mount", "-u", uri])
+        store.set(linux_mount="")
+        return "Relay ausgehängt."
+    return "Nichts zu trennen."
+
+
+# ============================================================== Fernbild
+WIN_VNC_VIEWERS = [
+    r"C:\Program Files\TightVNC\tvnviewer.exe",
+    r"C:\Program Files\RealVNC\VNC Viewer\vncviewer.exe",
+    r"C:\Program Files\uvnc bvba\UltraVNC\vncviewer.exe",
+    r"C:\Program Files\TigerVNC\vncviewer.exe",
+    r"C:\Program Files (x86)\TightVNC\tvnviewer.exe",
+    r"C:\Program Files (x86)\uvnc bvba\UltraVNC\vncviewer.exe",
+]
+
+
+def build_rdp_file(host: str, port: int, username: str = "") -> str:
+    lines = [f"full address:s:{host}:{port}", "prompt for credentials:i:1", "screen mode id:i:2",
+             "authentication level:i:2", "redirectclipboard:i:1"]
+    if username:
+        lines.append(f"username:s:{username}")
+    return "\r\n".join(lines) + "\r\n"
+
+
+def linux_screen_candidates(protocol: str, host: str, port: int) -> list[list[str]]:
+    if protocol == "rdp":
+        return [["xfreerdp3", f"/v:{host}:{port}", "/dynamic-resolution"],
+                ["xfreerdp", f"/v:{host}:{port}", "/dynamic-resolution"],
+                ["remmina", "-c", f"rdp://{host}:{port}"]]
+    return [["vncviewer", f"{host}::{port}"],
+            ["remmina", "-c", f"vnc://{host}:{port}"],
+            ["xdg-open", f"vnc://{host}:{port}"]]
+
+
+def android_screen_uri(protocol: str, host: str, port: int) -> str:
+    if protocol == "rdp":
+        # Microsoft Remote Desktop / "Windows App" versteht dieses URI-Schema
+        return "rdp://" + urllib.parse.quote(f"full address=s:{host}:{port}", safe="=:")
+    return f"vnc://{host}:{port}"
+
+
+def launch_screen(protocol: str, host: str, port: int) -> str:
+    sysname = system()
+    if sysname == "windows":
+        if protocol == "rdp":
+            f = Path(tempfile.gettempdir()) / f"bytera-{host}-{port}.rdp"
+            f.write_text(build_rdp_file(host, port), encoding="utf-8")
+            os.startfile(str(f))   # type: ignore[attr-defined]
+            return "Remotedesktop wird geöffnet …"
+        for exe in WIN_VNC_VIEWERS:
+            if os.path.exists(exe):
+                subprocess.Popen([exe, f"{host}::{port}"])
+                return f"{Path(exe).stem} wird geöffnet …"
+        try:
+            os.startfile(f"vnc://{host}:{port}")   # type: ignore[attr-defined]
+            return "VNC-Viewer wird geöffnet …"
+        except OSError:
+            raise FeatureError(f"Kein VNC-Viewer gefunden. Bitte z. B. TightVNC Viewer installieren.\nAdresse: {host}::{port}")
+    if sysname == "linux":
+        for cmd in linux_screen_candidates(protocol, host, port):
+            if shutil.which(cmd[0]):
+                subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return f"{cmd[0]} wird geöffnet …"
+        need = "FreeRDP oder Remmina" if protocol == "rdp" else "einen VNC-Viewer (TigerVNC) oder Remmina"
+        raise FeatureError(f"Bitte {need} installieren.\nAdresse: {host}:{port}")
+    raise FeatureError(f"Bitte manuell verbinden: {host}:{port}")
+
+
+# ------------------------------------------------------------------ extern oeffnen (aus dem Dashboard)
+LINUX_TERMINALS = [("x-terminal-emulator", ["-e"]), ("gnome-terminal", ["--"]), ("konsole", ["-e"]),
+                   ("xfce4-terminal", ["-x"]), ("mate-terminal", ["-x"]), ("tilix", ["-e"]), ("kitty", []),
+                   ("alacritty", ["-e"]), ("xterm", ["-e"])]
+
+
+def build_ssh_command(host: str, port: int, user: str = "", alias: str = "") -> list[str]:
+    """ssh-Befehl. alias = eigener known_hosts-Name (Tunnel: 127.0.0.1 mit wechselndem Port)."""
+    cmd = ["ssh", "-p", str(port)]
+    if alias:
+        cmd += ["-o", f"HostKeyAlias={alias}"]
+    return cmd + [f"{user}@{host}" if user else host]
+
+
+def start_program(protocol: str, host: str, port: int, user: str = "", alias: str = ""):
+    """Startet RDP/VNC/SSH. -> (Meldung, Prozess oder None). Den Prozess braucht der Tunnel
+    ("bis Nutzungsende": Programm zu -> Tunnel zu)."""
+    sysname = system()
+    if protocol == "ssh":
+        ssh = build_ssh_command(host, port, user, alias)
+        if sysname == "windows":
+            if not shutil.which("ssh"):
+                raise FeatureError("Kein SSH-Client gefunden (Windows: Einstellungen → Optionale Features → OpenSSH-Client).")
+            p = subprocess.Popen(ssh, creationflags=0x00000010)          # CREATE_NEW_CONSOLE
+            return "SSH wird geöffnet …", p
+        if sysname == "linux":
+            if not shutil.which("ssh"):
+                raise FeatureError("Kein SSH-Client gefunden (Paket openssh-client).")
+            for term, flag in LINUX_TERMINALS:
+                if shutil.which(term):
+                    p = subprocess.Popen([term, *flag, *ssh], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return f"SSH in {term} …", p
+            raise FeatureError("Kein Terminal-Programm gefunden. Befehl: " + " ".join(ssh))
+        raise FeatureError("Bitte manuell verbinden: " + " ".join(ssh))
+    if sysname == "windows" and protocol == "rdp":
+        f = Path(tempfile.gettempdir()) / f"bytera-{host}-{port}.rdp"
+        f.write_text(build_rdp_file(host, port, user), encoding="utf-8")
+        return "Remotedesktop wird geöffnet …", subprocess.Popen(["mstsc", str(f)])
+    if sysname == "windows":
+        for exe in WIN_VNC_VIEWERS:
+            if os.path.exists(exe):
+                return f"{Path(exe).stem} wird geöffnet …", subprocess.Popen([exe, f"{host}::{port}"])
+        return launch_screen(protocol, host, port), None
+    if sysname == "linux":
+        for cmd in linux_screen_candidates(protocol, host, port):
+            if shutil.which(cmd[0]) and cmd[0] != "xdg-open":
+                return f"{cmd[0]} wird geöffnet …", subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return launch_screen(protocol, host, port), None
+    return launch_screen(protocol, host, port), None

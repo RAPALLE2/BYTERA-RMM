@@ -1,7 +1,7 @@
 """
 agent.py
 --------
-Das Programm, das auf JEDEM Rechner läuft, den du über RAPALLE.net RMM
+Das Programm, das auf JEDEM Rechner läuft, den du über BYTERA RMM
 verwalten willst (dein PC, ein Server, ein anderer Windows/Linux-Rechner).
 
 Was der Agent tut:
@@ -288,7 +288,7 @@ if AGENT_LANG not in ("de", "en"):
 
 _AGENT_TEXTS = {
     "de": {
-        "consent_window": "RAPALLE.net RMM - Remote-Bildschirm",
+        "consent_window": "BYTERA RMM - Remote-Bildschirm",
         "consent_title": "Remote-Bildschirm zulassen?",
         "consent_requested": "Remote-Bildschirm angefragt",
         "consent_body": "{who} möchte den Bildschirm dieses Computers\nsehen und steuern.",
@@ -324,7 +324,7 @@ _AGENT_TEXTS = {
         "log_input_error": "Eingabe-Fehler: {err}",
     },
     "en": {
-        "consent_window": "RAPALLE.net RMM - Remote screen",
+        "consent_window": "BYTERA RMM - Remote screen",
         "consent_title": "Allow remote screen access?",
         "consent_requested": "Remote screen requested",
         "consent_body": "{who} would like to view and control\nthe screen of this computer.",
@@ -1857,7 +1857,7 @@ _WG_NAME = re.compile(r"^[A-Za-z0-9_=+.-]{1,15}$")
 
 def _wg_conf_dir():
     if IS_WINDOWS:
-        d = os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "Rapalle", "wireguard")
+        d = os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "Bytera", "wireguard")
     else:
         d = "/etc/wireguard"
     os.makedirs(d, exist_ok=True)
@@ -2072,6 +2072,17 @@ def _wg_down(name):
         os.remove(os.path.join(_wg_conf_dir(), name + ".conf"))
     except OSError:
         pass
+    if IS_WINDOWS:                                                 # Rest aus der Zeit vor der Umbenennung
+        legacy = os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "Rapalle", "wireguard")
+        try:
+            os.remove(os.path.join(legacy, name + ".conf"))
+        except OSError:
+            pass
+        for d in (legacy, os.path.dirname(legacy)):
+            try:
+                os.rmdir(d)                                        # nur wenn leer
+            except OSError:
+                pass
 
 
 @sio.on("wg-join", namespace="/agent")
@@ -2301,9 +2312,9 @@ async def on_vpn_ping(payload):
 # ======================================================================
 
 NODE_DIR = Path(os.path.dirname(os.path.abspath(__file__))) / "node"
-NODE_SERVICE = "rapalle-node"
-NODE_TASK = "RapalleNode"
-NODE_PLIST = "/Library/LaunchDaemons/net.rapalle.node.plist"
+NODE_SERVICE = "bytera-node"
+NODE_TASK = "ByteraNode"
+NODE_PLIST = "/Library/LaunchDaemons/net.bytera.node.plist"
 
 
 def _node_installed() -> bool:
@@ -2388,7 +2399,7 @@ def _node_service_install() -> str:
     """Richtet die Node als Dienst ein und startet sie. Gibt die Betriebsart zurueck."""
     py, main = sys.executable, str(NODE_DIR / "main.py")
     if sys.platform.startswith("linux") and _node_is_root() and shutil.which("systemctl") and os.path.isdir("/run/systemd/system"):
-        unit = (f"[Unit]\nDescription=RAPALLE.net RMM Node\nAfter=network-online.target docker.service\nWants=network-online.target\n\n"
+        unit = (f"[Unit]\nDescription=BYTERA RMM Node\nAfter=network-online.target docker.service\nWants=network-online.target\n\n"
                 f"[Service]\nWorkingDirectory={NODE_DIR}\nExecStart={py} {main}\nRestart=always\nRestartSec=5\n\n"
                 f"[Install]\nWantedBy=multi-user.target\n")
         Path(f"/etc/systemd/system/{NODE_SERVICE}.service").write_text(unit, encoding="utf-8")
@@ -2406,7 +2417,7 @@ def _node_service_install() -> str:
         _print(f"[node] Geplante Aufgabe nicht moeglich: {out.strip()[:200]}")
     elif sys.platform == "darwin" and _node_is_root():
         plist = ('<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>'
-                 '<key>Label</key><string>net.rapalle.node</string>'
+                 '<key>Label</key><string>net.bytera.node</string>'
                  f'<key>ProgramArguments</key><array><string>{py}</string><string>{main}</string></array>'
                  f'<key>WorkingDirectory</key><string>{NODE_DIR}</string>'
                  '<key>RunAtLoad</key><true/><key>KeepAlive</key><true/></dict></plist>')
@@ -4122,7 +4133,7 @@ if _INPUT_AVAILABLE:
 # Erster Versuch war, agent.py einfach noch einmal mit --screen-helper zu
 # starten. Das schlug fehl: Der Helfer laeuft als normaler BENUTZER, agent.py
 # schreibt beim Import aber unter anderem seine Logdatei nach
-# "C:\Program Files\RapalleRmmAgent\agent.log" - dort hat ein Benutzer kein
+# "C:\Program Files\ByteraRmmAgent\agent.log" - dort hat ein Benutzer kein
 # Schreibrecht. Der Prozess startete (die PID stand im Log), starb dann aber
 # beim Import, noch bevor er sich verbinden konnte. Genau das sah man als
 # "Helfer hat sich nicht gemeldet: timed out".
@@ -4175,7 +4186,7 @@ LANG = "de"
 # das wuerde den r-String beenden und agent.py zerlegen.
 TEXTS = {
     "de": {
-        "window": "RAPALLE.net RMM - Remote-Bildschirm",
+        "window": "BYTERA RMM - Remote-Bildschirm",
         "title": "Remote-Bildschirm zulassen?",
         "body": "{who} moechte den Bildschirm dieses Computers\nsehen und steuern.",
         "allow": "\u2713 Zulassen",
@@ -4196,7 +4207,7 @@ TEXTS = {
         "sess_ended": "Die Fernwartung wurde beendet.",
     },
     "en": {
-        "window": "RAPALLE.net RMM - Remote screen",
+        "window": "BYTERA RMM - Remote screen",
         "title": "Allow remote screen access?",
         "body": "{who} would like to view and control\nthe screen of this computer.",
         "allow": "\u2713 Allow",
@@ -5528,9 +5539,9 @@ def _notify_screen_mode(loop, mode, reason="", code=None, params=None):
 # der Agent installiert sie als SYSTEM mit pnputil. Ohne URL wird nichts
 # installiert - es werden keine Binaerdateien mit dem Agenten ausgeliefert.
 # ====================================================================
-_VDISPLAY_DIR = Path(os.environ.get("ProgramData") or r"C:\ProgramData") / "RapalleRMM" / "vdisplay" \
+_VDISPLAY_DIR = Path(os.environ.get("ProgramData") or r"C:\ProgramData") / "ByteraRMM" / "vdisplay" \
     if platform.system() == "Windows" else Path("/tmp/rmm-vdisplay")
-_VDISPLAY_HWID = "Root\\RapalleIddSampleDriver"   # HardwareID der mitgelieferten INF
+_VDISPLAY_HWID = "Root\\ByteraIddSampleDriver"   # HardwareID der mitgelieferten INF
 
 
 def _vdisplay_status() -> dict:
@@ -5542,14 +5553,15 @@ def _vdisplay_status() -> dict:
     try:
         r = _run(["pnputil", "/enum-devices", "/connected"])
         txt = (r.stdout or "") + (r.stdout is None and "" or "")
-        if "RapalleIdd" in txt or "Rapalle Virtual Display" in txt:
+        if any(k in txt for k in ("ByteraIdd", "Bytera Virtual Display", "RapalleIdd", "Rapalle Virtual Display")):
             out["present"] = True
     except Exception:
         pass
     # Treiber im Treiberspeicher? (auch wenn gerade kein Geraet aktiv ist)
     try:
         r = _run(["pnputil", "/enum-drivers"])
-        if "rapalleidd" in (r.stdout or "").lower() or "rapalle virtual display" in (r.stdout or "").lower():
+        low = (r.stdout or "").lower()
+        if any(k in low for k in ("byteraidd", "bytera virtual display", "rapalleidd", "rapalle virtual display")):
             out["installed"] = True
     except Exception:
         pass
@@ -5638,7 +5650,7 @@ def _vdisplay_remove() -> dict:
             line = line.strip()
             if line.lower().startswith("published name"):
                 cur["pub"] = line.split(":", 1)[1].strip()
-            elif "rapalle" in line.lower() and cur.get("pub"):
+            elif ("bytera" in line.lower() or "rapalle" in line.lower()) and cur.get("pub"):
                 pub = cur["pub"]
         if pub:
             _run(["pnputil", "/delete-driver", pub, "/uninstall", "/force"])
@@ -5882,12 +5894,12 @@ def _tk_consent_dialog(who: str, timeout_s: int) -> bool:
     if IS_WINDOWS:
         try:
             import ctypes
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("RapalleRMM.Agent.Consent")
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ByteraRMM.Agent.Consent")
         except Exception:
             pass
     root = tk.Tk()
     root.withdraw()
-    root.title("RAPALLE.net RMM")
+    root.title("BYTERA RMM")
     # Logo: logo.png (PNG!) liegt seit Install/Update neben agent.py.
     # iconphoto kann PNG auf Windows UND Linux - iconbitmap dagegen nur echte
     # .ico-Dateien (das alte favicon.ico war ein PNG -> blankes Icon).
@@ -6443,7 +6455,7 @@ def _run_dist_command(kind: str):
     Linux: Wir starten den Befehl als TRANSIENTEN systemd-Dienst
     (`systemd-run --collect`). Ein solcher Dienst läuft in einem EIGENEN cgroup,
     unabhängig vom Dienst des Agenten. Dadurch überlebt er zuverlässig das
-    `systemctl stop rapalle-agent` (dessen KillMode=control-group sonst alle
+    `systemctl stop bytera-agent` (dessen KillMode=control-group sonst alle
     Kindprozesse mitreißt - das war der Grund, warum der Uninstall zuvor
     scheinbar nichts tat).
 
@@ -6461,7 +6473,7 @@ def _run_dist_command(kind: str):
             url = f"{BACKEND_URL}/agent-dist/{fname}"
             inner_ps = f"iwr '{url}' -UseBasicParsing | iex"
             enc = base64.b64encode(inner_ps.encode("utf-16-le")).decode()
-            taskname = "RapalleRmmUpdate" if kind == "update" else "RapalleRmmUninstall"
+            taskname = "ByteraRmmUpdate" if kind == "update" else "ByteraRmmUninstall"
             event_id = "812" if kind == "update" else "811"
             tr = f"powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand {enc}"
 
@@ -6481,12 +6493,12 @@ def _run_dist_command(kind: str):
             if task_exists:
                 triggered = False
                 trig_err = ""
-                # Primär: Write-EventLog -> Provider ist garantiert 'RapalleRMM'
+                # Primär: Write-EventLog -> Provider ist garantiert 'ByteraRMM'
                 # (matcht die Event-Subscription des SYSTEM-Tasks sicher).
                 try:
                     w = _run(
                         ["powershell", "-NoProfile", "-Command",
-                         f"Write-EventLog -LogName Application -Source 'RapalleRMM' "
+                         f"Write-EventLog -LogName Application -Source 'ByteraRMM' "
                          f"-EventId {event_id} -EntryType Information -Message 'rmm {kind}'"],
                         capture_output=True, text=True,
                     )
@@ -6499,7 +6511,7 @@ def _run_dist_command(kind: str):
                 if not triggered:
                     try:
                         ev = _run(
-                            ["eventcreate", "/L", "Application", "/SO", "RapalleRMM",
+                            ["eventcreate", "/L", "Application", "/SO", "ByteraRMM",
                              "/T", "INFORMATION", "/ID", event_id, "/D", f"rmm {kind}"],
                             capture_output=True, text=True,
                         )
@@ -6556,7 +6568,7 @@ def _run_dist_command(kind: str):
             fname = "update.sh" if kind == "update" else "uninstall.sh"
             url = f"{BACKEND_URL}/agent-dist/{fname}"
             inner = f"curl -fsSL '{url}' | bash"
-            logf = f"/tmp/rapalle-agent-{kind}.log"
+            logf = f"/tmp/bytera-agent-{kind}.log"
             _print(f"[agent] {kind}: exakter Befehl (Linux, als root):")
             _print(f"         {inner}   (Log: {logf})")
 
@@ -6740,6 +6752,94 @@ def _install_exception_logging():
         pass
 
 
+# ====================================================================
+# Umbenennung RAPALLE.net RMM -> BYTERA RMM: Reste der Altinstallation
+# --------------------------------------------------------------------
+# Das Update-Skript zieht den Agenten bereits in den neuen Ordner um
+# (/opt/bytera-rmm-agent bzw. C:\Program Files\ByteraRmmAgent) und
+# entfernt die alten Dienste. Laeuft dabei etwas nicht durch (z.B. weil das
+# alte Wartungs-Task das Skript gestartet hat und Windows es beim Loeschen
+# beendet), raeumt der NEUE Agent beim Start selbst auf. Alles ist
+# idempotent und fasst nur die alten Namen an - nie den eigenen Ordner.
+# ====================================================================
+_LEGACY_LINUX_DIR = "/opt/rapalle-rmm-agent"
+_LEGACY_WIN_DIR = r"C:\Program Files\RapalleRmmAgent"
+_LEGACY_UNIT = "rapalle-agent"
+_LEGACY_NODE_UNIT = "rapalle-node"
+_LEGACY_WIN_TASKS = ("RapalleRmmAgent", "RapalleRmmUpdate", "RapalleRmmUninstall", "RapalleNode")
+_LEGACY_NODE_PLIST = "/Library/LaunchDaemons/net.rapalle.node.plist"
+
+
+def _legacy_rebrand_cleanup() -> None:
+    if os.environ.get("RMM_SCREEN_HELPER") == "1":
+        return
+    me = os.path.normcase(os.path.dirname(os.path.abspath(__file__)))
+    try:
+        if IS_WINDOWS:
+            legacy = os.path.normcase(_LEGACY_WIN_DIR)
+            if me == legacy:
+                return                       # wir SIND noch die Altinstallation -> nichts anfassen
+            for t in _LEGACY_WIN_TASKS:
+                if _run(["schtasks", "/query", "/tn", t], capture_output=True, text=True).returncode == 0:
+                    _run(["schtasks", "/end", "/tn", t], capture_output=True, text=True)
+                    _run(["schtasks", "/delete", "/tn", t, "/f"], capture_output=True, text=True)
+                    _print(f"[agent] Umbenennung: alte Aufgabe '{t}' entfernt")
+            try:
+                _run(["powershell", "-NoProfile", "-Command",
+                      "if ([System.Diagnostics.EventLog]::SourceExists('RapalleRMM')) "
+                      "{ Remove-EventLog -Source 'RapalleRMM' }"], capture_output=True, text=True)
+            except Exception:
+                pass
+            pd = os.environ.get("ProgramData") or r"C:\ProgramData"
+            # Treiber-Cache des virtuellen Bildschirms in den neuen Ordner holen
+            # (Die alten WireGuard-Dateien unter ProgramData\\Rapalle bleiben liegen, solange ein
+            #  Tunneldienst sie noch benutzen koennte - _wg_down raeumt sie beim Abbau mit weg.)
+            for old, new in ((os.path.join(pd, "RapalleRMM", "vdisplay"), os.path.join(pd, "ByteraRMM", "vdisplay")),):
+                if os.path.isdir(old):
+                    os.makedirs(new, exist_ok=True)
+                    for n in os.listdir(old):
+                        if not os.path.exists(os.path.join(new, n)):
+                            try:
+                                shutil.move(os.path.join(old, n), os.path.join(new, n))
+                            except Exception:
+                                pass
+                    shutil.rmtree(old, ignore_errors=True)
+                    try:
+                        os.rmdir(os.path.dirname(old))
+                    except OSError:
+                        pass
+            if os.path.isdir(_LEGACY_WIN_DIR):
+                shutil.rmtree(_LEGACY_WIN_DIR, ignore_errors=True)
+                _print("[agent] Umbenennung: alter Programmordner entfernt")
+        else:
+            if me == os.path.normcase(_LEGACY_LINUX_DIR):
+                return
+            if hasattr(os, "geteuid") and os.geteuid() != 0:
+                return
+            for unit in (_LEGACY_UNIT, _LEGACY_NODE_UNIT):
+                f = f"/etc/systemd/system/{unit}.service"
+                if os.path.exists(f):
+                    _run(["systemctl", "disable", "--now", unit], capture_output=True, text=True)
+                    try:
+                        os.unlink(f)
+                    except OSError:
+                        pass
+                    _run(["systemctl", "daemon-reload"], capture_output=True, text=True)
+                    _run(["systemctl", "reset-failed", unit], capture_output=True, text=True)
+                    _print(f"[agent] Umbenennung: alter Dienst '{unit}' entfernt")
+            if sys.platform == "darwin" and os.path.exists(_LEGACY_NODE_PLIST):
+                _run(["launchctl", "unload", "-w", _LEGACY_NODE_PLIST], capture_output=True, text=True)
+                try:
+                    os.unlink(_LEGACY_NODE_PLIST)
+                except OSError:
+                    pass
+            if os.path.isdir(_LEGACY_LINUX_DIR):
+                shutil.rmtree(_LEGACY_LINUX_DIR, ignore_errors=True)
+                _print("[agent] Umbenennung: alter Programmordner entfernt")
+    except Exception as e:
+        _print(f"[agent] Umbenennung: Aufraeumen der Altinstallation fehlgeschlagen: {e}")
+
+
 async def main():
     _install_exception_logging()
     _print(f"[agent] {_at('log_device_name', name=DEVICE_NAME)}")
@@ -6763,6 +6863,8 @@ async def main():
     # Diagnose einhaengen, BEVOR irgendetwas anderes startet - alles was
     # danach schiefgeht, soll bereits im Puffer landen.
     _diag_install()
+    # Reste der Installation unter altem Namen (RAPALLE.net RMM) wegraeumen
+    threading.Thread(target=_legacy_rebrand_cleanup, name="legacy-cleanup", daemon=True).start()
 
     # Alle Dauerschleifen laufen unter dem Aufseher. Stirbt eine an einer
     # Ausnahme, wird sie neu gestartet statt lautlos zu verschwinden.

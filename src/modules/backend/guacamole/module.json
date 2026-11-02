@@ -4,7 +4,7 @@
   "name": "Guacamole (RDP/SSH/VNC)",
   "version": "1.0.0",
   "description": "Remote-Zugriff per Apache Guacamole direkt im Browser. Startet auf Wunsch guacd in Docker, ueberwacht den Container und erlaubt eine manuelle Verbindung zu einem eigenen guacd.",
-  "author": "RAPALLE.net",
+  "author": "BYTERA",
   "category": "Fernzugriff",
   "icon": "🪟",
   "requires": [],

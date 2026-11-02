@@ -83,7 +83,7 @@ class Console:
 
     async def start(self) -> None:
         from app import modules
-        self.line(f"{BOLD}RAPALLE.net RMM – Konsole{RST}  {GREY}(angemeldet als {self.user['username']} über {self.via}){RST}")
+        self.line(f"{BOLD}BYTERA RMM – Konsole{RST}  {GREY}(angemeldet als {self.user['username']} über {self.via}){RST}")
         self.line(f"{GREY}Befehle: {BOLD}help{RST}{GREY} · Tab vervollständigt · Strg+C bricht ab · {BOLD}exit{RST}{GREY} beendet{RST}")
         self.line()
         self.prompt()

@@ -41,7 +41,8 @@ except ImportError:
 # bleiben stehen" (Layering/Tearing). Ohne Tag würde Docker 'latest' nehmen und
 # ein bereits lokal liegendes altes Image nie aktualisieren.
 IMAGE = "guacamole/guacd:1.6.0"
-CONTAINER_NAME = "rapalle-guacd"
+CONTAINER_NAME = "bytera-guacd"
+LEGACY_CONTAINER_NAME = "rapalle-guacd"   # Name vor der Umbenennung (RAPALLE.net RMM)
 # Der veröffentlichte Port wird bewusst nur an localhost gebunden - guacd hat
 # keine eigene Authentifizierung und darf nicht offen im Netz hängen.
 _PUBLISH = f"127.0.0.1:{GUACD_PORT}:4822"
@@ -194,6 +195,12 @@ def ensure_running() -> dict:
         log.append(res["log"])
         if not res["ok"]:
             return {"ok": False, "log": "\n".join(log)}
+
+    # Umbenennung: alten Container (belegt denselben Port) entfernen - guacd ist zustandslos
+    rc_old, out_old, _ = _run(["docker", "inspect", "-f", "{{.Name}}", LEGACY_CONTAINER_NAME], timeout=15)
+    if rc_old == 0 and out_old.strip():
+        log.append(f"Entferne alten Container '{LEGACY_CONTAINER_NAME}' (Umbenennung) ...")
+        _run(["docker", "rm", "-f", LEGACY_CONTAINER_NAME], timeout=60)
 
     state = _container_state()
     # Läuft/existiert ein Container noch aus einem ANDEREN (älteren) Image, muss er

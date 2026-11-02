@@ -30,4 +30,4 @@ def driver_zip(x_agent_token: str | None = Header(default=None),
     if not vdriver.have_local():
         raise HTTPException(404, "Kein Treiberpaket auf dem Server hinterlegt")
     return FileResponse(str(vdriver.ZIP), media_type="application/zip",
-                        filename="rapalle-vdisplay.zip")
+                        filename="bytera-vdisplay.zip")

@@ -177,7 +177,7 @@ def _dispatch_sync(rule: dict, notification: dict) -> None:
                 f"Service:  {notification.get('service')}\n"
                 f"Level:    {notification.get('level')}\n"
                 f"Zeit:     {time.strftime('%d.%m.%Y %H:%M:%S')}\n\n"
-                f"— RAPALLE.net RMM")
+                f"— BYTERA RMM")
         send_email(rule.get("target") or "", subject, body)
     elif channel == "webhook":
         from .webhooks import send_webhook

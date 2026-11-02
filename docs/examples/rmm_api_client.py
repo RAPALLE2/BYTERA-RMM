@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-rmm_api_client.py - Beispiel-Client fuer die REST-API des RAPALLE.net RMM
+rmm_api_client.py - Beispiel-Client fuer die REST-API des BYTERA RMM
 ==========================================================================
 Nur Python-Standardbibliothek (Python 3.8+), keine Installation noetig.
 Ausfuehrliche Beschreibung: docs/REST-API.md

@@ -81,7 +81,7 @@ def status(request: Request):
     how = {"open": "Keine Anmeldung nötig - Aufrufe laufen als der eingestellte API-Benutzer.",
            "user": "POST /api/v1/auth/login, danach Cookie rmm_api_session oder Header X-API-Session mitschicken.",
            "secure": "POST /api/v1/auth/login, danach bei jeder Anfrage 'Authorization: Bearer <token>' mitschicken."}
-    return {"api": "RAPALLE.net RMM REST-API", "version": API_VERSION, "mode": mode, "how_to": how.get(mode),
+    return {"api": "BYTERA RMM REST-API", "version": API_VERSION, "mode": mode, "how_to": how.get(mode),
             "token_lifetime": store.setting("token_lifetime") if mode == "secure" else None,
             "catalog": "/api/v1/routes"}
 

@@ -832,7 +832,7 @@
  "exp_relay_share_above": "Gib ihn oben frei.",
  "exp_relay_admin_must": "Ein Administrator muss ihn freigeben.",
  "ac_title": "Neuen Client hinzufügen",
- "ac_help": "Was bei der Installation passiert: Der Agent wird nach C:\\Program Files\\RapalleRmmAgent (Windows) bzw. /opt/rapalle-rmm-agent (Linux) installiert. Fehlt Python, wird es automatisch mitinstalliert. Die nötigen Bibliotheken kommen in eine eigene Umgebung. Der Agent wird als Dienst eingerichtet, der beim Booten startet - auch ohne Anmeldung - und meldet sich danach selbstständig hier im Dashboard an.",
+ "ac_help": "Was bei der Installation passiert: Der Agent wird nach C:\\Program Files\\ByteraRmmAgent (Windows) bzw. /opt/bytera-rmm-agent (Linux) installiert. Fehlt Python, wird es automatisch mitinstalliert. Die nötigen Bibliotheken kommen in eine eigene Umgebung. Der Agent wird als Dienst eingerichtet, der beim Booten startet - auch ohne Anmeldung - und meldet sich danach selbstständig hier im Dashboard an.",
  "ac_wish_name": "Wunschname für den Client (optional)",
  "ac_location_opt": "Standort (optional)",
  "ac_none": "— keiner —",

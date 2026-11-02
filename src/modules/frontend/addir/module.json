@@ -4,7 +4,7 @@
   "name": "Active Directory",
   "version": "1.0.0",
   "description": "Active Directory per LDAP verwalten: mehrere AD-Verbindungen, Benutzer anlegen/verschieben/bearbeiten, Passwörter setzen und zurücksetzen, aktivieren/sperren/entsperren, Ablaufdatum, Gruppen anlegen/verschieben/zuweisen, OUs anlegen/verschieben sowie Massen-Import per CSV. Verbundene ADs lassen sich im Modul „SSO“ direkt als Anmeldequelle wählen.",
-  "author": "RAPALLE.net",
+  "author": "BYTERA",
   "category": "System",
   "icon": "🗂️",
   "requires": [],

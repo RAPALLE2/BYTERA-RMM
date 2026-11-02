@@ -32,7 +32,7 @@ def _discord_payload(n: dict) -> dict:
             {"name": "Client",   "value": str(n["client"]),   "inline": True},
             {"name": "Service",  "value": str(n["service"]),  "inline": True},
         ],
-        "footer": {"text": "RAPALLE.net RMM"},
+        "footer": {"text": "BYTERA RMM"},
     }
     return {"embeds": [embed]}
 

@@ -42,6 +42,7 @@ FILES_DIR = SRC_DIR / "files"                          # Explorer/Teamspace (spa
 
 # --- Backend-Unterordner ---------------------------------------------------
 APP_DIR = BACKEND_DIR / "app"
+BRANDING_DEFAULTS_DIR = APP_DIR / "assets" / "branding"   # Standard-Logos (BYTERA); ersetzen unveraenderte alte Logos in frontend/image
 ROUTER_DIR = BACKEND_DIR / "router"
 LIB_DIR = BACKEND_DIR / "lib"
 

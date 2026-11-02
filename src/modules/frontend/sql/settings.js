@@ -124,7 +124,7 @@ export async function renderSettings(root) {
           <input type="password" id="sq-pass" placeholder="${t("u_unverandert_lassen_leer")}"></div>
       </div>
       <div class="form-row"><label id="sq-dblabel">${t("set_db_name")}</label>
-        <input type="text" id="sq-name" placeholder="rapalle_rmm"></div>
+        <input type="text" id="sq-name" placeholder="bytera_rmm"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
         <button class="btn" id="sq-test">${t("set_test_conn")}</button>
         ${isExt() && !dockerActive()

@@ -156,7 +156,7 @@ def _page(title: str, params: dict, error: str = "", step: str = "login", pendin
       <p class="sub">Bestätigungscode aus der Authenticator-App (oder ein Backup-Code)</p>
       <label>Code<input name="code" inputmode="numeric" autocomplete="one-time-code" required autofocus></label>''')
     body = f'''<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Anmelden – RAPALLE.net RMM</title><style>
+<title>Anmelden – BYTERA RMM</title><style>
 :root{{color-scheme:dark}}body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
 background:#0b1220;font:14px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#e6edf6}}
 form{{width:min(360px,calc(100vw - 32px));background:#121c2e;border:1px solid #24324a;border-radius:14px;padding:24px;box-shadow:0 20px 50px rgba(0,0,0,.45)}}
@@ -166,7 +166,7 @@ height:38px;padding:0 10px;border-radius:8px;border:1px solid #2b3b57;background
 button{{width:100%;height:40px;border:0;border-radius:8px;background:#2dd4bf;color:#05211d;font-weight:700;font-size:14px;cursor:pointer;margin-top:6px}}
 .err{{background:#3b1520;border:1px solid #7f1d2d;color:#fecdd3;padding:8px 10px;border-radius:8px;font-size:12.5px;margin-bottom:12px}}
 .acc{{color:#2dd4bf}}</style></head><body><form method="post">
-<h1>RAPALLE<span class="acc">.net</span> RMM</h1><p class="sub">Anmelden für <b>{e(title)}</b></p>
+<h1>BYTERA <span class="acc">RMM</span></h1><p class="sub">Anmelden für <b>{e(title)}</b></p>
 {f'<div class="err">{e(error)}</div>' if error else ""}{fields}{hidden}<button type="submit">Anmelden</button></form></body></html>'''
     return HTMLResponse(body, headers={"Cache-Control": "no-store", "X-Frame-Options": "DENY",
                                        "Referrer-Policy": "no-referrer"})

@@ -48,7 +48,7 @@ let _favUser = "anon";
 const favorites = { clients: {}, tenants: {}, websites: {}, pins: {} };
 let favExpanded = true;   // Favoriten-Sektion aufgeklappt?
 
-function _favKey() { return `rapalle-favs:${_favUser}`; }
+function _favKey() { return `bytera-favs:${_favUser}`; }
 
 export function initFavorites(username) {
   _favUser = username || "anon";

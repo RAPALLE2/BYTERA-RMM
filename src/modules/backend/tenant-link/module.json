@@ -4,7 +4,7 @@
   "name": "Mandant-Freigabe",
   "version": "1.0.0",
   "description": "Gegenstück auf einem Mandanten-Backend: erlaubt einem Haupt-RMM, dieses Backend einzubetten und per Autologin zu öffnen (frame-ancestors/CORS für die angegebenen Haupt-RMM-Adressen). Der Login läuft über die normale Anmeldung – jeder Benutzer hinterlegt seine Zugangsdaten im Haupt-RMM.",
-  "author": "RAPALLE.net",
+  "author": "BYTERA",
   "category": "System",
   "icon": "🔗",
   "requires": [],

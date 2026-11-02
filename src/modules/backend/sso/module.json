@@ -4,7 +4,7 @@
   "name": "SSO / Verzeichnis-Anmeldung",
   "version": "1.0.0",
   "description": "Anmeldung über LDAP / Active Directory (Realms) inkl. Import von AD-Gruppen. Deaktivierbar nur, wenn mindestens ein lokaler, aktiver Admin-Account existiert. Danach bleiben AD-Benutzer bestehen, können sich aber nicht anmelden.",
-  "author": "RAPALLE.net",
+  "author": "BYTERA",
   "category": "System",
   "icon": "🔐",
   "requires": [],

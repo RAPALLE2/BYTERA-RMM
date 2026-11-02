@@ -176,7 +176,7 @@ async def test_smtp(body: SmtpTestBody, user: dict = Depends(get_current_user)):
             notifier.send_email, body.to,
             "🔔 RMM Test-Mail",
             "Diese Test-Mail bestätigt, dass die SMTP-Verbindung funktioniert.\n\n"
-            "— RAPALLE.net RMM")
+            "— BYTERA RMM")
     except Exception as e:
         raise HTTPException(502, f"Test-Mail fehlgeschlagen: {e}")
     return {"ok": True}

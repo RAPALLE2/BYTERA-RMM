@@ -1,4 +1,4 @@
-# RAPALLE.net RMM - Agent Abhängigkeiten
+# BYTERA RMM - Agent Abhängigkeiten
 # Installieren mit: pip install -r requirements.txt
 #
 # Hinweis: python-socketio und aiohttp müssen zueinander passen. Wir geben

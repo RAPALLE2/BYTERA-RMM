@@ -36,5 +36,5 @@ jobs:
         run: cd src/client && python3 -m pytest -q tests
       - uses: actions/upload-artifact@v4
         with:
-          name: rapalle-client-pakete
+          name: bytera-client-pakete
           path: src/client/release/*

@@ -83,7 +83,7 @@ fail() {
 }
 
 echo "[start] ============================================================"
-echo "[start] RAPALLE.net RMM - Container startet"
+echo "[start] BYTERA RMM - Container startet"
 echo "[start] Zeit:        $(date 2>/dev/null || echo unbekannt)"
 echo "[start] Benutzer:    uid=$(id -u 2>/dev/null) gid=$(id -g 2>/dev/null) ($(id -un 2>/dev/null || echo '?'))"
 echo "[start] Verzeichnis: $(pwd)"

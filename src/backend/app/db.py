@@ -1,7 +1,7 @@
 """
 db.py
 -----
-Kompletter Datenbank-Layer für RAPALLE.net RMM.
+Kompletter Datenbank-Layer für BYTERA RMM.
 
 Wir benutzen SQLite (in Python fest eingebaut, "import sqlite3" - keine
 Installation nötig, kein Server nötig). Die Datenbank ist einfach eine
@@ -1553,14 +1553,14 @@ def _seed_default_scripts() -> None:
             "# Startet das offizielle Agent-Update. WICHTIG: losgelöst vom\n"
             "# Agent-Prozess (systemd-run), denn das Update stoppt den\n"
             "# Agent-Dienst - sonst würde das Update sich selbst mit abschießen.\n"
-            "BACKEND_URL=$(sed -n 's/^BACKEND_URL=//p' /opt/rapalle-rmm-agent/.env | tr -d '\\r')\n"
-            "if [ -z \"$BACKEND_URL\" ]; then echo 'BACKEND_URL nicht gefunden (/opt/rapalle-rmm-agent/.env)'; exit 1; fi\n"
+            "BACKEND_URL=$(sed -n 's/^BACKEND_URL=//p' /opt/bytera-rmm-agent/.env | tr -d '\\r')\n"
+            "if [ -z \"$BACKEND_URL\" ]; then echo 'BACKEND_URL nicht gefunden (/opt/bytera-rmm-agent/.env)'; exit 1; fi\n"
             "if command -v systemd-run >/dev/null 2>&1; then\n"
-            "  systemd-run --collect --quiet bash -c \"curl -fsSL \\\"$BACKEND_URL/agent-dist/update.sh\\\" | bash >/tmp/rapalle-agent-update.log 2>&1\"\n"
+            "  systemd-run --collect --quiet bash -c \"curl -fsSL \\\"$BACKEND_URL/agent-dist/update.sh\\\" | bash >/tmp/bytera-agent-update.log 2>&1\"\n"
             "else\n"
-            "  nohup bash -c \"curl -fsSL \\\"$BACKEND_URL/agent-dist/update.sh\\\" | bash >/tmp/rapalle-agent-update.log 2>&1\" >/dev/null 2>&1 &\n"
+            "  nohup bash -c \"curl -fsSL \\\"$BACKEND_URL/agent-dist/update.sh\\\" | bash >/tmp/bytera-agent-update.log 2>&1\" >/dev/null 2>&1 &\n"
             "fi\n"
-            "echo \"Agent-Update gestartet (Log: /tmp/rapalle-agent-update.log)\"",
+            "echo \"Agent-Update gestartet (Log: /tmp/bytera-agent-update.log)\"",
         ),
         (
             "Agent Update (Windows)",
@@ -1568,8 +1568,8 @@ def _seed_default_scripts() -> None:
             "Windows",
             "REM Loest das offizielle Agent-Update aus. Bevorzugt ueber den vor-\n"
             "REM installierten SYSTEM-Wartungstask (Event 812, elevated). Fallback:\n"
-            "REM update.ps1 losgeloest starten (Log: %TEMP%\\rapalle-agent-update.log).\n"
-            "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$ok=$false; try { Write-EventLog -LogName Application -Source 'RapalleRMM' -EventId 812 -EntryType Information -Message 'rmm update'; $ok=$true; Write-Host 'Agent-Update per SYSTEM-Task (Event 812) ausgeloest.' } catch {}; if (-not $ok) { $b=(Select-String -Path 'C:\\Program Files\\RapalleRmmAgent\\.env' -Pattern '^BACKEND_URL=(.+)$').Matches[0].Groups[1].Value.Trim(); $cmd='iwr ' + $b + '/agent-dist/update.ps1 -UseBasicParsing | iex > $env:TEMP\\rapalle-agent-update.log 2>&1'; Start-Process powershell -WindowStyle Hidden -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-Command',$cmd); Write-Host 'Agent-Update gestartet (update.ps1).' }\"",
+            "REM update.ps1 losgeloest starten (Log: %TEMP%\\bytera-agent-update.log).\n"
+            "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$ok=$false; try { Write-EventLog -LogName Application -Source 'ByteraRMM' -EventId 812 -EntryType Information -Message 'rmm update'; $ok=$true; Write-Host 'Agent-Update per SYSTEM-Task (Event 812) ausgeloest.' } catch {}; if (-not $ok) { $b=(Select-String -Path 'C:\\Program Files\\ByteraRmmAgent\\.env' -Pattern '^BACKEND_URL=(.+)$').Matches[0].Groups[1].Value.Trim(); $cmd='iwr ' + $b + '/agent-dist/update.ps1 -UseBasicParsing | iex > $env:TEMP\\bytera-agent-update.log 2>&1'; Start-Process powershell -WindowStyle Hidden -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-Command',$cmd); Write-Host 'Agent-Update gestartet (update.ps1).' }\"",
         ),
         (
             "Windows-Apps aktualisieren (winget)",
@@ -1664,7 +1664,7 @@ def list_users() -> list[dict]:
 # der normalen Dashboard-Anmeldung (dort liegt das Klartext-Passwort vor) und
 # legen es ab. So kann sich der Nutzer am Netzlaufwerk mit seinem GANZ NORMALEN
 # Konto-Passwort anmelden.
-RELAY_REALM = "RAPALLE.net RMM Relay"
+RELAY_REALM = "BYTERA RMM Relay"
 
 
 def _relay_fernet():

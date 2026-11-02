@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# RAPALLE.net RMM - Container-Image
+# BYTERA RMM - Container-Image
 #
 # Enthält: Python 3.12 + alle Abhängigkeiten aus src/backend/data/requirements.txt.
 # Der eigentliche Code (src/) wird per Volume aus dem

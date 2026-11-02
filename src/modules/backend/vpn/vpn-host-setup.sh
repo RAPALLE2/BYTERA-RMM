@@ -1,6 +1,6 @@
 #!/bin/sh
 # ============================================================================
-# vpn-host-setup.sh - VPN-Host fuer RAPALLE.net RMM vorbereiten (WireGuard)
+# vpn-host-setup.sh - VPN-Host fuer BYTERA RMM vorbereiten (WireGuard)
 # ============================================================================
 # Aufruf (als root):
 #   sh vpn-host-setup.sh                 IN dem Rechner/CT/der VM, die VPN-Host ist (Node oder Backend):

@@ -4,7 +4,7 @@
   "name": "Benachrichtigungen",
   "version": "1.0.0",
   "description": "Benachrichtigungs-Regeln (Trigger wie Client offline, CPU-Last, Website down, Anmeldung …) mit Versand per E-Mail (SMTP), Webhook (Discord/Custom) oder als Toast im Dashboard. Ist das Modul aus, werden keine Benachrichtigungen verschickt.",
-  "author": "RAPALLE.net",
+  "author": "BYTERA",
   "category": "System",
   "icon": "🔔",
   "requires": [],

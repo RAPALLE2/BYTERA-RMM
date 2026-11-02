@@ -8,17 +8,17 @@ wollen (Softwareverteilung, GPO, Intune, apt/dnf-Repos, Offline-Rollout).
 
 Erzeugte Pakete (je nach Bausystem, siehe unten):
 
-  Windows   RapalleRmmAgent-Setup.exe   PyInstaller-Onefile, fragt/kennt die
+  Windows   ByteraRmmAgent-Setup.exe   PyInstaller-Onefile, fragt/kennt die
                                         Backend-URL, installiert Python bei
                                         Bedarf, legt den SYSTEM-Autostart-Task
                                         an. Unterstuetzt "/S" fuer still.
-            RapalleRmmAgent.msi         Nur wenn WiX (candle/light) da ist -
+            ByteraRmmAgent.msi         Nur wenn WiX (candle/light) da ist -
                                         die MSI kapselt die Setup.exe (still),
                                         damit sie per GPO/Intune verteilbar ist.
-  Linux     rapalle-rmm-agent_<v>.deb   Debian/Ubuntu, postinst richtet venv +
+  Linux     bytera-rmm-agent_<v>.deb   Debian/Ubuntu, postinst richtet venv +
                                         systemd-Dienst ein.
-            rapalle-rmm-agent-<v>.rpm   Fedora/RHEL/openSUSE (braucht rpmbuild).
-            rapalle-rmm-agent.run       Selbstentpackendes Shell-Skript -
+            bytera-rmm-agent-<v>.rpm   Fedora/RHEL/openSUSE (braucht rpmbuild).
+            bytera-rmm-agent.run       Selbstentpackendes Shell-Skript -
                                         laeuft ueberall und laesst sich IMMER
                                         bauen (auch auf Windows).
 
@@ -26,7 +26,7 @@ Alle Pakete richten denselben Autostart ein wie die Web-Installer:
   Windows -> Aufgabenplanung, Principal SYSTEM, Trigger "Beim Systemstart"
              (laeuft also OHNE Anmeldung; Bildschirmaufnahme startet bei Bedarf
              einen Helfer in der aktiven Benutzersitzung)
-  Linux   -> systemd-Unit rapalle-agent.service, User=root, multi-user.target
+  Linux   -> systemd-Unit bytera-agent.service, User=root, multi-user.target
 
 Aufruf
 ------
@@ -62,10 +62,10 @@ BACKEND_ENV = SRC / "backend" / "data" / ".env"
 BRANDING = SRC / "frontend" / "image"
 DIST_DIR = SRC / "backend" / "temp" / "dist"
 
-PKG_NAME = "rapalle-rmm-agent"
-WIN_INSTALL_DIR = r"C:\Program Files\RapalleRmmAgent"
-LINUX_INSTALL_DIR = "/opt/rapalle-rmm-agent"
-TASK_NAME = "RapalleRmmAgent"
+PKG_NAME = "bytera-rmm-agent"
+WIN_INSTALL_DIR = r"C:\Program Files\ByteraRmmAgent"
+LINUX_INSTALL_DIR = "/opt/bytera-rmm-agent"
+TASK_NAME = "ByteraRmmAgent"
 
 
 # ==========================================================================
@@ -245,19 +245,19 @@ def copy_agent_into(dest: Path, backend_url: str, token: str) -> None:
 
 INSTALLER_STUB = r'''
 """
-RAPALLE.net RMM - Agent-Installer (Windows).
+BYTERA RMM - Agent-Installer (Windows).
 Wird von src/backend/app/build_installers.py zu einer .exe gepackt.
 
 Aufruf:
-    RapalleRmmAgent-Setup.exe                      -> interaktiv
-    RapalleRmmAgent-Setup.exe /S                   -> still (nutzt die
+    ByteraRmmAgent-Setup.exe                      -> interaktiv
+    ByteraRmmAgent-Setup.exe /S                   -> still (nutzt die
                                                       eingebackene Backend-URL)
-    RapalleRmmAgent-Setup.exe /S /URL=https://...  -> still, eigene Adresse
-    RapalleRmmAgent-Setup.exe /TOKEN=abc123        -> Onboarding-Token (ordnet
+    ByteraRmmAgent-Setup.exe /S /URL=https://...  -> still, eigene Adresse
+    ByteraRmmAgent-Setup.exe /TOKEN=abc123        -> Onboarding-Token (ordnet
                                                       das Geraet direkt dem im
                                                       Dashboard gewaehlten
                                                       Tenant/Standort zu)
-    RapalleRmmAgent-Setup.exe /UNINSTALL           -> deinstallieren
+    ByteraRmmAgent-Setup.exe /UNINSTALL           -> deinstallieren
 """
 import os
 import shutil
@@ -269,6 +269,9 @@ from pathlib import Path
 INSTALL_DIR = Path(r"__INSTALL_DIR__")
 TASK_NAME = "__TASK_NAME__"
 BAKED_URL = "__BACKEND_URL__"
+# Installation unter altem Namen (RAPALLE.net RMM) - wird uebernommen und entfernt
+LEGACY_DIR = Path(r"C:\Program Files\RapalleRmmAgent")
+LEGACY_TASKS = ("RapalleRmmAgent", "RapalleNode", "RapalleRmmUpdate", "RapalleRmmUninstall")
 
 
 def say(msg):
@@ -335,12 +338,33 @@ def install_python() -> str | None:
 def stop_running_agent():
     say("Stoppe evtl. laufenden Agenten ...")
     run(["schtasks", "/end", "/tn", TASK_NAME])
+    for t in LEGACY_TASKS[:2]:                       # Agent/Node unter altem Namen
+        run(["schtasks", "/end", "/tn", t])
+        run(["schtasks", "/delete", "/tn", t, "/f"])
     powershell(
         "Get-CimInstance Win32_Process -Filter \"Name='pythonw.exe' OR Name='python.exe'\" | "
         "Where-Object { $_.CommandLine -like '*agent.py*' } | "
         "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
     )
     time.sleep(2)
+
+
+def adopt_legacy():
+    """Altinstallation (RAPALLE.net RMM): Zuordnung (.env) und Geraete-ID uebernehmen."""
+    if not LEGACY_DIR.is_dir():
+        return
+    say(f"Altinstallation gefunden - uebernehme Zuordnung aus {LEGACY_DIR} ...")
+    INSTALL_DIR.mkdir(parents=True, exist_ok=True)
+    for f in (".env", ".device-id"):
+        if (LEGACY_DIR / f).is_file() and not (INSTALL_DIR / f).is_file():
+            shutil.copy2(LEGACY_DIR / f, INSTALL_DIR / f)
+
+
+def remove_legacy():
+    for t in LEGACY_TASKS:
+        run(["schtasks", "/delete", "/tn", t, "/f"])
+    powershell("if ([System.Diagnostics.EventLog]::SourceExists('RapalleRMM')) { Remove-EventLog -Source 'RapalleRMM' }")
+    shutil.rmtree(LEGACY_DIR, ignore_errors=True)
 
 
 def register_task(pythonw: Path):
@@ -371,12 +395,13 @@ Start-ScheduledTask -TaskName "{TASK_NAME}"
 
 
 def uninstall():
-    say("Deinstalliere RAPALLE.net RMM Agent ...")
+    say("Deinstalliere BYTERA RMM Agent ...")
     stop_running_agent()
     run(["schtasks", "/delete", "/tn", TASK_NAME, "/f"])
-    for t in ("RapalleRmmUpdate", "RapalleRmmUninstall"):
+    for t in ("ByteraRmmUpdate", "ByteraRmmUninstall"):
         run(["schtasks", "/delete", "/tn", t, "/f"])
     shutil.rmtree(INSTALL_DIR, ignore_errors=True)
+    remove_legacy()
     say("Fertig - der Agent wurde entfernt.")
     return 0
 
@@ -426,6 +451,7 @@ def main() -> int:
     url = url.rstrip("/")
 
     stop_running_agent()
+    adopt_legacy()
 
     say(f"Kopiere Agent nach {INSTALL_DIR} ...")
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
@@ -467,6 +493,7 @@ def main() -> int:
 
     if not register_task(venv / "Scripts" / "pythonw.exe"):
         return 1
+    remove_legacy()
 
     say("")
     say("=== FERTIG ===")
@@ -501,10 +528,10 @@ def build_windows_exe(out: Path, backend_url: str, token: str) -> Path | None:
             .replace("__BACKEND_URL__", backend_url),
             encoding="utf-8",
         )
-        info("Baue RapalleRmmAgent-Setup.exe (PyInstaller) ...")
+        info("Baue ByteraRmmAgent-Setup.exe (PyInstaller) ...")
         r = subprocess.run(
             pyinstaller_cmd() + ["--onefile", "--console", "--uac-admin",
-             "--name", "RapalleRmmAgent-Setup",
+             "--name", "ByteraRmmAgent-Setup",
              "--distpath", str(out), "--workpath", str(tmp / "work"),
              "--specpath", str(tmp),
              "--add-data", f"{tmp / 'payload'};payload",
@@ -514,7 +541,7 @@ def build_windows_exe(out: Path, backend_url: str, token: str) -> Path | None:
         if r.returncode != 0:
             info("PyInstaller fehlgeschlagen.")
             return None
-    exe = out / "RapalleRmmAgent-Setup.exe"
+    exe = out / "ByteraRmmAgent-Setup.exe"
     return exe if exe.is_file() else None
 
 
@@ -535,8 +562,20 @@ $InstallDir = "{install_dir}"
 $TaskName   = "{task}"
 $Payload    = $PSScriptRoot
 
+$LegacyDir  = "C:\\Program Files\\RapalleRmmAgent"     # Altinstallation (RAPALLE.net RMM)
+
+function Remove-Legacy {{
+    foreach ($t in @("RapalleRmmAgent", "RapalleNode", "RapalleRmmUpdate", "RapalleRmmUninstall")) {{
+        schtasks /end /tn $t 2>$null | Out-Null
+        schtasks /delete /tn $t /f 2>$null | Out-Null
+    }}
+    try {{ if ([System.Diagnostics.EventLog]::SourceExists("RapalleRMM")) {{ Remove-EventLog -Source "RapalleRMM" }} }} catch {{}}
+    Remove-Item -Recurse -Force $LegacyDir -ErrorAction SilentlyContinue
+}}
+
 function Stop-Agent {{
     try {{ schtasks /end /tn $TaskName 2>$null | Out-Null }} catch {{}}
+    foreach ($t in @("RapalleRmmAgent", "RapalleNode")) {{ try {{ schtasks /end /tn $t 2>$null | Out-Null }} catch {{}} }}
     try {{
         Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" |
             Where-Object {{ $_.CommandLine -like "*agent.py*" }} |
@@ -548,10 +587,11 @@ function Stop-Agent {{
 if ($Uninstall) {{
     Stop-Agent
     schtasks /delete /tn $TaskName /f 2>$null | Out-Null
-    foreach ($t in @("RapalleRmmUpdate", "RapalleRmmUninstall")) {{
+    foreach ($t in @("ByteraRmmUpdate", "ByteraRmmUninstall")) {{
         schtasks /delete /tn $t /f 2>$null | Out-Null
     }}
     Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue
+    Remove-Legacy
     Write-Host "Agent entfernt."
     exit 0
 }}
@@ -605,6 +645,10 @@ Stop-Agent
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 $keepEnv = ""
 if (Test-Path "$InstallDir\\.env") {{ $keepEnv = Get-Content "$InstallDir\\.env" -Raw }}
+elseif (Test-Path "$LegacyDir\\.env") {{ $keepEnv = Get-Content "$LegacyDir\\.env" -Raw }}    # Altinstallation uebernehmen
+if ((Test-Path "$LegacyDir\\.device-id") -and -not (Test-Path "$InstallDir\\.device-id")) {{
+    Copy-Item "$LegacyDir\\.device-id" "$InstallDir\\.device-id" -Force
+}}
 Get-ChildItem $Payload -Exclude "_setup.ps1" | Copy-Item -Destination $InstallDir -Recurse -Force
 if ($keepEnv) {{ Set-Content "$InstallDir\\.env" $keepEnv -NoNewline }}
 
@@ -635,6 +679,7 @@ $Settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGo
 try {{ Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
 Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $TrigBoot,$TrigWatch -Principal $Principal -Settings $Settings -Force | Out-Null
 Start-ScheduledTask -TaskName $TaskName
+Remove-Legacy
 
 Write-Host ""
 Write-Host "=== FERTIG ===" -ForegroundColor Green
@@ -644,7 +689,7 @@ Write-Host "Log-Datei bei Problemen: $InstallDir\\agent.log"
 
 
 PS_WRAPPER_TEMPLATE = '''<#
-RAPALLE.net RMM - Agent-Installation (Windows, eigenstaendig)
+BYTERA RMM - Agent-Installation (Windows, eigenstaendig)
 Der komplette Agent steckt als base64-ZIP am Ende dieser Datei - es wird also
 weder Internet noch Zugriff auf das Backend gebraucht.
 
@@ -710,7 +755,7 @@ try {{
 
 BAT_TEMPLATE = '''@echo off
 REM ========================================================================
-REM RAPALLE.net RMM - Agent-Installation (Windows, eigenstaendig)
+REM BYTERA RMM - Agent-Installation (Windows, eigenstaendig)
 REM Der komplette Agent steckt als base64-ZIP am Ende dieser Datei.
 REM
 REM Aufruf (Eingabeaufforderung als Administrator):
@@ -840,8 +885,8 @@ def build_windows_bat(out: Path, backend_url: str, token: str) -> Path:
 
 WXS = r'''<?xml version="1.0" encoding="utf-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="RAPALLE.net RMM Agent" Language="1031"
-           Version="__VERSION__" Manufacturer="RAPALLE.net"
+  <Product Id="*" Name="BYTERA RMM Agent" Language="1031"
+           Version="__VERSION__" Manufacturer="BYTERA"
            UpgradeCode="7B2F1C64-9A3D-4F51-8E2A-0C7A1D4E9B31">
     <Package InstallerVersion="300" Compressed="yes" InstallScope="perMachine" />
     <MajorUpgrade DowngradeErrorMessage="Eine neuere Version ist bereits installiert." />
@@ -849,7 +894,7 @@ WXS = r'''<?xml version="1.0" encoding="utf-8"?>
 
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALLFOLDER" Name="RapalleRmmAgent" />
+        <Directory Id="INSTALLFOLDER" Name="ByteraRmmAgent" />
       </Directory>
     </Directory>
 
@@ -895,10 +940,10 @@ def build_windows_msi(out: Path, setup_exe: Path | None) -> Path | None:
                .replace("__SETUP_EXE__", str(setup_exe)),
             encoding="utf-8",
         )
-        info("Baue RapalleRmmAgent.msi (WiX) ...")
+        info("Baue ByteraRmmAgent.msi (WiX) ...")
         if subprocess.run([candle, "-nologo", "-out", str(tmp / "agent.wixobj"), str(wxs)]).returncode:
             return None
-        msi = out / "RapalleRmmAgent.msi"
+        msi = out / "ByteraRmmAgent.msi"
         if subprocess.run([light, "-nologo", "-out", str(msi), str(tmp / "agent.wixobj")]).returncode:
             return None
         return msi if msi.is_file() else None
@@ -928,7 +973,7 @@ if [ -z "$URL" ] && [ -t 0 ]; then
 fi
 if [ -z "$URL" ]; then
   echo "Keine Backend-Adresse gesetzt. Nachtraeglich in $INSTALL_DIR/.env eintragen"
-  echo "und dann: systemctl restart rapalle-agent"
+  echo "und dann: systemctl restart bytera-agent"
 else
   sed -i "s|^BACKEND_URL=.*|BACKEND_URL=${{URL%/}}|" "$INSTALL_DIR/.env" 2>/dev/null || true
 fi
@@ -954,6 +999,26 @@ elif command -v pacman >/dev/null 2>&1; then
   pacman -Sy --noconfirm python python-pip >/dev/null 2>&1 || true
 fi
 
+# --- Umbenennung: Altinstallation (RAPALLE.net RMM) uebernehmen -----------
+LEGACY_DIR="/opt/rapalle-rmm-agent"
+if [ -d "$LEGACY_DIR" ] || [ -f /etc/systemd/system/rapalle-agent.service ]; then
+  echo "Altinstallation (RAPALLE.net RMM) gefunden - uebernehme Zuordnung und entferne sie ..."
+  systemctl disable --now rapalle-agent 2>/dev/null || true
+  systemctl disable --now rapalle-node 2>/dev/null || true
+  pkill -f "$LEGACY_DIR/" 2>/dev/null || true
+  if [ -f "$LEGACY_DIR/.device-id" ] && [ ! -f "$INSTALL_DIR/.device-id" ]; then
+    cp "$LEGACY_DIR/.device-id" "$INSTALL_DIR/.device-id"
+  fi
+  if [ -f "$LEGACY_DIR/.env" ]; then
+    # selbst vergebenen Geraetenamen behalten
+    v="$(grep -m1 "^DEVICE_NAME=" "$LEGACY_DIR/.env" | cut -d= -f2- || true)"
+    if [ -n "$v" ]; then sed -i "s|^DEVICE_NAME=.*|DEVICE_NAME=$v|" "$INSTALL_DIR/.env" 2>/dev/null || true; fi
+  fi
+  rm -f /etc/systemd/system/rapalle-agent.service /etc/systemd/system/rapalle-node.service
+  systemctl daemon-reload 2>/dev/null || true
+  rm -rf "$LEGACY_DIR"
+fi
+
 # --- Abhaengigkeiten in einer venv (Fallback: systemweit) -----------------
 cd "$INSTALL_DIR"
 if python3 -m venv venv >/dev/null 2>&1; then
@@ -967,9 +1032,9 @@ else
 fi
 
 # --- systemd-Dienst -------------------------------------------------------
-cat > /etc/systemd/system/rapalle-agent.service <<UNIT
+cat > /etc/systemd/system/bytera-agent.service <<UNIT
 [Unit]
-Description=RAPALLE.net RMM Agent
+Description=BYTERA RMM Agent
 After=network.target
 
 [Service]
@@ -984,15 +1049,15 @@ WantedBy=multi-user.target
 UNIT
 
 systemctl daemon-reload
-systemctl enable --now rapalle-agent
-echo "Fertig - Status: systemctl status rapalle-agent"
+systemctl enable --now bytera-agent
+echo "Fertig - Status: systemctl status bytera-agent"
 '''
 
 
 LINUX_REMOVE = f'''#!/bin/bash
-systemctl stop rapalle-agent 2>/dev/null || true
-systemctl disable rapalle-agent 2>/dev/null || true
-rm -f /etc/systemd/system/rapalle-agent.service
+systemctl stop bytera-agent 2>/dev/null || true
+systemctl disable bytera-agent 2>/dev/null || true
+rm -f /etc/systemd/system/bytera-agent.service
 systemctl daemon-reload 2>/dev/null || true
 rm -rf {LINUX_INSTALL_DIR}/venv
 exit 0
@@ -1020,9 +1085,13 @@ def build_deb(out: Path, backend_url: str, token: str) -> Path | None:
             "Priority: optional\n"
             "Architecture: all\n"
             "Depends: python3 (>= 3.9), python3-venv | python3-virtualenv, systemd\n"
-            "Maintainer: RAPALLE.net <noreply@rapalle.net>\n"
-            "Description: RAPALLE.net RMM Agent\n"
-            " Verbindet dieses Geraet mit dem RAPALLE.net RMM Dashboard.\n"
+            # Umbenennung: ersetzt das Paket unter altem Namen (RAPALLE.net RMM)
+            "Replaces: rapalle-rmm-agent\n"
+            "Conflicts: rapalle-rmm-agent\n"
+            "Provides: rapalle-rmm-agent\n"
+            "Maintainer: BYTERA <noreply@rapalle.net>\n"
+            "Description: BYTERA RMM Agent\n"
+            " Verbindet dieses Geraet mit dem BYTERA RMM Dashboard.\n"
             " Laeuft als systemd-Dienst (root) und startet beim Booten.\n",
             encoding="utf-8",
         )
@@ -1066,14 +1135,16 @@ def build_rpm(out: Path, backend_url: str, token: str) -> Path | None:
         spec = f"""Name:           {PKG_NAME}
 Version:        {version}
 Release:        1
-Summary:        RAPALLE.net RMM Agent
+Summary:        BYTERA RMM Agent
 License:        MIT
 BuildArch:      noarch
 Source0:        {PKG_NAME}-{version}.tar.gz
 Requires:       python3, systemd
+Obsoletes:      rapalle-rmm-agent
+Provides:       rapalle-rmm-agent
 
 %description
-Verbindet dieses Geraet mit dem RAPALLE.net RMM Dashboard.
+Verbindet dieses Geraet mit dem BYTERA RMM Dashboard.
 Laeuft als systemd-Dienst (root) und startet beim Booten.
 
 %prep
@@ -1130,7 +1201,7 @@ def build_run(out: Path, backend_url: str, token: str) -> Path:
 
     setup = linux_setup_script(backend_url).replace("#!/bin/bash\nset -e\n", "")
     header = f'''#!/bin/bash
-# RAPALLE.net RMM Agent {version} - selbstentpackender Installer
+# BYTERA RMM Agent {version} - selbstentpackender Installer
 # Aufruf:   sudo ./install-agent.sh          (fragt ggf. nach der Adresse)
 #           sudo RMM_BACKEND_URL=https://rmm.firma.de ./install-agent.sh
 #           sudo RMM_ENROLLMENT_TOKEN=<token> ./install-agent.sh
@@ -1191,8 +1262,8 @@ def build_tgz(out: Path, backend_url: str, token: str) -> Path:
     Fuer alle, die lieber selbst schauen, was installiert wird - oder das
     Paket per Ansible/Salt ausrollen:
 
-        tar xzf rapalle-rmm-agent-<v>.tar.gz
-        cd rapalle-rmm-agent-<v> && sudo ./install.sh
+        tar xzf bytera-rmm-agent-<v>.tar.gz
+        cd bytera-rmm-agent-<v> && sudo ./install.sh
     """
     version = agent_version()
     name = f"{PKG_NAME}-{version}"
@@ -1258,7 +1329,7 @@ def build_pkg(out: Path, backend_url: str, token: str) -> Path:
     damit KEIN makepkg noetig ist - das Paket laesst sich also auch auf einem
     Debian- oder Windows-Server erzeugen.
 
-        sudo pacman -U rapalle-rmm-agent-<v>-any.pkg.tar.xz
+        sudo pacman -U bytera-rmm-agent-<v>-any.pkg.tar.xz
 
     Hinweis: Ohne makepkg fehlt die (optionale) .MTREE-Datei. pacman gibt dazu
     eine Warnung aus und installiert normal - nur die Dateipruefsummen fallen
@@ -1274,13 +1345,15 @@ def build_pkg(out: Path, backend_url: str, token: str) -> Path:
         (root / ".PKGINFO").write_text(
             f"pkgname = {PKG_NAME}\n"
             f"pkgver = {version}-1\n"
-            "pkgdesc = RAPALLE.net RMM Agent\n"
+            "pkgdesc = BYTERA RMM Agent\n"
             "url = https://github.com/juliusbrussee\n"
             "builddate = 0\n"
-            "packager = RAPALLE.net\n"
+            "packager = BYTERA\n"
             f"size = {size}\n"
             "arch = any\n"
             "license = MIT\n"
+            "replaces = rapalle-rmm-agent\n"          # Umbenennung (RAPALLE.net RMM)
+            "conflict = rapalle-rmm-agent\n"
             "depend = python\n"
             "depend = systemd\n"
             f"backup = {LINUX_INSTALL_DIR.lstrip('/')}/.env\n",
@@ -1390,7 +1463,7 @@ def main() -> int:
     if "msi" in targets:
         # Die MSI kapselt die Setup.exe - fehlt sie, wird sie zuerst gebaut.
         if setup_exe is None:
-            existing = out / "RapalleRmmAgent-Setup.exe"
+            existing = out / "ByteraRmmAgent-Setup.exe"
             setup_exe = existing if existing.is_file() else build_windows_exe(out, url, token)
         msi = build_windows_msi(out, setup_exe)
         if msi:

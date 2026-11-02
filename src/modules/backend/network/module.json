@@ -4,7 +4,7 @@
   "name": "Netzwerk-Werkzeuge",
   "version": "1.0.0",
   "description": "Netzwerk-Scan, Portscan, Speedtest und Port-Weiterleitung. Jede Teilfunktion ist einzeln schaltbar.",
-  "author": "RAPALLE.net",
+  "author": "BYTERA",
   "category": "Netzwerk",
   "icon": "🌐",
   "requires": [],

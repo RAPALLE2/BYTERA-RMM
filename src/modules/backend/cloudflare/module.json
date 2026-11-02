@@ -4,7 +4,7 @@
   "name": "Cloudflare Tunnel",
   "version": "1.0.0",
   "description": "Erreichbar machen ohne offene Ports: legt Cloudflare-Tunnel per API selbst an und leitet genau die Ports weiter, die das RMM wirklich nutzt – Dashboard, WebDAV, SFTP, RMM-Konsole (SSH), Websites/Webhosts, Docker-Container sowie RDP/SSH/VNC zu Agents (über den RMM-Server oder eine Node im Netz des Agents). Pro Route wählbar: offen, RMM-Login (lokal oder AD inkl. 2FA) oder Einmal-PIN per E-Mail; SSH/VNC auch direkt im Browser, alles auch über cloudflared/WARP.",
-  "author": "RAPALLE.net",
+  "author": "BYTERA",
   "category": "Netzwerk",
   "icon": "☁️",
   "requires": [],

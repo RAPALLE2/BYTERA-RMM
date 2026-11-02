@@ -125,8 +125,8 @@ TEXTS: dict[str, dict[str, str]] = {
         "log_screen_start": "Bildschirm-Start für {name}: {mode}",
         "log_update_all": "Agent-Update für {n} Client(s) ausgelöst.",
         # ---- Installations-Skripte (Ausgaben auf dem Zielrechner) ----
-        "ins_title": "RAPALLE.net RMM – Agent installieren",
-        "ins_upd_title": "RAPALLE.net RMM – Agent NEU AUSROLLEN",
+        "ins_title": "BYTERA RMM – Agent installieren",
+        "ins_upd_title": "BYTERA RMM – Agent NEU AUSROLLEN",
         "ins_downloading": "Lade neueste Agent-Version...",
         "ins_stopping": "Stoppe Agent und Bildschirm-Helfer...",
         "ins_cleaning": "Räume alten Programmordner auf...",
@@ -175,8 +175,8 @@ TEXTS: dict[str, dict[str, str]] = {
         "log_screen_start": "Screen start for {name}: {mode}",
         "log_update_all": "Agent update triggered for {n} client(s).",
         # ---- Installation scripts (output on the target machine) ----
-        "ins_title": "RAPALLE.net RMM – install agent",
-        "ins_upd_title": "RAPALLE.net RMM – REDEPLOY agent",
+        "ins_title": "BYTERA RMM – install agent",
+        "ins_upd_title": "BYTERA RMM – REDEPLOY agent",
         "ins_downloading": "Downloading the latest agent version...",
         "ins_stopping": "Stopping the agent and screen helper...",
         "ins_cleaning": "Cleaning up the old program folder...",

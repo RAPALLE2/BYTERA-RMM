@@ -10,9 +10,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "desktop"))
 
-from rapalle_client import features  # noqa: E402
-from rapalle_client.api import Api, ApiError, normalize_server  # noqa: E402
-from rapalle_client.store import Store  # noqa: E402
+from bytera_client import features  # noqa: E402
+from bytera_client.api import Api, ApiError, normalize_server  # noqa: E402
+from bytera_client.store import Store  # noqa: E402
 
 
 def test_normalize_server():
@@ -63,7 +63,7 @@ def test_store_token_file(tmp_path, monkeypatch):
 
 
 def test_dashboard_url():
-    from rapalle_client import __version__
+    from bytera_client import __version__
     a = Api("https://rmm.firma.de", token="T.O.K")
     assert a.dashboard_url() == f"https://rmm.firma.de/#client-token=T.O.K&client-app={__version__}"
     assert a.dashboard_url("terminal", "c1") == \
@@ -71,9 +71,9 @@ def test_dashboard_url():
 
 
 def test_launch_link_and_ssh():
-    from rapalle_client import features, launcher
-    assert launcher.parse("rapalle-rmm://launch?s=https%3A%2F%2Frmm.firma.de&t=abc") == ("https://rmm.firma.de", "abc")
-    for bad in ("rapalle-rmm://evil?s=x&t=y", "https://rmm.firma.de", "rapalle-rmm://launch?s=x"):
+    from bytera_client import features, launcher
+    assert launcher.parse("bytera-rmm://launch?s=https%3A%2F%2Frmm.firma.de&t=abc") == ("https://rmm.firma.de", "abc")
+    for bad in ("bytera-rmm://evil?s=x&t=y", "https://rmm.firma.de", "bytera-rmm://launch?s=x"):
         with pytest.raises(ValueError):
             launcher.parse(bad)
     assert features.build_ssh_command("127.0.0.1", 4022, "root", "rmm-ssh-a.firma.de") == \
@@ -100,7 +100,7 @@ def test_end_to_end(tmp_path):
 
 
 def test_browser_command(tmp_path):
-    from rapalle_client import browser
+    from bytera_client import browser
     cmd = browser.build_command(("/usr/bin/chromium", "chromium"), "https://x/#client-token=T", tmp_path)
     assert cmd[1] == "--app=https://x/#client-token=T" and f"--user-data-dir={tmp_path}" in cmd
     assert browser.build_command(("/usr/bin/firefox", "firefox"), "https://x/", tmp_path) == ["/usr/bin/firefox", "--new-window", "https://x/"]

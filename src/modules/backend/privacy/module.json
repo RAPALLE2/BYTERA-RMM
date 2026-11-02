@@ -4,7 +4,7 @@
   "name": "Datenschutz (DSGVO)",
   "version": "1.0.0",
   "description": "Auskunft, Loeschung und automatische Aufbewahrungsfristen (DSGVO Art. 5/15/17). ACHTUNG: Ohne dieses Modul werden Aufbewahrungsfristen NICHT automatisch durchgesetzt.",
-  "author": "RAPALLE.net",
+  "author": "BYTERA",
   "category": "Betrieb",
   "icon": "🛡️",
   "requires": [],

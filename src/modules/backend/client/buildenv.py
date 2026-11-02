@@ -2,7 +2,7 @@
 # ------------------------------------------------------------------
 # Docker-Betrieb (Standard, alle Formate):
 #   Beim Aktivieren des Moduls wird EIN Bau-Image angelegt:
-#       rapalle/rmm-client-builder:<kennung>
+#       bytera/rmm-client-builder:<kennung>
 #   Inhalt: Ubuntu 24.04 + Wine + Windows-Python mit PyInstaller + wixl/msitools (MSI-Assistent) + rpmbuild
 #           + JDK 17 + Android-Werkzeuge (aapt, dx, zipalign, apksigner, android-23).
 #   Angelegt wird es OHNE Dockerfile-Build (der Build-Endpunkt aendert sich je nach
@@ -40,8 +40,9 @@ SCRIPT = CLIENT_DIR / "build_installers.py"
 TOOLS_DIR = MODULES_DATA_DIR / "client" / "buildtools"      # nativ Windows: PyInstaller-Cache/WiX
 
 BASE_IMAGE = os.environ.get("RMM_CLIENT_BUILDER_BASE", "ubuntu:24.04")
-REPO = "rapalle/rmm-client-builder"
-LABEL = "net.rapalle.rmm.client-builder"
+REPO = "bytera/rmm-client-builder"
+LABEL = "net.bytera.rmm.client-builder"
+LEGACY_LABEL = "net.rapalle.rmm.client-builder"     # Bau-Images aus der Zeit vor der Umbenennung
 NETWORK = os.environ.get("RMM_CLIENT_BUILDER_NET", "")       # leer = Docker-Standard (bridge)
 WIN_PY_FALLBACK = ("https://github.com/astral-sh/python-build-standalone/releases/download/20241016/"
                    "cpython-3.12.7+20241016-x86_64-pc-windows-msvc-install_only.tar.gz")
@@ -326,7 +327,7 @@ def _prepare_docker(force) -> None:
             raise RuntimeError(f"Einrichtung fehlgeschlagen (Code {rc}) – siehe Protokoll")
         _log("Speichere das Bau-Image (kann einige Minuten dauern) …")
         q = urllib.parse.urlencode({"container": cid, "repo": REPO, "tag": TAG,
-                                    "comment": "RAPALLE.net RMM Client-Bau-Umgebung"})
+                                    "comment": "BYTERA RMM Client-Bau-Umgebung"})
         _json("POST", f"/commit?{q}", {"Env": BUILD_ENV, "WorkingDir": "/work/client", "Cmd": ["bash"],
                                        "Labels": {LABEL: TAG}}, timeout=600)
     finally:
@@ -353,6 +354,12 @@ def _setup_line(ln: str) -> None:
 
 
 def _remove_stale_images() -> None:
+    try:                                   # alte Bau-Images (RAPALLE.net) belegen nur Platz
+        for im in _json("GET", "/images/json?filters=" + urllib.parse.quote(json.dumps({"label": [LEGACY_LABEL]})),
+                        timeout=30) or []:
+            _raw("DELETE", f"/images/{im['Id']}?force=1", timeout=300)
+    except Exception:
+        pass
     try:
         imgs = _json("GET", "/images/json?filters=" + urllib.parse.quote(json.dumps({"label": [LABEL]})), timeout=30) or []
     except Exception:
@@ -391,7 +398,7 @@ def remove_image() -> None:
 # ===================================================================== Bauen im Container
 def _is_pkg(name: str) -> bool:
     low = name.lower()
-    return low.startswith("rapalle") and low.endswith(
+    return low.startswith(("bytera", "rapalle")) and low.endswith(   # rapalle* = Pakete vor der Umbenennung
         (".exe", ".msi", ".zip", ".deb", ".rpm", ".pkg.tar.xz", ".tar.gz", ".tgz", ".tar", ".apk"))
 
 

@@ -4,7 +4,7 @@
   "name": "Headless-Bildschirm",
   "version": "1.0.0",
   "description": "Remote-Bildschirm auch ohne Monitor: installiert auf Wunsch einen virtuellen Bildschirmtreiber (nur Windows), damit headless-Server/VMs einen Desktop zum Aufnehmen haben. Außerdem Mehrbenutzer-Auswahl – sind mehrere Benutzer angemeldet, wählt man erst einen aus; dieser bekommt die Freigabe-Abfrage, und sein Bildschirm wird gesehen und gesteuert.",
-  "author": "RAPALLE.net",
+  "author": "BYTERA",
   "category": "Fernzugriff",
   "icon": "🖥️",
   "requires": [],

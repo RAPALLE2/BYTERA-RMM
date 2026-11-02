@@ -4,7 +4,7 @@
   "name": "REST-API",
   "version": "1.0.0",
   "description": "Steuert alles, was das Web-Dashboard kann, per REST-API (/api/v1): Benutzer, Rechte, Clients/Agenten, Module, Apps, Einstellungen, Nodes … Zugang nur für Konten mit dem Recht „API benutzen“ (Vorlage „API-Benutzer“), je Aufruf zusätzlich das passende Recht wie im Dashboard. Betriebsarten: ohne Benutzer, mit Benutzer, mit Benutzer (secure, langer Code mit einstellbarer Laufzeit). Mit Aufrufprotokoll.",
-  "author": "RAPALLE.net",
+  "author": "BYTERA",
   "category": "System",
   "icon": "🔌",
   "requires": [],

@@ -4,7 +4,7 @@
   "name": "Beispiel-Modul",
   "version": "1.0.0",
   "description": "Lehrbeispiel fuer eigene Module: Router, Hooks, Hintergrundaufgabe, Einstellungen, Teilfunktionen und ein absichtlicher Absturz zum Testen des Crashschutzes. Anleitung: GUIDE.md",
-  "author": "RAPALLE.net",
+  "author": "BYTERA",
   "category": "Entwicklung",
   "icon": "🧪",
   "requires": [],

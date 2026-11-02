@@ -39,7 +39,7 @@ class Cf:
         return cls((data or store.load()).get("auth") or {})
 
     def _headers(self) -> dict:
-        h = {"Content-Type": "application/json", "User-Agent": "RAPALLE.net-RMM"}
+        h = {"Content-Type": "application/json", "User-Agent": "BYTERA-RMM"}
         if self.type == "token":
             h["Authorization"] = f"Bearer {self.secret}"
         else:
@@ -138,7 +138,7 @@ class Cf:
     def dns_upsert(self, zone: str, name: str, tid: str) -> str:
         target = f"{tid}.cfargotunnel.com"
         rec = {"type": "CNAME", "name": name, "content": target, "proxied": True,
-               "comment": "RAPALLE.net RMM Tunnel"}
+               "comment": "BYTERA RMM Tunnel"}
         found = self.all(f"/zones/{zone}/dns_records", {"name": name})
         for r in found:
             if r.get("type") == "CNAME":

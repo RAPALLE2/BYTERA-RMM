@@ -328,7 +328,7 @@ def _extract_target_and_root(names: list[str], current_path: str):
     Bestimmt (Ziel-Ordner, Content-Root im ZIP) anhand des ZIP-Inhalts:
 
     - frontend/backend/agent direkt im ZIP-Root -> Ziel = PROJECT_ROOT, Root = "".
-    - EIN Wrapper-Ordner (z.B. "Rapalle.net-RMM/"), darin frontend/backend/agent
+    - EIN Wrapper-Ordner (z.B. "BYTERA-RMM/"), darin frontend/backend/agent
       -> Ziel = PROJECT_ROOT, Root = "<wrapper>/" (Wrapper wird abgestreift).
     - sonst -> Ziel = aktuell geöffneter Explorer-Ordner, Root = "".
     """
@@ -688,7 +688,7 @@ def migrate_export(request: Request,
 
     stamp = _time.strftime("%Y%m%d-%H%M%S")
     tmp_dir = Path(tempfile.mkdtemp(prefix="rmm-migrate-"))
-    archive = tmp_dir / f"rapalle-rmm-migration-{stamp}.zip"
+    archive = tmp_dir / f"bytera-rmm-migration-{stamp}.zip"
     try:
         manifest = migrate.build_export(
             archive, include_recordings=recordings, include_media=media,
@@ -815,7 +815,7 @@ def _norm_target(url: str) -> str:
 
 
 def _probe(url: str) -> dict:
-    """Ist das ein erreichbares RAPALLE.net RMM? (vom ALTEN Server aus gesehen)"""
+    """Ist das ein erreichbares BYTERA RMM? (vom ALTEN Server aus gesehen)"""
     import ssl
     import urllib.request
     ctx = ssl.create_default_context()
@@ -824,9 +824,9 @@ def _probe(url: str) -> dict:
     try:
         with urllib.request.urlopen(urllib.request.Request(url + "/agent-dist/update.sh"), timeout=10, context=ctx) as r:
             body = r.read(4000).decode("utf-8", "replace")
-        ok = "RAPALLE.net RMM" in body
+        ok = "BYTERA RMM" in body or "RAPALLE.net RMM" in body   # auch Server vor der Umbenennung
         return {"ok": ok, "detail": "Neuer Server erreichbar." if ok else
-                "Erreichbar, aber das ist offenbar kein RAPALLE.net RMM (Agent-Update-Skript fehlt)."}
+                "Erreichbar, aber das ist offenbar kein BYTERA RMM (Agent-Update-Skript fehlt)."}
     except Exception as e:      # noqa: BLE001
         return {"ok": False, "detail": f"Nicht erreichbar: {getattr(e, 'reason', e)}"}
 

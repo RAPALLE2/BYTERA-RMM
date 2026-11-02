@@ -13,7 +13,7 @@
 // Hinweis: Das ist die echte RMM-Web-App (auf eurem Server) - localStorage ist
 // hier völlig in Ordnung und der Standardweg für solche UI-Persistenz.
 
-const KEY_PREFIX = "rapalle-ui:";
+const KEY_PREFIX = "bytera-ui:";
 // Rechte-Helfer fürs harte Gating des Bearbeiten-Modus (kein Import-Zyklus:
 // state.js importiert selbst nichts).
 import { hasGlobalPerm } from "./state.js";
@@ -121,8 +121,8 @@ let _hydrated = false;
 // der Datenbank. Nur echt gerätegebundene Dinge (Login-Token, Spotify-OAuth)
 // bleiben ausdrücklich lokal.
 const SYNC_PREFIXES = [
-  KEY_PREFIX,          // "rapalle-ui:<user>"  Fenster/Sidebar/Layouts/Profile
-  "rapalle-favs:",     // Favoriten (Sidebar + Dashboard + angeheftete Einträge)
+  KEY_PREFIX,          // "bytera-ui:<user>"  Fenster/Sidebar/Layouts/Profile
+  "bytera-favs:",     // Favoriten (Sidebar + Dashboard + angeheftete Einträge)
   "rmm_appmenu:",      // Startmenü-Layout inkl. ORDNER
   "rmm_webapps:",      // interner Browser: gespeicherte Web-Apps
   "rmm_dash",          // Dashboard-Zusatzzustände
@@ -156,7 +156,7 @@ function _isSyncable(k) {
 
 // Alle aktuell im Browser liegenden, synchronisierbaren Schlüssel.
 function _syncedKeys() {
-  const out = new Set([_key, `rmm_appmenu:${_user}`, `rapalle-favs:${_user}`, `rmm_webapps:${_user}`]);
+  const out = new Set([_key, `rmm_appmenu:${_user}`, `bytera-favs:${_user}`, `rmm_webapps:${_user}`]);
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
@@ -172,11 +172,45 @@ function _syncedKeys() {
 // Wichtig: Es werden ALLE vom Server gelieferten Schlüssel übernommen, nicht
 // nur die aus einer festen Liste. Dadurch ist der Browser-Cache nur noch ein
 // Spiegel der Datenbank - egal über welche URL man das RMM öffnet.
+// Umbenennung RAPALLE.net -> BYTERA: alte Schlüssel ("rapalle-ui:", "rapalle-favs:")
+// auf die neuen Namen übertragen - im Server-Stand und im Browser.
+const LEGACY_PREFIXES = [["rapalle-ui:", "bytera-ui:"], ["rapalle-favs:", "bytera-favs:"]];
+function _renameLegacy(k) {
+  for (const [o, n] of LEGACY_PREFIXES) if (k && k.startsWith(o)) return n + k.slice(o.length);
+  return null;
+}
+function _migrateLegacyKeys(keys) {
+  let changed = false;
+  for (const k of Object.keys(keys)) {
+    const nk = _renameLegacy(k);
+    if (!nk) continue;
+    if (!Object.prototype.hasOwnProperty.call(keys, nk)) { keys[nk] = keys[k]; changed = true; }
+    delete keys[k];
+  }
+  return changed;
+}
+function _migrateLegacyLocal() {
+  try {
+    const old = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (_renameLegacy(k)) old.push(k);
+    }
+    for (const k of old) {
+      const nk = _renameLegacy(k);
+      if (localStorage.getItem(nk) === null) localStorage.setItem(nk, localStorage.getItem(k));
+      localStorage.removeItem(k);
+    }
+  } catch {}
+}
+
 export async function hydrateFromServer() {
   try {
+    _migrateLegacyLocal();
     const { api } = await import("./api.js");
     const res = await api.getUiPrefs();
     const keys = (res && res.keys) || {};
+    const migrated = _migrateLegacyKeys(keys);
     // Sonderfall "Erstmigration": Der Server kennt noch gar nichts (z.B. weil
     // dieser Benutzer bisher nur lokal gearbeitet hat). Dann NICHT aufräumen,
     // sondern den vorhandenen lokalen Stand einmalig in die Datenbank heben.
@@ -202,6 +236,7 @@ export async function hydrateFromServer() {
       try { localStorage.setItem(k, v); } catch {}
     }
     _hydrated = true;
+    if (migrated) { try { await flushToServer(); } catch {} }   // neue Schlüssel gleich speichern
   } catch (e) {
     // Server nicht erreichbar o.ä. -> lokaler Stand bleibt bestehen, ABER es
     // wird nichts hochgeladen (siehe _hydrated-Sperre in syncToServerSoon).

@@ -259,7 +259,7 @@ function hideTaskbarTip() {
 // Merker für den "sauberen Neustart": wird vom Reload-Knopf gesetzt und beim
 // nächsten Start in app.js EINMAL ausgewertet (und sofort gelöscht). Steht er,
 // werden offene Fenster/Apps und die Client-Auswahl NICHT wiederhergestellt.
-export const FRESH_START_KEY = "rapalle-ui:fresh-start";
+export const FRESH_START_KEY = "bytera-ui:fresh-start";
 
 export function requestFreshReload() {
   try { sessionStorage.setItem(FRESH_START_KEY, "1"); } catch {}

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-RAPALLE.net RMM - NODE
+BYTERA RMM - NODE
 ======================
 
 Eine Node ist ein kleiner, EIGENSTAENDIGER Prozess auf einem Client. Sie laeuft

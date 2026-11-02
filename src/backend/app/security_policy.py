@@ -51,7 +51,7 @@ DEFAULTS = {
 _TRIVIAL = {
     "passwort", "password", "administrator", "admin", "willkommen",
     "welcome", "qwertz", "qwerty", "123456", "12345678", "letmein",
-    "changeme", "geheim", "rapalle", "rmm",
+    "changeme", "geheim", "bytera", "rmm",
 }
 
 

@@ -84,7 +84,7 @@ def resolve_default_url() -> str:
     try:
         req = urllib.request.Request(
             f"https://api.github.com/repos/{DEFAULT_REPO}/releases/latest",
-            headers={"User-Agent": "RAPALLE-RMM", "Accept": "application/vnd.github+json"})
+            headers={"User-Agent": "BYTERA-RMM", "Accept": "application/vnd.github+json"})
         with urllib.request.urlopen(req, timeout=20) as r:
             rel = json.loads(r.read() or b"{}")
         assets = rel.get("assets") or []

@@ -1,4 +1,4 @@
-# RAPALLE.net RMM - Backend Abhängigkeiten
+# BYTERA RMM - Backend Abhängigkeiten
 # Installieren mit: pip install -r src/backend/data/requirements.txt
 #
 # Diese EINE Datei enthaelt alle Abhaengigkeiten des CORE (Laufzeit UND Bau-Werkzeuge,
@@ -55,4 +55,4 @@ psycopg2-binary>=2.9.0    # PostgreSQL
 #
 # Die Linux-Pakete (.deb/.rpm/.run) brauchen KEINE Python-Pakete, nur
 # dpkg-deb bzw. rpmbuild - und das .run gar nichts.
-pyinstaller>=6.0          # baut RapalleRmmAgent-Setup.exe (Onefile, --uac-admin)
+pyinstaller>=6.0          # baut ByteraRmmAgent-Setup.exe (Onefile, --uac-admin)

@@ -1013,7 +1013,7 @@ export function renderAudioPlayer(body, win) {
       // Player nur einmal pro Fenster anlegen und wiederverwenden.
       if (!spPlayer) {
         spPlayer = new Spotify.Player({
-          name: "RAPALLE RMM Player",
+          name: "BYTERA RMM Player",
           volume: (+volEl.value) / 100,
           getOAuthToken: (cb) => { getSpotifyToken().then((tok) => cb(tok || "")); },
         });

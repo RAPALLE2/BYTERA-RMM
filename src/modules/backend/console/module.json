@@ -4,7 +4,7 @@
   "name": "RMM-Konsole",
   "version": "1.0.0",
   "description": "Kommandozeile für das ganze RMM – wie die Shell auf einem Proxmox-Node: per SSH (das Backend wird zum SSH-Server), im Dashboard und in der Client-App, mit Tab-Vervollständigung. Geräte, Live-Metriken (btop-ähnlich), Terminal auf Geräten, Befehle, Prozesse, Neustart/Herunterfahren, Agent, Dateien; Proxmox-Gäste steuern und betreten (pct enter), Docker-Container betreten, Storage, Port-Weiterleitungen, Benutzer, Gruppen, Module, Einstellungen, Websites – und mit „api“ (wie pvesh) jede Dashboard-Funktion.",
-  "author": "RAPALLE.net",
+  "author": "BYTERA",
   "category": "Werkzeuge",
   "icon": "⌨️",
   "requires": [],

@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# RAPALLE.net RMM - docker compose
+# BYTERA RMM - docker compose
 #
 # Start:      docker compose up -d --build
 # Logs:       docker compose logs -f rmm
@@ -22,8 +22,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: rapallenet/rmm:local
-    container_name: rapalle-rmm
+    image: bytera/rmm:local
+    container_name: bytera-rmm
 
     # Der Container darf sich selbst neu starten (Settings -> Source ->
     # "Backend neu starten" und das Selbst-Update beenden den Prozess).
@@ -169,7 +169,7 @@ services:
   # ───────────────────────────────────────────────────────────────────────────
   guacd:
     image: guacamole/guacd:1.5.5
-    container_name: rapalle-rmm-guacd
+    container_name: bytera-rmm-guacd
     restart: unless-stopped
     # guacd macht die eigentliche Bildarbeit bei RDP/VNC - ruckelt eine
     # Fernsitzung, ist meist hier zu wenig Luft, nicht im Backend.

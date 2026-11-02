@@ -70,14 +70,17 @@ def _import_router(name):
 # 1) Datenbank initialisieren (legt Tabellen an, erzeugt admin/admin falls nötig)
 # Vorher: Ist der externe Datenbank-Modus aktiv, den Stand von extern laden
 # (danach laufen init_db-Migrationen ganz normal über den geladenen Stand).
+from app import rebrand as _rebrand
+_rebrand.before_db()        # Umbenennung RAPALLE.net -> BYTERA: Container/dbconfig nachziehen
 from app import dbsync as _dbsync
 _dbsync.startup_restore_if_external()
 db.init_db()
+_rebrand.after_db()         # Einstellungen, gespeicherte Skripte, repo.txt, Standard-Logos
 
 # (Aufbewahrungsfristen: siehe Modul 'privacy')
 
 # 2) FastAPI-App erstellen und alle Routen-Module einhängen
-api = FastAPI(title="RAPALLE.net RMM Backend")
+api = FastAPI(title="BYTERA RMM Backend")
 
 # Modul-Manager: findet module.json, laedt aktivierte Module im Startup-Event.
 # WICHTIG: direkt nach dem Erzeugen der App, noch VOR allen anderen Middlewares -
@@ -304,7 +307,7 @@ async def health_check():
     wenn Docker mitten in einem Massen-Update alle fünf Sekunden anklopft.
     Die Version steht weiterhin unter /api/version.
     """
-    return {"ok": True, "name": "RAPALLE.net RMM"}
+    return {"ok": True, "name": "BYTERA RMM"}
 
 
 @api.get("/api/version")
@@ -423,7 +426,7 @@ from router.admin_routes import build_notification as _build_notification
 def _check_website(url: str) -> tuple[bool, str | None]:
     """Ruft die URL auf (synchron, läuft via to_thread). 2xx/3xx = up.
     Rückgabe: (ok, fehlermeldung)."""
-    req = _urlreq.Request(url, headers={"User-Agent": "RAPALLE-RMM-UptimeMonitor/1.0"})
+    req = _urlreq.Request(url, headers={"User-Agent": "BYTERA-RMM-UptimeMonitor/1.0"})
     try:
         with _urlreq.urlopen(req, timeout=15) as resp:
             code = getattr(resp, "status", 200)

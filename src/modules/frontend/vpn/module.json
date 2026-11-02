@@ -4,7 +4,7 @@
   "name": "VPN (WireGuard)",
   "version": "1.0.0",
   "description": "WireGuard-Tunnel für Benutzer, Agents, Nodes und das Backend. Host ist das Backend oder eine beliebige Node (Node-Modul „vpn“ einzeln aktivieren). Virtuelles Netz oder Zugang ins reelle Netz des Hosts – jeder Teilnehmer mit eigener IP (Proxy-ARP) oder alle hinter der IP des Hosts (NAT). Laufzeit wie beim Relay, Tunnel und Teilnehmer jederzeit verlängern, hinzufügen oder verfallen lassen. Konfigurationsdateien zum Herunterladen (auch als QR-Code); die Client-App richtet Tunnel vollautomatisch ein und entfernt sie bei Ablauf. Rechte: „VPN benutzen“, „VPN unbegrenzt“ (Benutzer) sowie „VPN-Tunnel ausstellen“ / „ohne Ablaufzeit“ je Client oder im Standard-Client.",
-  "author": "RAPALLE.net",
+  "author": "BYTERA",
   "category": "Netzwerk",
   "icon": "🛡️",
   "requires": [],

@@ -1,4 +1,4 @@
-# RAPALLE.net RMM Client
+# BYTERA RMM Client
 
 Das RMM-Dashboard als eigene App für **Windows 10/11, Linux und Android** – ohne Abhängigkeiten für den Benutzer.
 Die fertigen Pakete liegen in `release/` und werden vom Modul **„Client-App“** angeboten
@@ -35,7 +35,7 @@ Server-Adresse gleich ein – man muss sich nur noch anmelden.
 - Die App erkennt ihre Installationsart selbst: einzelne `.exe` (Austausch + Neustart), `.msi` unter „Programme“
   (stilles MSI-Update), `.deb`/`.rpm`/`.pkg.tar.xz` (Admin-Abfrage per `pkexec`: apt / dnf·zypper·yum / pacman),
   `.tar.gz` (Dateien ersetzen, ohne Admin).
-  Installierte Pakete enthalten dafür die Datei `.rapalle-install`; ein Start aus dem Quellcode bekommt **keine** Auto-Updates.
+  Installierte Pakete enthalten dafür die Datei `.bytera-install`; ein Start aus dem Quellcode bekommt **keine** Auto-Updates.
 
 ## Aus dem Dashboard extern öffnen (ab 1.4)
 Läuft das Dashboard im Fenster der Client-App, öffnen **Terminal** und **Remote-Bildschirm** eines Agents die passende
@@ -46,8 +46,8 @@ extern, im Browser oder jedes Mal fragen; Umschalt+Klick zeigt immer die Auswahl
   das Backend (Modul „Cloudflare Tunnel“ + „Netzwerk“) eine Tunnel-Adresse mit eigenem Service-Token an und leitet zum
   Agent weiter; die App verbindet per `cloudflared access tcp` (lädt cloudflared einmalig selbst) auf `127.0.0.1`.
   Offen: bis Nutzungsende, 10/30/60/120 Minuten oder dauerhaft (Recht „Relay unbegrenzt“).
-- Technik: Link-Schema `rapalle-rmm://launch?s=<server>&t=<startschein>` (Windows: HKCU\Software\Classes, Linux:
-  `x-scheme-handler/rapalle-rmm`). Der Startschein gilt 2 Minuten, einmal, nur für den angemeldeten Benutzer –
+- Technik: Link-Schema `bytera-rmm://launch?s=<server>&t=<startschein>` (Windows: HKCU\Software\Classes, Linux:
+  `x-scheme-handler/bytera-rmm`). Der Startschein gilt 2 Minuten, einmal, nur für den angemeldeten Benutzer –
   fremde Seiten können so nichts starten. Android: JS-Brücke `RMM.launch(schein)` (ohne Tunnel).
 
 ## Pakete auf dem Server bauen (wie die Agent-Pakete)
@@ -57,7 +57,7 @@ nach `backend/storage/client/` (Vorrang vor den mitgelieferten, übersteht Serve
 oder **neue Version** (ältere Pakete werden entfernt, installierte Apps holen sich das Update automatisch). Live-Log und „Stopp“ inklusive.
 
 **Docker-Betrieb (alle Formate):** Beim Aktivieren des Moduls legt das RMM einmalig das Bau-Image
-`rapalle/rmm-client-builder:<kennung>` an (Ubuntu 24.04 + Wine + Windows-Python mit PyInstaller + wixl + rpmbuild + JDK 17 +
+`bytera/rmm-client-builder:<kennung>` an (Ubuntu 24.04 + Wine + Windows-Python mit PyInstaller + wixl + rpmbuild + JDK 17 +
 Android-Werkzeugen, ca. 1,5–2 GB; Fortschritt in den Modul-Einstellungen). Gebaut wird je Knopfdruck in einem Wegwerf-Container
 ohne Netzwerk. Das RMM-Image selbst bleibt klein; Modul aus → Bau-Image wird entfernt. Fehlt das Image (z. B. nach
 `docker image prune`), legt das Modul es beim nächsten Start neu an; „Neu vorbereiten“ erzwingt es.
@@ -100,8 +100,8 @@ online sein, deshalb zeigt die Auswahl beim Fernbild auch Offline-Geräte.
 src/client/
 ├── build_installers.py   baut ALLE Pakete (exe, zip, msi, deb, rpm, pkg, tar, tgz, apk) – wie src/backend/app/build_installers.py beim Agenten
 ├── desktop/              Windows + Linux: reines Python (nur Standardbibliothek, Oberfläche tkinter)
-│   ├── rapalle-client.py         Startdatei
-│   └── rapalle_client/           api.py, store.py, secrets_store.py, browser.py, features.py, autostart.py, gui.py
+│   ├── bytera-client.py         Startdatei
+│   └── bytera_client/           api.py, store.py, secrets_store.py, browser.py, features.py, autostart.py, gui.py
 ├── android/              native Android-App (Java, WebView) - AndroidManifest.xml, src/, assets/login.html, res/
 │   └── signing/          dauerhafter Signier-Schlüssel (Updates müssen gleich signiert sein!)
 ├── resources/            Programm-Symbole (aus dem RMM-Logo)
@@ -126,7 +126,7 @@ Auf **Windows** lassen sich `.exe`, `.zip` (und mit wixl/WiX `.msi`) direkt baue
 `py -m pip install pyinstaller && py src\client\build_installers.py --targets exe,zip`.
 Alternativ baut der GitHub-Workflow **„Client-App bauen“** (Actions) alle Pakete automatisch.
 
-Version ändern: `desktop/rapalle_client/__init__.py` (`__version__`). Android übernimmt sie beim Bauen.
+Version ändern: `desktop/bytera_client/__init__.py` (`__version__`). Android übernimmt sie beim Bauen.
 
 Tests: `cd src/client && python3 -m pytest tests`
 (gegen ein Backend zusätzlich `RMM_TEST_SERVER=… RMM_TEST_USER=… RMM_TEST_PASS=…`).

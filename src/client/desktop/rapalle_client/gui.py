@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import os
+import time
 import sys
 import threading
 import tkinter as tk
@@ -321,6 +322,7 @@ class ClientApp:
         self.vpnpanel = VpnPanel(self, f, default_data_dir())
         self.vpn.start()
         ttk.Separator(f).pack(fill="x", pady=8)
+        self._admin_options(f)
         self.v_auto = tk.BooleanVar(value=autostart.is_enabled())
         ttk.Checkbutton(f, text="Mit der Anmeldung am Computer starten", variable=self.v_auto,
                         command=self.toggle_autostart).pack(anchor="w")
@@ -602,6 +604,46 @@ class ClientApp:
             self.show_login("Abgemeldet.")
         self.bg(work, done)
 
+    # ------------------------------------------------------------- Administratorrechte (Windows)
+    def _admin_options(self, f):
+        from . import elevate
+        if not elevate.IS_WINDOWS:
+            return
+        admin = elevate.is_admin()
+        self.v_prompt = tk.BooleanVar(value=bool(self.store.get("admin_prompt", True)))
+        ttk.Checkbutton(f, text="Beim Start nach Administratorrechten fragen (für VPN)", variable=self.v_prompt,
+                        command=lambda: self.store.set(admin_prompt=bool(self.v_prompt.get()))).pack(anchor="w")
+        self.v_task = tk.BooleanVar(value=elevate.task_exists())
+        cb = ttk.Checkbutton(f, text="Immer als Administrator starten (ohne Rückfrage)", variable=self.v_task,
+                             command=self._toggle_admin_task)
+        cb.pack(anchor="w")
+        if not admin:
+            cb.state(["disabled"])
+            row = ttk.Frame(f)
+            row.pack(fill="x", pady=(2, 6))
+            ttk.Label(row, text="Läuft ohne Administratorrechte – VPN ist aus.", style="Sub.TLabel").pack(side="left")
+            ttk.Button(row, text="Als Administrator neu starten", command=self.restart_as_admin).pack(side="right")
+
+    def _toggle_admin_task(self):
+        from . import elevate
+        try:
+            ok, out = elevate.create_task() if self.v_task.get() else elevate.delete_task()
+            if not ok:
+                raise RuntimeError(out.strip()[-300:])
+        except Exception as e:  # noqa: BLE001
+            messagebox.showerror("RAPALLE.net RMM", f"Konnte die Einstellung nicht ändern:\n{e}")
+        self.v_task.set(elevate.task_exists())
+
+    def restart_as_admin(self):
+        from . import elevate
+        if elevate.relaunch_elevated([]):
+            try:
+                if getattr(self, "vpnpanel", None):
+                    self.vpnpanel.stop()
+            finally:
+                self.root.destroy()
+                os._exit(0)
+
     # ------------------------------------------------------------- VPN
     def _vpn_status(self, text: str):
         try:
@@ -667,9 +709,52 @@ def main(argv=None):
     if link:                                    # aus dem Dashboard: RDP/VNC/SSH/Terminal extern oeffnen
         from .launcher import handle
         return handle(link)
+    # Windows: einmal beim Start nach Administratorrechten fragen (fuer VPN). Erlaubt -> Admin-Instanz
+    # startet, diese beendet sich. Verweigert -> normal weiter, VPN aus. „Immer als Administrator“ ->
+    # geplante Aufgabe, keine Rueckfrage.
+    if "--setup-admin" in argv or "--remove-admin" in argv:
+        # Fuer Verteilung/Installation: "RapalleClient.exe --setup-admin" richtet „Immer als Administrator
+        # starten“ ein (einmal UAC bzw. als Admin ausgefuehrt ohne Rueckfrage), --remove-admin entfernt es.
+        from . import elevate
+        if not elevate.is_admin():
+            elevate.relaunch_elevated([a for a in argv if a in ("--setup-admin", "--remove-admin")])
+            return
+        ok, out = elevate.create_task() if "--setup-admin" in argv else elevate.delete_task()
+        print(("OK: " if ok else "FEHLER: ") + out.strip())
+        return
+    try:
+        from . import elevate
+        if elevate.startup(argv, Store(default_data_dir()), default_data_dir()):
+            return
+        elevate.mark_started(default_data_dir())       # diese Instanz laeuft wirklich (fuer den Start-Nachweis)
+    except Exception:
+        _crash_log()
     try:
         from . import urlscheme
         urlscheme.register()                    # rapalle-rmm:// fuer diesen Benutzer (Pfad kann sich aendern)
     except Exception:
         pass
-    ClientApp(minimized="--minimized" in argv).run()
+    try:
+        ClientApp(minimized="--minimized" in argv).run()
+    except Exception:
+        _crash_log(show=True)
+        raise
+
+
+def _crash_log(show: bool = False) -> None:
+    """Fehler beim Start NICHT verschlucken: in client-error.log schreiben und (wenn moeglich) anzeigen."""
+    import traceback
+    text = traceback.format_exc()
+    path = default_data_dir() / "client-error.log"
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n{text}")
+    except OSError:
+        pass
+    if show and os.name == "nt":
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None, f"Die App konnte nicht starten.\n\n{text[-1200:]}\n\nProtokoll: {path}",
+                                             "RAPALLE.net RMM", 0x10)
+        except Exception:
+            pass

@@ -1,4 +1,4 @@
-# RAPALLE.net RMM – REST-API (`/api/v1`)
+# BYTERA RMM – REST-API (`/api/v1`)
 
 Steuert alles, was das Web-Dashboard kann. Wird vom **Modul „REST-API“** geladen (Modul-App → aktivieren);
 der Core startet diesen Ordner nie selbst. Einstellungen, aktive Anmeldungen und das Aufrufprotokoll:

@@ -43,7 +43,7 @@ def geo(ip: str, timeout: float = 3.0) -> dict:
         return _geo_cache[ip]
     out = {}
     try:
-        req = urllib.request.Request(GEO_URL.format(ip=ip), headers={"User-Agent": "RAPALLE-RMM"})
+        req = urllib.request.Request(GEO_URL.format(ip=ip), headers={"User-Agent": "BYTERA-RMM"})
         with urllib.request.urlopen(req, timeout=timeout) as r:
             j = json.loads(r.read() or b"{}")
         if j.get("status") == "success":

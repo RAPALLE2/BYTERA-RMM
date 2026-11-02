@@ -4,7 +4,7 @@
   "name": "Spaces",
   "version": "1.0.0",
   "description": "Persönlicher Speicher je Benutzer, Teamspaces und Public Spaces - im Explorer und per Relay (Netzlaufwerk, FTP, SFTP). Ordner und Dateien lassen sich an Benutzer/Gruppen oder per Link freigeben (nur für Angemeldete). Git-Repositories direkt im Space. Grundlage für Notizheft, Bilder in Chat/Tickets und Musik im Audioplayer.",
-  "author": "RAPALLE.net",
+  "author": "BYTERA",
   "category": "Kollaboration",
   "icon": "☁️",
   "requires": [],

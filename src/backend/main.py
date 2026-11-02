@@ -128,7 +128,7 @@ def _report_backend_crash(exc: BaseException) -> None:
 
 
 if __name__ == "__main__":
-    print(f"RAPALLE.net RMM Backend startet auf http://{HOST}:{PORT}")
+    print(f"BYTERA RMM Backend startet auf http://{HOST}:{PORT}")
     # Selbstheilung: Stürzt der Server-Prozess unerwartet ab, wird er
     # automatisch neu gestartet. Ein sauberes Beenden (Strg+C) beendet normal.
     # Selbstheilung mit Grenze: Ein vorübergehender Fehler soll den Server nicht

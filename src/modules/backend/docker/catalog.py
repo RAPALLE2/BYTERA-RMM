@@ -76,7 +76,7 @@ def templates() -> list[dict]:
 def hub_search(query: str, limit: int = 25) -> list[dict]:
     """Docker Hub durchsuchen (braucht Internet auf dem RMM-Server)."""
     url = "https://hub.docker.com/v2/search/repositories/?" + urllib.parse.urlencode({"query": query, "page_size": limit})
-    req = urllib.request.Request(url, headers={"User-Agent": "RAPALLE.net-RMM"})
+    req = urllib.request.Request(url, headers={"User-Agent": "BYTERA-RMM"})
     with urllib.request.urlopen(req, timeout=15, context=ssl.create_default_context()) as r:
         data = json.loads(r.read())
     out = []

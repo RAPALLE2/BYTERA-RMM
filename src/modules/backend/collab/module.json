@@ -4,7 +4,7 @@
   "name": "Zusammenarbeit & Werkzeuge",
   "version": "1.2.0",
   "description": "Chat, Kalender mit Organigramm, persönliche Todo-Liste sowie die Werkzeuge Notizheft (Notizen als Dateien im eigenen Space - daher benötigt dieses Modul „Spaces“), Rechner und Uhr (Stoppuhr, Timer, Wecker) - jeweils einzeln schaltbar. Tickets sind ein eigenes Modul.",
-  "author": "RAPALLE.net",
+  "author": "BYTERA",
   "category": "Kollaboration",
   "icon": "🤝",
   "requires": [

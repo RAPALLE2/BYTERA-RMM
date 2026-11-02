@@ -4,7 +4,7 @@ routers/update_routes.py
 Server-Selbst-Update aus dem GitHub-Repo (Settings -> Update).
 
 Die Repo-URL liegt in backend/repo.txt (z.B.
-https://github.com/RAPALLE2/Rapalle.net-RMM.git) und kann über die API geändert
+https://github.com/RAPALLE2/BYTERA-RMM.git) und kann über die API geändert
 werden.
 
 Endpunkte (nur Admin):
@@ -36,6 +36,7 @@ import shutil
 import sys
 import tempfile
 import urllib.request
+import urllib.error
 import zipfile
 from pathlib import Path
 
@@ -50,7 +51,9 @@ router = APIRouter(prefix="/api/admin/update", tags=["update"])
 
 # …/backend/app/routers/update_routes.py -> Projekt-Root (…/rmm)
 from app.paths import PROJECT_ROOT as _PROJECT_ROOT, REPO_FILE as _REPO_FILE, BACKEND_VERSION_FILE as _VERSION_FILE
-_DEFAULT_REPO = "https://github.com/RAPALLE2/Rapalle.net-RMM.git"
+_DEFAULT_REPO = "https://github.com/RAPALLE2/BYTERA-RMM.git"
+# Neuer Repo-Name -> alter Name (Rueckfall, solange GitHub noch den alten fuehrt)
+_LEGACY_REPOS = {"bytera-rmm": "Rapalle.net-RMM"}
 
 # Diese Pfade (relativ zum Projekt-Root) werden beim Update NIE überschrieben
 # bzw. gelöscht - hier stecken lokale Daten und Konfiguration drin.
@@ -97,7 +100,7 @@ def _current_version() -> str:
 def _http_json(url: str):
     """GitHub-API-Aufruf (synchron; wird im Executor ausgeführt)."""
     req = urllib.request.Request(url, headers={
-        "User-Agent": "rapalle-rmm-updater",
+        "User-Agent": "bytera-rmm-updater",
         "Accept": "application/vnd.github+json",
     })
     with urllib.request.urlopen(req, timeout=20) as resp:
@@ -105,7 +108,7 @@ def _http_json(url: str):
 
 
 def _http_bytes(url: str) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": "rapalle-rmm-updater"})
+    req = urllib.request.Request(url, headers={"User-Agent": "bytera-rmm-updater"})
     with urllib.request.urlopen(req, timeout=120) as resp:
         return resp.read()
 
@@ -119,7 +122,17 @@ def _fetch_github_state() -> dict:
     """Holt Default-Branch, neuesten Commit und alle Releases vom Repo."""
     owner, repo = _parse_owner_repo(_read_repo_url())
     base = f"https://api.github.com/repos/{owner}/{repo}"
-    info = _http_json(base)
+    try:
+        info = _http_json(base)
+    except urllib.error.HTTPError as e:
+        # Umbenennung RAPALLE.net RMM -> BYTERA RMM: Ist das Repo auf GitHub noch
+        # nicht umbenannt, gibt es den neuen Namen nicht - dann den alten nehmen.
+        legacy = _LEGACY_REPOS.get(repo.lower())
+        if e.code != 404 or not legacy:
+            raise
+        repo = legacy
+        base = f"https://api.github.com/repos/{owner}/{repo}"
+        info = _http_json(base)
     default_branch = info.get("default_branch") or "main"
     head = _http_json(f"{base}/commits/{default_branch}")
     releases = _http_json(f"{base}/releases?per_page=100")
