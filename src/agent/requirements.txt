@@ -16,3 +16,8 @@ pyperclip>=1.8.0                         # Zwischenablage-Synchronisierung (Remo
 
 # Interaktives Terminal auf Windows (ConPTY); nur dort benoetigt.
 pywinpty>=2.0.0; sys_platform == "win32"
+
+# Ton-Uebertragung im Remote Screen (Loopback-Aufnahme der Lautsprecher, wie AnyDesk).
+# Nur Windows; fehlt es, ist die Funktion im Dashboard einfach "nicht verfuegbar".
+numpy>=1.24.0; sys_platform == "win32"
+soundcard>=0.4.3; sys_platform == "win32"

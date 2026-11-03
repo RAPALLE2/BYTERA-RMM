@@ -21,6 +21,13 @@ import { t } from "../app/i18n.js";
 
 export function renderVnc(body, win) {
   const { clientId, clientName } = win.props;
+  // Alle Steuer-Events an das Geraet tragen den Benutzernamen - das Backend
+  // prueft damit das Recht use_screen (frueher war screen-input ungeprueft).
+  const _me = () => state.user?.username || "";
+  const sendInput = (d) => dashboardSocket.emit("screen-input", { clientId, username: _me(), ...d });
+  const getClip = () => dashboardSocket.emit("screen-clipboard-get", { clientId, username: _me() });
+  const setMonitor = (monitor) => dashboardSocket.emit("screen-set-monitor", { clientId, username: _me(), monitor });
+  const stopScreen = () => dashboardSocket.emit("screen-stop", { clientId, username: _me() });
 
   // WICHTIG zum Layout: Der Fenster-Body (.rmm-window-body) ist ein Flex-Item
   // mit "flex:1" und "overflow:auto", hat also KEINE feste Hoehe. Ein
@@ -57,22 +64,38 @@ export function renderVnc(body, win) {
         <button class="btn" id="vnc-clip-send-${win.key}" title="${t("vnc_clip_send_title")}">📋→</button>
         <button class="btn" id="vnc-clip-get-${win.key}" title="${t("vnc_clip_get_title")}">→📋</button>
         <span style="width:1px;height:16px;background:var(--border)"></span>
+        <button class="btn" id="vnc-audio-${win.key}" title="${t("vnc_audio_title")}">🔇</button>
+        <button class="btn" id="vnc-hist-${win.key}" title="${t("vnc_hist_title")}">🕘</button>
+        <button class="btn" id="vnc-files-${win.key}" title="${t("vnc_files_title")}">📁</button>
+        <input type="file" id="vnc-fileinput-${win.key}" multiple style="display:none" />
         <button class="btn" id="vnc-chat-${win.key}" title="${t("vnc_chat_title")}">💬 <span id="vnc-chat-badge-${win.key}" style="display:none;background:var(--danger);color:#fff;border-radius:8px;padding:0 5px;font-size:10px">0</span></button>
         </span>
       </div>
       <div id="vnc-area-${win.key}" style="flex:1 1 0;min-height:0;min-width:0;overflow:hidden;position:relative">
         <img id="vnc-img-${win.key}" style="position:absolute;left:0;top:0;display:block"
              tabindex="0" />
+        <div id="vnc-histpanel-${win.key}" style="display:none;position:absolute;top:0;left:0;bottom:0;width:360px;max-width:80%;background:var(--panel);border-right:1px solid var(--border);flex-direction:column;z-index:21">
+          <div style="display:flex;align-items:center;gap:6px;padding:8px 10px;border-bottom:1px solid var(--border);font-size:13px">
+            <b style="flex:1">🕘 ${t("vnc_hist_title")}</b>
+            <button class="btn btn-sm" id="vnc-histclose-${win.key}">✕</button>
+          </div>
+          <div id="vnc-histlist-${win.key}" style="flex:1;overflow:auto;padding:8px 10px;font-size:12px"></div>
+        </div>
         <div id="vnc-chatpanel-${win.key}" style="display:none;position:absolute;top:0;right:0;bottom:0;width:300px;max-width:70%;background:var(--panel);border-left:1px solid var(--border);display:none;flex-direction:column;z-index:20">
           <div style="display:flex;align-items:center;gap:6px;padding:8px 10px;border-bottom:1px solid var(--border);font-size:13px">
             <b style="flex:1">💬 ${t("vnc_chat_title")}</b>
             <span id="vnc-grant-${win.key}" style="font-size:11px;color:var(--subtext)"></span>
             <button class="btn btn-sm" id="vnc-chat-close-${win.key}">✕</button>
           </div>
+          <div id="vnc-perms-${win.key}" style="display:flex;gap:6px;flex-wrap:wrap;padding:6px 10px;border-bottom:1px solid var(--border);font-size:11px"></div>
           <div id="vnc-chatlog-${win.key}" style="flex:1;overflow:auto;padding:8px 10px;font-size:12.5px;display:flex;flex-direction:column;gap:6px"></div>
           <div style="display:flex;gap:6px;padding:8px 10px;border-top:1px solid var(--border)">
             <input type="text" id="vnc-chatinput-${win.key}" placeholder="${t("vnc_chat_ph")}" style="flex:1" />
             <button class="btn btn-sm btn-primary" id="vnc-chatsend-${win.key}">${t("send")}</button>
+          </div>
+          <div style="display:flex;gap:6px;padding:0 10px 10px">
+            <button class="btn btn-sm" id="vnc-reqgrant-${win.key}" style="flex:1" title="${t("vnc_chat_request_title")}">🛡️ ${t("vnc_chat_request")}</button>
+            <button class="btn btn-sm btn-danger" id="vnc-endsess-${win.key}" style="flex:1">⏹ ${t("vnc_chat_end")}</button>
           </div>
         </div>
       </div>
@@ -165,7 +188,7 @@ export function renderVnc(body, win) {
   monitorSel.addEventListener("change", () => {
     const next = parseInt(monitorSel.value, 10);   // 0 = Alle Bildschirme
     if (!isNaN(next) && next !== monitorIndex) {
-      dashboardSocket.emit("screen-set-monitor", { clientId, monitor: next });
+      setMonitor(next);
     }
   });
 
@@ -196,7 +219,7 @@ export function renderVnc(body, win) {
       e.preventDefault();
       modState[name] = false;
       updateModBtn(name);
-      dashboardSocket.emit("screen-input", { clientId, type: "key", key: name });
+      sendInput({ type: "key", key: name });
       img.focus({ preventScroll: true });
     });
   });
@@ -208,12 +231,12 @@ export function renderVnc(body, win) {
   function sendKeyWithMods(key) {
     const mods = activeMods();
     if (mods.length) {
-      dashboardSocket.emit("screen-input", { clientId, type: "combo", keys: [...mods, key] });
+      sendInput({ type: "combo", keys: [...mods, key] });
       releaseMods();
     } else if (key.length === 1) {
-      dashboardSocket.emit("screen-input", { clientId, type: "text", text: key });
+      sendInput({ type: "text", text: key });
     } else {
-      dashboardSocket.emit("screen-input", { clientId, type: "key", key });
+      sendInput({ type: "key", key });
     }
   }
   function releaseMods() {
@@ -231,16 +254,16 @@ export function renderVnc(body, win) {
       window.notify?.(t("guac_clip_empty"), "warn");
       return;
     }
-    dashboardSocket.emit("screen-input", { clientId, type: "clipboard-set", text });
+    sendInput({ type: "clipboard-set", text });
     window.notify?.(t("vnc_clip_sent"), "success");
   });
   // Holen: Agent liest die Remote-Zwischenablage -> hier in die lokale schreiben.
   body.querySelector(`#vnc-clip-get-${win.key}`).addEventListener("click", () => {
-    dashboardSocket.emit("screen-clipboard-get", { clientId });
+    getClip();
   });
   async function onClipboard(data) {
     if (data.id !== clientId) return;
-    if (data.error) { window.notify?.(t("vnc_clip_remote") + ": " + data.error, "error"); return; }
+    if (data.error) { window.notify?.(t("vnc_clip_remote") + ": " + (data.code ? t(data.code) : data.error), "error"); return; }
     const text = data.text || "";
     try {
       await navigator.clipboard.writeText(text);
@@ -297,12 +320,249 @@ export function renderVnc(body, win) {
   body.querySelector(`#vnc-chatsend-${win.key}`).addEventListener("click", sendChat);
   chatInput.addEventListener("keydown", (e) => { if (e.key === "Enter") sendChat(); });
 
+  // Berechtigungen, die die Person vor dem PC im Sitzungsfenster schaltet (wie AnyDesk):
+  // Steuerung (Maus/Tastatur), Zwischenablage, Administrator-Rechte.
+  const permsEl = body.querySelector(`#vnc-perms-${win.key}`);
+  const reqBtn = body.querySelector(`#vnc-reqgrant-${win.key}`);
+  let perms = { input: true, clipboard: true, files: true, admin: false };
+  function renderPerms() {
+    const chip = (on, icon, label) =>
+      `<span style="padding:2px 7px;border-radius:9px;background:${on ? "rgba(46,125,87,.25)" : "rgba(180,69,90,.22)"};`
+      + `color:${on ? "var(--success, #3fb27f)" : "var(--danger)"}">${icon} ${label}</span>`;
+    permsEl.innerHTML = chip(perms.input, "🖱️", t(perms.input ? "vnc_perm_input_on" : "vnc_perm_input_off"))
+      + chip(perms.clipboard, "📋", t(perms.clipboard ? "vnc_perm_clip_on" : "vnc_perm_clip_off"))
+      + chip(perms.files !== false, "📁", t(perms.files !== false ? "vnc_perm_files_on" : "vnc_perm_files_off"))
+      + chip(perms.admin, "🛡️", t(perms.admin ? "vnc_perm_admin_on" : "vnc_perm_admin_off"));
+    reqBtn.disabled = !!perms.admin;
+    grantLbl.textContent = perms.admin ? "🛡️" : "";
+  }
+  renderPerms();
+  reqBtn.addEventListener("click", () => {
+    dashboardSocket.emit("screen-session-request-grant", { clientId, username: state.user?.username || "" });
+    addChat(null, t("vnc_chat_requested"), true);
+  });
+  body.querySelector(`#vnc-endsess-${win.key}`).addEventListener("click", () => {
+    // Fenster schliessen -> Aufraeumen sendet screen-stop -> Agent beendet die Sitzung
+    import("../app/windowmanager.js").then(({ closeWindow }) => closeWindow(win.key));
+  });
+
   function onSessChat(d) { if (d.id !== clientId) return; addChat("user", d.text || ""); }
   function onSessGrant(d) {
     if (d.id !== clientId) return;
-    grantLbl.textContent = d.granted ? "🛡️ " + t("vnc_chat_granted") : "";
-    addChat(null, d.granted ? t("vnc_chat_granted") : t("vnc_chat_revoked"), true);
-    if (d.granted) window.notify?.(t("vnc_chat_granted"), "success");
+    perms.admin = !!d.granted;
+    renderPerms();
+    let msg = d.granted ? t("vnc_chat_granted") : t("vnc_chat_revoked");
+    if (d.granted && d.silent) msg = t("vnc_chat_granted_silent");
+    if (d.denied) msg = t("vnc_chat_denied");
+    addChat(null, msg, true);
+    if (d.granted) window.notify?.(msg, "success");
+    else if (d.denied) window.notify?.(msg, "warning");
+  }
+  function onSessPerms(d) {
+    if (d.id !== clientId || !d.perms) return;
+    const before = { ...perms };
+    perms = { ...perms, ...d.perms };
+    renderPerms();
+    if (before.input !== perms.input) {
+      const m = t(perms.input ? "vnc_perm_input_on" : "vnc_perm_input_off");
+      addChat(null, m, true);
+      window.notify?.(m, perms.input ? "info" : "warning");
+    }
+    if (before.clipboard !== perms.clipboard) addChat(null, t(perms.clipboard ? "vnc_perm_clip_on" : "vnc_perm_clip_off"), true);
+    if (before.files !== perms.files) addChat(null, t(perms.files !== false ? "vnc_perm_files_on" : "vnc_perm_files_off"), true);
+  }
+
+  // --- Datei-Uebertragung (wie AnyDesk) ---
+  // Admin -> Benutzer: Datei waehlen oder auf das Bild ziehen. Gesendet wird in
+  // Stuecken zu 256 KB; jedes Stueck wird vom Geraet bestaetigt, erst dann geht
+  // das naechste raus. Die Datei landet im Ordner "Downloads" des Benutzers.
+  // Benutzer -> Admin: "📎" im Sitzungsfenster -> Datei kommt hier stueckweise an
+  // und wird als Download angeboten.
+  const FILE_CHUNK = 256 * 1024;
+  const FILE_MAX = 1024 * 1024 * 1024;
+  const fileInput = body.querySelector(`#vnc-fileinput-${win.key}`);
+  const pendingAcks = new Map();          // "tid:seq" -> {resolve, reject, timer}
+  let fileQueue = Promise.resolve();
+  function fileSysRow(text) {
+    addChat(null, text, true);
+    return chatLog.lastElementChild;
+  }
+  function waitAck(tid, seq) {
+    return new Promise((resolve, reject) => {
+      const key = `${tid}:${seq}`;
+      const timer = setTimeout(() => { pendingAcks.delete(key); reject(new Error("timeout")); }, 60000);
+      pendingAcks.set(key, { resolve, reject, timer });
+    });
+  }
+  function onFileAck(d) {
+    if (d.id !== clientId) return;
+    const key = `${d.tid}:${d.seq}`;
+    const p = pendingAcks.get(key);
+    if (!p) return;
+    pendingAcks.delete(key);
+    clearTimeout(p.timer);
+    if (d.error) p.reject(new Error(d.code ? t(d.code) : d.error)); else p.resolve(d);
+  }
+  function b64Of(buf) {
+    const bytes = new Uint8Array(buf);
+    let bin = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
+  }
+  async function sendOneFile(file) {
+    if (perms.files === false) { window.notify?.(t("vnc_perm_files_off"), "warning"); return; }
+    if (file.size > FILE_MAX) { window.notify?.(t("vnc_file_too_big"), "error"); return; }
+    if (!chatOpen) chatSetOpen(true);
+    const row = fileSysRow(`📤 ${file.name} – 0 %`);
+    const tid = `a${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+    const total = Math.max(1, Math.ceil(file.size / FILE_CHUNK));
+    try {
+      for (let seq = 0; seq < total; seq++) {
+        const buf = await file.slice(seq * FILE_CHUNK, (seq + 1) * FILE_CHUNK).arrayBuffer();
+        const ack = waitAck(tid, seq);
+        dashboardSocket.emit("screen-file-chunk", {
+          clientId, username: state.user?.username || "", tid, seq, name: file.name, size: file.size,
+          data: b64Of(buf), last: seq === total - 1,
+        });
+        await ack;
+        row.textContent = `📤 ${file.name} – ${Math.round(((seq + 1) / total) * 100)} %`;
+      }
+      row.textContent = `📤 ${t("vnc_file_sent", { name: file.name })}`;
+    } catch (e) {
+      row.textContent = `⚠️ ${t("vnc_file_failed", { name: file.name })}: ${e.message || e}`;
+      row.style.color = "var(--danger)";
+    }
+  }
+  function sendFiles(list) {
+    for (const f of Array.from(list || [])) fileQueue = fileQueue.then(() => sendOneFile(f));
+  }
+  body.querySelector(`#vnc-files-${win.key}`).addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", () => { sendFiles(fileInput.files); fileInput.value = ""; });
+  const dropArea = body.querySelector(`#vnc-area-${win.key}`);
+  dropArea.addEventListener("dragover", (e) => {
+    if (e.dataTransfer?.types?.includes("Files")) { e.preventDefault(); dropArea.style.outline = "2px dashed var(--accent)"; }
+  });
+  dropArea.addEventListener("dragleave", () => { dropArea.style.outline = ""; });
+  dropArea.addEventListener("drop", (e) => {
+    if (!e.dataTransfer?.files?.length) return;
+    e.preventDefault();
+    dropArea.style.outline = "";
+    sendFiles(e.dataTransfer.files);
+  });
+
+  // --- Ton (wie AnyDesk "Ton uebertragen") ---
+  // Das Geraet schickt 100-ms-Stuecke (16 kHz mono, 8-Bit-mu-law). Hier werden
+  // sie dekodiert und lueckenlos hintereinander abgespielt (Web Audio). Laeuft
+  // die Wiedergabe mehr als 0,6 s hinterher, wird neu angesetzt (keine Verzoegerung
+  // aufbauen). Standard: AUS - der Admin schaltet ihn bewusst ein, der Benutzer
+  // sieht es im Sitzungsfenster.
+  const audioBtn = body.querySelector(`#vnc-audio-${win.key}`);
+  let audioOn = false, audioCtx = null, audioNext = 0;
+  const MU_TABLE = new Float32Array(256);
+  for (let i = 0; i < 256; i++) {
+    const y = i / 127.5 - 1;
+    MU_TABLE[i] = Math.sign(y) * (Math.pow(256, Math.abs(y)) - 1) / 255;
+  }
+  function setAudio(on) {
+    audioOn = on;
+    audioBtn.textContent = on ? "🔊" : "🔇";
+    audioBtn.classList.toggle("btn-primary", on);
+    if (on && !audioCtx) {
+      try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch { audioCtx = null; }
+    }
+    if (audioCtx) { on ? audioCtx.resume() : audioCtx.suspend(); }
+    audioNext = 0;
+  }
+  audioBtn.addEventListener("click", () => {
+    const on = !audioOn;
+    setAudio(on);                         // im Klick erzeugen: Browser erlauben Ton nur nach Benutzeraktion
+    dashboardSocket.emit("screen-audio", { clientId, username: state.user?.username || "", enabled: on });
+  });
+  function onAudio(d) {
+    if (d.id !== clientId) return;
+    if (d.error) {
+      setAudio(false);
+      window.notify?.(t("vnc_audio_unavailable") + (d.code ? "" : ": " + d.error), "warning");
+      return;
+    }
+    if (!d.data || !audioOn || !audioCtx) return;
+    const bin = atob(d.data);
+    const rate = d.rate || 16000;
+    const buf = audioCtx.createBuffer(1, bin.length, rate);
+    const ch = buf.getChannelData(0);
+    for (let i = 0; i < bin.length; i++) ch[i] = MU_TABLE[bin.charCodeAt(i)];
+    const src = audioCtx.createBufferSource();
+    src.buffer = buf;
+    src.connect(audioCtx.destination);
+    const now = audioCtx.currentTime;
+    if (audioNext < now + 0.02 || audioNext > now + 0.6) audioNext = now + 0.08;
+    src.start(audioNext);
+    audioNext += buf.duration;
+  }
+
+  // --- Sitzungsverlauf ---
+  const histPanel = body.querySelector(`#vnc-histpanel-${win.key}`);
+  const histList = body.querySelector(`#vnc-histlist-${win.key}`);
+  const EVENT_LABEL = {
+    "screen.file_sent": "📤", "screen.file_received": "📥", "screen.admin_granted": "🛡️",
+    "screen.admin_revoked": "🛡️✕", "screen.admin_denied": "🛡️✕", "screen.admin_requested": "🛡️?",
+    "screen.audio_on": "🔊", "screen.audio_off": "🔇", "screen.silent_used": "🤫",
+  };
+  function fmtDur(s) {
+    if (s == null) return t("vnc_hist_running");
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(sec).padStart(2, "0");
+  }
+  async function loadHistory() {
+    histList.innerHTML = `<div style="color:var(--subtext)">${esc(t("loading"))}</div>`;
+    try {
+      const res = await api.getScreenHistory(clientId);
+      const list = res.sessions || [];
+      if (!list.length) { histList.innerHTML = `<div style="color:var(--subtext)">${esc(t("vnc_hist_empty"))}</div>`; return; }
+      histList.innerHTML = list.map((s) => {
+        const ev = (s.events || []).map((e) =>
+          `<div style="color:var(--subtext);margin-left:10px">${new Date(e.ts).toLocaleTimeString()} ${EVENT_LABEL[e.action] || "•"} `
+          + `${esc(t("vnc_ev_" + e.action.slice(7)))}`
+          + `${e.details && !e.details.startsWith("rec:") ? " – " + esc(e.details) : ""}</div>`).join("");
+        const by = s.ended_by === "user" ? t("vnc_hist_by_user") : s.ended_by === "admin" ? t("vnc_hist_by_admin") : "";
+        return `<div style="padding:7px 0;border-bottom:1px solid var(--border)">
+          <div style="display:flex;gap:6px"><b style="flex:1">${new Date(s.start).toLocaleString()}</b><span>${esc(fmtDur(s.duration_s))}</span></div>
+          <div style="color:var(--subtext)">👤 ${esc(s.user || "?")}${by ? " · " + esc(by) : ""}${s.rec_id ? " · 🎞️" : ""}</div>${ev}</div>`;
+      }).join("");
+    } catch (e) {
+      histList.innerHTML = `<div style="color:var(--danger)">${esc(e.message || String(e))}</div>`;
+    }
+  }
+  body.querySelector(`#vnc-hist-${win.key}`).addEventListener("click", () => {
+    const open = histPanel.style.display !== "flex";
+    histPanel.style.display = open ? "flex" : "none";
+    if (open) loadHistory();
+  });
+  body.querySelector(`#vnc-histclose-${win.key}`).addEventListener("click", () => { histPanel.style.display = "none"; });
+
+  const incoming = new Map();             // tid -> {name, size, parts[], got, row}
+  function onFileOut(d) {
+    if (d.id !== clientId || !d.tid) return;
+    let st = incoming.get(d.tid);
+    if (!st) {
+      if (!chatOpen) { unread++; chatBadge.textContent = unread; chatBadge.style.display = "inline-block"; }
+      st = { name: d.name || "datei", size: d.size || 0, parts: [], got: 0, row: fileSysRow(`📥 ${d.name} – 0 %`) };
+      incoming.set(d.tid, st);
+    }
+    const bin = atob(d.data || "");
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    st.parts[d.seq || 0] = arr;
+    st.got += arr.length;
+    if (st.size) st.row.textContent = `📥 ${st.name} – ${Math.min(100, Math.round((st.got / st.size) * 100))} %`;
+    if (d.last) {
+      incoming.delete(d.tid);
+      const url = URL.createObjectURL(new Blob(st.parts));
+      st.row.innerHTML = `📥 ${esc(t("vnc_file_received", { name: st.name }))} – <a href="${url}" download="${esc(st.name)}">${esc(t("vnc_file_save"))}</a>`;
+      const a = document.createElement("a");
+      a.href = url; a.download = st.name; document.body.appendChild(a); a.click(); a.remove();
+      window.notify?.(t("vnc_file_received", { name: st.name }), "success");
+    }
   }
   function onSessDisc(d) {
     if (d.id !== clientId) return;
@@ -312,6 +572,10 @@ export function renderVnc(body, win) {
   dashboardSocket.on("screen-session-chat", onSessChat);
   dashboardSocket.on("screen-session-grant", onSessGrant);
   dashboardSocket.on("screen-session-disconnect", onSessDisc);
+  dashboardSocket.on("screen-session-perms", onSessPerms);
+  dashboardSocket.on("screen-file-ack", onFileAck);
+  dashboardSocket.on("screen-file-out", onFileOut);
+  dashboardSocket.on("screen-audio", onAudio);
 
   // --- Strg+C / Strg+V automatisch: echte Zwischenablage mitsynchronisieren ---
   // Strg+V: lokale Zwischenablage lesen -> Remote setzen -> dann Strg+V am Remote.
@@ -320,15 +584,15 @@ export function renderVnc(body, win) {
   async function pasteToRemote() {
     let text = "";
     try { text = await navigator.clipboard.readText(); } catch { /* Browser blockt evtl. */ }
-    if (text) dashboardSocket.emit("screen-input", { clientId, type: "clipboard-set", text });
+    if (text) sendInput({ type: "clipboard-set", text });
     // Kurze Pause, damit der Agent die Zwischenablage gesetzt hat, dann einfügen.
     await new Promise((r) => setTimeout(r, text ? 60 : 0));
-    dashboardSocket.emit("screen-input", { clientId, type: "combo", keys: ["Control", "v"] });
+    sendInput({ type: "combo", keys: ["Control", "v"] });
   }
   function copyFromRemote() {
-    dashboardSocket.emit("screen-input", { clientId, type: "combo", keys: ["Control", "c"] });
+    sendInput({ type: "combo", keys: ["Control", "c"] });
     // Dem Remote-PC Zeit geben, die Auswahl zu kopieren, dann abholen.
-    setTimeout(() => dashboardSocket.emit("screen-clipboard-get", { clientId }), 140);
+    setTimeout(() => getClip(), 140);
   }
 
 
@@ -358,7 +622,7 @@ export function renderVnc(body, win) {
     if (shellActive) return;
     shellActive = true;
     // Screen-Streaming beenden und alle Screen-Listener abmelden
-    try { dashboardSocket.emit("screen-stop", { clientId }); } catch {}
+    try { stopScreen(); } catch {}
     dashboardSocket.off("screen-frame", onFrame);
     dashboardSocket.off("screen-error", onError);
     dashboardSocket.off("screen-mode", onMode);
@@ -366,6 +630,11 @@ export function renderVnc(body, win) {
     dashboardSocket.off("screen-session-chat", onSessChat);
     dashboardSocket.off("screen-session-grant", onSessGrant);
     dashboardSocket.off("screen-session-disconnect", onSessDisc);
+    dashboardSocket.off("screen-session-perms", onSessPerms);
+    dashboardSocket.off("screen-file-ack", onFileAck);
+    dashboardSocket.off("screen-file-out", onFileOut);
+    dashboardSocket.off("screen-audio", onAudio);
+    try { audioCtx?.close(); } catch {}
     try { areaObserver?.disconnect(); } catch (e) {}
     window.removeEventListener("mouseup", onMouseUp);
 
@@ -640,7 +909,7 @@ export function renderVnc(body, win) {
     if (!controlEnabled()) return;
     const { x, y } = mapCoords(e.clientX, e.clientY);
     // Beim Ziehen ebenfalls "move" senden - der Client hält ja die Taste gedrückt
-    dashboardSocket.emit("screen-input", { clientId, type: "move", x, y });
+    sendInput({ type: "move", x, y });
   });
 
   // ---- Touch: Zoomen/Schieben und Halten = Rechtsklick -------------------
@@ -670,7 +939,7 @@ export function renderVnc(body, win) {
 
   const touchSend = (type, cx, cy, button = "left") => {
     const { x, y } = mapCoords(cx, cy);
-    dashboardSocket.emit("screen-input", { clientId, type, x, y, button });
+    sendInput({ type, x, y, button });
   };
 
   img.addEventListener("pointerdown", (e) => {
@@ -741,7 +1010,7 @@ export function renderVnc(body, win) {
     const { x, y } = mapCoords(e.clientX, e.clientY);
     const button = e.button === 2 ? "right" : "left";
     // Taste DRÜCKEN (nicht sofort klicken) -> ermöglicht Halten + Ziehen
-    dashboardSocket.emit("screen-input", { clientId, type: "down", x, y, button });
+    sendInput({ type: "down", x, y, button });
   });
 
   // mouseup auf dem gesamten Fenster abfangen (falls man außerhalb des Bildes loslässt)
@@ -750,7 +1019,7 @@ export function renderVnc(body, win) {
     mouseDown = false;
     const { x, y } = mapCoords(e.clientX, e.clientY);
     const button = e.button === 2 ? "right" : "left";
-    dashboardSocket.emit("screen-input", { clientId, type: "up", x, y, button });
+    sendInput({ type: "up", x, y, button });
   }
   img.addEventListener("mouseup", onMouseUp);
   window.addEventListener("mouseup", onMouseUp);
@@ -759,7 +1028,7 @@ export function renderVnc(body, win) {
     if (!controlEnabled()) return;
     e.preventDefault();
     const { x, y } = mapCoords(e.clientX, e.clientY);
-    dashboardSocket.emit("screen-input", { clientId, type: "double", x, y });
+    sendInput({ type: "double", x, y });
   });
 
   // Rechtsklick-Menü des Browsers im Bild unterdrücken (wir leiten Rechtsklick weiter)
@@ -768,7 +1037,7 @@ export function renderVnc(body, win) {
   img.addEventListener("wheel", (e) => {
     if (!controlEnabled()) return;
     e.preventDefault();
-    dashboardSocket.emit("screen-input", { clientId, type: "scroll", dy: e.deltaY > 0 ? -1 : 1 });
+    sendInput({ type: "scroll", dy: e.deltaY > 0 ? -1 : 1 });
   });
 
   // --- Tastatur ---
@@ -789,8 +1058,8 @@ export function renderVnc(body, win) {
     }
     if (e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && (e.key === "x" || e.key === "X")) {
       // Ausschneiden = kopieren + Agent führt Strg+X ohnehin aus; danach abholen.
-      dashboardSocket.emit("screen-input", { clientId, type: "combo", keys: ["Control", "x"] });
-      setTimeout(() => dashboardSocket.emit("screen-clipboard-get", { clientId }), 140);
+      sendInput({ type: "combo", keys: ["Control", "x"] });
+      setTimeout(() => getClip(), 140);
       return;
     }
 
@@ -805,7 +1074,7 @@ export function renderVnc(body, win) {
       if (!["Control", "Alt", "Meta", "Shift"].includes(e.key)) {
         keys.push(e.key.length === 1 ? e.key.toLowerCase() : e.key);
       }
-      if (keys.length) dashboardSocket.emit("screen-input", { clientId, type: "combo", keys });
+      if (keys.length) sendInput({ type: "combo", keys });
       return;
     }
 
@@ -817,16 +1086,16 @@ export function renderVnc(body, win) {
 
     // Normales druckbares Zeichen -> als Text tippen
     if (e.key.length === 1) {
-      dashboardSocket.emit("screen-input", { clientId, type: "text", text: e.key });
+      sendInput({ type: "text", text: e.key });
     } else {
       // Sondertaste (Enter, Backspace, Pfeile, ...)
-      dashboardSocket.emit("screen-input", { clientId, type: "key", key: e.key });
+      sendInput({ type: "key", key: e.key });
     }
   });
 
   // Strg+Alt+Entf Button (lässt sich aus dem Browser nicht als echte Taste abfangen)
   ctrlAltDelBtn.addEventListener("click", () => {
-    dashboardSocket.emit("screen-input", { clientId, type: "combo", keys: ["Control", "Alt", "Delete"] });
+    sendInput({ type: "combo", keys: ["Control", "Alt", "Delete"] });
   });
 
   // --- Text senden (kompletten Text auf einmal an den Cursor des Clients tippen) ---
@@ -838,7 +1107,7 @@ export function renderVnc(body, win) {
     // werden die Zeichen vor dem Senden ueber die Positions-Tabelle ersetzt
     // (Reverse-Effekt); "de"/"raw" = 1:1 senden.
     const mapped = mapKeyboardText(text, layout);
-    dashboardSocket.emit("screen-input", { clientId, type: "text", text: mapped, layout });
+    sendInput({ type: "text", text: mapped, layout });
     textInput.value = "";
     textInput.focus();
   }
@@ -854,8 +1123,16 @@ export function renderVnc(body, win) {
     dashboardSocket.off("screen-error", onError);
     dashboardSocket.off("screen-mode", onMode);
     dashboardSocket.off("screen-clipboard", onClipboard);
+    dashboardSocket.off("screen-session-chat", onSessChat);
+    dashboardSocket.off("screen-session-grant", onSessGrant);
+    dashboardSocket.off("screen-session-disconnect", onSessDisc);
+    dashboardSocket.off("screen-session-perms", onSessPerms);
+    dashboardSocket.off("screen-file-ack", onFileAck);
+    dashboardSocket.off("screen-file-out", onFileOut);
+    dashboardSocket.off("screen-audio", onAudio);
+    try { audioCtx?.close(); } catch {}
     try { areaObserver?.disconnect(); } catch (e) {}
-    dashboardSocket.emit("screen-stop", { clientId });
+    stopScreen();
     if (rdpActive) dashboardSocket.emit("rdp-stop", { clientId });
     window.removeEventListener("mouseup", onMouseUp);
   });

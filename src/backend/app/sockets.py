@@ -1866,22 +1866,67 @@ async def dashboard_screen_start(sid, data):
             target=client_id,
             details=f"rec:{rec_id}" if rec_id else client["hostname"],
         )
+        _screen_open[client_id] = {"user": data.get("username", "unbekannt"), "ts": time.time()}
+
+
+# Laufende Sitzungen (fuer den Sitzungsverlauf: Ende + Dauer ins Audit-Log)
+_screen_open: dict[str, dict] = {}
+
+
+async def _log_session_end(client_id: str | None, by: str) -> None:
+    info = _screen_open.pop(client_id or "", None)
+    if not info:
+        return
+    from app import db as _db
+    secs = int(time.time() - info["ts"])
+    await _db.call(_db.add_audit_entry, info["user"], "screen.session_ended", target=client_id,
+                   details=f"{by};{secs}")
 
 
 @sio.on("screen-stop", namespace="/dashboard")
 async def dashboard_screen_stop(sid, data):
     """Dashboard hat das VNC-Fenster geschlossen -> Streaming + Aufnahme stoppen."""
     client_id = data.get("clientId")
+    # Stoppen darf jeder mit Sichtrecht (kein Schaden; verhindert nur das Zusehen).
+    if not await _ws_user_may(data.get("username"), "c_screen_view", client_id):
+        return
     await send_to_agent(client_id, "screen-stop", {})
     recording.stop_recording(client_id)
+    await _log_session_end(client_id, "admin")
+
+
+@sio.on("screen-audio", namespace="/dashboard")
+async def dashboard_screen_audio(sid, data):
+    """Ton des Remote-PCs ein-/ausschalten (wie AnyDesk "Ton uebertragen")."""
+    from app import db as _db
+    client_id = data.get("clientId")
+    if not await _ws_user_may(data.get("username"), "use_screen", client_id):
+        return
+    on = bool(data.get("enabled"))
+    await _db.call(_db.add_audit_entry, data.get("username") or "system",
+                   "screen.audio_on" if on else "screen.audio_off", target=client_id, details="")
+    await send_to_agent(client_id, "screen-audio", {"enabled": on})
+
+
+@sio.on("screen-audio", namespace="/agent")
+async def on_screen_audio(sid, payload):
+    """Ton-Stueck (mu-law, mono) oder Status/Fehler vom Agenten -> Dashboard (ohne Aufzeichnung)."""
+    await sio.emit("screen-audio", payload, namespace="/dashboard")
 
 
 @sio.on("screen-input", namespace="/dashboard")
 async def dashboard_screen_input(sid, data):
-    """Maus-/Tastatureingabe vom Dashboard an den Agenten weiterreichen."""
+    """Maus-/Tastatureingabe vom Dashboard an den Agenten weiterreichen.
+    Fruehere Luecke: dieses Event pruefte KEIN Recht - wer die Client-ID kannte,
+    konnte einem Geraet ohne use_screen Eingaben schicken. Jetzt wie alle anderen
+    Fernwartungs-Events mit Rechtepruefung."""
     client_id = data.pop("clientId", None)
-    if client_id:
-        await send_to_agent(client_id, "screen-input", data)
+    username = data.pop("username", None)
+    if not client_id:
+        return
+    if not await _ws_user_may(username, "use_screen", client_id):
+        return
+    await send_to_agent(client_id, "screen-input", data)
 
 
 @sio.on("screen-clipboard-get", namespace="/dashboard")
@@ -1889,6 +1934,8 @@ async def dashboard_screen_clipboard_get(sid, data):
     """Dashboard möchte die Zwischenablage des Remote-PCs holen (Clipboard-Sync)."""
     client_id = data.get("clientId")
     if client_id:
+        if not await _ws_user_may(data.get("username"), "use_screen", client_id):
+            return
         ok = await send_to_agent(client_id, "screen-clipboard-get", {})
         if not ok:
             await sio.emit("screen-clipboard",
@@ -1958,12 +2005,64 @@ async def on_session_chat(sid, payload):
     await sio.emit("screen-session-chat", payload, namespace="/dashboard")
 
 
+@sio.on("screen-session-request-grant", namespace="/dashboard")
+async def dashboard_session_request_grant(sid, data):
+    """Admin bittet die Person vor dem PC um Administrator-Rechte (wie AnyDesk)."""
+    from app import db as _db
+    client_id = data.get("clientId")
+    if not await _ws_user_may(data.get("username"), "use_screen", client_id):
+        return
+    await _db.call(_db.add_audit_entry, data.get("username") or "system",
+                   "screen.admin_requested", target=client_id, details="")
+    await send_to_agent(client_id, "screen-session-request-grant", {})
+
+
+# --- Datei-Uebertragung in der Fernwartungs-Sitzung (wie AnyDesk) ---
+@sio.on("screen-file-chunk", namespace="/dashboard")
+async def dashboard_screen_file_chunk(sid, data):
+    """Admin -> Benutzer: ein Stueck einer Datei (base64, ~256 KB) an den Agenten."""
+    from app import db as _db
+    client_id = data.get("clientId")
+    if not await _ws_user_may(data.get("username"), "use_screen", client_id):
+        await sio.emit("screen-file-ack", {"id": client_id, "tid": data.get("tid"), "seq": data.get("seq"),
+                                           "error": "forbidden"}, to=sid, namespace="/dashboard")
+        return
+    if int(data.get("seq") or 0) == 0:
+        await _db.call(_db.add_audit_entry, data.get("username") or "system", "screen.file_sent",
+                       target=client_id, details=f"{data.get('name')} ({data.get('size')} Bytes)")
+    payload = {k: data.get(k) for k in ("tid", "seq", "name", "size", "data", "last")}
+    if not await send_to_agent(client_id, "screen-file-chunk", payload):
+        await sio.emit("screen-file-ack", {"id": client_id, "tid": data.get("tid"), "seq": data.get("seq"),
+                                           "error": "offline"}, to=sid, namespace="/dashboard")
+
+
+@sio.on("screen-file-ack", namespace="/agent")
+async def on_screen_file_ack(sid, payload):
+    await sio.emit("screen-file-ack", payload, namespace="/dashboard")
+
+
+@sio.on("screen-file-out", namespace="/agent")
+async def on_screen_file_out(sid, payload):
+    """Benutzer -> Admin: Datei aus dem Sitzungsfenster (stueckweise) ans Dashboard."""
+    from app import db as _db
+    if int((payload or {}).get("seq") or 0) == 0:
+        await _db.call(_db.add_audit_entry, "system", "screen.file_received",
+                       target=payload.get("id"), details=f"{payload.get('name')} ({payload.get('size')} Bytes)")
+    await sio.emit("screen-file-out", payload, namespace="/dashboard")
+
+
+@sio.on("screen-session-perms", namespace="/agent")
+async def on_session_perms(sid, payload):
+    """Berechtigungen, die der Benutzer im Sitzungsfenster geschaltet hat -> Dashboard."""
+    await sio.emit("screen-session-perms", payload, namespace="/dashboard")
+
+
 @sio.on("screen-session-grant", namespace="/agent")
 async def on_session_grant(sid, payload):
     # Benutzer hat Admin-Rechte erlaubt/entzogen -> ans Dashboard + Audit.
     from app import db as _db
     cid = (payload or {}).get("id")
-    action = "granted" if payload.get("granted") else "revoked"
+    action = "granted" if payload.get("granted") else ("denied" if payload.get("denied") else "revoked")
     detail = "silent (ohne Benutzerfreigabe)" if payload.get("silent") else "durch Benutzer"
     await _db.call(_db.add_audit_entry, "system",
                    "screen.admin_" + action, target=cid, details=detail)
@@ -1975,6 +2074,7 @@ async def on_session_disconnect(sid, payload):
     # Benutzer hat die Fernwartung getrennt -> Aufnahme stoppen + Dashboard informieren.
     cid = (payload or {}).get("id")
     recording.stop_recording(cid)
+    await _log_session_end(cid, "user")
     await sio.emit("screen-session-disconnect", payload, namespace="/dashboard")
 
 
@@ -1990,6 +2090,8 @@ async def dashboard_screen_set_monitor(sid, data):
     client_id = data.get("clientId")
     monitor = data.get("monitor")
     if client_id and monitor is not None:
+        if not await _ws_user_may(data.get("username"), "use_screen", client_id):
+            return
         await send_to_agent(client_id, "screen-set-monitor", {"monitor": int(monitor)})
 
 

@@ -366,6 +366,8 @@ export const api = {
   getClients: () => request("/api/clients"),
   getClient: (id) => request(`/api/clients/${id}`),
   getMetricsHistory: (id) => request(`/api/clients/${id}/metrics/history`),
+  // Fernwartung: Sitzungsverlauf (aus dem Audit-Log, wie die Verbindungsliste bei AnyDesk)
+  getScreenHistory: (id) => request(`/api/clients/${encodeURIComponent(id)}/screen-history`),
   updateClient: (id, fields) => request(`/api/clients/${id}`, { method: "PUT", body: JSON.stringify(fields) }),
   deleteClient: (id) => request(`/api/clients/${id}`, { method: "DELETE" }),
   execOnClient: (id, command, session, shell = "auto", elevated = false) =>

@@ -2535,6 +2535,15 @@ def add_audit_entry(username: str | None, action: str, target: str | None = None
     _conn.commit()
 
 
+def list_audit_for_target(target: str, action_prefix: str, limit: int = 500) -> list[dict]:
+    """Audit-Eintraege eines Ziels (z.B. Client) mit Aktions-Praefix, neueste zuerst."""
+    rows = _conn.execute(
+        "SELECT * FROM audit_log WHERE target = ? AND action LIKE ? ORDER BY ts DESC LIMIT ?",
+        (target, action_prefix + "%", limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def list_audit_log(limit: int = 200) -> list[dict]:
     rows = _conn.execute(
         "SELECT * FROM audit_log ORDER BY ts DESC LIMIT ?", (limit,)

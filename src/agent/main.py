@@ -4151,6 +4151,16 @@ import io, json, os, socket, sys, tempfile, threading, time, traceback
 
 LOG = os.path.join(tempfile.gettempdir(), "rmm-screen-helper.log")
 
+# Harte Abstuerze (z.B. in Tk/Tcl) beenden den Prozess, ohne dass Python noch
+# einen Traceback schreibt. faulthandler schreibt dann wenigstens den Stack ins
+# Protokoll - sonst war im Dashboard nur "Bild steht" zu sehen.
+try:
+    import faulthandler
+    _FAULT_FILE = open(LOG, "a", encoding="utf-8")
+    faulthandler.enable(_FAULT_FILE)
+except Exception:
+    _FAULT_FILE = None
+
 def log(msg):
     try:
         with open(LOG, "a", encoding="utf-8") as f:
@@ -4205,6 +4215,37 @@ TEXTS = {
         "sess_admin": "Admin",
         "sess_connected": "Verbunden",
         "sess_ended": "Die Fernwartung wurde beendet.",
+        "sess_window": "BYTERA RMM - Fernwartung",
+        "sess_end": "Sitzung beenden",
+        "sess_perms": "BERECHTIGUNGEN DES ADMINISTRATORS",
+        "perm_input": "Steuerung",
+        "perm_clipboard": "Zwischenablage",
+        "perm_admin": "Admin-Rechte",
+        "perm_on_input": "Maus und Tastatur duerfen gesteuert werden.",
+        "perm_off_input": "Steuerung gesperrt - der Administrator kann nur zusehen.",
+        "perm_on_clipboard": "Zwischenablage freigegeben.",
+        "perm_off_clipboard": "Zwischenablage gesperrt.",
+        "perm_on_admin": "Administrator-Rechte erteilt.",
+        "perm_off_admin": "Administrator-Rechte entzogen.",
+        "hint_input_off": "Nur Zusehen.",
+        "hint_clip_off": "Zwischenablage gesperrt.",
+        "sess_req": "Der Administrator bittet um Administrator-Rechte.",
+        "sess_req_allow": "Erlauben",
+        "sess_req_deny": "Ablehnen",
+        "sess_req_denied": "Anfrage nach Administrator-Rechten abgelehnt.",
+        "perm_files": "Dateien",
+        "perm_on_files": "Datei-Uebertragung erlaubt.",
+        "perm_off_files": "Datei-Uebertragung gesperrt.",
+        "hint_files_off": "Dateien gesperrt.",
+        "file_pick": "Datei an den Administrator senden",
+        "file_too_big": "Die Datei ist zu gross (hoechstens 1 GB).",
+        "file_sending": "Sende {name} ...",
+        "file_sent": "{name} wurde gesendet.",
+        "file_failed": "{name} konnte nicht gesendet werden.",
+        "file_received": "Datei empfangen: {name}",
+        "file_open": "Ordner oeffnen",
+        "audio_on": "Der Administrator hoert jetzt den Ton dieses Computers mit.",
+        "audio_off": "Ton-Uebertragung beendet.",
     },
     "en": {
         "window": "BYTERA RMM - Remote screen",
@@ -4226,6 +4267,37 @@ TEXTS = {
         "sess_admin": "Admin",
         "sess_connected": "Connected",
         "sess_ended": "The remote session has ended.",
+        "sess_window": "BYTERA RMM - Remote support",
+        "sess_end": "End session",
+        "sess_perms": "ADMINISTRATOR PERMISSIONS",
+        "perm_input": "Control",
+        "perm_clipboard": "Clipboard",
+        "perm_admin": "Admin rights",
+        "perm_on_input": "Mouse and keyboard may be controlled.",
+        "perm_off_input": "Control blocked - the administrator can only watch.",
+        "perm_on_clipboard": "Clipboard allowed.",
+        "perm_off_clipboard": "Clipboard blocked.",
+        "perm_on_admin": "Administrator rights granted.",
+        "perm_off_admin": "Administrator rights revoked.",
+        "hint_input_off": "View only.",
+        "hint_clip_off": "Clipboard blocked.",
+        "sess_req": "The administrator is asking for administrator rights.",
+        "sess_req_allow": "Allow",
+        "sess_req_deny": "Deny",
+        "sess_req_denied": "Request for administrator rights denied.",
+        "perm_files": "Files",
+        "perm_on_files": "File transfer allowed.",
+        "perm_off_files": "File transfer blocked.",
+        "hint_files_off": "Files blocked.",
+        "file_pick": "Send a file to the administrator",
+        "file_too_big": "The file is too large (max. 1 GB).",
+        "file_sending": "Sending {name} ...",
+        "file_sent": "{name} has been sent.",
+        "file_failed": "{name} could not be sent.",
+        "file_received": "File received: {name}",
+        "file_open": "Open folder",
+        "audio_on": "The administrator is now listening to this computer's sound.",
+        "audio_off": "Sound transfer stopped.",
     },
 }
 
@@ -4236,64 +4308,307 @@ def ht(key, **kw):
     return txt.format(**kw) if kw else txt
 
 
-# --- Chat-/Steuerfenster waehrend einer aktiven Fernwartung -------------------
-# Laeuft in der Benutzersitzung, zeigt wer verbunden ist, erlaubt Chat mit dem
-# Administrator, das Erteilen/Entziehen von Administrator-Rechten und das Trennen
-# der Verbindung. Bei aktivem Silent-Modus wird es NICHT geoeffnet (der Agent
-# schickt dann kein "session-open"). reply(obj) schiebt Ereignisse zum Agenten.
-class SessionWindow:
-    def __init__(self, who, reply):
+# --- EIN Oberflaechen-Thread fuer alles, was Tk braucht ------------------------
+# Frueher erzeugte jeder Teil sein EIGENES Tk in seinem EIGENEN Thread: die
+# Zustimmungsabfrage im Steuer-Thread, das Sitzungsfenster in einem weiteren
+# Thread, die Zwischenablage mal hier, mal dort. Tk ist dafuer nicht gebaut -
+# unter Windows fuehrte das zu (a) Fenstern, die keine Tastatur-Eingaben bekamen,
+# und (b) harten Abstuerzen des ganzen Helfers ("Tcl_AsyncDelete: async handler
+# deleted by the wrong thread"), sobald die Speicherbereinigung ein altes
+# Tk-Objekt in einem fremden Thread aufraeumte - typischerweise wenige Sekunden
+# nach Sitzungsbeginn, also nach ein paar Dutzend Bildern. Jetzt gibt es genau
+# EIN Tk (verborgenes Hauptfenster) im HAUPT-Thread des Helfers; alle anderen
+# Threads geben ihre Tk-Arbeit ueber ui_call() dorthin ab.
+import queue as _queue
+_UI = {"root": None, "q": _queue.Queue(), "ok": False, "ready": threading.Event()}
+
+
+def ui_call(fn, wait=True, timeout=None):
+    # Der Oberflaechen-Thread startet parallel zum Steuer-Thread - ein frueher
+    # Auftrag (Zustimmung, Sitzungsfenster) wartet kurz, bis er bereit ist.
+    _UI["ready"].wait(10)
+    if not _UI["ok"]:
+        raise RuntimeError("keine Oberflaeche (Tk) verfuegbar")
+    box = {"done": threading.Event(), "res": None, "err": None}
+    _UI["q"].put((fn, box))
+    if not wait:
+        return None
+    if not box["done"].wait(timeout):
+        raise RuntimeError("Oberflaeche antwortet nicht")
+    if box["err"] is not None:
+        raise box["err"]
+    return box["res"]
+
+
+def ui_loop(state):
+    # Laeuft im Haupt-Thread. False = kein Tk verfuegbar (dann ohne Fenster weiter).
+    try:
         import tkinter as tk
+        root = tk.Tk()
+        root.withdraw()
+    except Exception as e:
+        log("Oberflaeche (Tk) nicht verfuegbar: %s" % e)
+        _UI["ready"].set()
+        return False
+    _UI["root"] = root
+    _UI["ok"] = True
+    _UI["ready"].set()
+
+    def pump():
+        # ZUERST neu einplanen: ein Auftrag kann eine eigene Warteschleife
+        # starten (Zustimmungsabfrage) - die Warteschlange muss weiterlaufen.
+        if state["stop"]:
+            try: root.quit()
+            except Exception: pass
+            return
+        root.after(40, pump)
+        while True:
+            try:
+                fn, box = _UI["q"].get_nowait()
+            except _queue.Empty:
+                break
+            try:
+                box["res"] = fn()
+            except Exception as e:
+                box["err"] = e
+                log("Oberflaeche: %s" % e)
+            finally:
+                box["done"].set()
+
+    root.after(40, pump)
+    try:
+        root.mainloop()
+    except Exception as e:
+        log("Oberflaeche beendet: %s" % e)
+    _UI["ok"] = False
+    try: root.destroy()
+    except Exception: pass
+    return True
+
+
+def _logo_images(win):
+    # Logo (liegt neben dem Helfer) als Fenstersymbol. Bilder am Fenster
+    # festhalten, sonst raeumt Python sie weg.
+    try:
+        import tkinter as tk
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
+        if not os.path.isfile(p):
+            return None
+        big = tk.PhotoImage(master=win, file=p)
+        icons = [big.subsample(max(1, big.width() // t), max(1, big.width() // t)) for t in (64, 32, 16)]
+        win._icon_refs = [big] + icons
+        try: win.iconphoto(False, *icons)
+        except Exception: pass
+        return big
+    except Exception as e:
+        log("logo not loadable: %s" % e)
+        return None
+
+
+# --- Datei-Uebertragung waehrend der Sitzung (wie AnyDesk) -------------------
+# Admin -> Benutzer: Stuecke kommen als "file-chunk" an und landen im Ordner
+# "Downloads" des angemeldeten Benutzers (der Helfer laeuft als dieser Benutzer,
+# die Datei gehoert also ihm). Jedes Stueck wird bestaetigt ("file-ack") - erst
+# dann schickt das Dashboard das naechste (Flusskontrolle).
+# Benutzer -> Admin: "Datei senden" im Sitzungsfenster liest die Datei in
+# Stuecken und schickt sie als "file-out" ans Dashboard.
+FILE_CHUNK = 256 * 1024
+FILE_MAX = 1024 * 1024 * 1024          # 1 GB je Datei
+
+
+def downloads_dir():
+    home = os.path.expanduser("~")
+    for cand in (os.path.join(home, "Downloads"), home, tempfile.gettempdir()):
+        if os.path.isdir(cand):
+            return cand
+    return tempfile.gettempdir()
+
+
+def safe_name(name):
+    name = os.path.basename(str(name or "").replace("\\", "/")).strip() or "datei"
+    bad = '<>:"/\\|?*'
+    name = "".join("_" if (ch in bad or ord(ch) < 32) else ch for ch in name)
+    return name[:180] or "datei"
+
+
+def unique_path(folder, name):
+    base, ext = os.path.splitext(name)
+    path, n = os.path.join(folder, name), 1
+    while os.path.exists(path):
+        path = os.path.join(folder, "%s (%d)%s" % (base, n, ext))
+        n += 1
+    return path
+
+
+def open_folder(path):
+    try:
+        if sys.platform == "win32":
+            import subprocess
+            subprocess.Popen(["explorer", "/select,", path])
+        elif sys.platform == "darwin":
+            import subprocess
+            subprocess.Popen(["open", "-R", path])
+        else:
+            import subprocess
+            subprocess.Popen(["xdg-open", os.path.dirname(path)])
+    except Exception as e:
+        log("Ordner oeffnen: %s" % e)
+
+
+# --- Sitzungsfenster beim Benutzer (nach dem Vorbild von AnyDesk) ---------------
+# Zeigt, WER verbunden ist und seit wann, einen Chat mit dem Administrator, die
+# Berechtigungen als Schalter (Steuerung, Zwischenablage, Administrator-Rechte)
+# und "Sitzung beenden". Bei Silent-Modus wird es NICHT geoeffnet.
+# Wichtig zum Aufbau: Eingabezeile, Berechtigungen und "Sitzung beenden" werden
+# ZUERST von unten angeordnet, der Chat-Verlauf fuellt nur den Rest. Vorher kam
+# der Verlauf zuerst, nahm seine volle Wunschhoehe und schob Eingabefeld und
+# Knoepfe aus dem Fenster - der Benutzer konnte nur lesen.
+# Alles hier laeuft im Oberflaechen-Thread (ui_call).
+class SessionWindow:
+    BG = "#131c2b"; PANEL = "#0d1420"; TEXT = "#e6ecf5"; SUB = "#8ea0b8"
+    ACC = "#4f8cff"; ON = "#2e7d57"; OFF = "#24304a"; DANGER = "#b4455a"; WARN = "#c98a1b"
+
+    def __init__(self, root, who, reply, perms):
+        import tkinter as tk
+        self.tk = tk
         self.reply = reply
-        self.granted = False
         self.closed = False
-        self.root = tk.Tk()
-        self.root.title(ht("sess_title"))
-        self.root.configure(bg="#131c2b")
-        self.root.attributes("-topmost", True)
-        self.root.minsize(360, 420)
+        self.started = time.time()
+        self.perms = {"input": True, "clipboard": True, "files": True, "admin": False}
+        self.perms.update(perms or {})
+        BG, PANEL, TEXT, SUB = self.BG, self.PANEL, self.TEXT, self.SUB
+        w = self.win = tk.Toplevel(root)
+        w.title(ht("sess_window"))
+        w.configure(bg=BG)
+        w.attributes("-topmost", True)
+        w.minsize(340, 470)
         try:
-            self.root.geometry("380x460+%d+80" % (self.root.winfo_screenwidth() - 400))
+            W, H = 370, 560
+            x = w.winfo_screenwidth() - W - 16
+            y = max(10, w.winfo_screenheight() - H - 70)
+            w.geometry("%dx%d+%d+%d" % (W, H, x, y))
         except Exception:
             pass
-        BG = "#131c2b"; TEXT = "#e6ecf5"; SUB = "#8ea0b8"; ACC = "#4f8cff"; DANGER = "#b4455a"
-        head = tk.Frame(self.root, bg=BG, padx=14, pady=10); head.pack(fill="x")
-        tk.Label(head, text="🖥️ " + ht("sess_title"), font=("Segoe UI", 12, "bold"), bg=BG, fg=TEXT, anchor="w").pack(fill="x")
-        self.sub = tk.Label(head, text=ht("sess_sub", who=who), font=("Segoe UI", 9), bg=BG, fg=SUB, anchor="w", justify="left", wraplength=340)
-        self.sub.pack(fill="x")
-        # Chat-Verlauf
-        chat_wrap = tk.Frame(self.root, bg="#0d1420"); chat_wrap.pack(fill="both", expand=True, padx=10, pady=(4, 6))
-        self.log = tk.Text(chat_wrap, bg="#0d1420", fg=TEXT, bd=0, font=("Segoe UI", 10), wrap="word", state="disabled", padx=8, pady=8)
+        _logo_images(w)
+
+        # Kopf: Avatar mit Initiale, Name, Verbindungsdauer
+        head = tk.Frame(w, bg=BG, padx=14, pady=12); head.pack(side="top", fill="x")
+        initial = (str(who).strip()[:1] or "A").upper()
+        tk.Label(head, text=initial, width=3, height=1, bg=self.ACC, fg="#ffffff",
+                 font=("Segoe UI", 16, "bold")).pack(side="left", padx=(0, 10))
+        info = tk.Frame(head, bg=BG); info.pack(side="left", fill="x", expand=True)
+        tk.Label(info, text=str(who), font=("Segoe UI", 12, "bold"), bg=BG, fg=TEXT, anchor="w").pack(fill="x")
+        self.timer = tk.Label(info, text=ht("sess_connected"), font=("Segoe UI", 9), bg=BG, fg=SUB, anchor="w")
+        self.timer.pack(fill="x")
+
+        # --- von UNTEN: Sitzung beenden, Berechtigungen, Eingabezeile ---
+        tk.Button(w, text="\u23F9  " + ht("sess_end"), command=self._end, bg=self.DANGER, fg="#ffffff",
+                  activebackground="#9a3a4d", activeforeground="#ffffff", bd=0,
+                  font=("Segoe UI", 10, "bold"), pady=9, cursor="hand2").pack(side="bottom", fill="x", padx=10, pady=(4, 10))
+
+        perm = tk.Frame(w, bg=BG, padx=10); perm.pack(side="bottom", fill="x", pady=(6, 2))
+        tk.Label(perm, text=ht("sess_perms"), font=("Segoe UI", 8, "bold"), bg=BG, fg=SUB, anchor="w").grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
+        self.perm_btns = {}
+        for col, (key, icon) in enumerate((("input", "\U0001F5B1"), ("clipboard", "\U0001F4CB"),
+                                           ("files", "\U0001F4C1"), ("admin", "\U0001F6E1"))):
+            # 2 x 2 Schalter (vier nebeneinander wurden bei langen Texten abgeschnitten)
+            b = tk.Button(perm, text=icon + "  " + ht("perm_" + key), command=lambda k=key: self._toggle(k),
+                          bd=0, font=("Segoe UI", 9, "bold"), fg="#ffffff", pady=7, cursor="hand2")
+            b.grid(row=1 + col // 2, column=col % 2, sticky="nsew", padx=3, pady=2)
+            perm.grid_columnconfigure(col % 2, weight=1, uniform="p")
+            self.perm_btns[key] = b
+        self.perm_hint = tk.Label(perm, text="", font=("Segoe UI", 8), bg=BG, fg=SUB, anchor="w", justify="left", wraplength=330)
+        self.perm_hint.grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
+
+        # Anfrage des Administrators (nur sichtbar, wenn er Rechte anfordert)
+        self.req = tk.Frame(w, bg=self.WARN, padx=10, pady=8)
+        tk.Label(self.req, text=ht("sess_req"), bg=self.WARN, fg="#ffffff", font=("Segoe UI", 9, "bold"),
+                 anchor="w", justify="left", wraplength=320).pack(fill="x")
+        rb = tk.Frame(self.req, bg=self.WARN); rb.pack(fill="x", pady=(6, 0))
+        tk.Button(rb, text=ht("sess_req_allow"), command=lambda: self._answer_request(True), bg=self.ON, fg="#ffffff",
+                  bd=0, padx=12, pady=4, cursor="hand2").pack(side="left")
+        tk.Button(rb, text=ht("sess_req_deny"), command=lambda: self._answer_request(False), bg=self.OFF, fg="#ffffff",
+                  bd=0, padx=12, pady=4, cursor="hand2").pack(side="left", padx=6)
+
+        row = tk.Frame(w, bg=BG, padx=10); row.pack(side="bottom", fill="x", pady=(4, 0))
+        self.row = row
+        self.entry = tk.Entry(row, bg=PANEL, fg=TEXT, insertbackground=TEXT, bd=0, font=("Segoe UI", 10),
+                              relief="flat", highlightthickness=1, highlightbackground="#24304a", highlightcolor=self.ACC)
+        self.entry.pack(side="left", fill="x", expand=True, ipady=7, padx=(0, 6))
+        self.entry.bind("<Return>", lambda e: self._send())
+        tk.Button(row, text=ht("sess_send"), command=self._send, bg=self.ACC, fg="#ffffff", bd=0,
+                  font=("Segoe UI", 9, "bold"), padx=14, pady=6, cursor="hand2").pack(side="right")
+        # Datei an den Administrator schicken (wie "Datei senden" bei AnyDesk)
+        tk.Button(row, text="\U0001F4CE", command=self._pick_file, bg=self.OFF, fg="#ffffff", bd=0,
+                  font=("Segoe UI", 10), padx=8, pady=4, cursor="hand2").pack(side="right", padx=(0, 6))
+
+        # --- Rest: Chat-Verlauf (klein anfangen, waechst mit dem Fenster) ---
+        chat = tk.Frame(w, bg=PANEL); chat.pack(side="top", fill="both", expand=True, padx=10, pady=(0, 4))
+        self.log = tk.Text(chat, height=6, bg=PANEL, fg=TEXT, bd=0, font=("Segoe UI", 10), wrap="word",
+                           state="disabled", padx=8, pady=8)
+        sb = tk.Scrollbar(chat, command=self.log.yview); sb.pack(side="right", fill="y")
         self.log.pack(side="left", fill="both", expand=True)
-        sb = tk.Scrollbar(chat_wrap, command=self.log.yview); sb.pack(side="right", fill="y")
         self.log.config(yscrollcommand=sb.set)
         self.log.tag_config("you", foreground="#7fd6a0", font=("Segoe UI", 9, "bold"))
         self.log.tag_config("admin", foreground="#7fb4ff", font=("Segoe UI", 9, "bold"))
         self.log.tag_config("sys", foreground=SUB, font=("Segoe UI", 8, "italic"))
-        # Eingabezeile
-        row = tk.Frame(self.root, bg=BG, padx=10); row.pack(fill="x")
-        self.entry = tk.Entry(row, bg="#0d1420", fg=TEXT, insertbackground=TEXT, bd=0, font=("Segoe UI", 10))
-        self.entry.pack(side="left", fill="x", expand=True, ipady=6, padx=(0, 6))
-        self.entry.bind("<Return>", lambda e: self._send())
-        tk.Button(row, text=ht("sess_send"), command=self._send, bg=ACC, fg="#ffffff", bd=0, font=("Segoe UI", 9, "bold"), padx=14, pady=5, cursor="hand2").pack(side="right")
-        # Aktionen
-        act = tk.Frame(self.root, bg=BG, padx=10, pady=10); act.pack(fill="x")
-        self.grant_btn = tk.Button(act, text=ht("sess_grant_on"), command=self._toggle_grant, bg="#24304a", fg=TEXT, bd=0, font=("Segoe UI", 9, "bold"), pady=7, cursor="hand2")
-        self.grant_btn.pack(fill="x", pady=(0, 6))
-        tk.Button(act, text="✖ " + ht("sess_disconnect"), command=self._disconnect, bg=DANGER, fg="#ffffff", bd=0, font=("Segoe UI", 9, "bold"), pady=7, cursor="hand2").pack(fill="x")
-        self.root.protocol("WM_DELETE_WINDOW", self._minimize)   # X minimiert statt trennt
-        self._sys(ht("sess_connected"))
+        self.log.tag_config("file", foreground="#f0c674", font=("Segoe UI", 9, "bold"))
+        self._link_n = 0
+        # Klick irgendwo in den Verlauf -> Schreibfeld bekommt den Fokus
+        self.log.bind("<Button-1>", lambda e: self.entry.focus_set())
+
+        w.protocol("WM_DELETE_WINDOW", self._minimize)       # X minimiert (wie AnyDesk), trennt nicht
+        self._paint_perms()
+        self._sys(ht("sess_sub", who=who))
+        self._tick()
+        try:
+            w.lift()
+            self.entry.focus_set()
+        except Exception:
+            pass
+
+    # --- Darstellung ---
+    def _paint_perms(self):
+        for key, b in self.perm_btns.items():
+            on = bool(self.perms.get(key))
+            b.config(bg=self.ON if on else self.OFF, activebackground=self.ON if on else self.OFF)
+        hints = []
+        if not self.perms.get("input"):
+            hints.append(ht("hint_input_off"))
+        if not self.perms.get("clipboard"):
+            hints.append(ht("hint_clip_off"))
+        if not self.perms.get("files"):
+            hints.append(ht("hint_files_off"))
+        if self.perms.get("admin"):
+            hints.append(ht("sess_granted"))
+        self.perm_hint.config(text="  ".join(hints))
+
+    def _tick(self):
+        if self.closed:
+            return
+        s = int(time.time() - self.started)
+        self.timer.config(text="%s  %02d:%02d:%02d" % (ht("sess_connected"), s // 3600, s % 3600 // 60, s % 60))
+        self.win.after(1000, self._tick)
 
     def _append(self, who_tag, who_text, text):
         self.log.config(state="normal")
-        self.log.insert("end", who_text + ": ", who_tag)
+        self.log.insert("end", time.strftime("%H:%M ") + who_text + ": ", who_tag)
         self.log.insert("end", text + "\n")
         self.log.see("end")
         self.log.config(state="disabled")
 
     def _sys(self, text):
-        self.log.config(state="normal"); self.log.insert("end", text + "\n", "sys"); self.log.see("end"); self.log.config(state="disabled")
+        self.log.config(state="normal"); self.log.insert("end", text + "\n", "sys")
+        self.log.see("end"); self.log.config(state="disabled")
 
+    def _attention(self):
+        try:
+            self.win.deiconify(); self.win.lift(); self.win.bell()
+        except Exception:
+            pass
+
+    # --- Aktionen des Benutzers ---
     def _send(self):
         txt = self.entry.get().strip()
         if not txt:
@@ -4303,120 +4618,188 @@ class SessionWindow:
         try: self.reply({"session": "chat", "text": txt})
         except Exception: pass
 
-    def _toggle_grant(self):
-        self.granted = not self.granted
-        self.grant_btn.config(text=ht("sess_grant_off") if self.granted else ht("sess_grant_on"),
-                              bg="#2e7d57" if self.granted else "#24304a")
-        if self.granted:
-            self._sys(ht("sess_granted"))
-        try: self.reply({"session": "grant", "granted": self.granted})
-        except Exception: pass
+    def _toggle(self, key, value=None):
+        v = (not self.perms.get(key)) if value is None else bool(value)
+        self.perms[key] = v
+        self._paint_perms()
+        self._sys(ht(("perm_on_" if v else "perm_off_") + key))
+        try:
+            if key == "admin":
+                self.reply({"session": "grant", "granted": v})
+            else:
+                self.reply({"session": "perm", "perm": key, "value": v})
+        except Exception:
+            pass
 
-    def _disconnect(self):
+    def _answer_request(self, ok):
+        self.req.pack_forget()
+        if ok:
+            if not self.perms.get("admin"):
+                self._toggle("admin", True)
+        else:
+            self._sys(ht("sess_req_denied"))
+            try: self.reply({"session": "grant-denied"})
+            except Exception: pass
+
+    def _end(self):
         try: self.reply({"session": "disconnect"})
         except Exception: pass
         self._sys(ht("sess_ended"))
         self.close()
 
     def _minimize(self):
-        try: self.root.iconify()
+        try: self.win.iconify()
         except Exception: pass
 
-    # Vom Agenten aufgerufen (ueber den Tk-Thread via after):
+    # --- Dateien ---
+    def _pick_file(self):
+        try:
+            from tkinter import filedialog
+            path = filedialog.askopenfilename(parent=self.win, title=ht("file_pick"))
+        except Exception as e:
+            log("Dateiauswahl: %s" % e)
+            return
+        if not path:
+            return
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            return
+        if size > FILE_MAX:
+            self._sys(ht("file_too_big"))
+            return
+        self._sys(ht("file_sending", name=os.path.basename(path)))
+        threading.Thread(target=self._send_file, args=(path, size), daemon=True).start()
+
+    def _send_file(self, path, size):
+        tid = "u%d%04d" % (int(time.time() * 1000), os.getpid() % 10000)
+        name = os.path.basename(path)
+        import base64
+        try:
+            with open(path, "rb") as f:
+                seq = 0
+                while True:
+                    data = f.read(FILE_CHUNK)
+                    last = f.tell() >= size or not data
+                    self.reply({"session": "file-out", "tid": tid, "name": name, "size": size, "seq": seq,
+                                "data": base64.b64encode(data).decode("ascii"), "last": bool(last)})
+                    seq += 1
+                    if last:
+                        break
+                    time.sleep(0.01)          # Bilder nicht ausbremsen
+            msg = ht("file_sent", name=name)
+        except Exception as e:
+            log("Datei senden: %s" % e)
+            msg = ht("file_failed", name=name)
+        try:
+            ui_call(lambda: self._sys(msg), wait=False)
+        except Exception:
+            pass
+
+    def on_file_received(self, name, path):
+        # Zeile mit anklickbarem "Ordner oeffnen"
+        self._link_n += 1
+        tag = "lnk%d" % self._link_n
+        self.log.config(state="normal")
+        self.log.insert("end", time.strftime("%H:%M ") + "\U0001F4E5 " + ht("file_received", name=name) + "  ", "file")
+        self.log.insert("end", ht("file_open"), (tag,))
+        self.log.insert("end", "\n")
+        self.log.tag_config(tag, foreground="#7fb4ff", underline=True)
+        self.log.tag_bind(tag, "<Button-1>", lambda e, p=path: open_folder(p))
+        self.log.tag_bind(tag, "<Enter>", lambda e: self.log.config(cursor="hand2"))
+        self.log.tag_bind(tag, "<Leave>", lambda e: self.log.config(cursor=""))
+        self.log.see("end")
+        self.log.config(state="disabled")
+        self._attention()
+
+    def on_audio(self, on):
+        # Datenschutz: sichtbar machen, dass der Ton dieses PCs uebertragen wird
+        self._sys("\U0001F50A " + ht("audio_on") if on else "\U0001F507 " + ht("audio_off"))
+        self.timer.config(fg="#f0c674" if on else self.SUB)
+
+    # --- vom Agenten (ueber ui_call im Oberflaechen-Thread) ---
     def on_admin_chat(self, text):
-        self.root.after(0, lambda: self._append("admin", ht("sess_admin"), text))
+        self._append("admin", ht("sess_admin"), text)
+        self._attention()
+
+    def on_admin_request(self):
+        if self.perms.get("admin"):
+            return
+        self.req.pack(side="bottom", fill="x", padx=10, pady=(4, 0), before=self.row)
+        self._sys(ht("sess_req"))
+        self._attention()
 
     def close(self):
         if self.closed:
             return
         self.closed = True
-        try: self.root.after(0, self.root.destroy)
+        try: self.win.destroy()
         except Exception: pass
-
-    def run(self):
-        try: self.root.mainloop()
-        except Exception as e: log("Sessionfenster: %s" % e)
-        self.closed = True
 
 
 def consent_dialog(who, timeout_s):
+    # Laeuft im Oberflaechen-Thread (ui_call). Eigenes Toplevel am gemeinsamen
+    # Tk; gewartet wird mit wait_window - die Warteschlange laeuft dabei weiter.
     import tkinter as tk
+    root = _UI["root"]
     result = {"ok": False}
-    root = tk.Tk()
-    root.title(ht("window"))
-    root.attributes("-topmost", True)
-    root.configure(bg="#131c2b")
-    root.resizable(False, False)
-
-    # Logo: logo.png liegt seit Install/Update neben agent.py - also im
-    # gleichen Ordner wie dieses Helfer-Skript. Es wird sowohl als Fenster-
-    # symbol (iconphoto, kann PNG) als auch sichtbar im Dialog verwendet.
-    # Ohne diesen Block war der Dialog des Helfers bildlos - der alte, direkt
-    # im Agenten gezeichnete Dialog hatte das Logo noch.
-    logo_big = logo_small = None
-    try:
-        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
-        if os.path.isfile(p):
-            logo_big = tk.PhotoImage(file=p)
-            f = max(1, logo_big.width() // 64)
-            logo_small = logo_big.subsample(f, f)
-            icons = []
-            for target in (64, 32, 16):
-                s = max(1, logo_big.width() // target)
-                icons.append(logo_big.subsample(s, s))
-            root._icon_refs = [logo_big, logo_small] + icons   # GC-Schutz
-            try:
-                root.iconphoto(True, *icons)
-            except Exception:
-                pass
-    except Exception as e:
-        log("logo not loadable: %s" % e)
-        logo_big = logo_small = None
-
-    if logo_small is not None:
-        tk.Label(root, image=logo_small, bg="#131c2b").pack(pady=(20, 4))
+    top = tk.Toplevel(root)
+    top.title(ht("window"))
+    top.attributes("-topmost", True)
+    top.configure(bg="#131c2b")
+    top.resizable(False, False)
+    big = _logo_images(top)
+    small = None
+    if big is not None:
+        try:
+            small = big.subsample(max(1, big.width() // 64), max(1, big.width() // 64))
+            top._icon_refs.append(small)
+        except Exception:
+            small = None
+    if small is not None:
+        tk.Label(top, image=small, bg="#131c2b").pack(pady=(20, 4))
     else:
-        tk.Label(root, text="\U0001F5A5", font=("Segoe UI Emoji", 30),
+        tk.Label(top, text="\U0001F5A5", font=("Segoe UI Emoji", 30),
                  bg="#131c2b", fg="#e8eef7").pack(pady=(20, 4))
-    tk.Label(root, text=ht("title"), bg="#131c2b", fg="#e8eef7",
+    tk.Label(top, text=ht("title"), bg="#131c2b", fg="#e8eef7",
              font=("Segoe UI", 14, "bold")).pack(pady=(4, 8))
-    tk.Label(root, text=ht("body", who=str(who)), bg="#131c2b", fg="#8fa3bd",
+    tk.Label(top, text=ht("body", who=str(who)), bg="#131c2b", fg="#8fa3bd",
              font=("Segoe UI", 10), justify="center").pack(padx=28)
-    countdown = tk.Label(root, text="", bg="#131c2b", fg="#8fa3bd", font=("Segoe UI", 9))
+    countdown = tk.Label(top, text="", bg="#131c2b", fg="#8fa3bd", font=("Segoe UI", 9))
     countdown.pack(pady=(10, 0))
-    row = tk.Frame(root, bg="#131c2b"); row.pack(pady=18)
+    row = tk.Frame(top, bg="#131c2b"); row.pack(pady=18)
     def yes():
-        result["ok"] = True; root.destroy()
+        result["ok"] = True; top.destroy()
     def no():
-        root.destroy()
+        top.destroy()
     tk.Button(row, text=ht("deny"), command=no, width=14,
               bg="#243043", fg="#e8eef7", relief="flat").pack(side="left", padx=6)
     tk.Button(row, text=ht("allow"), command=yes, width=14,
               bg="#2f6fed", fg="#ffffff", relief="flat").pack(side="left", padx=6)
     left = {"n": int(timeout_s)}
     def tick():
+        if not top.winfo_exists():
+            return
         if left["n"] <= 0:
-            try: root.destroy()
+            try: top.destroy()
             except Exception: pass
             return
         countdown.config(text=ht("auto", secs=left["n"]))
         left["n"] -= 1
-        root.after(1000, tick)
+        top.after(1000, tick)
     tick()
-    root.protocol("WM_DELETE_WINDOW", no)
-    # Erst nach dem Aufbau zentrieren - vorher steht die Fenstergroesse noch
-    # nicht fest und der Dialog landete oben links.
+    top.protocol("WM_DELETE_WINDOW", no)
     try:
-        root.update_idletasks()
-        w, h = root.winfo_width(), root.winfo_height()
-        x = (root.winfo_screenwidth() - w) // 2
-        y = (root.winfo_screenheight() - h) // 3
-        root.geometry("+%d+%d" % (x, y))
-        root.lift()
-        root.focus_force()
+        top.update_idletasks()
+        w, h = top.winfo_width(), top.winfo_height()
+        x = (top.winfo_screenwidth() - w) // 2
+        y = (top.winfo_screenheight() - h) // 3
+        top.geometry("+%d+%d" % (x, y))
+        top.lift()
+        top.focus_force()
     except Exception:
         pass
-    root.mainloop()
+    root.wait_window(top)
     return result["ok"]
 
 def main():
@@ -4427,11 +4810,52 @@ def main():
     LANG = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] in ("de", "en") else "de"
     log("Start (PID %s, Python %s)" % (os.getpid(), sys.executable))
     sock = socket.create_connection(("127.0.0.1", port), timeout=15)
+    # Zeitlimit NUR fuer den Verbindungsaufbau. Blieb es stehen, beendete jede
+    # Pause ohne Steuerbefehl von mehr als 15 s (Admin schaut nur zu, bewegt die
+    # Maus nicht) den Steuerkanal - und damit den ganzen Helfer: das Bild blieb
+    # nach einigen Dutzend Bildern stehen.
+    sock.settimeout(None)
     send(sock, json.dumps({"key": key, "pid": os.getpid()}).encode())
     log("connected to the agent on port %s" % port)
 
-    state = {"quality": 60, "fps": 10, "monitor": 1,
+    state = {"quality": 60, "fps": 10, "monitor": 1, "audio": False,
              "left": 0, "top": 0, "stream": False, "stop": False, "sesswin": None}
+
+    state["files"] = {}
+
+    def receive_chunk(o):
+        import base64
+        tid = str(o.get("tid") or "")
+        st = state["files"].get(tid)
+        if st is None:
+            if int(o.get("seq") or 0) != 0:
+                raise RuntimeError("unbekannte Uebertragung")
+            if int(o.get("size") or 0) > FILE_MAX:
+                raise RuntimeError("Datei zu gross")
+            path = unique_path(downloads_dir(), safe_name(o.get("name")))
+            st = state["files"][tid] = {"f": open(path, "wb"), "path": path, "n": 0}
+        data = base64.b64decode(o.get("data") or "")
+        st["n"] += len(data)
+        if st["n"] > FILE_MAX:
+            raise RuntimeError("Datei zu gross")
+        st["f"].write(data)
+        if o.get("last"):
+            st["f"].close()
+            state["files"].pop(tid, None)
+            log("Datei empfangen: %s (%d Bytes)" % (st["path"], st["n"]))
+            sess_do("on_file_received", os.path.basename(st["path"]), st["path"])
+            return {"done": True, "path": st["path"]}
+        return {}
+
+    def sess_do(method, *args):
+        # Methode des Sitzungsfensters im Oberflaechen-Thread aufrufen (ohne zu warten).
+        w = state.get("sesswin")
+        if w is None:
+            return
+        try:
+            ui_call(lambda: getattr(w, method)(*args), wait=False)
+        except Exception as e:
+            log("Sitzungsfenster (%s): %s" % (method, e))
 
     mouse = keyboard = None
     try:
@@ -4503,20 +4927,16 @@ def main():
         return getattr(KK, name.lower(), None)
 
     def set_clipboard(text):
-        # Zwischenablage der Benutzersitzung setzen (ohne Zusatzpaket).
-        import tkinter as tk
-        r = tk.Tk(); r.withdraw()
-        r.clipboard_clear(); r.clipboard_append(text)
-        r.update()          # erst dadurch uebernimmt Windows den Inhalt
-        r.destroy()
+        # Zwischenablage der Benutzersitzung setzen - ueber das EINE Tk im
+        # Oberflaechen-Thread (kein eigenes Tk pro Aufruf mehr, siehe ui_call).
+        def _do():
+            r = _UI["root"]
+            r.clipboard_clear(); r.clipboard_append(text)
+            r.update()      # erst dadurch uebernimmt Windows den Inhalt
+        ui_call(_do, timeout=5)
 
     def get_clipboard():
-        import tkinter as tk
-        r = tk.Tk(); r.withdraw()
-        try:
-            return r.clipboard_get()
-        finally:
-            r.destroy()
+        return ui_call(lambda: _UI["root"].clipboard_get(), timeout=5)
 
     def do_input(d):
         k = d.get("type")
@@ -4598,8 +5018,9 @@ def main():
             elif c == "consent":
                 ok = False
                 try:
-                    ok = consent_dialog(o.get("who") or ht("somebody"),
-                                        int(o.get("timeout", 30)))
+                    secs = int(o.get("timeout", 30))
+                    ok = ui_call(lambda: consent_dialog(o.get("who") or ht("somebody"), secs),
+                                 timeout=secs + 30)
                 except Exception as e:
                     log("Zustimmungsdialog fehlgeschlagen: %s" % e)
                 try:
@@ -4607,40 +5028,116 @@ def main():
                 except Exception:
                     pass
             elif c == "session-open":
-                # Chat-/Steuerfenster in einem eigenen Thread (eigenes Tk).
-                if state.get("sesswin") is None:
-                    def _run_win(who):
-                        try:
-                            win = SessionWindow(who, lambda o: send(sock, b"R" + json.dumps(o).encode()))
-                            state["sesswin"] = win
-                            win.run()
-                        except Exception as e:
-                            log("Sessionfenster-Start: %s" % e)
-                        finally:
-                            state["sesswin"] = None
-                    threading.Thread(target=_run_win, args=(o.get("who") or ht("somebody"),), daemon=True).start()
+                # Sitzungsfenster im Oberflaechen-Thread aufbauen.
+                old = state.get("sesswin")
+                if old is not None and old.closed:
+                    state["sesswin"] = old = None
+                if old is None:
+                    def _reply(obj):
+                        send(sock, b"R" + json.dumps(obj).encode())
+                    try:
+                        who, perms = o.get("who") or ht("somebody"), o.get("perms") or {}
+                        state["sesswin"] = ui_call(
+                            lambda: SessionWindow(_UI["root"], who, _reply, perms), timeout=15)
+                    except Exception as e:
+                        log("Sitzungsfenster-Start: %s" % e)
             elif c == "session-chat":
-                w = state.get("sesswin")
-                if w is not None:
-                    try: w.on_admin_chat(o.get("text") or "")
-                    except Exception as e: log("Admin-Chat: %s" % e)
+                sess_do("on_admin_chat", o.get("text") or "")
+            elif c == "session-request-grant":
+                sess_do("on_admin_request")
+            elif c == "audio":
+                state["audio"] = bool(o.get("enabled"))
+                sess_do("on_audio", state["audio"])
+            elif c == "file-chunk":
+                ack = {"session": "file-ack", "tid": o.get("tid"), "seq": o.get("seq")}
+                try:
+                    ack.update(receive_chunk(o))
+                except Exception as e:
+                    log("Datei empfangen: %s" % e)
+                    ack["error"] = str(e)
+                    st = state["files"].pop(o.get("tid"), None)
+                    if st:
+                        try: st["f"].close(); os.remove(st["path"])
+                        except Exception: pass
+                try:
+                    send(sock, b"R" + json.dumps(ack).encode())
+                except Exception:
+                    pass
             elif c == "session-close":
-                w = state.get("sesswin")
-                if w is not None:
-                    try: w.close()
-                    except Exception: pass
-                    state["sesswin"] = None
+                sess_do("close")
+                state["sesswin"] = None
             elif c == "stop":
-                w = state.get("sesswin")
-                if w is not None:
-                    try: w.close()
-                    except Exception: pass
+                sess_do("close")
                 state["stop"] = True
                 break
         state["stop"] = True
 
     threading.Thread(target=control, daemon=True).start()
+    cap = threading.Thread(target=capture, args=(sock, state), daemon=True)
+    cap.start()
+    threading.Thread(target=audio_loop, args=(sock, state), daemon=True).start()
+    # Haupt-Thread = Oberflaeche (Tk mag den Haupt-Thread am liebsten). Ohne Tk
+    # laeuft der Helfer einfach ohne Fenster weiter, bis der Agent ihn beendet.
+    if not ui_loop(state):
+        while not state["stop"]:
+            time.sleep(0.3)
+    state["stop"] = True
+    cap.join(timeout=3)
+    log("Ende")
 
+
+def audio_loop(sock, state):
+    # Ton des PCs mitschicken (wie AnyDesk "Ton uebertragen"): Aufnahme dessen,
+    # was aus den Lautsprechern kommt (Loopback), 16 kHz mono, als 8-Bit-mu-law
+    # (~16 KB/s). Laeuft nur, solange der Admin den Ton eingeschaltet hat.
+    # Braucht das Paket "soundcard" (+ numpy); fehlt es, meldet der Helfer das
+    # einmal und der Admin sieht "Ton nicht verfuegbar".
+    RATE, BLOCK = 16000, 1600            # 100 ms je Stueck
+    def status(**kw):
+        try:
+            send(sock, b"R" + json.dumps(dict({"session": "audio"}, **kw)).encode())
+        except Exception:
+            pass
+    while not state["stop"]:
+        if not state.get("audio"):
+            time.sleep(0.2)
+            continue
+        try:
+            if sys.platform == "win32":
+                import ctypes
+                ctypes.windll.ole32.CoInitializeEx(None, 0)   # COM fuer WASAPI in DIESEM Thread
+            import numpy as np
+            import soundcard as sc
+            spk = sc.default_speaker()
+            mic = sc.get_microphone(id=str(spk.name), include_loopback=True)
+        except Exception as e:
+            log("Ton nicht verfuegbar: %s" % e)
+            status(error=str(e), code="agent_audio_unavailable")
+            state["audio"] = False
+            continue
+        log("Ton an (%s)" % getattr(spk, "name", "?"))
+        status(state="on")
+        mu = 255.0
+        try:
+            with mic.recorder(samplerate=RATE, channels=1, blocksize=BLOCK) as rec:
+                while state.get("audio") and not state["stop"]:
+                    data = rec.record(numframes=BLOCK)
+                    x = np.clip(np.asarray(data, dtype=np.float32).reshape(-1), -1.0, 1.0)
+                    y = np.sign(x) * np.log1p(mu * np.abs(x)) / np.log1p(mu)
+                    send(sock, b"A" + ((y + 1.0) * 127.5 + 0.5).astype(np.uint8).tobytes())
+        except Exception as e:
+            log("Tonaufnahme: %s" % e)
+            status(error=str(e), code="agent_audio_failed")
+            state["audio"] = False
+            time.sleep(1.0)
+            continue
+        log("Ton aus")
+        status(state="off")
+
+
+def capture(sock, state):
+    # Bildschirmaufnahme in einem eigenen Thread (mss-Objekt wird hier erzeugt
+    # und nur hier benutzt - mss haelt Windows-Handles pro Thread).
     try:
         import mss
         from PIL import Image
@@ -4652,46 +5149,73 @@ def main():
             pass
         return
 
-    with mss.mss() as sct:
-        while not state["stop"]:
-            if not state["stream"]:
-                time.sleep(0.15)
-                continue
+    # Robust gegen kurze Aussetzer: Sperrbildschirm, UAC-Abfrage (sicherer
+    # Desktop), Aufloesungs- oder Monitorwechsel lassen einzelne Aufnahmen
+    # scheitern. Frueher beendete schon EIN Fehler die ganze Uebertragung - das
+    # Bild blieb nach wenigen Dutzend Bildern einfach stehen. Jetzt wird die
+    # Aufnahme neu aufgesetzt und erst nach anhaltenden Fehlern (~15 s) aufgegeben.
+    sct = None
+    errors = 0
+    while not state["stop"]:
+        if not state["stream"]:
+            time.sleep(0.15)
+            continue
+        try:
+            if sct is None:
+                sct = mss.mss()
+            mons = sct.monitors
+            count = max(1, len(mons) - 1)
+            idx = state["monitor"] if 0 < state["monitor"] <= count else 1
+            mon = mons[idx]
+            state["left"], state["top"] = mon.get("left", 0), mon.get("top", 0)
+            shot = sct.grab(mon)
+            img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+            # Gleiche Regel wie im direkten Aufnahmeweg des Agenten:
+            # hohe Qualitaet -> bis 1920 px, sonst 1280 px.
+            q = max(10, min(95, state["quality"]))
+            max_width = 1920 if q >= 70 else 1280
+            if img.width > max_width:
+                ratio = max_width / img.width
+                img = img.resize((max_width, int(img.height * ratio)))
+            buf = io.BytesIO()
+            img.save(buf, "JPEG", quality=q)
+            # Gemeldet wird die ECHTE Bildschirmgroesse (nicht die des
+            # verkleinerten JPEG): Das Dashboard rechnet Mausklicks damit zurueck.
+            meta = {"width": shot.width, "height": shot.height, "index": idx,
+                    "count": count, "left": state["left"], "top": state["top"]}
+            payload = b"F" + json.dumps(meta).encode() + b"\0" + buf.getvalue()
+            errors = 0
+        except Exception as e:
+            errors += 1
+            if errors in (1, 10) or errors % 50 == 0:
+                log("Aufnahme (Versuch %d): %s" % (errors, e))
             try:
-                mons = sct.monitors
-                count = max(1, len(mons) - 1)
-                idx = state["monitor"] if 0 < state["monitor"] <= count else 1
-                mon = mons[idx]
-                state["left"], state["top"] = mon.get("left", 0), mon.get("top", 0)
-                shot = sct.grab(mon)
-                img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
-                # Gleiche Regel wie im direkten Aufnahmeweg des Agenten:
-                # hohe Qualitaet -> bis 1920 px, sonst 1280 px. Vorher schickte
-                # der Helfer IMMER die volle Aufloesung - das kostete unnoetig
-                # Bandbreite und ignorierte die Qualitaetseinstellung.
-                q = max(10, min(95, state["quality"]))
-                max_width = 1920 if q >= 70 else 1280
-                if img.width > max_width:
-                    ratio = max_width / img.width
-                    img = img.resize((max_width, int(img.height * ratio)))
-                buf = io.BytesIO()
-                img.save(buf, "JPEG", quality=q)
-                # Gemeldet wird die ECHTE Bildschirmgroesse (nicht die des
-                # verkleinerten JPEG): Das Dashboard rechnet Mausklicks damit
-                # zurueck. Das Seitenverhaeltnis bleibt gleich, deshalb passt
-                # die Zuordnung weiterhin.
-                meta = {"width": shot.width, "height": shot.height, "index": idx,
-                        "count": count, "left": state["left"], "top": state["top"]}
-                send(sock, b"F" + json.dumps(meta).encode() + b"\0" + buf.getvalue())
-            except Exception as e:
-                log("Aufnahme: %s" % e)
+                if sct is not None:
+                    sct.close()
+            except Exception:
+                pass
+            sct = None
+            if errors >= 50:
                 try:
                     send(sock, b"F" + json.dumps({"error": str(e)}).encode() + b"\0")
                 except Exception:
                     pass
                 break
-            time.sleep(1.0 / max(1, min(30, state["fps"])))
-    log("Ende")
+            time.sleep(0.3)
+            continue
+        try:
+            send(sock, payload)
+        except Exception as e:
+            log("Verbindung zum Agenten weg: %s" % e)
+            state["stop"] = True
+            break
+        time.sleep(1.0 / max(1, min(30, state["fps"])))
+    try:
+        if sct is not None:
+            sct.close()
+    except Exception:
+        pass
+    log("Aufnahme beendet")
 
 try:
     main()
@@ -5162,7 +5686,9 @@ class _ScreenHelper:
             return "frame", json.loads(msg[1:sep].decode()), msg[sep + 1:]
         if msg[:1] == b"R":
             return "reply", json.loads(msg[1:].decode()), None
-        return None
+        if msg[:1] == b"A":
+            return "audio", None, msg[1:]          # Ton: mu-law, mono, 16 kHz
+        return "unknown", None, None               # nicht als "Verbindung weg" werten
 
     def drain(self, seconds: float = 1.5) -> None:
         """
@@ -5223,8 +5749,10 @@ class _ScreenHelper:
                 pass
 
 
-def _screen_helper_loop(loop, helper):
-    """Nimmt die Bilder vom Helfer entgegen und schickt sie ans Dashboard."""
+def _screen_helper_loop(loop, helper) -> bool:
+    """Nimmt die Bilder vom Helfer entgegen und schickt sie ans Dashboard.
+    Rueckgabe True = der Helfer ist WAEHREND der Sitzung weggebrochen (der
+    Aufrufer startet ihn neu), False = regulaer beendet oder Fehler gemeldet."""
     helper.send({"cmd": "config", "stream": True,
                  "quality": int(_screen_stream.get("quality", 60)),
                  "fps": int(_screen_stream.get("fps", 10)),
@@ -5248,12 +5776,17 @@ def _screen_helper_loop(loop, helper):
         if kind == "reply" and isinstance(meta, dict) and meta.get("session"):
             _handle_session_reply(loop, meta)
             continue
+        if kind == "audio":
+            _session_emit(loop, "screen-audio", {"data": base64.b64encode(jpeg).decode(),
+                                                 "rate": 16000, "codec": "mulaw8"})
+            continue
         if kind != "frame":
             continue
         if meta.get("error"):
             _notify_screen_error(loop, f"Helper reports: {meta['error']}",
                                  code="agent_err_helper", params={"err": meta["error"]})
-            break
+            _screen_stream["active"] = False
+            return False
         _screen_stream["mon_left"] = meta.get("left", 0)
         _screen_stream["mon_top"] = meta.get("top", 0)
         b64 = base64.b64encode(jpeg).decode()
@@ -5266,8 +5799,11 @@ def _screen_helper_loop(loop, helper):
             }, namespace="/agent"),
             loop,
         )
-    _screen_stream["active"] = False
-    _print("[screen-helper] transfer finished.")
+    died = bool(_screen_stream["active"] and not helper.alive)
+    if not died:
+        _screen_stream["active"] = False
+    _print("[screen-helper] transfer finished." + (" (helper lost)" if died else ""))
+    return died
 
 
 def _ensure_helper(loop):
@@ -5328,14 +5864,43 @@ def _screen_capture_loop(loop):
                 params={"sessions": ", ".join(str(x) for x in _win_user_sessions()) or "-"})
             _screen_stream["active"] = False
             return
-        try:
-            _screen_helper_loop(loop, helper)
-        finally:
-            # Verbindung offen lassen: Die naechste Sitzung braucht sie fuer
-            # die Zustimmungsabfrage sofort wieder. Nur die Uebertragung
-            # anhalten.
-            helper.send({"cmd": "config", "stream": False})
-        return
+        # Bricht der Helfer mitten in der Sitzung weg (Absturz, Abmeldung,
+        # Bildschirmsperre mit Sitzungswechsel), wird er bis zu dreimal neu
+        # gestartet und die Sitzung laeuft weiter - ohne neue Zustimmung, sie
+        # wurde fuer DIESE Sitzung ja schon erteilt. Frueher blieb das Bild in
+        # dem Fall einfach stehen, ohne jede Meldung.
+        restarts = 0
+        while True:
+            try:
+                died = _screen_helper_loop(loop, helper)
+            finally:
+                # Verbindung offen lassen: Die naechste Sitzung braucht sie fuer
+                # die Zustimmungsabfrage sofort wieder. Nur die Uebertragung anhalten.
+                if helper.alive:
+                    helper.send({"cmd": "config", "stream": False})
+            if not died or not _screen_stream["active"]:
+                return
+            restarts += 1
+            if restarts > 3:
+                _notify_screen_error(loop, "The screen helper in the user session stopped repeatedly.",
+                                     code="agent_err_helper_lost", params={})
+                _screen_stream["active"] = False
+                return
+            _print(f"[screen-helper] Helfer weggebrochen - Neustart {restarts}/3")
+            try:
+                helper.close()
+            except Exception:
+                pass
+            _screen_stream["helper"] = None
+            time.sleep(1.0)
+            helper = _ensure_helper(loop)
+            if helper is None:
+                _notify_screen_error(loop, "The screen helper in the user session could not be restarted.",
+                                     code="agent_err_helper_lost", params={})
+                _screen_stream["active"] = False
+                return
+            if _session.get("active") and _session.get("window"):
+                _open_session_window(_session.get("by") or "")
 
     try:
         sct = mss.mss()
@@ -6096,14 +6661,32 @@ def _ask_screen_consent(requested_by: str, timeout_s: int = 30) -> bool:
 # Oeffnet im Helfer (Benutzersitzung) das Fenster, in dem die Person vor dem PC
 # chatten, Admin-Rechte erlauben und die Verbindung trennen kann. Bei Silent-
 # Modus (require_consent == False) wird es NICHT geoeffnet.
-_session = {"active": False, "by": "", "granted": False, "window": False}
+_session = {"active": False, "by": "", "granted": False, "window": False,
+            # Berechtigungen, die der Benutzer im Sitzungsfenster schaltet (wie AnyDesk)
+            "perms": {"input": True, "clipboard": True, "files": True}}
+
+
+def _session_perm(name: str) -> bool:
+    """Darf der Administrator gerade <name> (input|clipboard)? Ohne aktive Sitzung: ja."""
+    if not _session.get("active"):
+        return True
+    return bool((_session.get("perms") or {}).get(name, True))
+
+
+def _session_perm_payload() -> dict:
+    p = dict(_session.get("perms") or {})
+    p["admin"] = bool(_session.get("granted"))
+    return {"perms": p}
 
 
 def _open_session_window(requested_by: str) -> None:
     helper = _screen_stream.get("helper")
     if helper is None or not helper.alive:
         return
-    _session["window"] = helper.send({"cmd": "session-open", "who": requested_by or _at("consent_requested")})
+    perms = dict(_session.get("perms") or {})
+    perms["admin"] = bool(_session.get("granted"))
+    _session["window"] = helper.send({"cmd": "session-open", "who": requested_by or _at("consent_requested"),
+                                      "perms": perms})
 
 
 def _close_session_window() -> None:
@@ -6122,7 +6705,26 @@ def _handle_session_reply(loop, obj: dict) -> None:
     elif kind == "grant":
         _session["granted"] = bool(obj.get("granted"))
         _session_emit(loop, "screen-session-grant", {"granted": _session["granted"]})
+        _session_emit(loop, "screen-session-perms", _session_perm_payload())
         _print(f"[agent] Admin-Rechte vom Benutzer {'erteilt' if _session['granted'] else 'entzogen'}")
+    elif kind == "grant-denied":
+        _session_emit(loop, "screen-session-grant", {"granted": False, "denied": True})
+        _print("[agent] Benutzer hat die Anfrage nach Admin-Rechten abgelehnt.")
+    elif kind == "perm":
+        name = obj.get("perm")
+        if name in ("input", "clipboard", "files"):
+            _session.setdefault("perms", {})[name] = bool(obj.get("value"))
+            _session_emit(loop, "screen-session-perms", _session_perm_payload())
+            _print(f"[agent] Berechtigung '{name}' vom Benutzer {'erlaubt' if obj.get('value') else 'gesperrt'}")
+    elif kind == "audio":
+        _session_emit(loop, "screen-audio", {k: obj.get(k) for k in ("state", "error", "code")})
+    elif kind == "file-ack":
+        _session_emit(loop, "screen-file-ack", {k: obj.get(k) for k in ("tid", "seq", "done", "error")})
+    elif kind == "file-out":
+        if not _session_perm("files"):
+            return
+        _session_emit(loop, "screen-file-out", {k: obj.get(k) for k in
+                                                ("tid", "name", "size", "seq", "data", "last")})
     elif kind == "disconnect":
         _print("[agent] Benutzer hat die Fernwartung getrennt.")
         _session_emit(loop, "screen-session-disconnect", {})
@@ -6143,6 +6745,76 @@ def session_grant_active() -> bool:
     """Darf der Agent waehrend dieser Sitzung mit erhoehten Rechten arbeiten?
     (Vom Dashboard genutzte Befehle duerfen das pruefen.)"""
     return bool(_session.get("active") and _session.get("granted"))
+
+
+# --- Datei-Uebertragung in der Sitzung (Admin -> Benutzer) --------------------
+# Ohne Helfer (Linux, Agent laeuft direkt in der Benutzersitzung) schreibt der
+# Agent selbst in den Downloads-Ordner seines Benutzers.
+_direct_files: dict = {}
+
+
+def _direct_receive(d: dict) -> dict:
+    tid = str(d.get("tid") or "")
+    st = _direct_files.get(tid)
+    if st is None:
+        if int(d.get("seq") or 0) != 0:
+            raise RuntimeError("unknown transfer")
+        home = os.path.expanduser("~")
+        folder = os.path.join(home, "Downloads") if os.path.isdir(os.path.join(home, "Downloads")) else home
+        name = os.path.basename(str(d.get("name") or "file").replace("\\", "/")) or "file"
+        name = "".join("_" if ch in '<>:"/\\|?*' or ord(ch) < 32 else ch for ch in name)[:180]
+        base, ext = os.path.splitext(name)
+        path, n = os.path.join(folder, name), 1
+        while os.path.exists(path):
+            path, n = os.path.join(folder, f"{base} ({n}){ext}"), n + 1
+        st = _direct_files[tid] = {"f": open(path, "wb"), "path": path}
+    st["f"].write(base64.b64decode(d.get("data") or ""))
+    if d.get("last"):
+        st["f"].close()
+        _direct_files.pop(tid, None)
+        return {"done": True}
+    return {}
+
+
+@sio.on("screen-file-chunk", namespace="/agent")
+async def on_screen_file_chunk(data):
+    d = data or {}
+    ack = {"id": DEVICE_ID, "tid": d.get("tid"), "seq": d.get("seq")}
+    if not _session_perm("files"):
+        ack.update(error="blocked", code="agent_files_blocked")
+        await sio.emit("screen-file-ack", ack, namespace="/agent")
+        return
+    helper = _screen_stream.get("helper")
+    if helper is not None and helper.alive:
+        # Bestaetigung kommt vom Helfer (file-ack -> _handle_session_reply)
+        helper.send({"cmd": "file-chunk", **{k: d.get(k) for k in ("tid", "seq", "name", "size", "data", "last")}})
+        return
+    try:
+        ack.update(await asyncio.get_event_loop().run_in_executor(None, _direct_receive, d))
+    except Exception as e:      # noqa: BLE001
+        ack["error"] = str(e)
+    await sio.emit("screen-file-ack", ack, namespace="/agent")
+
+
+@sio.on("screen-audio", namespace="/agent")
+async def on_screen_audio_toggle(data):
+    """Ton des PCs mitschicken ein/aus (Aufnahme im Helfer, d.h. in der Benutzersitzung)."""
+    on = bool((data or {}).get("enabled"))
+    _screen_stream["audio"] = on
+    helper = _screen_stream.get("helper")
+    if helper is not None and helper.alive:
+        helper.send({"cmd": "audio", "enabled": on})
+    elif on:
+        await sio.emit("screen-audio", {"id": DEVICE_ID, "error": "no helper", "code": "agent_audio_unavailable"},
+                       namespace="/agent")
+
+
+@sio.on("screen-session-request-grant", namespace="/agent")
+async def on_screen_session_request_grant(data):
+    """Administrator bittet um Administrator-Rechte -> Hinweis im Sitzungsfenster."""
+    helper = _screen_stream.get("helper")
+    if _session.get("active") and _session.get("window") and helper is not None and helper.alive:
+        helper.send({"cmd": "session-request-grant"})
 
 
 @sio.on("screen-session-chat", namespace="/agent")
@@ -6260,7 +6932,8 @@ async def on_screen_start(data):
     # Admin hat sofort erhoehte Rechte, ohne dass jemand am Geraet zustimmt.
     # Mit Benutzerfreigabe (require_consent == True): Rechte erst nach Klick im Fenster.
     _session.update(active=True, by=(data or {}).get("requested_by") or "",
-                    granted=not require_consent)
+                    granted=not require_consent, perms={"input": True, "clipboard": True, "files": True})
+    _session_emit(loop, "screen-session-perms", _session_perm_payload())
     if require_consent:
         def _later():
             for _ in range(20):
@@ -6278,6 +6951,10 @@ async def on_screen_start(data):
 @sio.on("screen-stop", namespace="/agent")
 async def on_screen_stop(data):
     """Stoppt das Bildschirm-Streaming."""
+    _screen_stream["audio"] = False                       # Ton immer mit ausschalten
+    _h = _screen_stream.get("helper")
+    if _h is not None and _h.alive:
+        _h.send({"cmd": "audio", "enabled": False})
     _screen_stream["active"] = False
     # Auch eine noch offene Zustimmungsabfrage entwerten (siehe "epoch"):
     # sonst startete eine verspaetete Zustimmung einen Stream, den niemand
@@ -6627,6 +7304,10 @@ def _clipboard_set(text: str) -> None:
 @sio.on("screen-clipboard-get", namespace="/agent")
 async def on_screen_clipboard_get(data):
     """Liest die lokale Zwischenablage und schickt sie ans Dashboard zurueck."""
+    if not _session_perm("clipboard"):
+        await sio.emit("screen-clipboard", {"id": DEVICE_ID, "error": "Clipboard blocked by the user.",
+                                            "code": "agent_clip_blocked"}, namespace="/agent")
+        return
     loop = asyncio.get_event_loop()
     try:
         text = await loop.run_in_executor(None, _clipboard_get)
@@ -6643,6 +7324,13 @@ async def on_screen_input(data):
     Simuliert eine Maus-/Tastatureingabe, die vom Dashboard kommt.
     data.type ist einer von: "move", "click", "scroll", "key", "text", "combo"
     """
+    # Berechtigungen aus dem Sitzungsfenster (vom Benutzer geschaltet).
+    kind = (data or {}).get("type")
+    if kind == "clipboard-set":
+        if not _session_perm("clipboard"):
+            return
+    elif not _session_perm("input"):
+        return
     # Laeuft ein Helfer in der Benutzersitzung? Dann MUSS die Eingabe dort
     # ausgefuehrt werden - aus Sitzung 0 erreicht kein Klick den Desktop.
     helper = _screen_stream.get("helper")

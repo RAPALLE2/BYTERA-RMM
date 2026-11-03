@@ -158,6 +158,39 @@ def delete_client_website(client_id: str, website_id: str,
     return {"ok": True}
 
 
+@router.get("/{client_id}/screen-history")
+def get_screen_history(client_id: str, user: dict = Depends(get_current_user)):
+    """
+    Sitzungsverlauf der Fernwartung (wie die Verbindungsliste bei AnyDesk):
+    aus dem Audit-Log zusammengesetzt - Beginn, Ende, Dauer, wer, und was in der
+    Sitzung passiert ist (Dateien, Rechte, Ton). Neueste zuerst, max. 50.
+    """
+    _require_client_perm(user, client_id, "c_screen_view")
+    rows = sorted(db.list_audit_for_target(client_id, "screen.", 600), key=lambda r: r["ts"])
+    sessions: list[dict] = []
+    cur: dict | None = None
+    for r in rows:
+        act = r["action"]
+        if act == "screen.session_started":
+            det = r.get("details") or ""
+            cur = {"start": r["ts"], "end": None, "duration_s": None, "user": r.get("username"),
+                   "ended_by": None, "rec_id": det[4:] if det.startswith("rec:") else None, "events": []}
+            sessions.append(cur)
+            continue
+        if cur is None:
+            continue
+        if act == "screen.session_ended":
+            by, _, secs = (r.get("details") or "").partition(";")
+            cur.update(end=r["ts"], ended_by=by or None,
+                       duration_s=int(secs) if secs.isdigit() else int((r["ts"] - cur["start"]) / 1000))
+            cur = None
+            continue
+        cur["events"].append({"ts": r["ts"], "action": act, "user": r.get("username"),
+                              "details": r.get("details") or ""})
+    sessions.reverse()
+    return {"sessions": sessions[:50]}
+
+
 @router.get("/{client_id}/metrics/history")
 def get_client_metrics_history(client_id: str, hours: int = 0,
                                user: dict = Depends(get_current_user)):
