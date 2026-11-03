@@ -200,3 +200,43 @@ class Launcher:
 
 def handle(url: str) -> None:
     Launcher(url).run()
+
+
+def handle_deeplink(url: str) -> bool:
+    """
+    Internes Adress-Schema  bytera://<kind>/<ziel...>  (wie steam://...). Oeffnet
+    das Dashboard in einem App-Fenster und laesst es per ?go=... zum Ziel springen
+    (Aufloesung im Dashboard, bytera-url.js). True = behandelt.
+    """
+    if not url or not url.lower().startswith("bytera://"):
+        return False
+    try:
+        from . import browser
+        from .store import Store, default_data_dir
+        from .api import Api
+        store = Store(default_data_dir())
+        server, token = store.get("server"), store.load_token()
+        if not (server and token):
+            try:
+                root = tk.Tk(); root.withdraw()
+                messagebox.showerror("BYTERA RMM",
+                    "Die Client-App ist noch nicht angemeldet. Bitte zuerst die App öffnen und anmelden.")
+                root.destroy()
+            except Exception:
+                pass
+            return True
+        api = Api(server, verify_tls=not store.get("insecure", False))
+        api.session(token)
+        dash = api.dashboard_url()                       # .../#client-token=...
+        base, _, frag = dash.partition("#")
+        sep = "&" if "?" in base else "?"
+        target = f"{base}{sep}go={urllib.parse.quote(url, safe='')}" + (("#" + frag) if frag else "")
+        browser.open_app_window(target, default_data_dir() / "browser", size=(1200, 800))
+    except Exception as e:
+        try:
+            root = tk.Tk(); root.withdraw()
+            messagebox.showerror("BYTERA RMM", f"Link konnte nicht geöffnet werden:\n{e}")
+            root.destroy()
+        except Exception:
+            pass
+    return True

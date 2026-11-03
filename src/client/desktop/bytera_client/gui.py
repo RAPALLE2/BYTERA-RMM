@@ -667,6 +667,10 @@ def main(argv=None):
     if link:                                    # aus dem Dashboard: RDP/VNC/SSH/Terminal extern oeffnen
         from .launcher import handle
         return handle(link)
+    deeplink = next((a for a in argv if a.lower().startswith("bytera://")), None)
+    if deeplink:                                # internes Adress-Schema bytera://<kind>/... (wie steam://)
+        from .launcher import handle_deeplink
+        return handle_deeplink(deeplink)
     try:
         from . import legacy
         if legacy.migrate():                    # Umbenennung: App zieht an den neuen Ort um und startet dort neu

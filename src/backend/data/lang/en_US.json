@@ -1499,5 +1499,6 @@
  "vnc_ev_admin_requested": "Admin rights requested",
  "vnc_ev_audio_on": "Sound on",
  "vnc_ev_audio_off": "Sound off",
- "vnc_ev_silent_used": "Connected without confirmation"
+ "vnc_ev_silent_used": "Connected without confirmation",
+ "copy_link": "Copy link"
 }

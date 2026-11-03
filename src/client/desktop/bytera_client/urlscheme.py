@@ -46,32 +46,51 @@ def _unregister_legacy() -> None:
         pass
 
 
+# Zwei Schemata: bytera-rmm:// (RDP/VNC/SSH extern) und bytera:// (internes
+# Adress-Schema wie steam://, oeffnet einen Bereich des Dashboards).
+SCHEMES = (SCHEME, "bytera")
+
+
+def _register_one(scheme: str) -> None:
+    if os.name == "nt":
+        import winreg
+        cmd = " ".join(f'"{c}"' for c in _command()) + ' "%1"'
+        base = rf"Software\Classes\{scheme}"
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, base) as k:
+            winreg.SetValueEx(k, "", 0, winreg.REG_SZ, "URL:BYTERA RMM")
+            winreg.SetValueEx(k, "URL Protocol", 0, winreg.REG_SZ, "")
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, base + r"\shell\open\command") as k:
+            winreg.SetValueEx(k, "", 0, winreg.REG_SZ, cmd)
+        return
+    apps = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "applications"
+    apps.mkdir(parents=True, exist_ok=True)
+    exe = " ".join(f'"{c}"' if " " in c else c for c in _command())
+    f = apps / f"bytera-client-link-{scheme}.desktop"
+    text = ("[Desktop Entry]\nType=Application\nName=BYTERA RMM (Links)\nNoDisplay=true\n"
+            f"Exec={exe} %u\nMimeType=x-scheme-handler/{scheme};\nTerminal=false\n")
+    if not f.exists() or f.read_text(encoding="utf-8") != text:
+        f.write_text(text, encoding="utf-8")
+        if shutil.which("update-desktop-database"):
+            subprocess.run(["update-desktop-database", str(apps)], capture_output=True, timeout=20)
+    if shutil.which("xdg-mime"):
+        subprocess.run(["xdg-mime", "default", f.name, f"x-scheme-handler/{scheme}"], capture_output=True, timeout=20)
+
+
 def register() -> str:
     """-> kurze Statusmeldung (Fehler werden geschluckt - das Schema ist ein Zusatz)."""
     _unregister_legacy()
+    # Alten Einzel-Starter (vor der Zwei-Schema-Umstellung) aufraeumen (Linux).
     try:
-        if os.name == "nt":
-            import winreg
-            cmd = " ".join(f'"{c}"' for c in _command()) + ' "%1"'
-            base = rf"Software\Classes\{SCHEME}"
-            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, base) as k:
-                winreg.SetValueEx(k, "", 0, winreg.REG_SZ, "URL:BYTERA RMM")
-                winreg.SetValueEx(k, "URL Protocol", 0, winreg.REG_SZ, "")
-            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, base + r"\shell\open\command") as k:
-                winreg.SetValueEx(k, "", 0, winreg.REG_SZ, cmd)
-            return "registriert"
-        apps = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "applications"
-        apps.mkdir(parents=True, exist_ok=True)
-        exe = " ".join(f'"{c}"' if " " in c else c for c in _command())
-        f = apps / "bytera-client-link.desktop"
-        text = ("[Desktop Entry]\nType=Application\nName=BYTERA RMM (Links)\nNoDisplay=true\n"
-                f"Exec={exe} %u\nMimeType=x-scheme-handler/{SCHEME};\nTerminal=false\n")
-        if not f.exists() or f.read_text(encoding="utf-8") != text:
-            f.write_text(text, encoding="utf-8")
-            if shutil.which("update-desktop-database"):
-                subprocess.run(["update-desktop-database", str(apps)], capture_output=True, timeout=20)
-        if shutil.which("xdg-mime"):
-            subprocess.run(["xdg-mime", "default", f.name, f"x-scheme-handler/{SCHEME}"], capture_output=True, timeout=20)
-        return "registriert"
-    except Exception as e:      # noqa: BLE001
-        return f"nicht registriert: {e}"
+        if os.name != "nt":
+            apps = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "applications"
+            (apps / "bytera-client-link.desktop").unlink(missing_ok=True)
+    except Exception:
+        pass
+    ok = []
+    for sc in SCHEMES:
+        try:
+            _register_one(sc)
+            ok.append(sc)
+        except Exception as e:      # noqa: BLE001
+            return f"{sc} nicht registriert: {e}"
+    return "registriert (" + ", ".join(ok) + ")"

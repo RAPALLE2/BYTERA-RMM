@@ -583,6 +583,22 @@ export async function openShareLink(token) {
 }
 
 // ------------------------------------------------------------------ App
-export function renderSpacesApp(body, win) {
-  return renderSpacesBrowser(body, { path: win?.props?.path || "" });
+export async function renderSpacesApp(body, win) {
+  // bytera://space/<name>: Namen aus dem Link zum echten Pfad aufloesen
+  // (Teams/<name>, Öffentlich/<name> oder "Mein Space"). Findet er nichts,
+  // oeffnet er die Space-Uebersicht.
+  let path = win?.props?.path || "";
+  const wanted = win?.props?.openSpace;
+  if (wanted && !path) {
+    try {
+      const meta = await sreq("");
+      const n = String(wanted).toLowerCase();
+      if (n === "mein space" || n === "my" || n === "personal") path = "Mein Space";
+      else {
+        const sp = (meta.spaces || []).find((x) => (x.name || "").toLowerCase() === n);
+        if (sp) path = (sp.kind === "team" ? "Teams/" : "Öffentlich/") + sp.name;
+      }
+    } catch { /* egal - dann Uebersicht */ }
+  }
+  return renderSpacesBrowser(body, { path });
 }

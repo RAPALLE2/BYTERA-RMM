@@ -43,8 +43,12 @@ import { renderAddClient } from "../feature/addclient.js";
 import { renderManage, setManageOnChanged } from "../feature/manage.js";
 import { renderSettings } from "../feature/settings.js";
 import { renderModules } from "../feature/modules.js";
+import { renderDist } from "../feature/dist.js";   // Verteilung (/dist) - Core, frueher Modul
 import { renderNode } from "../feature/node.js";
 import { loadModules, renderModuleApp, openModuleApp, moduleAppPerm, inactiveModuleBox, getModuleApi, onModulesChanged } from "./modules.js";
+import { setByteraHandlers, installByteraLinkHandler, consumeDeepLinkFromLocation, resolveByteraUrl } from "./bytera-url.js";
+import { handleAction as _clientHandleAction } from "./panel.js";
+import { selectClientExternal as _selectClientExternal } from "./sidebar.js";
 import { renderPermissions } from "../feature/permissions.js";
 import { renderAudit } from "../feature/audit.js";
 import { renderProfile } from "../feature/profile.js";
@@ -70,6 +74,7 @@ const APP_RENDERERS = {
   settings: renderSettings,
   node: renderNode,                // Node (pro Client: props.clientId) bzw. Uebersicht aller Nodes
   modules: renderModules,          // Modul-App (Core): Module ansehen, schalten, einstellen
+  dist: renderDist,                // Verteilung (/dist) - Core, frueher Modul "dist"
   permissions: renderPermissions,
   audit: renderAudit,
   profile: renderProfile,
@@ -119,6 +124,7 @@ const APP_REQUIRED_PERM = {
   permissions: "see_permissions",
   manage: "manage_hierarchy",
   "add-client": "add_client",
+  dist: "manage_dist",          // Verteilung (/dist) - Core, frueher Modul "dist"
 };
 
 function _appAllowed(appKey) {
@@ -632,16 +638,47 @@ function initMenusAndButtons() {
 
   function openAppFromMenu(app) {
     startMenu.classList.add("hidden");
-    if (openModuleApp(app)) return;          // App eines aktiven Moduls
+    if (openModuleApp(app)) return true;         // App eines aktiven Moduls
     if (app === "nodes") openWindow({ key: "nodes", appId: "node", title: "Nodes", w: 760, h: 560 });
     else if (app === "modules") openWindow({ key: "modules", appId: "modules", title: "Module", w: 980, h: 680 });
     else if (app === "manage") openWindow({ key: "manage", appId: "manage", title: "Tenants & Standorte verwalten", w: 560, h: 620 });
     else if (app === "settings") openWindow({ key: "settings", appId: "settings", title: t("settings"), w: 560, h: 620 });
     else if (app === "permissions") openWindow({ key: "permissions", appId: "permissions", title: "Berechtigungen", w: 820, h: 640 });
     else if (app === "audit") openWindow({ key: "audit", appId: "audit", title: "Audit-Log", w: 720, h: 520 });
+    else if (app === "dist") openWindow({ key: "dist", appId: "dist", title: "Verteilung (/dist)", w: 900, h: 640 });
     else if (app.startsWith("webapp:")) getModuleApi("browser")?.openWebApp?.(app);   // gespeicherte Web-App
     else if (app === "clients") { minimizeAll(); state.selection = null; renderMainContent(); }
+    else return false;                           // unbekannt - der Aufrufer entscheidet
+    return true;
   }
+
+  // Internes Adress-Schema bytera://... (wie steam://) mit den Oeffnen-Funktionen verbinden.
+  setByteraHandlers({
+    openApp: openAppFromMenu,
+    openModuleApp,
+    clientAction: (action, clientId) => {
+      const c = (state.clients || []).find((x) => x.id === clientId);
+      if (!c) return false;
+      if (action === "edit") openWindow({ key: `edit-${c.id}`, appId: "edit-client",
+        title: `${t("edit")} — ${c.hostname}`, props: { clientId: c.id }, w: 480, h: 520 });
+      else _clientHandleAction(action, c, null, { forceWeb: true });
+      return true;
+    },
+    selectClient: (id) => { try { _selectClientExternal(id); return true; } catch { state.selection = { type: "client", id }; renderMainContent(); return true; } },
+    openNode: (id) => openWindow({ key: id ? `node-${id}` : "nodes", appId: "node",
+      title: id ? `Node – ${id}` : "Nodes", props: id ? { clientId: id } : {}, w: 820, h: 680 }) ?? true,
+    openSpace: (name) => {
+      const api = getModuleApi("spaces");
+      if (!api) return false;
+      openWindow({ key: "spaces", appId: "spaces", title: "Spaces", w: 900, h: 640,
+                   props: name ? { openSpace: name } : {} });
+      return true;
+    },
+    openDist: (folder) => { openAppFromMenu("dist"); if (folder) window.notify?.("Verteilung geöffnet – Ordner: " + folder, "info", 3000); return true; },
+  });
+  installByteraLinkHandler();
+  window.byteraOpen = (url) => resolveByteraUrl(url);   // global aufrufbar (z.B. Desktop-Client)
+  consumeDeepLinkFromLocation();
 
   // Anpassbares Anwendungsmenü (Drag & Drop, Ordner) initialisieren.
   initStartMenu({

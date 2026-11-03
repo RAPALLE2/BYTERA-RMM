@@ -10,6 +10,7 @@
 // Diagramme mit Hover-Tooltip und Zeitspannen-Dropdown.
 
 import { state, findClient } from "./state.js";
+import { makeByteraUrl as _makeByteraUrl, copyByteraUrl as _copyByteraUrl } from "./bytera-url.js";
 import { hasClientPerm, hasGlobalPerm, isAdmin } from "./state.js";
 import { formatBytes, formatUptime, esc, gradientDonutSvg, CPU_GRADIENT, RAM_GRADIENT, DISK_GRADIENT, interactiveChart, uiConfirm, uiPrompt, uiChoice } from "./utils.js";
 import { getHistoryRange, TIME_RANGES, seedHistory, hasSeeded } from "./metricshistory.js";
@@ -278,7 +279,8 @@ export function renderActionsPart(target, client) {
     ${hasClientPerm(client.id, "c_terminal_console") ? `<button class="action-btn" data-action="terminal" ${client.online ? "" : "disabled"}>⌨️ ${t("terminal")}</button>` : ""}
     ${hasClientPerm(client.id, "c_screen_view") ? `<button class="action-btn" data-action="vnc" ${client.online ? "" : "disabled"}>🖥️ ${t("remote_screen")}${hasClientPerm(client.id, "c_screen") ? "" : " 👁️"}</button>` : ""}
     ${isModuleOn("guacamole") && hasClientPerm(client.id, "c_guacamole") ? `<button class="action-btn" data-action="guacamole">🕹️ Guacamole</button>` : ""}
-    ${hasClientPerm(client.id, "c_taskmanager_view") ? `<button class="action-btn" data-action="taskmanager" ${client.online ? "" : "disabled"}>📋 ${t("task_manager")}</button>` : ""}`;
+    ${hasClientPerm(client.id, "c_taskmanager_view") ? `<button class="action-btn" data-action="taskmanager" ${client.online ? "" : "disabled"}>📋 ${t("task_manager")}</button>` : ""}
+    <button class="action-btn" data-action="copylink" title="bytera://-Link zu diesem Gerät kopieren">🔗 ${t("copy_link")}</button>`;
   // Knöpfe aktiver Module (registerClientAction in modules.js), z.B. "🖧 Proxmox"
   getClientActions().forEach((a, i) => {
     let label = null;
@@ -293,7 +295,10 @@ export function renderActionsPart(target, client) {
   holder.appendChild(box);
   target.appendChild(holder);
   box.querySelectorAll("[data-action]").forEach((btn) =>
-    btn.addEventListener("click", (ev) => handleAction(btn.dataset.action, client, ev)));
+    btn.addEventListener("click", (ev) => {
+      if (btn.dataset.action === "copylink") { _copyByteraUrl(_makeByteraUrl("agent", client.id)); return; }
+      handleAction(btn.dataset.action, client, ev);
+    }));
 }
 
 // --- WEBSITES-Part (Quick-Access) ---

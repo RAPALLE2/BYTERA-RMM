@@ -1499,5 +1499,6 @@
  "vnc_ev_admin_requested": "Admin-Rechte angefragt",
  "vnc_ev_audio_on": "Ton an",
  "vnc_ev_audio_off": "Ton aus",
- "vnc_ev_silent_used": "Ohne Rückfrage verbunden"
+ "vnc_ev_silent_used": "Ohne Rückfrage verbunden",
+ "copy_link": "Link kopieren"
 }
