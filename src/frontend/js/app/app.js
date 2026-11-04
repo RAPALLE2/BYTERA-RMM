@@ -32,31 +32,15 @@ window.notify = notify;
 window.notifyError = notifyError;
 
 // App-Fenster-Renderer
-import { renderTerminal } from "../feature/terminal.js";
-import { renderExplorer } from "../feature/explorer.js";
 // Registriert window.showPermissionDenied - der Dialog bei fehlenden Rechten.
 import "./permdenied.js";
-import { renderTaskManager } from "../feature/taskmanager.js";
-import { renderVnc } from "../feature/vnc.js";
-import { renderEditClient, setEditOnChanged } from "../feature/editclient.js";
-import { renderAddClient } from "../feature/addclient.js";
-import { renderManage, setManageOnChanged } from "../feature/manage.js";
-import { renderSettings } from "../feature/settings.js";
-import { renderModules } from "../feature/modules.js";
-import { renderDist } from "../feature/dist.js";   // Verteilung (/dist) - Core, frueher Modul
-import { renderTempUsb } from "../feature/tempusb.js";   // Digitaler USB-Stick (Core)
-import { renderNode } from "../feature/node.js";
+// renderDist/renderTempUsb/bytera-url werden LAZY geladen (siehe unten), damit eine
+// einzelne fehlende Datei nie den Login der gesamten SPA blockiert.
 import { loadModules, renderModuleApp, openModuleApp, moduleAppPerm, inactiveModuleBox, getModuleApi, onModulesChanged } from "./modules.js";
-import { setByteraHandlers, installByteraLinkHandler, consumeDeepLinkFromLocation, resolveByteraUrl } from "./bytera-url.js";
 import { handleAction as _clientHandleAction } from "./panel.js";
 import { selectClientExternal as _selectClientExternal } from "./sidebar.js";
-import { renderPermissions } from "../feature/permissions.js";
-import { renderAudit } from "../feature/audit.js";
-import { renderProfile } from "../feature/profile.js";
 import { renderNotifyCenter, attachUnreadDot } from "./notifycenter.js";
 import { updateClientLayouts } from "./dashlayout.js";
-import { renderPanelPart } from "../feature/panelpart.js";
-import { renderFleetWidget } from "../feature/fleetwidget.js";
 import { initStartMenu, refreshStartMenu, setStartMenuUser, unlockCatalogPruning } from "./startmenu.js";
 import { t, initLanguages, loadLocale } from "./i18n.js";
 
@@ -64,26 +48,62 @@ import { t, initLanguages, loadLocale } from "./i18n.js";
 // Content-Router: welcher Renderer gehört zu welchem appId?
 // -----------------------------------------------------------------
 
-const APP_RENDERERS = {
-  terminal: renderTerminal,
-  explorer: renderExplorer,
-  taskmanager: renderTaskManager,
-  vnc: renderVnc,
-  "edit-client": renderEditClient,
-  "add-client": renderAddClient,
-  manage: renderManage,
-  settings: renderSettings,
-  node: renderNode,                // Node (pro Client: props.clientId) bzw. Uebersicht aller Nodes
-  modules: renderModules,          // Modul-App (Core): Module ansehen, schalten, einstellen
-  dist: renderDist,                // Verteilung (/dist) - Core, frueher Modul "dist"
-  "temp-usb": renderTempUsb,       // Digitaler USB-Stick (Core)
-  permissions: renderPermissions,
-  audit: renderAudit,
-  profile: renderProfile,
-  notifycenter: renderNotifyCenter,
-  panelpart: renderPanelPart,
-  fleetwidget: renderFleetWidget,
+const _featureWarned = new Set();
+
+async function loadFeature(mod, fn) {
+  // Dynamisch laden, Fehler abfangen. Rueckgabe: Renderer-Funktion oder null.
+  try {
+    const m = await import(mod);
+    if (typeof m[fn] !== "function") throw new Error("Funktion " + fn + " fehlt in " + mod);
+    return m[fn];
+  } catch (e) {
+    if (!_featureWarned.has(mod)) {
+      _featureWarned.add(mod);
+      const msg = "Ein Teil des RMM konnte nicht geladen werden: " + mod.split("/").pop()
+        + " (" + (e && e.message ? e.message : e) + "). Der Rest funktioniert weiter.";
+      try { notifyError ? notifyError(msg) : notify(msg, "error", 9000); } catch { /* egal */ }
+      console.error("[feature]", mod, e);
+    }
+    return null;
+  }
+}
+
+async function _lazyRender(mod, fn, body, win) {
+  const r = await loadFeature(mod, fn);
+  if (r) return r(body, win);
+  body.innerHTML = '<div style="padding:16px;color:var(--danger)">Diese App konnte nicht geladen werden.'
+    + '<br><small>Vermutlich wurde beim Update eine Datei nicht mit hochgeladen. '
+    + 'Login und die übrigen Funktionen laufen normal weiter.</small></div>';
+}
+
+// Jede App wird ERST beim Oeffnen geladen (dynamic import). Faellt eine Datei
+// aus (nach einem Update nicht mit hochgeladen, Syntaxfehler, 404), bleibt NUR
+// diese App betroffen - Login, Shell und alle anderen Apps laufen weiter. Das
+// ist das "try: import ... except: Hinweis"-Prinzip fuer das ganze Frontend.
+const FEATURE_MODULES = {
+  terminal:      ["../feature/terminal.js", "renderTerminal"],
+  explorer:      ["../feature/explorer.js", "renderExplorer"],
+  taskmanager:   ["../feature/taskmanager.js", "renderTaskManager"],
+  vnc:           ["../feature/vnc.js", "renderVnc"],
+  "edit-client": ["../feature/editclient.js", "renderEditClient"],
+  "add-client":  ["../feature/addclient.js", "renderAddClient"],
+  manage:        ["../feature/manage.js", "renderManage"],
+  settings:      ["../feature/settings.js", "renderSettings"],
+  node:          ["../feature/node.js", "renderNode"],
+  modules:       ["../feature/modules.js", "renderModules"],
+  dist:          ["../feature/dist.js", "renderDist"],
+  "temp-usb":    ["../feature/tempusb.js", "renderTempUsb"],
+  permissions:   ["../feature/permissions.js", "renderPermissions"],
+  audit:         ["../feature/audit.js", "renderAudit"],
+  profile:       ["../feature/profile.js", "renderProfile"],
+  panelpart:     ["../feature/panelpart.js", "renderPanelPart"],
+  fleetwidget:   ["../feature/fleetwidget.js", "renderFleetWidget"],
 };
+
+const APP_RENDERERS = { notifycenter: renderNotifyCenter };
+for (const [appId, [mod, fn]] of Object.entries(FEATURE_MODULES)) {
+  APP_RENDERERS[appId] = (body, win) => _lazyRender(mod, fn, body, win);
+}
 
 function renderWindowContent(body, win) {
   const renderer = APP_RENDERERS[win.appId];
@@ -290,8 +310,9 @@ async function startSession(user) {
   // galt und NICHTS wiederhergestellt wurde. (Rechte hängen nicht an Clients/
   // Hierarchie, können also gefahrlos zuerst geladen werden.)
   await reloadPerms();
-  // Aktive Module laden (ein Fehler in einem Modul betrifft nur dieses).
-  await loadModules();
+  // Aktive Module laden (ein Fehler in einem Modul betrifft nur dieses). Faellt
+  // das Laden ganz aus, laeuft die Shell trotzdem - nur die Modul-Apps fehlen.
+  try { await loadModules(); } catch (e) { console.error("[modules] laden:", e); }
   unlockCatalogPruning();     // jetzt kennt der Katalog auch die Modul-Apps
   onModulesChanged(() => { try { applyAppVisibility(); } catch {} });
 
@@ -657,6 +678,8 @@ function initMenusAndButtons() {
   }
 
   // Internes Adress-Schema bytera://... (wie steam://) mit den Oeffnen-Funktionen verbinden.
+  // Lazy, damit eine fehlende bytera-url.js nie den Start blockiert.
+  import("./bytera-url.js").then(({ setByteraHandlers, installByteraLinkHandler, consumeDeepLinkFromLocation, resolveByteraUrl }) => {
   setByteraHandlers({
     openApp: openAppFromMenu,
     openModuleApp,
@@ -683,6 +706,7 @@ function initMenusAndButtons() {
   installByteraLinkHandler();
   window.byteraOpen = (url) => resolveByteraUrl(url);   // global aufrufbar (z.B. Desktop-Client)
   consumeDeepLinkFromLocation();
+  }).catch((e) => console.warn("bytera-url.js nicht geladen:", e));
 
   // Anpassbares Anwendungsmenü (Drag & Drop, Ordner) initialisieren.
   initStartMenu({
@@ -944,31 +968,35 @@ function initDesktopDrop() {
   });
 }
 
+// Ein einzelner Init-Schritt darf den Start nicht abbrechen: jeder laeuft in
+// seinem eigenen try/catch. So bleibt der Login bedienbar, selbst wenn ein
+// spaeterer Teil (Menues, Live-Updates, ...) Probleme macht.
+function _step(name, fn) {
+  try { fn(); } catch (e) { console.error("[init] " + name + ":", e); }
+}
+
 async function main() {
   // Sprachen aus allen lang-Ordnern laden (Login-Fenster + Puffer übersetzen).
   try { await initLanguages(); } catch { /* offline -> Puffer/Fallback */ }
-  applyStaticTranslations();
-  // Rückkehr vom Spotify-OAuth-Login (?code&state=rmm-spotify:...) verarbeiten
-  // und die URL säubern - unabhängig vom RMM-Login-Status.
-  // Renderer für Fenster-Inhalte registrieren
-  setContentRenderer(renderWindowContent);
-  // (setOnWindowsChanged wird in startSession gesetzt - inkl. Zustand-Speichern)
-  // Sidebar-Auswahl -> Haupt-Panel aktualisieren
-  setOnSelect(renderMainContent);
-  // Bearbeiten-Modus wurde umgeschaltet (z.B. "Bearbeiten beenden"-Button in
-  // der Client-/Dashboard-Toolbar) -> Ansicht mit/ohne Werkzeuge neu zeichnen.
-  window.addEventListener("dashedit-changed", () => renderMainContent());
-  // Edit-Client-Änderungen -> alles neu laden
-  setEditOnChanged(refreshAll);
-  setManageOnChanged(refreshAll);
+  _step("translations", applyStaticTranslations);
 
-  initLoginForm();
-  initChangePwForm();
-  initMenusAndButtons();
-  initTaskbar();
-  initHelp();   // Hilfe-Fragezeichen der ganzen Oberflaeche verkabeln
-  initLiveUpdates();
-  initDesktopDrop();
+  // ZUERST den Login verkabeln - bevor irgendetwas anderes schiefgehen kann.
+  // Damit ist Anmelden immer moeglich, solange der Kern (dieses Modul) laedt.
+  _step("login-form", initLoginForm);
+  _step("change-pw-form", initChangePwForm);
+
+  _step("content-renderer", () => setContentRenderer(renderWindowContent));
+  _step("on-select", () => setOnSelect(renderMainContent));
+  _step("dashedit", () => window.addEventListener("dashedit-changed", () => renderMainContent()));
+  // "Aenderungen -> alles neu laden" der Feature-Module lazy verkabeln.
+  loadFeature("../feature/editclient.js", "setEditOnChanged").then((fn) => fn && fn(refreshAll)).catch(() => {});
+  loadFeature("../feature/manage.js", "setManageOnChanged").then((fn) => fn && fn(refreshAll)).catch(() => {});
+
+  _step("menus", initMenusAndButtons);
+  _step("taskbar", initTaskbar);
+  _step("help", initHelp);
+  _step("live-updates", initLiveUpdates);
+  _step("desktop-drop", initDesktopDrop);
 
   // Ist noch ein gültiges Token vorhanden? Dann direkt einloggen.
   const token = localStorage.getItem("rmm_token");
@@ -984,4 +1012,10 @@ async function main() {
   showOnly(loginScreen());
 }
 
-main();
+main().catch((e) => {
+  // Selbst wenn main() unerwartet scheitert: Login-Formular sichtbar machen und
+  // ein letztes Mal verkabeln, damit man sich trotzdem anmelden kann.
+  console.error("[init] main:", e);
+  try { initLoginForm(); } catch { /* egal */ }
+  try { showOnly(loginScreen()); } catch { /* egal */ }
+});
