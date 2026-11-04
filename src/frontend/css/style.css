@@ -1505,3 +1505,24 @@ body.solo-mode .rmm-window { inset: 0 !important; width: 100% !important; height
   border-radius: 0 !important; border: 0 !important; }
 /* Fensterknöpfe aus: geschlossen wird das Fenster der Client-App selbst */
 body.solo-mode .rmm-window-titlebar .win-controls { display: none !important; }
+
+/* Globale Suchleiste in der Topbar (bytera://-Adresse oder frei suchen) */
+.topbar-search { position: relative; flex: 1; max-width: 440px; margin: 0 16px; }
+.topbar-search > input {
+  width: 100%; box-sizing: border-box; padding: 7px 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 13px;
+}
+.topbar-search > input:focus { outline: none; border-color: var(--accent); }
+.global-search-results {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 60;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0,0,0,.35); overflow: hidden; max-height: 60vh; overflow-y: auto;
+}
+.global-search-results.hidden { display: none; }
+.gs-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer; font-size: 13px; }
+.gs-row:hover, .gs-row.active { background: var(--hover, rgba(127,127,127,.15)); }
+.gs-ic { width: 20px; text-align: center; }
+.gs-la { flex: 1; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gs-sub { color: var(--subtext); font-size: 11px; }
+.gs-empty { padding: 10px 12px; color: var(--subtext); font-size: 12px; }
+@media (max-width: 760px) { .topbar-search { display: none; } }

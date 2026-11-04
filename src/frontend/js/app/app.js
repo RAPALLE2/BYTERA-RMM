@@ -34,7 +34,7 @@ window.notifyError = notifyError;
 // App-Fenster-Renderer
 // Registriert window.showPermissionDenied - der Dialog bei fehlenden Rechten.
 import "./permdenied.js";
-// renderDist/renderTempUsb/bytera-url werden LAZY geladen (siehe unten), damit eine
+// renderDist wird LAZY geladen (siehe FEATURE_MODULES), damit eine
 // einzelne fehlende Datei nie den Login der gesamten SPA blockiert.
 import { loadModules, renderModuleApp, openModuleApp, moduleAppPerm, inactiveModuleBox, getModuleApi, onModulesChanged } from "./modules.js";
 import { handleAction as _clientHandleAction } from "./panel.js";
@@ -92,7 +92,6 @@ const FEATURE_MODULES = {
   node:          ["../feature/node.js", "renderNode"],
   modules:       ["../feature/modules.js", "renderModules"],
   dist:          ["../feature/dist.js", "renderDist"],
-  "temp-usb":    ["../feature/tempusb.js", "renderTempUsb"],
   permissions:   ["../feature/permissions.js", "renderPermissions"],
   audit:         ["../feature/audit.js", "renderAudit"],
   profile:       ["../feature/profile.js", "renderProfile"],
@@ -147,7 +146,6 @@ const APP_REQUIRED_PERM = {
   manage: "manage_hierarchy",
   "add-client": "add_client",
   dist: "manage_dist",          // Verteilung (/dist) - Core, frueher Modul "dist"
-  "temp-usb": "manage_temp_usb",   // Digitaler USB-Stick
 };
 
 function _appAllowed(appKey) {
@@ -599,6 +597,83 @@ function initChangePwForm() {
 // Menüs & globale Buttons verkabeln
 // -----------------------------------------------------------------
 
+// Globale Suchleiste in der Topbar: entweder eine bytera://-Adresse direkt
+// eingeben (-> Modul "url-scheme" oeffnet das Ziel) oder frei suchen (Geraete +
+// Apps). Enter oeffnet den obersten Treffer bzw. die eingegebene Adresse.
+function initGlobalSearch() {
+  const inp = document.getElementById("global-search");
+  const box = document.getElementById("global-search-results");
+  if (!inp || !box) return;
+
+  function openUrl(url) {
+    const api = getModuleApi("url-scheme");
+    if (api && typeof api.resolve === "function") { api.resolve(url); return true; }
+    window.notify?.('Das Modul „URL-Schema" ist nicht aktiv - bytera://-Adressen gehen erst, wenn es eingeschaltet ist.', "warning", 7000);
+    return false;
+  }
+
+  function suggestions(q) {
+    const out = [];
+    const ql = q.toLowerCase();
+    // Geraete
+    for (const c of (state.clients || [])) {
+      if (!ql || (c.hostname || "").toLowerCase().includes(ql)) {
+        out.push({ icon: "🖥️", label: c.hostname || c.id, sub: "Gerät öffnen",
+                   run: () => window.byteraOpenTarget?.selectClient(c.id) });
+      }
+      if (out.length > 7) break;
+    }
+    // Apps (Kacheln aus dem Startmenue)
+    document.querySelectorAll("#start-menu [data-app], .app-catalog [data-app]").forEach((b) => {
+      const label = b.textContent.trim();
+      const app = b.dataset.app;
+      if (app && (!ql || label.toLowerCase().includes(ql)) && out.length <= 12) {
+        out.push({ icon: "📦", label, sub: "App öffnen", run: () => openAppFromMenu(app) });
+      }
+    });
+    return out.slice(0, 10);
+  }
+
+  let items = [], active = -1;
+  function render() {
+    const q = inp.value.trim();
+    if (!q) { box.classList.add("hidden"); box.innerHTML = ""; items = []; return; }
+    if (/^bytera:\/\//i.test(q)) {
+      items = [{ icon: "🔗", label: q, sub: "Adresse öffnen", run: () => openUrl(q) }];
+    } else {
+      items = suggestions(q);
+    }
+    active = items.length ? 0 : -1;
+    box.innerHTML = items.length
+      ? items.map((it, i) => `<div class="gs-row${i === active ? " active" : ""}" data-i="${i}">
+          <span class="gs-ic">${it.icon}</span><span class="gs-la">${esc(it.label)}</span><span class="gs-sub">${esc(it.sub)}</span></div>`).join("")
+      : `<div class="gs-empty">Keine Treffer</div>`;
+    box.classList.remove("hidden");
+    box.querySelectorAll(".gs-row").forEach((r) =>
+      r.addEventListener("mousedown", (e) => { e.preventDefault(); const it = items[+r.dataset.i]; close(); it && it.run(); }));
+  }
+  function close() { box.classList.add("hidden"); box.innerHTML = ""; }
+
+  inp.addEventListener("input", render);
+  inp.addEventListener("focus", render);
+  inp.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { inp.value = ""; close(); inp.blur(); return; }
+    if (!items.length) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); active = (active + 1) % items.length; }
+    else if (e.key === "ArrowUp") { e.preventDefault(); active = (active - 1 + items.length) % items.length; }
+    else if (e.key === "Enter") {
+      e.preventDefault();
+      const it = items[active] || items[0];
+      const val = inp.value.trim();
+      close(); inp.value = "";
+      if (it) it.run(); else if (/^bytera:\/\//i.test(val)) openUrl(val);
+      return;
+    } else return;
+    box.querySelectorAll(".gs-row").forEach((r, i) => r.classList.toggle("active", i === active));
+  });
+  document.addEventListener("click", (e) => { if (!e.target.closest(".topbar-search")) close(); });
+}
+
 function initMenusAndButtons() {
   // Benutzermenü (oben rechts)
   const userMenuBtn = document.getElementById("user-menu-btn");
@@ -670,17 +745,16 @@ function initMenusAndButtons() {
     else if (app === "permissions") openWindow({ key: "permissions", appId: "permissions", title: "Berechtigungen", w: 820, h: 640 });
     else if (app === "audit") openWindow({ key: "audit", appId: "audit", title: "Audit-Log", w: 720, h: 520 });
     else if (app === "dist") openWindow({ key: "dist", appId: "dist", title: "Verteilung (/dist)", w: 900, h: 640 });
-    else if (app === "temp-usb") openWindow({ key: "temp-usb", appId: "temp-usb", title: "USB-Stick", w: 860, h: 600 });
     else if (app.startsWith("webapp:")) getModuleApi("browser")?.openWebApp?.(app);   // gespeicherte Web-App
     else if (app === "clients") { minimizeAll(); state.selection = null; renderMainContent(); }
     else return false;                           // unbekannt - der Aufrufer entscheidet
     return true;
   }
 
-  // Internes Adress-Schema bytera://... (wie steam://) mit den Oeffnen-Funktionen verbinden.
-  // Lazy, damit eine fehlende bytera-url.js nie den Start blockiert.
-  import("./bytera-url.js").then(({ setByteraHandlers, installByteraLinkHandler, consumeDeepLinkFromLocation, resolveByteraUrl }) => {
-  setByteraHandlers({
+  // Oeffnen-Primitive fuer das URL-Schema-Modul ("url-scheme") global bereitstellen.
+  // Das Modul besitzt das Format (parse/resolve) und ruft diese Funktionen auf.
+  // So bleibt das Format ein Modul, die eigentliche Fenster-Logik aber im Core.
+  window.byteraOpenTarget = {
     openApp: openAppFromMenu,
     openModuleApp,
     clientAction: (action, clientId) => {
@@ -702,11 +776,11 @@ function initMenusAndButtons() {
       return true;
     },
     openDist: (folder) => { openAppFromMenu("dist"); if (folder) window.notify?.("Verteilung geöffnet – Ordner: " + folder, "info", 3000); return true; },
-  });
-  installByteraLinkHandler();
-  window.byteraOpen = (url) => resolveByteraUrl(url);   // global aufrufbar (z.B. Desktop-Client)
-  consumeDeepLinkFromLocation();
-  }).catch((e) => console.warn("bytera-url.js nicht geladen:", e));
+    notify: (m) => { try { window.notify?.(m, "error", 7000); } catch { /* egal */ } },
+  };
+  // bytera://... aus dem Desktop-Client / Deep-Link weiterhin global aufrufbar -
+  // leitet an das Modul weiter (wenn aktiv).
+  window.byteraOpen = (url) => { try { getModuleApi("url-scheme")?.resolve?.(url); } catch { /* egal */ } };
 
   // Anpassbares Anwendungsmenü (Drag & Drop, Ordner) initialisieren.
   initStartMenu({
@@ -993,6 +1067,7 @@ async function main() {
   loadFeature("../feature/manage.js", "setManageOnChanged").then((fn) => fn && fn(refreshAll)).catch(() => {});
 
   _step("menus", initMenusAndButtons);
+  _step("global-search", initGlobalSearch);
   _step("taskbar", initTaskbar);
   _step("help", initHelp);
   _step("live-updates", initLiveUpdates);

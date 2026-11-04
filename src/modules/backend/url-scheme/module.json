@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "id": "url-scheme",
+  "name": "URL-Schema (bytera://)",
+  "version": "1.0.0",
+  "description": "Internes Adress-Schema bytera://<bereich>/<ziel> (wie steam://...). Links im Dashboard, Deep-Links beim Laden (?go=bytera://...) und - mit der Desktop-App - das Betriebssystem-Schema bytera:// oeffnen direkt den passenden Bereich. Die globale Suchleiste nutzt dieses Modul zum Aufloesen eingegebener Adressen.",
+  "author": "BYTERA",
+  "category": "System",
+  "icon": "🔗",
+  "requires": []
+}

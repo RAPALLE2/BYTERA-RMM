@@ -96,6 +96,11 @@
         <span class="topbar-title">BYTERA <span class="accent">RMM</span></span>
         <span class="topbar-version"><!-- wird aus /api/version (version.txt) befüllt --></span>
       </div>
+      <div class="topbar-search">
+        <input id="global-search" type="text" autocomplete="off" spellcheck="false"
+               placeholder="bytera://agent/… eingeben oder suchen" />
+        <div id="global-search-results" class="global-search-results hidden"></div>
+      </div>
       <div class="topbar-right">
         <button id="user-menu-btn" class="user-menu-btn">
           <span id="user-menu-name">...</span> ▾
@@ -191,7 +196,6 @@
           <button data-app="modules"><span class="app-icon">🧩</span><span>Module</span></button>
           <button data-app="nodes"><span class="app-icon">🧱</span><span>Nodes</span></button>
           <button data-app="dist"><span class="app-icon">📦</span><span>Verteilung</span></button>
-          <button data-app="temp-usb"><span class="app-icon">💾</span><span>USB-Stick</span></button>
         </div>
       </div>
     </div>

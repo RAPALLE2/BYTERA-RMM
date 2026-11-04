@@ -10,7 +10,7 @@
 // Diagramme mit Hover-Tooltip und Zeitspannen-Dropdown.
 
 import { state, findClient } from "./state.js";
-import { makeByteraUrl as _makeByteraUrl, copyByteraUrl as _copyByteraUrl } from "./bytera-url.js";
+// URL-Schema-Modul wird beim Klick dynamisch geladen (robust, falls aus/fehlend)
 import { hasClientPerm, hasGlobalPerm, isAdmin } from "./state.js";
 import { formatBytes, formatUptime, esc, gradientDonutSvg, CPU_GRADIENT, RAM_GRADIENT, DISK_GRADIENT, interactiveChart, uiConfirm, uiPrompt, uiChoice } from "./utils.js";
 import { getHistoryRange, TIME_RANGES, seedHistory, hasSeeded } from "./metricshistory.js";
@@ -281,7 +281,7 @@ export function renderActionsPart(target, client) {
     ${isModuleOn("guacamole") && hasClientPerm(client.id, "c_guacamole") ? `<button class="action-btn" data-action="guacamole">🕹️ Guacamole</button>` : ""}
     ${hasClientPerm(client.id, "c_taskmanager_view") ? `<button class="action-btn" data-action="taskmanager" ${client.online ? "" : "disabled"}>📋 ${t("task_manager")}</button>` : ""}
     <button class="action-btn" data-action="copylink" title="bytera://-Link zu diesem Gerät kopieren">🔗 ${t("copy_link")}</button>
-    ${(isAdmin() || hasGlobalPerm("manage_temp_usb")) ? `<button class="action-btn" data-action="tempusb" ${client.online ? "" : "disabled"} title="${t("tu_attach_dev_title")}">💾 ${t("tu_attach_dev")}</button>` : ""}`;
+    ${(isModuleOn("temp-usb") && (isAdmin() || hasGlobalPerm("manage_temp_usb"))) ? `<button class="action-btn" data-action="tempusb" ${client.online ? "" : "disabled"} title="${t("tu_attach_dev_title")}">💾 ${t("tu_attach_dev")}</button>` : ""}`;
   // Knöpfe aktiver Module (registerClientAction in modules.js), z.B. "🖧 Proxmox"
   getClientActions().forEach((a, i) => {
     let label = null;
@@ -297,7 +297,14 @@ export function renderActionsPart(target, client) {
   target.appendChild(holder);
   box.querySelectorAll("[data-action]").forEach((btn) =>
     btn.addEventListener("click", (ev) => {
-      if (btn.dataset.action === "copylink") { _copyByteraUrl(_makeByteraUrl("agent", client.id)); return; }
+      if (btn.dataset.action === "copylink") {
+        import("/js/app/modules.js").then(({ getModuleApi }) => {
+          const api = getModuleApi("url-scheme");
+          if (api) api.copy(api.make("agent", client.id));
+          else window.notify?.('Das Modul „URL-Schema" ist nicht aktiv.', "warning", 6000);
+        }).catch(() => {});
+        return;
+      }
       if (btn.dataset.action === "tempusb") { window.openRmmApp?.("temp-usb"); return; }
       handleAction(btn.dataset.action, client, ev);
     }));

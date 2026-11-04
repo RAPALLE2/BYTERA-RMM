@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "id": "temp-usb",
+  "name": "Digitaler USB-Stick",
+  "version": "1.0.0",
+  "apps": [
+    {
+      "id": "temp-usb",
+      "label": "USB-Stick",
+      "icon": "💾",
+      "title": "USB-Stick",
+      "entry": "app.js",
+      "export": "renderTempUsb",
+      "perm": "manage_temp_usb",
+      "w": 860,
+      "h": 600
+    }
+  ]
+}

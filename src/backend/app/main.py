@@ -48,7 +48,6 @@ from router import (
     notes_routes,
     diag_routes,
     dist_routes,       # frueher Modul "dist" - jetzt Core (Verteilung unter /dist)
-    tempusb_routes,    # Digitaler USB-Stick (/api/temp-usb)
 )  # noqa: E501 - Sammelimport, Absicherung siehe _import_router() unten
 
 
@@ -257,7 +256,6 @@ _mount("notes_routes", notes_routes)       # Client-Notizen (Sichtbarkeit + Prot
 # Relay-Explorer bleiben - die brauchen kein VPN.
 _mount("diag_routes", diag_routes)
 _mount("dist_routes", dist_routes)         # Verteilung /dist (Core)
-_mount("tempusb_routes", tempusb_routes)   # Digitaler USB-Stick (Core)
 
 # (Guacamole-WebSocket-Tunnel registriert das Modul 'guacamole' selbst.)
 
@@ -560,11 +558,6 @@ async def _start_background_tasks():
             print(f"[dist] {_n} Paket(e) nach /dist gespiegelt")
     except Exception as _e:
         print(f"[dist] Start uebersprungen: {_e}")
-    try:
-        from app import tempusb_store as _tu
-        _tu.ensure_dirs()
-    except Exception as _e:
-        print(f"[temp-usb] Start uebersprungen: {_e}")
     # Aktivierte Module laden. Ein Fehler betrifft NUR das jeweilige Modul.
     try:
         await _modules.load_enabled()

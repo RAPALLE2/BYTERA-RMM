@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "id": "url-scheme",
+  "name": "URL-Schema (bytera://)",
+  "version": "1.0.0",
+  "init": {
+    "entry": "init.js",
+    "export": "init"
+  }
+}

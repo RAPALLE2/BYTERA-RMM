@@ -2032,11 +2032,12 @@ async def on_tempusb_status(sid, payload):
 async def on_tempusb_upload(sid, payload):
     """Agent -> Bereich: eine im Geraeteordner neue/geaenderte Datei (stueckweise)."""
     import base64 as _b64
-    from app import tempusb_store as _store
+    from app import modules as _modules
+    _store = _modules.use("temp-usb", "store")   # nur wenn das Modul aktiv ist
     d = payload or {}
     area_id = str(d.get("id") or "")
     name = str(d.get("name") or "")
-    if not area_id or not name or not _store.get(area_id):
+    if not _store or not area_id or not name or not _store.get(area_id):
         return
     key = f"{area_id}:{sid}:{name}"
     buf = _tempusb_in.get(key, b"")

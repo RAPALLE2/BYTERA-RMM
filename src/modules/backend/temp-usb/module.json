@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "id": "temp-usb",
+  "name": "Digitaler USB-Stick",
+  "version": "1.0.0",
+  "description": "Dateien einfach zum Agenten bringen: ein USB-Bereich je Benutzer/Gruppe (/storage/temp-usb/<id>) wird an ein Gerät angehängt - als Ordner-Sync (Standard C:\\bytera bzw. /mnt/bytera) oder, mit hinterlegtem Treiber, als virtueller USB-Stick. Was der Benutzer am Gerät ablegt, erscheint wieder im Bereich (im Relay sichtbar) und lässt sich per Remote-Screen/Shell ausführen.",
+  "author": "BYTERA",
+  "category": "Verteilung",
+  "icon": "💾",
+  "requires": [],
+  "entry": "module",
+  "routers": [
+    "temp_usb_routes"
+  ],
+  "hooks": {
+    "startup": "on_startup",
+    "enable": "on_enable"
+  }
+}
