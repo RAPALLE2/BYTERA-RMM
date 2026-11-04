@@ -59,7 +59,7 @@ export function renderWebserver(body) {
     listEl.querySelectorAll("[data-s]").forEach((el) => { el.style.background = el.dataset.s === name ? "var(--panel-2)" : ""; });
     const s = data.sites.find((x) => x.name === name);
     if (!s) return;
-    const url = `${location.origin}/${s.name}/`;
+    const url = `${location.origin}/web/${s.name}/`;
     main.innerHTML = `
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
         <b style="font-size:15px">${esc(s.title || s.name)}</b>
@@ -81,7 +81,7 @@ export function renderWebserver(body) {
       pane.innerHTML = `<div style="border:1px solid var(--border);border-radius:8px;padding:12px">↪ <b>Weiterleitung</b> – diese Website hat keine Dateien,
         sie leitet jeden Abruf weiter an ${up.provider === "docker" ? `den Docker-Dienst <b>${esc(up.ref?.service || "")}</b> (Port ${esc(String(up.ref?.port || ""))})
         – verwaltet in der App „Docker“ unter „Veröffentlichen“` : `<code>${esc(up.url || "")}</code>`}.</div>`;
-    } else if (tab === "files") renderFileManager(pane, { api: `/api/webserver/sites/${encodeURIComponent(name)}`, publicBase: `/${name}` });
+    } else if (tab === "files") renderFileManager(pane, { api: `/api/webserver/sites/${encodeURIComponent(name)}`, publicBase: `/web/${name}` });
     else drawSettings(pane, s);
   }
 
@@ -150,7 +150,7 @@ export function renderWebserver(body) {
       } catch (e) { window.notify?.(e.message, "error"); }
     });
     pane.querySelector("[data-rename]")?.addEventListener("click", async () => {
-      const n = await uiPrompt("Neue Adresse (rmm.url.de/…)", { value: s.name });
+      const n = await uiPrompt("Neue Adresse (rmm.url.de/web/…)", { value: s.name });
       if (!n?.trim() || n.trim() === s.name) return;
       try { const r = await wreq(`/sites/${encodeURIComponent(s.name)}`, { method: "PATCH", body: { new_name: n.trim() } });
         current = r.name; await loadList(r.name); } catch (e) { window.notify?.(e.message, "error"); }
@@ -163,7 +163,7 @@ export function renderWebserver(body) {
   }
 
   body.querySelector("[data-new]").addEventListener("click", async () => {
-    const name = await uiPrompt("Adresse der neuen Website (rmm.url.de/…)", { placeholder: "z. B. firmen-wiki" });
+    const name = await uiPrompt("Adresse der neuen Website (rmm.url.de/web/…)", { placeholder: "z. B. firmen-wiki" });
     if (!name?.trim()) return;
     const title = (await uiPrompt("Titel (optional)", { placeholder: name.trim() })) || "";
     try { const r = await wreq("/sites", { method: "POST", body: { name: name.trim(), title } });

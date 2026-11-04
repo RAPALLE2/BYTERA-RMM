@@ -10,7 +10,11 @@
   "requires": [],
   "pip": [],
   "entry": "module",
-  "routers": ["spaces_routes", "git_ops"],
+  "routers": [
+    "spaces_routes",
+    "git_ops",
+    "spaces_public"
+  ],
   "hooks": {
     "startup": "on_startup",
     "enable": "on_enable"

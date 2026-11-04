@@ -1,11 +1,11 @@
 # proxy.py (Modul "webserver") - Websites der Art "Weiterleitung" (Reverse-Proxy)
 # ------------------------------------------------------------------------------
-# rmm.url.de/<name>/<pfad>  ->  <ziel>/<pfad>   (HTTP und WebSocket)
+# rmm.url.de/web/<name>/<pfad>  ->  <ziel>/<pfad>   (HTTP und WebSocket)
 # Ziel (site["upstream"]):
 #   {"url": "http://10.0.0.5:8080"}                       feste Adresse
 #   {"provider": "docker", "ref": {...}}                  vom Modul "docker" aufgeloest
 #                                                         (Container-Adresse kann sich aendern)
-# Gesetzte Kopfzeilen: X-Forwarded-For/-Proto/-Host und X-Forwarded-Prefix=/<name>
+# Gesetzte Kopfzeilen: X-Forwarded-For/-Proto/-Host und X-Forwarded-Prefix=/web/<name>
 # (viele Apps bauen damit ihre Links richtig). Location-Antworten des Ziels werden
 # auf /<name>/... umgeschrieben.
 
@@ -42,12 +42,20 @@ async def upstream_url(site: dict) -> str:
     raise RuntimeError("Kein Ziel eingestellt")
 
 
+def _prefix_for(name: str) -> str:
+    try:
+        from . import sites
+        return sites.site_prefix(name)
+    except Exception:
+        return "/web"
+
+
 def _fwd_headers(req_headers, client_host: str, scheme: str, host: str, name: str) -> dict:
     h = {k: v for k, v in req_headers.items() if k.lower() not in HOP and not k.lower().startswith("x-forwarded-")}
     h["X-Forwarded-For"] = client_host
     h["X-Forwarded-Proto"] = scheme
     h["X-Forwarded-Host"] = host
-    h["X-Forwarded-Prefix"] = f"/{name}"
+    h["X-Forwarded-Prefix"] = f"{_prefix_for(name)}/{name}"
     return h
 
 
@@ -69,10 +77,11 @@ async def http(request: Request, name: str, site: dict, path: str):
         lk = k.lower()
         if lk in HOP:
             continue
+        pref = _prefix_for(name)
         if lk == "location" and v.startswith(base):
-            v = f"/{name}" + (v[len(base):] or "/")
-        elif lk == "location" and v.startswith("/") and not v.startswith(f"/{name}/"):
-            v = f"/{name}{v}"
+            v = f"{pref}/{name}" + (v[len(base):] or "/")
+        elif lk == "location" and v.startswith("/") and not v.startswith(f"{pref}/{name}/"):
+            v = f"{pref}/{name}{v}"
         out_headers.append((k, v))
 
     async def body():

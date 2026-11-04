@@ -242,7 +242,7 @@ def _webserver():
 
 
 def _site_url(name: str) -> str:
-    return f"/{name}/"
+    return f"/docker/{name}/"   # oeffentliche Adresse der Docker-Weiterleitung
 
 
 @router.get("/stacks/{sid}/publish")
@@ -290,7 +290,7 @@ async def publish_add(sid: str, body: PublishBody, user: dict = Depends(get_curr
     if body.mode == "path":
         ws = _webserver()
         try:
-            ws.create(body.name, f"{st['name']} ({body.service})", user, kind="proxy", public=True,
+            ws.create(body.name, f"{st['name']} ({body.service})", user, kind="proxy", public=True, ns="docker",
                       upstream={"provider": "docker", "ref": {"stack": sid, "service": body.service, "port": body.port}})
         except ValueError as e:
             raise HTTPException(400, str(e))
@@ -305,7 +305,7 @@ async def publish_add(sid: str, body: PublishBody, user: dict = Depends(get_curr
         entry = publish.new_entry("port", body.service, body.port, public_port=body.public_port)
     st = stacks.update(sid, {"publish": (st.get("publish") or []) + [entry]})
     _audit(user, "publish_add", f"{st['project']}/{body.service}:{body.port} -> "
-                                + (f"/{entry.get('name')}/" if body.mode == "path" else f"Port {body.public_port}"))
+                                + (f"/docker/{entry.get('name')}/" if body.mode == "path" else f"Port {body.public_port}"))
     log = []
     if body.mode == "port" and st.get("deployed"):
         try:

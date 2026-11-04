@@ -438,3 +438,4 @@ async def attach(file: UploadFile = File(...), area: str = Form("chat"), user: d
                             kind="attachment", name=base)
     return {"token": sh["token"], "url": f"/api/spaces/s/{sh['token']}/download?inline=1",
             "name": base, "mime": mt, "size": len(data)}
+

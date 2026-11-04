@@ -44,6 +44,7 @@ import { renderManage, setManageOnChanged } from "../feature/manage.js";
 import { renderSettings } from "../feature/settings.js";
 import { renderModules } from "../feature/modules.js";
 import { renderDist } from "../feature/dist.js";   // Verteilung (/dist) - Core, frueher Modul
+import { renderTempUsb } from "../feature/tempusb.js";   // Digitaler USB-Stick (Core)
 import { renderNode } from "../feature/node.js";
 import { loadModules, renderModuleApp, openModuleApp, moduleAppPerm, inactiveModuleBox, getModuleApi, onModulesChanged } from "./modules.js";
 import { setByteraHandlers, installByteraLinkHandler, consumeDeepLinkFromLocation, resolveByteraUrl } from "./bytera-url.js";
@@ -75,6 +76,7 @@ const APP_RENDERERS = {
   node: renderNode,                // Node (pro Client: props.clientId) bzw. Uebersicht aller Nodes
   modules: renderModules,          // Modul-App (Core): Module ansehen, schalten, einstellen
   dist: renderDist,                // Verteilung (/dist) - Core, frueher Modul "dist"
+  "temp-usb": renderTempUsb,       // Digitaler USB-Stick (Core)
   permissions: renderPermissions,
   audit: renderAudit,
   profile: renderProfile,
@@ -125,6 +127,7 @@ const APP_REQUIRED_PERM = {
   manage: "manage_hierarchy",
   "add-client": "add_client",
   dist: "manage_dist",          // Verteilung (/dist) - Core, frueher Modul "dist"
+  "temp-usb": "manage_temp_usb",   // Digitaler USB-Stick
 };
 
 function _appAllowed(appKey) {
@@ -646,6 +649,7 @@ function initMenusAndButtons() {
     else if (app === "permissions") openWindow({ key: "permissions", appId: "permissions", title: "Berechtigungen", w: 820, h: 640 });
     else if (app === "audit") openWindow({ key: "audit", appId: "audit", title: "Audit-Log", w: 720, h: 520 });
     else if (app === "dist") openWindow({ key: "dist", appId: "dist", title: "Verteilung (/dist)", w: 900, h: 640 });
+    else if (app === "temp-usb") openWindow({ key: "temp-usb", appId: "temp-usb", title: "USB-Stick", w: 860, h: 600 });
     else if (app.startsWith("webapp:")) getModuleApi("browser")?.openWebApp?.(app);   // gespeicherte Web-App
     else if (app === "clients") { minimizeAll(); state.selection = null; renderMainContent(); }
     else return false;                           // unbekannt - der Aufrufer entscheidet

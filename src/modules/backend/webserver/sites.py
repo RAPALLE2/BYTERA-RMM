@@ -33,12 +33,19 @@ from app.paths import MODULES_DATA_DIR, STORAGE_DIR, WEB_DIR
 from . import webhost
 
 ROOT = WEB_DIR  # storage/web/<name>
+PREFIX = "/web"       # Standard-Namensraum
+NS_PREFIX = {"web": "/web", "docker": "/docker"}   # oeffentliche Adresse je Namensraum
+
+
+def site_prefix(name: str) -> str:
+    return NS_PREFIX.get((get(name) or {}).get("ns") or "web", "/web")
 REG = MODULES_DATA_DIR / "webserver" / "sites.json"
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
 # Immer gesperrt (zusaetzlich zu allen belegten Adressen, siehe reserved())
 RESERVED = {"api", "dav", "deployment", "agent-dist", "client-dist", "modules", "css", "js", "image", "images",
             "socket.io", "ws", "docs", "redoc", "openapi.json", "static", "assets", "favicon.ico", "index.html",
-            "login", "logout", "admin", "dashboard", "robots.txt", "health", "metrics", "relay", "websites"}
+            "login", "logout", "admin", "dashboard", "robots.txt", "health", "metrics", "relay", "websites",
+            "web", "docker", "spaces", "dist"}
 NONE, EDIT, ADMIN = 0, 1, 2
 _lock = threading.RLock()
 
@@ -138,17 +145,20 @@ def visible(user) -> list[dict]:
 
 # ------------------------------------------------------------------ Aendern
 def create(name: str, title: str, user: dict, kind: str = "static", upstream: dict | None = None,
-           public: bool = False) -> dict:
-    """kind "static" = Ordner ausliefern, "proxy" = Weiterleitung an upstream (siehe proxy.py)."""
+           public: bool = False, ns: str = "web") -> dict:
+    """kind "static" = Ordner ausliefern, "proxy" = Weiterleitung an upstream (siehe proxy.py).
+    ns = Namensraum der oeffentlichen Adresse: "web" -> /web/<name>, "docker" -> /docker/<name>."""
     name = check_name(name)
     if kind not in ("static", "proxy") or (kind == "proxy" and not upstream):
         raise ValueError("Ungültige Website-Art")
+    if ns not in ("web", "docker"):
+        raise ValueError("Ungültiger Namensraum")
     with _lock:
         d = _load()
         if name in d:
             raise ValueError(f"„{name}“ gibt es schon")
         d[name] = {"title": (title or name).strip()[:80], "public": bool(public), "listing": True, "members": [],
-                   "created": int(time.time()), "created_by": user["username"], "kind": kind}
+                   "created": int(time.time()), "created_by": user["username"], "kind": kind, "ns": ns}
         if kind == "proxy":
             d[name]["upstream"] = upstream
         _save(d)
@@ -218,7 +228,8 @@ def _handler(name: str):
         if s.get("kind") == "proxy":
             from . import proxy
             return await proxy.http(request, name, s, path)
-        return webhost.serve(folder(name), [p for p in path.split("/") if p], f"/{name}",
+        pref = NS_PREFIX.get(s.get("ns") or "web", "/web")
+        return webhost.serve(folder(name), [p for p in path.split("/") if p], f"{pref}/{name}",
                              title=s.get("title") or name, listing=bool(s.get("listing", True)))
     return handler
 
@@ -257,14 +268,20 @@ def sync_routes() -> None:
     for name in _load():
         h = _handler(name)
 
-        async def to_slash(_n=name):
-            return RedirectResponse(f"/{_n}/", status_code=308)
-        new.append(APIRoute(f"/{name}", endpoint=to_slash, methods=["GET", "HEAD"], include_in_schema=False))
         site = _load().get(name) or {}
+        pref = NS_PREFIX.get(site.get("ns") or "web", "/web")
+
+        async def to_slash(_n=name, _p=pref):
+            return RedirectResponse(f"{_p}/{_n}/", status_code=308)
+        new.append(APIRoute(f"{pref}/{name}", endpoint=to_slash, methods=["GET", "HEAD"], include_in_schema=False))
+        # Alte Adresse rmm.url.de/<name> weiter auf die neue umleiten.
+        async def to_ns(_n=name, _p=pref):
+            return RedirectResponse(f"{_p}/{_n}/", status_code=308)
+        new.append(APIRoute(f"/{name}", endpoint=to_ns, methods=["GET", "HEAD"], include_in_schema=False))
         methods = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] if site.get("kind") == "proxy" else ["GET", "HEAD"]
-        new.append(APIRoute(f"/{name}/{{path:path}}", endpoint=h, methods=methods, include_in_schema=False))
+        new.append(APIRoute(f"{pref}/{name}/{{path:path}}", endpoint=h, methods=methods, include_in_schema=False))
         if site.get("kind") == "proxy":
-            new.append(WebSocketRoute(f"/{name}/{{path:path}}", endpoint=_ws_handler(name)))
+            new.append(WebSocketRoute(f"{pref}/{name}/{{path:path}}", endpoint=_ws_handler(name)))
     if new:
         modules._place_before_static(new)
     else:

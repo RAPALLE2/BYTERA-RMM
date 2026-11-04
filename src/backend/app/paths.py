@@ -81,6 +81,7 @@ TICKET_FILES_DIR = MEDIA_DIR / "tickets"               # Ticket-Anhaenge
 
 TEMP_DIR = BACKEND_DIR / "temp"
 DIST_DIR = STORAGE_DIR / "dist"                        # Verteilung (/dist): enrollment, agent, client, ...
+TEMP_USB_DIR = STORAGE_DIR / "temp-usb"                # Digitaler USB-Stick je Benutzer/Gruppe (/storage/temp-usb/<id>)
 
 # --- Agent -----------------------------------------------------------------
 AGENT_MAIN_FILE = AGENT_DIR / "main.py"

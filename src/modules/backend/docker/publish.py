@@ -1,7 +1,7 @@
 # publish.py (Modul "docker") - Container oeffentlich machen
 # ----------------------------------------------------------
 # Eintraege je Stack (stack["publish"]):
-#   {"id", "mode": "path", "service", "port", "name"}          rmm.url.de/<name>/  (Weiterleitung im Modul "webserver")
+#   {"id", "mode": "path", "service", "port", "name"}          rmm.url.de/docker/<name>/  (Weiterleitung im Modul "webserver")
 #   {"id", "mode": "port", "service", "port", "public_port"}   <host>:<public_port> (Port-Freigabe auf dem Docker-Host)
 #
 # "path": Der Webserver fragt bei JEDEM Abruf resolve() nach der aktuellen Adresse (Container-IPs

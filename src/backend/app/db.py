@@ -2774,6 +2774,7 @@ GLOBAL_PERM_KEYS = [
     "manage_tenants",
     "use_tenants",
     "manage_dist",
+    "manage_temp_usb",
     # Modul "console": RMM-Konsole benutzen (SSH, Dashboard, Client-App) - je Befehl zusaetzlich das passende Recht
     "use_console",
     "create_users",

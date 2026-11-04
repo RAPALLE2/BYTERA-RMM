@@ -2018,6 +2018,52 @@ async def dashboard_session_request_grant(sid, data):
 
 
 # --- Datei-Uebertragung in der Fernwartungs-Sitzung (wie AnyDesk) ---
+# --- Digitaler USB-Stick: Dateien, die der Agent zuruecksendet ----------------
+_tempusb_in: dict = {}
+
+
+@sio.on("temp-usb-status", namespace="/agent")
+async def on_tempusb_status(sid, payload):
+    """Status des Agenten (angehaengt/geloest/Fehler) -> Dashboard."""
+    await sio.emit("temp-usb-status", payload, namespace="/dashboard")
+
+
+@sio.on("temp-usb-upload", namespace="/agent")
+async def on_tempusb_upload(sid, payload):
+    """Agent -> Bereich: eine im Geraeteordner neue/geaenderte Datei (stueckweise)."""
+    import base64 as _b64
+    from app import tempusb_store as _store
+    d = payload or {}
+    area_id = str(d.get("id") or "")
+    name = str(d.get("name") or "")
+    if not area_id or not name or not _store.get(area_id):
+        return
+    key = f"{area_id}:{sid}:{name}"
+    buf = _tempusb_in.get(key, b"")
+    try:
+        buf += _b64.b64decode(d.get("data") or "")
+    except Exception:
+        _tempusb_in.pop(key, None)
+        return
+    if len(buf) > 1024 * 1024 * 1024:     # 1 GB je Datei - Schutz gegen Dauerstrom
+        _tempusb_in.pop(key, None)
+        return
+    if d.get("last"):
+        _tempusb_in.pop(key, None)
+        rel, _, fname = name.replace("\\", "/").rpartition("/")
+        try:
+            await _db_run(_store.write_file, area_id, rel, fname or name, buf)
+        except Exception:
+            return
+    else:
+        _tempusb_in[key] = buf
+
+
+async def _db_run(fn, *a):
+    import asyncio as _aio
+    return await _aio.get_event_loop().run_in_executor(None, fn, *a)
+
+
 @sio.on("screen-file-chunk", namespace="/dashboard")
 async def dashboard_screen_file_chunk(sid, data):
     """Admin -> Benutzer: ein Stueck einer Datei (base64, ~256 KB) an den Agenten."""

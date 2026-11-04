@@ -6948,6 +6948,140 @@ async def on_screen_start(data):
         _print("[agent] Silent-Modus: Admin-Rechte ohne Benutzerfreigabe aktiv.")
 
 
+# ============================================================================
+# Digitaler USB-Stick (temp-usb): Ordner-Sync zwischen /storage/temp-usb/<id>
+# und einem lokalen Ordner (Standard C:\bytera bzw. /mnt/bytera). Der Benutzer
+# kann Dateien dort ablegen/ausfuehren; was er ablegt, kommt in den Bereich
+# zurueck und ist im Relay sichtbar. "usb"-Modus (virtueller Stick per Treiber)
+# faellt auf Ordner-Sync zurueck, wenn kein Treiber hinterlegt/installiert ist.
+# ============================================================================
+_tempusb = {}          # id -> {"path": Ordner, "mode", "known": {relpfad: mtime}, "stop": Event}
+_tempusb_lock = threading.Lock()
+_TEMPUSB_PUT = {}      # (id,name) -> bytes (laufender Empfang vom Server)
+
+
+def _tempusb_default_dir() -> str:
+    return r"C:\bytera" if IS_WINDOWS else "/mnt/bytera"
+
+
+def _tempusb_emit(event: str, data: dict) -> None:
+    try:
+        asyncio.run_coroutine_threadsafe(
+            sio.emit(event, {"id": DEVICE_ID, **data}, namespace="/agent"), _AGENT_LOOP)
+    except Exception as e:
+        _print(f"[temp-usb] emit {event}: {e}")
+
+
+def _tempusb_upload_file(area_id: str, root: str, rel: str) -> None:
+    import base64 as _b64
+    full = os.path.join(root, rel.replace("/", os.sep))
+    try:
+        data = open(full, "rb").read()
+    except OSError:
+        return
+    chunk = 256 * 1024
+    n = max(1, (len(data) + chunk - 1) // chunk)
+    for seq in range(n):
+        _tempusb_emit("temp-usb-upload", {"id": area_id, "name": rel.replace(os.sep, "/"),
+                                          "seq": seq, "last": seq == n - 1,
+                                          "data": _b64.b64encode(data[seq * chunk:(seq + 1) * chunk]).decode()})
+
+
+def _tempusb_watch(area_id: str) -> None:
+    # Pollt den Ordner; neue/geaenderte Dateien (die NICHT gerade vom Server
+    # kamen) werden hochgeladen. Kein Zusatzpaket noetig.
+    import time as _t
+    while True:
+        with _tempusb_lock:
+            st = _tempusb.get(area_id)
+        if not st or st["stop"].is_set():
+            return
+        root = st["path"]
+        try:
+            for dp, _dn, fn in os.walk(root):
+                for f in fn:
+                    full = os.path.join(dp, f)
+                    rel = os.path.relpath(full, root).replace(os.sep, "/")
+                    try:
+                        m = os.path.getmtime(full)
+                    except OSError:
+                        continue
+                    if st["known"].get(rel) != m:
+                        st["known"][rel] = m
+                        _tempusb_upload_file(area_id, root, rel)
+        except Exception as e:
+            _print(f"[temp-usb] watch {area_id}: {e}")
+        _t.sleep(3.0)
+
+
+@sio.on("temp-usb-attach", namespace="/agent")
+async def on_tempusb_attach(data):
+    d = data or {}
+    area_id = str(d.get("id") or "")
+    if not area_id:
+        return
+    path = (d.get("path") or "").strip() or _tempusb_default_dir()
+    mode = d.get("mode") or "folder"
+    note = ""
+    if mode == "usb" and not (d.get("driver") or "").strip():
+        mode = "folder"                       # kein Treiber hinterlegt -> Ordner-Sync
+        note = "kein USB-Treiber hinterlegt - nutze Ordner-Sync"
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError as e:
+        _tempusb_emit("temp-usb-status", {"id": area_id, "error": str(e), "code": "agent_tempusb_mkdir"})
+        return
+    with _tempusb_lock:
+        old = _tempusb.get(area_id)
+        if old:
+            old["stop"].set()
+        # "known" wird durch temp-usb-put (Server-Dateien) gefuellt; alles andere
+        # im Ordner gilt als lokal und wird hochgeladen.
+        _tempusb[area_id] = {"path": path, "mode": mode, "known": {}, "stop": threading.Event()}
+    threading.Thread(target=_tempusb_watch, args=(area_id,), name=f"tempusb-{area_id}", daemon=True).start()
+    _print(f"[agent] temp-usb angehängt: {area_id} -> {path} ({mode})")
+    _tempusb_emit("temp-usb-status", {"id": area_id, "state": "attached", "path": path, "mode": mode, "note": note})
+
+
+@sio.on("temp-usb-put", namespace="/agent")
+async def on_tempusb_put(data):
+    d = data or {}
+    area_id, name = str(d.get("id") or ""), str(d.get("name") or "")
+    with _tempusb_lock:
+        st = _tempusb.get(area_id)
+    if not st or not name:
+        return
+    key = (area_id, name)
+    try:
+        _TEMPUSB_PUT[key] = _TEMPUSB_PUT.get(key, b"") + base64.b64decode(d.get("data") or "")
+    except Exception:
+        _TEMPUSB_PUT.pop(key, None)
+        return
+    if not d.get("last"):
+        return
+    buf = _TEMPUSB_PUT.pop(key, b"")
+    full = os.path.join(st["path"], name.replace("/", os.sep))
+    try:
+        os.makedirs(os.path.dirname(full) or st["path"], exist_ok=True)
+        with open(full, "wb") as f:
+            f.write(buf)
+        with _tempusb_lock:
+            st["known"][name] = os.path.getmtime(full)      # nicht zurueckspiegeln
+    except OSError as e:
+        _print(f"[temp-usb] put {name}: {e}")
+
+
+@sio.on("temp-usb-detach", namespace="/agent")
+async def on_tempusb_detach(data):
+    area_id = str((data or {}).get("id") or "")
+    with _tempusb_lock:
+        st = _tempusb.pop(area_id, None)
+    if st:
+        st["stop"].set()
+        _print(f"[agent] temp-usb gelöst: {area_id}")
+    _tempusb_emit("temp-usb-status", {"id": area_id, "state": "detached"})
+
+
 @sio.on("screen-stop", namespace="/agent")
 async def on_screen_stop(data):
     """Stoppt das Bildschirm-Streaming."""
