@@ -5,7 +5,7 @@
 // Gerät kann dort z.B. ein Skript ablegen und per Remote-Screen/Shell starten;
 // was er ablegt, erscheint wieder hier.
 import { api, getToken } from "/js/app/api.js";
-import { esc, uiConfirm, uiPrompt } from "/js/app/utils.js";
+import { esc, uiConfirm, uiPrompt, uiChoice } from "/js/app/utils.js";
 import { state } from "/js/app/state.js";
 import { t } from "/js/app/i18n.js";
 
@@ -119,19 +119,18 @@ export async function renderTempUsb(body) {
   async function attachDialog() {
     const online = (state.clients || []).filter((c) => c.online);
     if (!online.length) { window.notify?.(t("tu_no_online"), "warning"); return; }
-    const pick = await uiPrompt(t("tu_attach_which"), {
-      description: online.map((c, i) => `${i + 1}: ${c.hostname}`).join("\n"),
-      placeholder: "1",
-    });
-    const idx = parseInt(pick, 10) - 1;
-    if (!(idx >= 0 && idx < online.length)) return;
+    // Geraet (Node) ueber das Standard-Auswahlmenue (wie Teamspace-Mitglieder).
+    const clientId = await uiChoice(t("tu_attach_which"),
+      online.map((c) => ({ label: "🖥️ " + (c.hostname || c.id), value: c.id })));
+    if (!clientId) return;
+    const dev = online.find((c) => c.id === clientId);
     const path = await uiPrompt(t("tu_target"), { placeholder: "C:\\bytera / /mnt/bytera", value: "" });
     try {
       await req(`/api/temp-usb/${current.id}/attach`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId: online[idx].id, mode: "folder", path: path || "" }),
+        body: JSON.stringify({ clientId, mode: "folder", path: path || "" }),
       });
-      window.notify?.(t("tu_attached") + " " + online[idx].hostname, "success");
+      window.notify?.(t("tu_attached") + " " + (dev?.hostname || clientId), "success");
       load();
     } catch (e) { window.notify?.(String(e.message || e), "error"); }
   }
@@ -142,16 +141,15 @@ export async function renderTempUsb(body) {
       const label = await uiPrompt(t("tu_new_label"), { placeholder: t("tu_new_ph") });
       if (!label) return;
       const dir = await jreq("/api/temp-usb/directory").catch(() => ({ users: [], groups: [] }));
-      // einfache Auswahl: eigener Benutzer als Standard; Gruppen per Nummer
+      // Besitzer ueber das Standard-Auswahlmenue (Benutzer + Gruppen, wie ueberall).
+      const opts = [{ label: "👤 " + t("tu_owner_me"), value: "me" }];
+      for (const u of (dir.users || [])) opts.push({ label: "👤 " + u.name, value: "user:" + u.id });
+      for (const g of (dir.groups || [])) opts.push({ label: "👥 " + g.name, value: "group:" + g.id });
+      const choice = await uiChoice(t("tu_owner"), opts);
+      if (!choice) return;
       let owner_type = "user", owner_id = state.user?.id || "";
-      if (dir.groups?.length) {
-        const g = await uiPrompt(t("tu_owner"), {
-          description: t("tu_owner_me") + "\n" + dir.groups.map((x, i) => `${i + 1}: 👥 ${x.name}`).join("\n"),
-          placeholder: t("tu_owner_me_ph"),
-        });
-        const gi = parseInt(g, 10) - 1;
-        if (gi >= 0 && gi < dir.groups.length) { owner_type = "group"; owner_id = dir.groups[gi].id; }
-      }
+      if (choice.startsWith("user:")) { owner_type = "user"; owner_id = choice.slice(5); }
+      else if (choice.startsWith("group:")) { owner_type = "group"; owner_id = choice.slice(6); }
       await req("/api/temp-usb", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ label, owner_type, owner_id }) });
       load();
     });
