@@ -42,6 +42,12 @@ def legacy_peer_iface(t: dict) -> str:
     return f"rmv{t['id']}"[:15]
 
 
+def device_peer_iface(t: dict, p: dict, device_id: str) -> str:
+    """Eindeutige Schnittstelle je (Tunnel, Benutzer-Peer, Geraet)."""
+    short = "".join(ch for ch in str(device_id) if ch.isalnum())[:6]
+    return f"r{t['id']}{p['id']}{short}"[:15]
+
+
 def pick_subnet(pool: str, used: set[str]) -> str:
     """Freies /24 aus dem Pool (Standard 10.77.0.0/16)."""
     net = ipaddress.ip_network(pool, strict=False)
@@ -66,8 +72,17 @@ def host_ip(t: dict) -> str:
     return next(iter(_pool_ips(t)))
 
 
+def _all_used_ips(t: dict) -> set:
+    used = {t.get("host_ip")}
+    for p in t["peers"].values():
+        used.add(p.get("ip"))
+        for dv in (p.get("devices") or {}).values():   # Geraete-Unterpeers (ein Benutzer, mehrere Geraete)
+            used.add(dv.get("ip"))
+    return used
+
+
 def next_ip(t: dict) -> str:
-    used = {t.get("host_ip")} | {p["ip"] for p in t["peers"].values()}
+    used = _all_used_ips(t)
     for ip in _pool_ips(t):
         if ip not in used:
             return ip
@@ -146,7 +161,28 @@ def host_conf(t: dict) -> str:
     lines += [f"PostUp = {u} || true" for u in up]
     lines += [f"PostDown = {d}" for d in down]
     for p in t["peers"].values():
-        lines += ["", f"# {p['kind']}: {p['name']}", "[Peer]", f"PublicKey = {p['pub']}", f"AllowedIPs = {p['ip']}/32"]
+        devs = p.get("devices") or {}
+        if p["kind"] == "user" and devs:
+            # Ein Benutzer mit mehreren Geraeten: jedes Geraet ist ein eigener Peer
+            # mit eigener Adresse. (Der Benutzer-Peer selbst bekommt dann KEINE
+            # eigene Zeile - er ist nur noch die Mitgliedschaft.)
+            for dev in devs.values():
+                lines += ["", f"# {p['kind']}: {p['name']} / {dev.get('name') or 'Gerät'}",
+                          "[Peer]", f"PublicKey = {dev['pub']}", f"AllowedIPs = {dev['ip']}/32"]
+        else:
+            lines += ["", f"# {p['kind']}: {p['name']}", "[Peer]", f"PublicKey = {p['pub']}", f"AllowedIPs = {p['ip']}/32"]
+    return "\n".join(lines) + "\n"
+
+
+def device_peer_conf(t: dict, p: dict, dev: dict) -> str:
+    """Wie peer_conf, aber mit dem eigenen Schluessel/der eigenen Adresse EINES
+    Geraets des Benutzer-Peers."""
+    lines = [f"# RMM-VPN „{t['name']}“ – {p['name']} / {dev.get('name') or 'Gerät'}", "[Interface]",
+             f"PrivateKey = {store.dec(dev['priv_enc'])}", f"Address = {dev['ip']}/32"]
+    if t.get("dns"):
+        lines.append(f"DNS = {t['dns']}")
+    lines += ["", "[Peer]", f"PublicKey = {t['host_pub']}", f"Endpoint = {t['endpoint']}",
+              f"AllowedIPs = {peer_allowed(t)}", f"PersistentKeepalive = {int(t.get('keepalive') or 25)}"]
     return "\n".join(lines) + "\n"
 
 

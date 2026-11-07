@@ -390,6 +390,26 @@ def uninstall(data_dir: Path, iface: str) -> None:
         pass
 
 
+import socket as _socket
+import urllib.parse as _uparse
+
+
+def vpn_my_path(store) -> str:
+    """GET-Pfad fuer /api/vpn/my mit Geraete-Kennung, damit JEDES Geraet eine
+    eigene VPN-Adresse bekommt (mehrere Geraete am selben Konto = je eigene IP)."""
+    try:
+        dev = (store.get("device_id") or "").strip()
+    except Exception:
+        dev = ""
+    if not dev:
+        return "/api/vpn/my"
+    try:
+        name = (store.get("device_name") or _socket.gethostname() or "").strip()
+    except Exception:
+        name = ""
+    return "/api/vpn/my?" + _uparse.urlencode({"device_id": dev, "device_name": name})
+
+
 class VpnSync:
     """Hintergrund-Abgleich. get_api() liefert das aktuelle Api-Objekt (oder None)."""
 
@@ -447,14 +467,14 @@ class VpnSync:
             return
         from .api import ApiError
         try:
-            data = api.request("GET", "/api/vpn/my")
+            data = api.request("GET", vpn_my_path(self.store))
         except ApiError as e:
             if e.status == 404:
                 return                                   # Modul "vpn" ist auf dem Server aus
             if e.status != 401 or not self.refresh:
                 raise
             self.refresh()
-            data = self.get_api().request("GET", "/api/vpn/my")
+            data = self.get_api().request("GET", vpn_my_path(self.store))
         self._cleanup_legacy()
         manual = set(self.store.get("vpn_manual", []) or [])          # per Dashboard-Knopf aktiviert
         off = set(self.store.get("vpn_off", []) or [])                 # im VPN-Bereich bewusst getrennt

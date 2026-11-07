@@ -511,22 +511,77 @@ def peer_config(tid: str, pid: str, qr: bool = False, user: dict = Depends(get_c
     return PlainTextResponse(conf, headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
+def _ensure_device_peer(tid: str, pid: str, device_id: str, device_name: str) -> dict:
+    """Legt (einmalig) einen Geraete-Unterpeer unter einem Benutzer-Peer an: eigener
+    Schluessel, eigene Adresse. So bekommt jedes Geraet eines Benutzers eine eigene IP."""
+    created = {"new": False}
+
+    def upd(d):
+        t = d["tunnels"].get(tid)
+        if not t:
+            return
+        p = t["peers"].get(pid)
+        if not p:
+            return
+        devs = p.setdefault("devices", {})
+        dv = devs.get(device_id)
+        if not dv:
+            priv, pub = wgconf.keypair()
+            dv = {"id": device_id, "name": device_name or "Gerät", "pub": pub, "priv_enc": store.enc(priv),
+                  "ip": wgconf.next_ip(t), "added": int(time.time())}
+            devs[device_id] = dv
+            created["new"] = True
+        elif device_name and dv.get("name") != device_name:
+            dv["name"] = device_name
+        created["dev"] = dict(dv)
+    store.update(upd)
+    return created
+
+
 @router.get("/my")
-def my_tunnels(user: dict = Depends(get_current_user)):
+async def my_tunnels(request: Request, user: dict = Depends(get_current_user)):
     """Fuer die Client-App: alle aktiven Tunnel, in denen ICH Teilnehmer bin (mit Datei).
-    Die App legt fehlende Tunnel an, verbindet sie und loescht, was hier nicht mehr steht."""
+    Die App legt fehlende Tunnel an, verbindet sie und loescht, was hier nicht mehr steht.
+
+    Mit ?device_id=... bekommt JEDES Geraet des Benutzers eine EIGENE Adresse
+    (eigener Unterpeer). Ohne device_id bleibt es beim gemeinsamen Benutzer-Peer
+    (Abwaertskompatibilitaet, z.B. QR-Code/Handy ohne App-Geraete-ID)."""
+    device_id = (request.query_params.get("device_id") or "").strip()[:64]
+    device_name = (request.query_params.get("device_name") or "").strip()[:64]
     out = []
     now = time.time()
+    host_resync = set()
     for t in store.load()["tunnels"].values():
         if t.get("state") != "active":
             continue
         for p in t["peers"].values():
-            if p["kind"] == "user" and p["ref"] == user["id"]:
-                exp = min([x for x in (t.get("expires"), p.get("expires")) if x] or [0])
-                if exp and exp <= now:
+            if not (p["kind"] == "user" and p["ref"] == user["id"]):
+                continue
+            exp = min([x for x in (t.get("expires"), p.get("expires")) if x] or [0])
+            if exp and exp <= now:
+                continue
+            if device_id:
+                res = _ensure_device_peer(t["id"], p["id"], device_id, device_name)
+                dv = res.get("dev")
+                if not dv:
                     continue
+                if res.get("new"):
+                    host_resync.add(t["id"])          # Host muss den neuen Pubkey kennen
+                out.append({"tunnel": t["id"], "peer": p["id"], "name": t["name"],
+                            "iface": wgconf.device_peer_iface(t, p, device_id), "expires": exp,
+                            "auto": bool(p.get("auto", True)),
+                            "conf": wgconf.device_peer_conf(t, {**p}, dv)})
+            else:
                 out.append({"tunnel": t["id"], "peer": p["id"], "name": t["name"], "iface": wgconf.peer_iface(t, p),
                             "expires": exp, "auto": bool(p.get("auto", True)), "conf": wgconf.peer_conf(t, p)})
+    # Neu angelegte Geraete: Host-Konfiguration neu ausbringen (zusaetzlicher Peer).
+    for tid in host_resync:
+        try:
+            tt = store.get(tid)
+            if tt:
+                await hosting.host_up(tt)
+        except Exception:
+            pass
     return {"tunnels": out, "server_time": int(now)}
 
 

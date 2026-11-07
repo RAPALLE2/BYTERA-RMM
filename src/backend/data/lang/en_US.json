@@ -1521,5 +1521,10 @@
  "tu_attached": "Attached to",
  "tu_attach_dev": "Attach USB",
  "tu_attach_dev_title": "Attach the digital USB stick to this device",
- "agent_tempusb_mkdir": "The target folder could not be created."
+ "agent_tempusb_mkdir": "The target folder could not be created.",
+ "none": "none",
+ "filter": "filter",
+ "ok": "OK",
+ "tu_users": "Users",
+ "tu_groups": "Groups"
 }

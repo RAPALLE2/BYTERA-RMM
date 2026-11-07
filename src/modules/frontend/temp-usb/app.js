@@ -5,7 +5,8 @@
 // Gerät kann dort z.B. ein Skript ablegen und per Remote-Screen/Shell starten;
 // was er ablegt, erscheint wieder hier.
 import { api, getToken } from "/js/app/api.js";
-import { esc, uiConfirm, uiPrompt, uiChoice } from "/js/app/utils.js";
+import { esc, uiConfirm, uiPrompt } from "/js/app/utils.js";
+import { pickEntity } from "/js/app/picker.js";
 import { state } from "/js/app/state.js";
 import { t } from "/js/app/i18n.js";
 
@@ -119,9 +120,10 @@ export async function renderTempUsb(body) {
   async function attachDialog() {
     const online = (state.clients || []).filter((c) => c.online);
     if (!online.length) { window.notify?.(t("tu_no_online"), "warning"); return; }
-    // Geraet (Node) ueber das Standard-Auswahlmenue (wie Teamspace-Mitglieder).
-    const clientId = await uiChoice(t("tu_attach_which"),
-      online.map((c) => ({ label: "🖥️ " + (c.hostname || c.id), value: c.id })));
+    // Geraet ueber die Standard-Auswahl (Filter + Liste, wie beim VPN).
+    const clientId = await pickEntity(t("tu_attach_which"), [{
+      items: online.map((c) => ({ id: c.id, name: c.hostname || c.id, icon: c.node ? "🖧" : "🖥" })),
+    }]);
     if (!clientId) return;
     const dev = online.find((c) => c.id === clientId);
     const path = await uiPrompt(t("tu_target"), { placeholder: "C:\\bytera / /mnt/bytera", value: "" });
@@ -141,11 +143,13 @@ export async function renderTempUsb(body) {
       const label = await uiPrompt(t("tu_new_label"), { placeholder: t("tu_new_ph") });
       if (!label) return;
       const dir = await jreq("/api/temp-usb/directory").catch(() => ({ users: [], groups: [] }));
-      // Besitzer ueber das Standard-Auswahlmenue (Benutzer + Gruppen, wie ueberall).
-      const opts = [{ label: "👤 " + t("tu_owner_me"), value: "me" }];
-      for (const u of (dir.users || [])) opts.push({ label: "👤 " + u.name, value: "user:" + u.id });
-      for (const g of (dir.groups || [])) opts.push({ label: "👥 " + g.name, value: "group:" + g.id });
-      const choice = await uiChoice(t("tu_owner"), opts);
+      // Besitzer ueber die Standard-Auswahl: eigener Benutzer, alle Benutzer, alle Gruppen.
+      const groups = [
+        { items: [{ id: "me", name: t("tu_owner_me"), icon: "👤" }] },
+        { title: t("tu_users"), icon: "👤", items: (dir.users || []).map((u) => ({ id: "user:" + u.id, name: u.name })) },
+        { title: t("tu_groups"), icon: "👥", items: (dir.groups || []).map((g) => ({ id: "group:" + g.id, name: g.name })) },
+      ];
+      const choice = await pickEntity(t("tu_owner"), groups, { selected: ["me"] });
       if (!choice) return;
       let owner_type = "user", owner_id = state.user?.id || "";
       if (choice.startsWith("user:")) { owner_type = "user"; owner_id = choice.slice(5); }

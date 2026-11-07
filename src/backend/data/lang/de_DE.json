@@ -1521,5 +1521,10 @@
  "tu_attached": "Angehängt an",
  "tu_attach_dev": "USB anhängen",
  "tu_attach_dev_title": "Digitalen USB-Stick an dieses Gerät anhängen",
- "agent_tempusb_mkdir": "Zielordner konnte nicht angelegt werden."
+ "agent_tempusb_mkdir": "Zielordner konnte nicht angelegt werden.",
+ "none": "keine",
+ "filter": "filtern",
+ "ok": "OK",
+ "tu_users": "Benutzer",
+ "tu_groups": "Gruppen"
 }

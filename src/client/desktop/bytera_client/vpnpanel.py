@@ -22,6 +22,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
 
+from .vpn import vpn_my_path
 from . import vpn
 
 REQ = "vpn_request.json"        # Anforderung vom Link-Starter
@@ -118,7 +119,7 @@ class VpnPanel:
         if api is None:
             return
         try:
-            data = api.request("GET", "/api/vpn/my")
+            data = api.request("GET", vpn_my_path(self.gui.store))
             self.tunnels = data.get("tunnels", [])
         except Exception as e:  # noqa: BLE001
             if getattr(e, "status", None) == 404:

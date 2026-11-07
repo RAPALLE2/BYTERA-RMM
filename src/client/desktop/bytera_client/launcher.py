@@ -19,6 +19,7 @@ from tkinter import messagebox
 import hashlib
 
 from . import browser, features, tunnel, vpn
+from .vpn import vpn_my_path
 from .api import Api, ApiError, normalize_server
 from .store import Store, default_data_dir
 
@@ -138,7 +139,7 @@ class Launcher:
 
     def ensure_vpn(self, tid: str) -> dict:
         """Eigenen Tunnel holen und SOFORT in WireGuard einrichten/aktivieren (auch ohne Automatik)."""
-        data = self.api.request("GET", "/api/vpn/my")
+        data = self.api.request("GET", vpn_my_path(self.store))
         t = next((x for x in data.get("tunnels", []) if x["tunnel"] == tid), None)
         if not t:
             raise ValueError("Der VPN-Tunnel wurde nicht gefunden oder ist abgelaufen.")
