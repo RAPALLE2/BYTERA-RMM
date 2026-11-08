@@ -2131,6 +2131,28 @@ async def on_screen_clipboard(sid, payload):
     await sio.emit("screen-clipboard", payload, namespace="/dashboard")
 
 
+@sio.on("screen-config", namespace="/dashboard")
+async def dashboard_screen_config(sid, data):
+    """Qualitaet/FPS der laufenden Fernwartung aendern (z.B. aus bytera://.../remotescreen/fps=10)."""
+    client_id = data.get("clientId")
+    if not client_id:
+        return
+    if not await _ws_user_may(data.get("username"), "use_screen", client_id):
+        return
+    out = {}
+    if data.get("fps") is not None:
+        try: out["fps"] = max(1, min(30, int(data["fps"])))
+        except Exception: pass
+    if data.get("quality") is not None:
+        try: out["quality"] = max(10, min(95, int(data["quality"])))
+        except Exception: pass
+    if data.get("width") is not None:
+        try: out["width"] = max(0, min(3840, int(data["width"])))   # 0 = automatisch
+        except Exception: pass
+    if out:
+        await send_to_agent(client_id, "screen-config", out)
+
+
 @sio.on("screen-set-monitor", namespace="/dashboard")
 async def dashboard_screen_set_monitor(sid, data):
     """Bildschirm-Wechsel (Multi-Monitor) an den Agenten weiterreichen."""

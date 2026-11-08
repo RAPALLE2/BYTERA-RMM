@@ -1,0 +1,70 @@
+{
+  "schema": 1,
+  "id": "browser",
+  "name": "Web-Browser",
+  "version": "1.0.0",
+  "description": "Vollwertiger Browser über den Server: ein echter Chromium (headless) läuft im Backend, sein Bildschirm wird live ins Dashboard gestreamt (Bilder, JavaScript, Cookies, POST – alles funktioniert). Firefox-ähnliche Oberfläche mit Tabs und Lesezeichen. Optionaler Proxy/VPN-Egress, um interne Seiten im Netz des Backends/Agenten zu erreichen.",
+  "author": "BYTERA",
+  "category": "Werkzeuge",
+  "icon": "🧭",
+  "requires": [],
+  "pip": [
+    "playwright"
+  ],
+  "routers": [
+    "browser_routes",
+    "webproxy_routes"
+  ],
+  "apps": [
+    {
+      "id": "webbrowser",
+      "label": "Browser",
+      "icon": "🌐",
+      "title": "Browser",
+      "entry": "webbrowser.js",
+      "export": "renderWebBrowser",
+      "w": 1020,
+      "h": 720
+    },
+    {
+      "id": "webapp",
+      "label": "Web-App",
+      "icon": "🌐",
+      "title": "Web-App",
+      "entry": "webbrowser.js",
+      "export": "renderWebApp",
+      "w": 1020,
+      "h": 720,
+      "startmenu": false
+    }
+  ],
+  "init": {
+    "entry": "index.js",
+    "export": "init"
+  },
+  "node": {
+    "kind": "python",
+    "requires_docker": false,
+    "autostart": false,
+    "actions": [
+      "up",
+      "down",
+      "restart",
+      "status"
+    ]
+  },
+  "settings": [
+    {
+      "key": "browser_proxy",
+      "type": "string",
+      "label": "Proxy/VPN-Egress des Server-Browsers",
+      "default": "",
+      "help": "z. B. socks5://10.77.0.1:1080 oder http://proxy:3128 – leer = direkt. Über einen VPN-Endpunkt werden interne Seiten erreichbar."
+    }
+  ],
+  "entry": "module",
+  "hooks": {
+    "disable": "on_disable",
+    "shutdown": "on_shutdown"
+  }
+}

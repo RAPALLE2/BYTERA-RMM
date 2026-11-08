@@ -12,7 +12,7 @@
 //   - "Relay"-Tab: Anleitung + fertige URL zum Netzlaufwerk-Verbinden
 
 import { api } from "../app/api.js";
-import { formatBytes, esc, uiConfirm, uiPrompt, uiChoice } from "../app/utils.js";
+import { formatBytes, esc, uiConfirm, uiPrompt, uiChoice, downloadBlob } from "../app/utils.js";
 import { BACKEND_URL, publicBaseNow, loadPublicBase } from "../app/config.js";
 import { isAdmin as userIsAdmin, state, hasGlobalPerm, hasClientPerm } from "../app/state.js";
 import { scheduleSave } from "../app/persist.js";
@@ -70,6 +70,9 @@ export function renderExplorer(body, win) {
   const where = clientId ? clientName : "Server";
   const history = [""];
   let currentPath = "";
+  // URL kopieren (Titelleiste) -> Explorer dieses Geräts am aktuellen Pfad.
+  win.getLink = () => `bytera://agent/${encodeURIComponent(clientId)}/explorer`
+    + (currentPath ? "/path=" + encodeURIComponent(currentPath) : "");
   let currentEntries = [];
   let mode = "files";
 
@@ -192,11 +195,7 @@ export function renderExplorer(body, win) {
     try {
       const res = await fs.read(entry.path);
       const bytes = Uint8Array.from(atob(res.data), (c) => c.charCodeAt(0));
-      const blob = new Blob([bytes]);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = res.name || entry.name; a.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(res.name || entry.name, bytes);   // handygerecht (iOS: neuer Tab)
     } catch (e) { window.notify?.("Download fehlgeschlagen: " + e.message, "error"); }
   }
 
@@ -216,9 +215,20 @@ export function renderExplorer(body, win) {
   async function editFile(entry) {
     try {
       const res = await fs.read(entry.path);
+      // Bytes dekodieren; wenn viele nicht-druckbare Zeichen -> wohl Binaerdatei.
+      let raw = "";
+      try { raw = atob(res.data); } catch { raw = ""; }
       let text;
-      try { text = decodeURIComponent(escape(atob(res.data))); }
-      catch { text = atob(res.data); }
+      try { text = decodeURIComponent(escape(raw)); } catch { text = raw; }
+      const sample = raw.slice(0, 4000);
+      let ctrl = 0;
+      for (let i = 0; i < sample.length; i++) {
+        const c = sample.charCodeAt(i);
+        if (c === 0 || (c < 9) || (c > 13 && c < 32)) ctrl++;
+      }
+      if (sample.length && ctrl / sample.length > 0.15) {
+        if (!(await uiConfirm(t("exp_binary_warn") || "Diese Datei sieht nicht nach Text aus. Trotzdem im Editor öffnen? Das Speichern kann sie beschädigen."))) return;
+      }
       const overlay = openOverlay(`
         <div style="display:flex;flex-direction:column;height:70vh">
           <div style="margin-bottom:8px;color:var(--subtext)">✏️ ${esc(entry.name)}</div>
@@ -349,7 +359,7 @@ export function renderExplorer(body, win) {
 
   function entryMenuItems(entry) {
     const isImg = !entry.isDir && IMAGE_EXT.has(extOf(entry.name));
-    const isTxt = !entry.isDir && TEXT_EXT.has(extOf(entry.name));
+    const isTxt = !entry.isDir;   // Editor kann ALLES oeffnen (Text wird erkannt)
     const items = [];
     if (entry.isDir) {
       items.push({ icon: "📂", label: t("exp_open"), fn: () => { history.push(entry.path); load(entry.path); } });
@@ -415,7 +425,7 @@ export function renderExplorer(body, win) {
         const modeHint = entry.mode ? ` (${entry.mode})` : "";
         const owner = (entry.owner || entry.group) ? `${esc(entry.owner || "")}:${esc(entry.group || "")}` : "";
         const isImg = !entry.isDir && IMAGE_EXT.has(extOf(entry.name));
-        const isTxt = !entry.isDir && TEXT_EXT.has(extOf(entry.name));
+        const isTxt = !entry.isDir;   // Editor kann ALLES oeffnen (Text wird erkannt)
 
         tr.innerHTML = `
           <td style="cursor:pointer">${icon} ${esc(entry.name)}</td>

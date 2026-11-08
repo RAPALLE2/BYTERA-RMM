@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "id": "recordings",
+  "name": "Aufzeichnungen",
+  "version": "1.0.0",
+  "description": "Zeichnet Remote-Bildschirm- und Terminal-Sitzungen auf und bietet die Wiedergabe. Ohne dieses Modul laufen Sitzungen weiter, werden aber nicht mitgeschnitten.",
+  "author": "BYTERA",
+  "category": "Betrieb",
+  "icon": "🎬",
+  "requires": [],
+  "pip": [],
+  "routers": [
+    "recordings_routes"
+  ],
+  "apps": [
+    {
+      "id": "recordings",
+      "label": "Aufzeichnungen",
+      "icon": "🎥",
+      "title": "Session-Aufzeichnungen",
+      "entry": "recordings.js",
+      "export": "renderRecordings",
+      "w": 820,
+      "h": 560,
+      "perm": "see_replay"
+    }
+  ],
+  "settings_ui": {
+    "entry": "settings.js",
+    "export": "renderSettings"
+  }
+}

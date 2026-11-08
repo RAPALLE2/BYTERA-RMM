@@ -140,3 +140,25 @@ export function bindContextMenu(el, builder) {
     el.removeEventListener("pointercancel", clearT);
   };
 }
+
+
+// ---------------------------------------------------------------------------
+// Globaler Rechtsklick-Schutz: ueberall das NATIVE Browsermenue unterdruecken.
+// Elemente mit eigenem Menue (bindContextMenu) rufen preventDefault()+stop und
+// sind damit ausgenommen. Ausnahmen, wo das native Menue sinnvoll ist:
+//   * Eingabefelder / editierbare Bereiche (Kopieren/Einfuegen/Rechtschreibung)
+//   * markierter Text (Kopieren)
+//   * Elemente mit [data-native-menu] (bewusste Opt-outs)
+let _guardOn = false;
+export function installGlobalContextGuard() {
+  if (_guardOn) return;
+  _guardOn = true;
+  document.addEventListener("contextmenu", (e) => {
+    if (e.defaultPrevented) return;                 // ein eigenes Menue hat schon uebernommen
+    const el = e.target;
+    if (el && el.closest && el.closest("input, textarea, [contenteditable=''], [contenteditable=true], [data-native-menu]")) return;
+    const sel = window.getSelection && window.getSelection();
+    if (sel && !sel.isCollapsed && String(sel).trim()) return;   // Text markiert -> natives Menue erlauben
+    e.preventDefault();
+  }, false);   // NICHT capture: bindContextMenu-Handler (ebenfalls bubbling) laufen zuerst und setzen defaultPrevented
+}

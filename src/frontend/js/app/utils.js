@@ -425,3 +425,41 @@ export function mapKeyboardText(text, clientLayout) {
   for (const ch of text) out += (_DE_KEY_TO_EN[ch] !== undefined ? _DE_KEY_TO_EN[ch] : ch);
   return out;
 }
+
+// Handy-tauglicher Download. Auf dem Desktop oeffnet der unsichtbare Link mit
+// download-Attribut die Speichern-Abfrage. Mobile Browser (vor allem iOS Safari)
+// ignorieren das download-Attribut oft und tun dann NICHTS - dort oeffnen wir die
+// Datei stattdessen in einem neuen Tab, wo der Nutzer sie teilen/sichern kann.
+// blobOrBytes: Blob | Uint8Array | ArrayBuffer. mime optional.
+export function downloadBlob(filename, blobOrBytes, mime = "application/octet-stream") {
+  let blob;
+  if (blobOrBytes instanceof Blob) blob = blobOrBytes;
+  else blob = new Blob([blobOrBytes], { type: mime });
+  if (!blob.type && mime) { try { blob = new Blob([blob], { type: mime }); } catch { /* egal */ } }
+  const url = URL.createObjectURL(blob);
+  const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const supportsDownload = "download" in document.createElement("a");
+  try {
+    if (isMobile && !supportsDownload) {
+      // z.B. iOS Safari: in neuem Tab oeffnen -> dort "Teilen"/"Sichern".
+      const w = window.open(url, "_blank");
+      if (!w) location.href = url;
+    } else {
+      const a = document.createElement("a");
+      a.href = url; a.download = filename || "download";
+      a.rel = "noopener"; document.body.appendChild(a); a.click(); a.remove();
+    }
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+}
+
+// Fertige Blob-URL (z.B. von einem Download-Endpunkt) handygerecht ausliefern.
+export function saveUrlAs(url, filename) {
+  const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const supportsDownload = "download" in document.createElement("a");
+  if (isMobile && !supportsDownload) { const w = window.open(url, "_blank"); if (!w) location.href = url; return; }
+  const a = document.createElement("a");
+  a.href = url; a.download = filename || "download"; a.rel = "noopener";
+  document.body.appendChild(a); a.click(); a.remove();
+}

@@ -1,0 +1,155 @@
+{
+  "schema": 1,
+  "id": "collab",
+  "name": "Zusammenarbeit & Werkzeuge",
+  "version": "1.2.0",
+  "description": "Chat, Kalender mit Organigramm, persönliche Todo-Liste sowie die Werkzeuge Notizheft (Notizen als Dateien im eigenen Space - daher benötigt dieses Modul „Spaces“), Rechner und Uhr (Stoppuhr, Timer, Wecker) - jeweils einzeln schaltbar. Tickets sind ein eigenes Modul.",
+  "author": "BYTERA",
+  "category": "Kollaboration",
+  "icon": "🤝",
+  "requires": [
+    "spaces"
+  ],
+  "pip": [],
+  "routers": [
+    {
+      "module": "chat_routes",
+      "feature": "chat"
+    },
+    {
+      "module": "calendar_routes",
+      "feature": "calendar"
+    },
+    {
+      "module": "todos_routes",
+      "feature": "todos"
+    },
+    {
+      "module": "notepad_routes",
+      "feature": "notepad"
+    },
+    {
+      "module": "clock_routes",
+      "feature": "clock"
+    }
+  ],
+  "features": [
+    {
+      "id": "chat",
+      "label": "Chat",
+      "default": true
+    },
+    {
+      "id": "calendar",
+      "label": "Kalender & Organigramm",
+      "default": true
+    },
+    {
+      "id": "todos",
+      "label": "Todo-Liste",
+      "default": true
+    },
+    {
+      "id": "notepad",
+      "label": "Notizheft",
+      "default": true
+    },
+    {
+      "id": "calc",
+      "label": "Rechner",
+      "default": true
+    },
+    {
+      "id": "clock",
+      "label": "Uhr (Stoppuhr, Timer, Wecker)",
+      "default": true
+    }
+  ],
+  "apps": [
+    {
+      "id": "chat",
+      "label": "Chat",
+      "icon": "💬",
+      "title": "Chat",
+      "entry": "chat.js",
+      "export": "renderChat",
+      "w": 900,
+      "h": 620,
+      "perm": "use_chat",
+      "feature": "chat"
+    },
+    {
+      "id": "calendar",
+      "label": "Kalender",
+      "icon": "🗓️",
+      "title": "Kalender",
+      "entry": "calendar.js",
+      "export": "renderCalendar",
+      "w": 900,
+      "h": 680,
+      "perm": "use_calendar",
+      "feature": "calendar"
+    },
+    {
+      "id": "todos",
+      "label": "Todos",
+      "icon": "✅",
+      "title": "Todos",
+      "entry": "todos.js",
+      "export": "renderTodos",
+      "w": 960,
+      "h": 640,
+      "perm": "use_todos",
+      "feature": "todos"
+    },
+    {
+      "id": "orgchart",
+      "label": "Organigramm",
+      "icon": "🏛️",
+      "title": "Organigramm",
+      "entry": "orgchart.js",
+      "export": "renderOrgChart",
+      "w": 780,
+      "h": 640,
+      "perm": "see_org",
+      "feature": "calendar"
+    },
+    {
+      "id": "notepad",
+      "label": "Notizheft",
+      "icon": "🗒️",
+      "title": "Notizheft",
+      "entry": "notepad.js",
+      "export": "renderNotepad",
+      "w": 860,
+      "h": 600,
+      "feature": "notepad"
+    },
+    {
+      "id": "calculator",
+      "label": "Rechner",
+      "icon": "🧮",
+      "title": "Rechner",
+      "entry": "calculator.js",
+      "export": "renderCalculator",
+      "w": 420,
+      "h": 660,
+      "feature": "calc"
+    },
+    {
+      "id": "clock",
+      "label": "Uhr",
+      "icon": "⏰",
+      "title": "Uhr",
+      "entry": "clock.js",
+      "export": "renderClock",
+      "w": 520,
+      "h": 560,
+      "feature": "clock"
+    }
+  ],
+  "init": {
+    "entry": "clockcore.js",
+    "export": "init"
+  }
+}

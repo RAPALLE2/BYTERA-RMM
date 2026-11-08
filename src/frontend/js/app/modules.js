@@ -196,11 +196,12 @@ export function renderModuleApp(appId, body, win) {
 }
 
 /** Oeffnet eine Modul-App aus dem Startmenue. true = behandelt. */
-export function openModuleApp(appId) {
+export function openModuleApp(appId, props = null) {
   const info = apps.get(appId);
   if (!info) return false;
   const a = info.app;
-  openWindow({ key: a.key || a.id, appId: a.id, title: a.title || a.label || a.id, w: a.w || 800, h: a.h || 600 });
+  openWindow({ key: a.key || a.id, appId: a.id, title: a.title || a.label || a.id,
+               w: a.w || 800, h: a.h || 600, props: props || {} });
   return true;
 }
 

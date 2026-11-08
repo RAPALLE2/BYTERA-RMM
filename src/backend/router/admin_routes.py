@@ -160,6 +160,7 @@ PERM_LABELS = {
     "use_tenants": "Mandanten öffnen und wechseln – Modul „Mandanten“",
     "manage_dist": "Verteilung verwalten (/dist: Ordner, Dateien, Freigaben)",
     "manage_temp_usb": "Digitalen USB-Stick verwalten (temp-usb: Bereiche, Dateien, an Geräte anhängen)",
+    "use_browser": "Server-Browser benutzen (Webseiten über den Server laden, VPN-Zugang)",
     "use_console": "RMM-Konsole benutzen (SSH, Dashboard, Client-App) – je Befehl zusätzlich das passende Recht",
     "create_users": "Benutzer erstellen",
     "network_scan": "Netzwerk-Scan",

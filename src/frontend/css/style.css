@@ -97,6 +97,14 @@ body {
   width: 100%; padding: 9px 10px; border-radius: 6px;
   border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
 }
+/* Dropdown: eigene Darstellung, damit der Text nicht halb im Hintergrund liegt.
+   (Natives <select> uebernahm teils die durchscheinende Login-Flaeche.) */
+.login-box select {
+  -webkit-appearance: none; -moz-appearance: none; appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8'><path d='M1 1l5 5 5-5' fill='none' stroke='%238fa3bd' stroke-width='1.5'/></svg>");
+  background-repeat: no-repeat; background-position: right 10px center; padding-right: 30px;
+}
+.login-box select option { background: #141d2b; color: var(--text); }
 
 /* Aussehen von .btn-primary: siehe ui.css. Login: volle Breite, etwas höher. */
 .login-box .btn-primary { width: 100%; margin-top: 20px; min-height: 38px; font-size: 13.5px; }
@@ -371,6 +379,8 @@ input.invalid, textarea.invalid {
 /* 📌 Anheften: standardmäßig gedimmt, angepinnt = Akzent-Hintergrund.
    WICHTIG: Die Rotation liegt NUR auf dem Icon (.win-pin-glyph), damit die
    Button-Box – und damit der Hover-/Angepinnt-Hintergrund – immer gerade bleibt. */
+.rmm-window-titlebar .win-link-btn { font-size: 12px; opacity: 0.6; transition: opacity 0.15s ease; display: inline-flex; align-items: center; justify-content: center; }
+.rmm-window-titlebar .win-link-btn:hover { opacity: 1; }
 .rmm-window-titlebar .win-pin-btn { font-size: 11px; filter: grayscale(1); opacity: 0.55; transition: opacity 0.15s ease; display: inline-flex; align-items: center; justify-content: center; }
 .rmm-window-titlebar .win-pin-btn:hover { opacity: 1; }
 .rmm-window-titlebar .win-pin-btn.pinned { filter: none; opacity: 1; background: rgba(79,140,255,0.22); }
@@ -939,7 +949,7 @@ button:has(> button:active),
   gap: 14px;
   align-items: start;
 }
-.dash-w .dash-w-body { overflow: visible; }
+.dash-w .dash-w-body { overflow: auto; min-width: 0; min-height: 0; }   /* zu klein -> scrollen statt ueberlaufen */
 .dash-w {
   position: relative;
   display: flex; flex-direction: column;
@@ -1526,3 +1536,22 @@ body.solo-mode .rmm-window-titlebar .win-controls { display: none !important; }
 .gs-sub { color: var(--subtext); font-size: 11px; }
 .gs-empty { padding: 10px 12px; color: var(--subtext); font-size: 12px; }
 @media (max-width: 760px) { .topbar-search { display: none; } }
+
+
+/* Widgets/Panels responsiv: Inhalte nicht ueber den Rand druecken ------------ */
+.dash-w-body, .dash-lp-body, .panelpart-body, .widget-fit-holder {
+  min-width: 0; min-height: 0;
+}
+/* Zu schmal: Knopfreihen umbrechen statt abschneiden; Beschriftungen kuerzen. */
+.dash-lp-body.actions-panel, .panelpart-body.actions-panel,
+.quick-actions, .dash-w-head, .dash-lp-head {
+  flex-wrap: wrap;
+}
+.action-btn, .quick-actions button {
+  min-width: 0; max-width: 100%;
+}
+.action-btn > span, .dash-w-title, .dash-lp-title, .tb-label {
+  overflow: hidden; text-overflow: ellipsis;
+}
+/* Zu kurz: der Fensterinhalt bekommt eine vertikale Scrollleiste. */
+.rmm-window-body { overflow: auto; min-height: 0; }

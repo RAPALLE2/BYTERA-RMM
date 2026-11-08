@@ -1526,5 +1526,6 @@
  "filter": "filter",
  "ok": "OK",
  "tu_users": "Users",
- "tu_groups": "Groups"
+ "tu_groups": "Groups",
+ "exp_binary_warn": "This file does not look like text. Open it in the editor anyway? Saving may corrupt it."
 }

@@ -152,8 +152,10 @@ export function buildSubTabs(root, opts = {}) {
   if (pinned.length) {
     const foot = document.createElement("div");
     foot.className = "sub-foot";
-    foot.style.cssText = "margin-top:14px;padding-top:12px;border-top:1px solid var(--border)"
-      + (padL || padR ? `;padding-left:${padL || 0};padding-right:${padR || 0};padding-bottom:16px` : "");
+    // Mindest-Innenabstand, damit der angeheftete Knopf (z.B. "Speichern") nicht
+    // ohne Rand am Fensterrand klebt, auch wenn das Fenster selbst kein Padding hat.
+    const pl = padL || "14px", pr = padR || "14px";
+    foot.style.cssText = `margin-top:14px;padding:12px ${pr} 16px ${pl};border-top:1px solid var(--border)`;
     let any = false;
     pinned.forEach((sel) => {
       root.querySelectorAll(sel).forEach((el) => { foot.appendChild(el); any = true; });

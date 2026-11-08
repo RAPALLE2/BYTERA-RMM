@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "id": "docker",
+  "name": "Docker",
+  "version": "1.0.0",
+  "description": "Container verwalten – auf dem RMM-Server (Docker-Socket) oder auf Nodes: Stacks per docker-compose oder aus dem Container-Browser (Katalog + Docker Hub), volle Kontrolle (Start/Stopp, Logs, Statistik, Konsole, Images, Volumes, Netzwerke), Rechte pro Stack für Benutzer und Gruppen, Veröffentlichen über den Webserver.",
+  "author": "BYTERA",
+  "category": "Virtualisierung",
+  "icon": "🐳",
+  "requires": [
+    "webserver"
+  ],
+  "pip": [
+    "PyYAML>=6.0"
+  ],
+  "routers": [
+    "docker_routes"
+  ],
+  "apps": [
+    {
+      "id": "docker",
+      "label": "Docker",
+      "icon": "🐳",
+      "title": "Docker",
+      "entry": "app.js",
+      "export": "renderDocker",
+      "w": 1100,
+      "h": 700
+    }
+  ],
+  "node": {
+    "kind": "python",
+    "requires_docker": true,
+    "autostart": false,
+    "actions": [
+      "up",
+      "down",
+      "restart",
+      "status"
+    ]
+  }
+}

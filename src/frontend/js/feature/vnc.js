@@ -21,6 +21,16 @@ import { t } from "../app/i18n.js";
 
 export function renderVnc(body, win) {
   const { clientId, clientName } = win.props;
+  // URL kopieren: Fernwartung dieses Geräts (aktuell gezeigter Monitor + Parameter).
+  win.getLink = () => {
+    const p = [];
+    const m = (typeof monitorIndex === "number" && monitorIndex > 0) ? monitorIndex
+      : parseInt(win.props?.screen, 10);
+    if (!isNaN(m) && m) p.push("screen=" + m);
+    if (win.props?.fps) p.push("fps=" + win.props.fps);
+    if (win.props?.resolution) p.push("resolution=" + win.props.resolution);
+    return `bytera://agent/${encodeURIComponent(clientId)}/remotescreen` + (p.length ? "/" + p.join("&") : "");
+  };
   // Alle Steuer-Events an das Geraet tragen den Benutzernamen - das Backend
   // prueft damit das Recht use_screen (frueher war screen-input ungeprueft).
   const _me = () => state.user?.username || "";
@@ -818,6 +828,21 @@ export function renderVnc(body, win) {
     if (chosenSession !== null && chosenSession !== undefined) payload.session = chosenSession;
     dashboardSocket.emit("screen-start", payload);
     _announceSessionStart(clientId);
+    // bytera://agent/<id>/remotescreen/screen=2&fps=10 -> Bildschirm/FPS/Qualitaet
+    // anwenden, sobald der Stream laeuft.
+    const wantScreen = parseInt(win.props?.screen, 10);
+    if (!isNaN(wantScreen)) setTimeout(() => { try { setMonitor(wantScreen); } catch { /* egal */ } }, 1500);
+    const cfg = {};
+    const wantFps = parseInt(win.props?.fps, 10);
+    const wantQ = parseInt(win.props?.quality, 10);
+    if (!isNaN(wantFps)) cfg.fps = wantFps;
+    if (!isNaN(wantQ)) cfg.quality = wantQ;
+    // resolution=BREITExHOEHE (z.B. 1024x512) -> Zielbreite an den Agenten.
+    const res = String(win.props?.resolution || "").match(/^(\d{3,4})\s*[x\u00d7]/);
+    if (res) cfg.width = parseInt(res[1], 10);
+    if (Object.keys(cfg).length) {
+      setTimeout(() => { try { dashboardSocket.emit("screen-config", { clientId, username: _me(), ...cfg }); } catch { /* egal */ } }, 1500);
+    }
   }
 
   function pickUserThenStart() {

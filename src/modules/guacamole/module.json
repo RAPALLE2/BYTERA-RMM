@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "id": "guacamole",
+  "name": "Guacamole (RDP/SSH/VNC)",
+  "version": "1.0.0",
+  "description": "Remote-Zugriff per Apache Guacamole direkt im Browser. Startet auf Wunsch guacd in Docker, ueberwacht den Container und erlaubt eine manuelle Verbindung zu einem eigenen guacd.",
+  "author": "BYTERA",
+  "category": "Fernzugriff",
+  "icon": "🪟",
+  "requires": [],
+  "pip": [],
+  "routers": [
+    "guac_routes"
+  ],
+  "websockets": [
+    {
+      "module": "guac_routes",
+      "path": "/guac/tunnel",
+      "endpoint": "tunnel_endpoint"
+    }
+  ],
+  "apps": [
+    {
+      "id": "guacamole",
+      "label": "Guacamole",
+      "icon": "🪟",
+      "title": "Guacamole",
+      "entry": "guacamole.js",
+      "export": "renderGuacamole",
+      "w": 900,
+      "h": 640,
+      "startmenu": false
+    }
+  ],
+  "settings_ui": {
+    "entry": "settings.js",
+    "export": "renderSettings"
+  }
+}

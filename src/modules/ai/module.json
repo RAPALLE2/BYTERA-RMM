@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "id": "ai",
+  "name": "KI-Chat",
+  "version": "1.0.0",
+  "description": "Chat mit KI-Anbietern ueber den Server (Verbindungen + Proxy).",
+  "author": "BYTERA",
+  "category": "KI",
+  "icon": "🤖",
+  "requires": [],
+  "pip": [],
+  "routers": [
+    "ai_routes"
+  ],
+  "apps": [
+    {
+      "id": "aichat",
+      "label": "AI Chat",
+      "icon": "🤖",
+      "title": "AI Chat",
+      "entry": "aichat.js",
+      "export": "renderAiChat",
+      "w": 860,
+      "h": 620
+    }
+  ]
+}

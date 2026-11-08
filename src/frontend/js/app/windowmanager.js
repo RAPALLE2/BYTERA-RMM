@@ -23,6 +23,70 @@ import { bindContextMenu } from "./contextmenu.js";
 const cleanupFns = {};
 export function registerCleanup(key, fn) { cleanupFns[key] = fn; }
 
+// appId der Fenster-Apps -> Geraete-Aktion im bytera://-Schema.
+const _APP_TO_ACTION = {
+  vnc: "remotescreen", explorer: "explorer", taskmanager: "tasks",
+  terminal: "terminal", guacamole: "guacamole", "edit-client": "edit",
+};
+// Core-/Menue-Apps, die ohne Geraet geoeffnet werden.
+const _APP_FUNCTION = new Set(["settings", "audit", "permissions", "modules", "nodes", "manage", "profile"]);
+
+function _qs(obj) {
+  const p = Object.entries(obj || {})
+    .filter(([, v]) => v !== undefined && v !== null && v !== "")
+    .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`);
+  return p.length ? "/" + p.join("&") : "";
+}
+
+// Standard-Link, wenn die App kein eigenes win.getLink() setzt.
+function defaultWindowLink(win) {
+  const pr = win.props || {};
+  const cid = pr.clientId;
+  if (win.appId === "dist") return "bytera://dist";
+  if (win.appId === "temp-usb") return "bytera://app/temp-usb";
+  if (_APP_FUNCTION.has(win.appId)) return "bytera://function/" + win.appId;
+  const action = _APP_TO_ACTION[win.appId];
+  if (cid && action) {
+    // ausgewaehlte Zustands-Parameter je App mitnehmen
+    const params = {};
+    if (win.appId === "vnc") {
+      if (pr.screen != null) params.screen = pr.screen;
+      if (pr.fps != null) params.fps = pr.fps;
+      if (pr.resolution) params.resolution = pr.resolution;
+    }
+    if (win.appId === "explorer" && pr.path) params.path = pr.path;
+    return `bytera://agent/${encodeURIComponent(cid)}/${action}` + _qs(params);
+  }
+  if (cid) return `bytera://agent/${encodeURIComponent(cid)}`;
+  // Modul-App ohne Geraet
+  return "bytera://app/" + win.appId;
+}
+
+export function windowLink(win) {
+  try {
+    if (typeof win.getLink === "function") {
+      const u = win.getLink();
+      if (u) return u;
+    }
+  } catch { /* egal */ }
+  return defaultWindowLink(win);
+}
+
+function copyWindowLink(win) {
+  const url = windowLink(win);
+  import("./modules.js").then(({ getModuleApi }) => {
+    const api = getModuleApi("url-scheme");
+    if (api && api.copy) api.copy(url);
+    else {
+      try { navigator.clipboard?.writeText(url); } catch { /* egal */ }
+      window.notify?.("Link kopiert: " + url, "success", 2500);
+    }
+  }).catch(() => {
+    try { navigator.clipboard?.writeText(url); } catch { /* egal */ }
+    window.notify?.(url, "info", 4000);
+  });
+}
+
 // Wird von app.js gesetzt: Funktion, die den Inhalt eines Fensters rendert.
 let contentRenderer = null;
 export function setContentRenderer(fn) { contentRenderer = fn; }
@@ -351,6 +415,16 @@ function createWindowElement(win) {
   const controls = document.createElement("span");
   controls.className = "win-controls";
 
+  // 🔗 URL kopieren: baut einen bytera://-Link, der den aktuellen Zustand des
+  // Fensters (App, Gerät, Pfad, Einstellungen) abbildet. Die App kann dafuer
+  // win.getLink() setzen (liefert den vollen Link); sonst gibt es einen Standard.
+  const linkBtn = document.createElement("button");
+  linkBtn.className = "win-link-btn";
+  linkBtn.textContent = "🔗";
+  linkBtn.title = "URL kopieren (Link zu dieser Ansicht)";
+  linkBtn.addEventListener("click", (e) => { e.stopPropagation(); copyWindowLink(win); });
+  linkBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+
   const pinBtn = document.createElement("button");
   // Nur das Icon (Glyph) wird schräg gestellt/gedreht, NICHT die Button-Box.
   // Dadurch bleibt der Hover-/Angepinnt-Hintergrund immer gerade.
@@ -381,6 +455,7 @@ function createWindowElement(win) {
   closeBtn.addEventListener("click", (e) => { e.stopPropagation(); closeWindow(win.key); });
   closeBtn.addEventListener("mousedown", (e) => e.stopPropagation());
 
+  controls.appendChild(linkBtn);
   controls.appendChild(pinBtn);
   controls.appendChild(minBtn);
   controls.appendChild(maxBtn);

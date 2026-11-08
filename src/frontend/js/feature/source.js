@@ -12,7 +12,7 @@
 import { api, getToken } from "../app/api.js";
 import { helpDot } from "../app/help.js";
 import { state } from "../app/state.js";
-import { esc, formatBytes, uiConfirm, uiPrompt, uiConfirmTwice, downloadText } from "../app/utils.js";
+import { esc, formatBytes, uiConfirm, uiPrompt, uiConfirmTwice, downloadText, saveUrlAs } from "../app/utils.js";
 import { dashboardSocket } from "../app/socket.js";
 import { MiniTerm } from "./miniterm.js";
 import { t } from "../app/i18n.js";
@@ -1102,11 +1102,9 @@ function renderDiagnostics(host) {
       });
       if (!res.ok) throw new Error(`Fehler ${res.status}`);
       const blob = await res.blob();
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = `rmm-diagnose-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}.zip`;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(a.href), 8000);
+      const _u = URL.createObjectURL(blob);
+      saveUrlAs(_u, `rmm-diagnose-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}.zip`);
+      setTimeout(() => URL.revokeObjectURL(_u), 60000);
     } catch (e) {
       window.notify?.("Download fehlgeschlagen: " + e.message, "error");
     }

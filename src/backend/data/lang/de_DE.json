@@ -1526,5 +1526,6 @@
  "filter": "filtern",
  "ok": "OK",
  "tu_users": "Benutzer",
- "tu_groups": "Gruppen"
+ "tu_groups": "Gruppen",
+ "exp_binary_warn": "Diese Datei sieht nicht nach Text aus. Trotzdem im Editor öffnen? Beim Speichern kann sie beschädigt werden."
 }

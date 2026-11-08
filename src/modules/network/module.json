@@ -1,0 +1,95 @@
+{
+  "schema": 1,
+  "id": "network",
+  "name": "Netzwerk-Werkzeuge",
+  "version": "1.0.0",
+  "description": "Netzwerk-Scan, Portscan, Speedtest und Port-Weiterleitung. Jede Teilfunktion ist einzeln schaltbar.",
+  "author": "BYTERA",
+  "category": "Netzwerk",
+  "icon": "🌐",
+  "requires": [],
+  "pip": [],
+  "routers": [
+    {
+      "module": "network_routes",
+      "feature": "scan"
+    },
+    {
+      "module": "speedtest_routes",
+      "feature": "speedtest"
+    },
+    {
+      "module": "portforward_routes",
+      "feature": "portforward"
+    }
+  ],
+  "hooks": {
+    "startup": "on_startup"
+  },
+  "features": [
+    {
+      "id": "scan",
+      "label": "Netzwerk-Scan & Portscan",
+      "default": true
+    },
+    {
+      "id": "speedtest",
+      "label": "Speedtest",
+      "default": true
+    },
+    {
+      "id": "portforward",
+      "label": "Port-Weiterleitung",
+      "default": true
+    }
+  ],
+  "entry": "module",
+  "apps": [
+    {
+      "id": "network",
+      "label": "Netzwerk-Scanner",
+      "icon": "📡",
+      "title": "Netzwerk-Scanner",
+      "entry": "network.js",
+      "export": "renderNetwork",
+      "w": 620,
+      "h": 500,
+      "perm": "network_scan",
+      "feature": "scan"
+    },
+    {
+      "id": "portscan",
+      "label": "Portscan",
+      "icon": "🎯",
+      "title": "Portscan",
+      "entry": "portscan.js",
+      "export": "renderPortscan",
+      "w": 560,
+      "h": 480,
+      "perm": "port_scan",
+      "feature": "scan"
+    },
+    {
+      "id": "speedtest",
+      "label": "Speedtest",
+      "icon": "🚀",
+      "title": "Speedtest",
+      "entry": "speedtest.js",
+      "export": "renderSpeedtest",
+      "w": 560,
+      "h": 640,
+      "feature": "speedtest"
+    }
+  ],
+  "node": {
+    "kind": "python",
+    "requires_docker": false,
+    "autostart": false,
+    "actions": [
+      "up",
+      "down",
+      "restart",
+      "status"
+    ]
+  }
+}

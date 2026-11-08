@@ -1197,11 +1197,13 @@ export async function handleQuickAction(action, client) {
   }
 }
 
-export function handleAction(action, client, ev, { forceWeb = false } = {}) {
+export function handleAction(action, client, ev, { forceWeb = false, params = null } = {}) {
   // Module duerfen uebernehmen (z.B. Client-App: extern oeffnen) - mit forceWeb nicht
   if (!forceWeb && runActionHandlers(action, client, ev)) return;
   const colorProps = { clientColor: client.color };
-  const props = { clientId: client.id, clientName: client.hostname, platform: client.platform };
+  // params (z.B. aus bytera://.../remotescreen/screen=2&fps=10) landen in props,
+  // damit die jeweilige App (z.B. Fernwartung) sie auswerten kann.
+  const props = { clientId: client.id, clientName: client.hostname, platform: client.platform, ...(params || {}) };
   if (action === "terminal") {
     // Stabiler Key: ein erneuter Klick holt das vorhandene Terminal nach vorne.
     // Mit gedrückter Umschalttaste entsteht ein zweites Terminal (Suffix --2).

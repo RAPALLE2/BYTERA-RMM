@@ -4818,7 +4818,7 @@ def main():
     send(sock, json.dumps({"key": key, "pid": os.getpid()}).encode())
     log("connected to the agent on port %s" % port)
 
-    state = {"quality": 60, "fps": 10, "monitor": 1, "audio": False,
+    state = {"quality": 60, "fps": 10, "monitor": 1, "audio": False, "width": 0,
              "left": 0, "top": 0, "stream": False, "stop": False, "sesswin": None}
 
     state["files"] = {}
@@ -5011,6 +5011,7 @@ def main():
                 state["quality"] = int(o.get("quality", state["quality"]))
                 state["fps"] = int(o.get("fps", state["fps"]))
                 state["monitor"] = int(o.get("monitor", state["monitor"]))
+                state["width"] = int(o.get("width", state.get("width", 0)) or 0)
                 state["stream"] = bool(o.get("stream", state["stream"]))
             elif c == "input":
                 try: do_input(o.get("data") or {})
@@ -5156,8 +5157,18 @@ def capture(sock, state):
     # Aufnahme neu aufgesetzt und erst nach anhaltenden Fehlern (~15 s) aufgegeben.
     sct = None
     errors = 0
+    last_send = time.time()
+    def _keepalive():
+        nonlocal last_send
+        if time.time() - last_send >= 4.0:
+            try:
+                send(sock, b"K")          # Lebenszeichen - haelt die Leitung wach
+                last_send = time.time()
+            except Exception:
+                state["stop"] = True
     while not state["stop"]:
         if not state["stream"]:
+            _keepalive()
             time.sleep(0.15)
             continue
         try:
@@ -5173,7 +5184,8 @@ def capture(sock, state):
             # Gleiche Regel wie im direkten Aufnahmeweg des Agenten:
             # hohe Qualitaet -> bis 1920 px, sonst 1280 px.
             q = max(10, min(95, state["quality"]))
-            max_width = 1920 if q >= 70 else 1280
+            _fw = int(state.get("width", 0) or 0)
+            max_width = _fw if _fw > 0 else (1920 if q >= 70 else 1280)
             if img.width > max_width:
                 ratio = max_width / img.width
                 img = img.resize((max_width, int(img.height * ratio)))
@@ -5201,10 +5213,12 @@ def capture(sock, state):
                 except Exception:
                     pass
                 break
+            _keepalive()           # trotz Aufnahmefehler (Sperrbildschirm o.ae.) am Leben bleiben
             time.sleep(0.3)
             continue
         try:
             send(sock, payload)
+            last_send = time.time()
         except Exception as e:
             log("Verbindung zum Agenten weg: %s" % e)
             state["stop"] = True
@@ -5622,9 +5636,27 @@ class _ScreenHelper:
         exe = sys.executable
         # Die Sprache wird als drittes Argument mitgegeben - der Helfer laeuft in
         # einem eigenen Prozess und liest die .env des Agenten nicht.
-        if not _win_start_in_user_session([exe, script, str(port), key, AGENT_LANG]):
-            server.close()
-            return None
+        cmd = [exe, script, str(port), key, AGENT_LANG]
+        if IS_WINDOWS:
+            # Dienst in Sitzung 0 -> Helfer in die Benutzersitzung bringen.
+            if not _win_start_in_user_session(cmd):
+                server.close()
+                return None
+        else:
+            # Linux/macOS: Der Agent laeuft bereits in der grafischen Sitzung des
+            # Benutzers (DISPLAY/XAUTHORITY gesetzt). Der Helfer erbt die Umgebung
+            # und kann so das Chat-/Rechte-Fenster anzeigen.
+            if not os.environ.get("DISPLAY") and sys.platform != "darwin":
+                _print("[screen-helper] kein DISPLAY - Chat-/Rechte-Fenster nicht möglich")
+                server.close()
+                return None
+            try:
+                subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 start_new_session=True)
+            except Exception as e:
+                _print(f"[screen-helper] Helfer-Start (Linux) fehlgeschlagen: {e}")
+                server.close()
+                return None
 
         try:
             conn, _addr = server.accept()
@@ -5688,7 +5720,19 @@ class _ScreenHelper:
             return "reply", json.loads(msg[1:].decode()), None
         if msg[:1] == b"A":
             return "audio", None, msg[1:]          # Ton: mu-law, mono, 16 kHz
+        if msg[:1] == b"K":
+            return "keepalive", None, None         # Lebenszeichen des Helfers
         return "unknown", None, None               # nicht als "Verbindung weg" werten
+
+    def ping(self) -> bool:
+        """Aktiver Verbindungstest: ein Ping an den Helfer. True = Leitung ok.
+        Der Helfer ignoriert unbekannte Steuerbefehle, es reicht, dass das
+        Senden nicht scheitert (sonst ist der Socket wirklich tot)."""
+        try:
+            self.send({"cmd": "ping"})
+            return True
+        except Exception:
+            return False
 
     def drain(self, seconds: float = 1.5) -> None:
         """
@@ -5753,26 +5797,36 @@ def _screen_helper_loop(loop, helper) -> bool:
     """Nimmt die Bilder vom Helfer entgegen und schickt sie ans Dashboard.
     Rueckgabe True = der Helfer ist WAEHREND der Sitzung weggebrochen (der
     Aufrufer startet ihn neu), False = regulaer beendet oder Fehler gemeldet."""
-    helper.send({"cmd": "config", "stream": True,
-                 "quality": int(_screen_stream.get("quality", 60)),
-                 "fps": int(_screen_stream.get("fps", 10)),
-                 "monitor": int(_screen_stream.get("monitor", 1) or 1)})
+    def _hcfg():
+        return {"cmd": "config", "stream": True,
+                "quality": int(_screen_stream.get("quality", 60)),
+                "fps": int(_screen_stream.get("fps", 10)),
+                "monitor": int(_screen_stream.get("monitor", 1) or 1),
+                "width": int(_screen_stream.get("width", 0) or 0)}
+    helper.send(_hcfg())
     last_cfg = None
     while _screen_stream["active"] and helper.alive:
         cfg = (int(_screen_stream.get("quality", 60)),
                int(_screen_stream.get("fps", 10)),
-               int(_screen_stream.get("monitor", 1) or 1))
+               int(_screen_stream.get("monitor", 1) or 1),
+               int(_screen_stream.get("width", 0) or 0))
         if cfg != last_cfg:
-            helper.send({"cmd": "config", "stream": True, "quality": cfg[0],
-                         "fps": cfg[1], "monitor": cfg[2]})
+            helper.send(_hcfg())
             last_cfg = cfg
-        got = helper.recv(timeout=30.0)
+        got = helper.recv(timeout=15.0)
         if got is None:
-            # Leitung weg: Als tot markieren, damit die NAECHSTE Sitzung einen
-            # frischen Helfer startet, statt auf einen toten Socket zu warten.
+            # Nichts gelesen. Der Helfer sendet alle ~4 s ein Lebenszeichen (auch
+            # bei Sperrbildschirm/UAC, wenn gerade kein Bild entsteht). Bleibt es
+            # 15 s GANZ still, pruefen wir die Verbindung aktiv mit einem Ping,
+            # statt die Sitzung sofort zu beenden (fruehere Ursache fuer
+            # "Sitzung geht nach einiger Zeit aus").
+            if helper.ping():
+                continue
             helper.alive = False
             break
         kind, meta, jpeg = got
+        if kind == "keepalive":
+            continue                     # Lebenszeichen - alles in Ordnung
         if kind == "reply" and isinstance(meta, dict) and meta.get("session"):
             _handle_session_reply(loop, meta)
             continue
@@ -5820,6 +5874,8 @@ def _ensure_helper(loop):
         # zwar noch, zeichnet aber einen Desktop auf, den niemand mehr sieht -
         # und sein Zustimmungsdialog erscheint auf einem unsichtbaren
         # Bildschirm. Deshalb hier vergleichen und ihn notfalls ersetzen.
+        if not IS_WINDOWS:
+            return helper                      # Linux/macOS: ein Helfer, keine Sitzungs-IDs
         want = _win_user_sessions()
         have = getattr(helper, "session", None)
         if not want or have is None or have == want[0]:
@@ -5953,7 +6009,10 @@ def _screen_capture_loop(loop):
             # Ziel-Breite skaliert mit der gewählten Qualität: hohe Qualität ->
             # bis 1920px (schärfer), niedrige -> 1280px (spart Bandbreite).
             _q_now = int(_screen_stream.get("quality", 55))
-            max_width = 1920 if _q_now >= 70 else 1280
+            # Zielbreite: fest gewaehlt (bytera://.../resolution=WxH) hat Vorrang,
+            # sonst automatisch nach Qualitaet (1920/1280).
+            _fixed_w = int(_screen_stream.get("width", 0) or 0)
+            max_width = _fixed_w if _fixed_w > 0 else (1920 if _q_now >= 70 else 1280)
             if img.width > max_width:
                 ratio = max_width / img.width
                 img = img.resize((max_width, int(img.height * ratio)))
@@ -6682,6 +6741,19 @@ def _session_perm_payload() -> dict:
 def _open_session_window(requested_by: str) -> None:
     helper = _screen_stream.get("helper")
     if helper is None or not helper.alive:
+        # Direkter Aufnahmeweg (Agent sitzt selbst in der Benutzersitzung): es gibt
+        # noch keinen Helfer. Das Chat-/Rechte-Fenster lebt aber IM Helfer - also
+        # hier einen fuer die Oberflaeche starten (Windows: in die Benutzersitzung,
+        # Linux/macOS: als Prozess mit geerbtem DISPLAY). Fruehere Ursache fuer
+        # "Chat geht nicht" / "kein Rechte-Fenster": ohne Helfer kam nie ein Fenster.
+        try:
+            helper = _ensure_helper(_AGENT_LOOP)
+        except Exception as e:
+            _print(f"[agent] Sitzungsfenster: Helfer-Start fehlgeschlagen: {e}")
+            helper = None
+    if helper is None or not helper.alive:
+        _print("[agent] Hinweis: Chat-/Rechte-Fenster konnte nicht geöffnet werden "
+               "(kein Helfer/Desktop).")
         return
     perms = dict(_session.get("perms") or {})
     perms["admin"] = bool(_session.get("granted"))
@@ -6812,8 +6884,12 @@ async def on_screen_audio_toggle(data):
 @sio.on("screen-session-request-grant", namespace="/agent")
 async def on_screen_session_request_grant(data):
     """Administrator bittet um Administrator-Rechte -> Hinweis im Sitzungsfenster."""
+    if not _session.get("active"):
+        return
+    if not _session.get("window"):
+        _open_session_window(_session.get("by") or "")   # Fenster (und Helfer) notfalls oeffnen
     helper = _screen_stream.get("helper")
-    if _session.get("active") and _session.get("window") and helper is not None and helper.alive:
+    if _session.get("window") and helper is not None and helper.alive:
         helper.send({"cmd": "session-request-grant"})
 
 
@@ -6822,7 +6898,12 @@ async def on_screen_session_chat(data):
     """Chat-Nachricht vom Administrator -> im Fenster der Benutzersitzung zeigen."""
     text = (data or {}).get("text") or ""
     helper = _screen_stream.get("helper")
+    if (helper is None or not helper.alive) and _session.get("active"):
+        _open_session_window(_session.get("by") or "")   # Fenster (und Helfer) notfalls oeffnen
+        helper = _screen_stream.get("helper")
     if helper is not None and helper.alive:
+        if not _session.get("window"):
+            _open_session_window(_session.get("by") or "")
         helper.send({"cmd": "session-chat", "text": str(text)[:2000]})
 
 
@@ -7097,6 +7178,24 @@ async def on_screen_stop(data):
     _close_session_window()
     _session.update(active=False, granted=False)
     _print(f"[agent] {_at('log_screen_stopped')}")
+
+
+@sio.on("screen-config", namespace="/agent")
+async def on_screen_config(data):
+    """Qualitaet/FPS waehrend der Sitzung aendern. Der Capture-Loop (bzw. der
+    Helfer ueber _screen_helper_loop) uebernimmt die Werte automatisch."""
+    if not isinstance(data, dict):
+        return
+    try:
+        if data.get("fps") is not None:
+            _screen_stream["fps"] = max(1, min(30, int(data["fps"])))
+        if data.get("quality") is not None:
+            _screen_stream["quality"] = max(10, min(95, int(data["quality"])))
+        if data.get("width") is not None:
+            w = int(data["width"])
+            _screen_stream["width"] = 0 if w <= 0 else max(320, min(3840, w))   # 0 = automatisch
+    except Exception:
+        pass
 
 
 @sio.on("screen-set-monitor", namespace="/agent")

@@ -109,10 +109,50 @@ class ClientApp:
         return "break"
 
     def _new_frame(self):
-        if self.frame is not None:
-            self.frame.destroy()
-        self.frame = ttk.Frame(self.root, padding=22)
-        self.frame.pack(fill="both", expand=True)
+        # Scrollbarer Inhalt: passt der Inhalt nicht ins Fenster, erscheint rechts
+        # eine Scrollleiste (vorher wurde alles unten abgeschnitten). self.frame
+        # bleibt der INNERE Inhalts-Frame, alle Aufrufer funktionieren unveraendert.
+        if getattr(self, "_scroll_host", None) is not None:
+            try: self._scroll_host.destroy()
+            except Exception: pass
+        host = ttk.Frame(self.root)
+        host.pack(fill="both", expand=True)
+        self._scroll_host = host
+        canvas = tk.Canvas(host, highlightthickness=0, bd=0, bg=BG)
+        vbar = ttk.Scrollbar(host, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        inner = ttk.Frame(canvas, padding=22)
+        win_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        def _resize(_e=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.itemconfigure(win_id, width=canvas.winfo_width())   # Inhalt auf Fensterbreite
+            # Scrollleiste nur zeigen, wenn noetig.
+            need = inner.winfo_reqheight() > canvas.winfo_height()
+            if need and not vbar.winfo_ismapped(): vbar.pack(side="right", fill="y")
+            elif not need and vbar.winfo_ismapped(): vbar.pack_forget()
+        inner.bind("<Configure>", _resize)
+        canvas.bind("<Configure>", _resize)
+        self.root.after_idle(_resize)      # nach dem ersten Layout sicher neu bewerten
+
+        # Mausrad / Touchpad (Windows/macOS: <MouseWheel>, Linux: Button-4/5)
+        def _wheel(e):
+            if inner.winfo_reqheight() <= canvas.winfo_height():
+                return
+            delta = -1 if (getattr(e, "delta", 0) > 0 or getattr(e, "num", 0) == 4) else 1
+            canvas.yview_scroll(delta, "units")
+        def _bind_wheel(_e=None):
+            canvas.bind_all("<MouseWheel>", _wheel)
+            canvas.bind_all("<Button-4>", _wheel)
+            canvas.bind_all("<Button-5>", _wheel)
+        def _unbind_wheel(_e=None):
+            canvas.unbind_all("<MouseWheel>"); canvas.unbind_all("<Button-4>"); canvas.unbind_all("<Button-5>")
+        canvas.bind("<Enter>", _bind_wheel)
+        canvas.bind("<Leave>", _unbind_wheel)
+        host.bind("<Destroy>", lambda e: _unbind_wheel() if e.widget is host else None)
+
+        self.frame = inner
         return self.frame
 
     # ------------------------------------------------------------- Ladeleiste + Stopp

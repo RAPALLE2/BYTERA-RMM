@@ -37,7 +37,7 @@ AGENT_DIR = SRC_DIR / "agent"
 FRONTEND_DIR = SRC_DIR / "frontend"
 BRANDING_DIR = FRONTEND_DIR / "image"                  # Branding = frontend/image (Defaults UND Uploads)
 NODE_DIR = SRC_DIR / "node"                            # Node-Module (node_*.py)
-MODULES_DIR = SRC_DIR / "modules"                      # Optionale Module: modules/<bereich>/<name>/module.json
+MODULES_DIR = SRC_DIR / "modules"                      # Optionale Module: modules/<id>/module.json + Unterordner backend/ frontend/ node/
 FILES_DIR = SRC_DIR / "files"                          # Explorer/Teamspace (spaeter)
 
 # --- Backend-Unterordner ---------------------------------------------------

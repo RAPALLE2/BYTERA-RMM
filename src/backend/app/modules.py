@@ -5,7 +5,7 @@ modules.py - Modul-Manager des RMM
 Module sind optionale Funktionen (Tickets, Guacamole, Patching ...). Der Core
 laeuft ohne jedes Modul. Ein Modul liegt in
 
-    src/modules/<bereich>/<name>/module.json      (bereich: backend|frontend|agent|client|node)
+    src/modules/<id>/module.json  +  Unterordner backend/ frontend/ node/ agent/ client/
 
 Ein Modul kann aus MEHREREN Teilen bestehen (z.B. backend + frontend). Die
 Teile werden ueber die gemeinsame "id" in der module.json zu EINEM Modul
@@ -204,29 +204,36 @@ def _save_state() -> None:
 # =========================================================================
 
 def discover() -> dict[str, Module]:
-    """Liest alle module.json unter src/modules/<bereich>/<name>/."""
+    """Liest alle Module unter src/modules/<id>/ mit EINER module.json und den
+    Unterordnern backend/ frontend/ node/ ... (frueher: modules/<bereich>/<id>/)."""
     global _registry, _discover_errors
     reg: dict[str, Module] = {}
     errs: list[dict] = []
-    for area in AREAS:
-        base = MODULES_DIR / area
-        if not base.is_dir():
+    if not MODULES_DIR.is_dir():
+        with _lock:
+            _registry, _discover_errors = reg, errs
+        return reg
+    for d in sorted(MODULES_DIR.iterdir()):
+        mf = d / "module.json"
+        if not d.is_dir() or not mf.is_file():
             continue
-        for d in sorted(base.iterdir()):
-            mf = d / "module.json"
-            if not d.is_dir() or not mf.is_file():
-                continue
-            try:
-                man = json.loads(mf.read_text(encoding="utf-8"))
-                if not isinstance(man, dict):
-                    raise ValueError("module.json muss ein JSON-Objekt sein")
-                mid = str(man.get("id") or d.name)
-                if not _ID_RE.match(mid):
-                    raise ValueError(f"ungueltige id '{mid}' (a-z, 0-9, _ und -, 2-32 Zeichen)")
-                man["id"] = mid
-                reg.setdefault(mid, Module(mid)).parts[area] = Part(area, d, man)
-            except Exception as exc:
-                errs.append({"path": str(mf.relative_to(MODULES_DIR.parent)), "error": str(exc)})
+        try:
+            man = json.loads(mf.read_text(encoding="utf-8"))
+            if not isinstance(man, dict):
+                raise ValueError("module.json muss ein JSON-Objekt sein")
+            mid = str(man.get("id") or d.name)
+            if not _ID_RE.match(mid):
+                raise ValueError(f"ungueltige id '{mid}' (a-z, 0-9, _ und -, 2-32 Zeichen)")
+            man["id"] = mid
+            mod = reg.setdefault(mid, Module(mid))
+            # Je vorhandenem Bereichs-Unterordner ein Part - alle teilen sich die
+            # EINE module.json; der Loader liest je Bereich die passenden Schluessel.
+            for area in AREAS:
+                sub = d / area
+                if sub.is_dir():
+                    mod.parts[area] = Part(area, sub, man)
+        except Exception as exc:
+            errs.append({"path": str(mf.relative_to(MODULES_DIR.parent)), "error": str(exc)})
     with _lock:
         _registry, _discover_errors = reg, errs
     return reg

@@ -18,6 +18,7 @@ import { setLanguage, getLanguage, applyStaticTranslations } from "./i18n_apply.
 import { renderSidebar, setOnSelect, getExpandedIds, setExpandedIds, setOnTreeStateChanged, initFavorites, initSidebarNav } from "./sidebar.js";
 import { renderMainContent } from "./panel.js";
 import { renderTaskbar, initTaskbar, consumeFreshStart } from "./taskbar.js";
+import { installGlobalContextGuard } from "./contextmenu.js";
 import { initHelp } from "./help.js";
 import { setContentRenderer, setOnWindowsChanged, openWindow, minimizeAll, closeWindow } from "./windowmanager.js";
 import { recordMetrics } from "./metricshistory.js";
@@ -721,6 +722,13 @@ function initMenusAndButtons() {
     e.stopPropagation();
     startMenu.classList.toggle("hidden");
   });
+  // Handy: eigener Menue-Knopf in der Topbar (drei waagerechte Striche) oeffnet das
+  // Anwendungsmenue DIREKT, ohne die Taskleiste ein-/auszublenden.
+  const mobMenuBtn = document.getElementById("mobile-menu-btn");
+  mobMenuBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    startMenu.classList.toggle("hidden");
+  });
   // Klick auf den abgedunkelten Hintergrund (nicht auf eine Kachel) schließt das Menü
   startMenu.addEventListener("click", (e) => {
     if (e.target === startMenu) startMenu.classList.add("hidden");
@@ -757,22 +765,33 @@ function initMenusAndButtons() {
   window.byteraOpenTarget = {
     openApp: openAppFromMenu,
     openModuleApp,
-    clientAction: (action, clientId) => {
+    clientAction: (action, clientId, params) => {
       const c = (state.clients || []).find((x) => x.id === clientId);
       if (!c) return false;
       if (action === "edit") openWindow({ key: `edit-${c.id}`, appId: "edit-client",
         title: `${t("edit")} — ${c.hostname}`, props: { clientId: c.id }, w: 480, h: 520 });
-      else _clientHandleAction(action, c, null, { forceWeb: true });
+      else _clientHandleAction(action, c, null, { forceWeb: true, params: params || null });
       return true;
+    },
+    // bytera://function/<name> -> Core-App/Menue per Name oeffnen.
+    runFunction: (name, _parts, _query) => {
+      const n = String(name || "").toLowerCase();
+      const map = { settings: "settings", audit: "audit", permissions: "permissions", modules: "modules",
+                    nodes: "nodes", manage: "manage", dist: "dist", clients: "clients", profile: "profile" };
+      if (map[n]) return openAppFromMenu(map[n]);
+      return openAppFromMenu(n);     // evtl. Modul-App
     },
     selectClient: (id) => { try { _selectClientExternal(id); return true; } catch { state.selection = { type: "client", id }; renderMainContent(); return true; } },
     openNode: (id) => openWindow({ key: id ? `node-${id}` : "nodes", appId: "node",
       title: id ? `Node – ${id}` : "Nodes", props: id ? { clientId: id } : {}, w: 820, h: 680 }) ?? true,
-    openSpace: (name) => {
+    openSpace: (name, fullPath) => {
       const api = getModuleApi("spaces");
       if (!api) return false;
-      openWindow({ key: "spaces", appId: "spaces", title: "Spaces", w: 900, h: 640,
-                   props: name ? { openSpace: name } : {} });
+      // Hat der Link einen Unterpfad (Teams/Projekt/ordner), direkt dorthin.
+      const props = {};
+      if (fullPath && fullPath.includes("/")) props.path = fullPath;
+      else if (name) props.openSpace = name;
+      openWindow({ key: "spaces", appId: "spaces", title: "Spaces", w: 900, h: 640, props });
       return true;
     },
     openDist: (folder) => { openAppFromMenu("dist"); if (folder) window.notify?.("Verteilung geöffnet – Ordner: " + folder, "info", 3000); return true; },
@@ -1066,6 +1085,7 @@ async function main() {
   loadFeature("../feature/editclient.js", "setEditOnChanged").then((fn) => fn && fn(refreshAll)).catch(() => {});
   loadFeature("../feature/manage.js", "setManageOnChanged").then((fn) => fn && fn(refreshAll)).catch(() => {});
 
+  _step("rightclick-guard", installGlobalContextGuard);
   _step("menus", initMenusAndButtons);
   _step("global-search", initGlobalSearch);
   _step("taskbar", initTaskbar);
