@@ -27,6 +27,10 @@ import { state, hasGlobalPerm, isAdmin } from "/js/app/state.js";
 import { t } from "/js/app/i18n.js";
 import { registerCleanup } from "/js/app/windowmanager.js";
 
+
+// Einheitliche Meldung statt des nativen Browser-Dialogs alert().
+const uiAlert = (m) => { window.notify?.(String(m ?? ""), "error", 9000); };
+
 // Farben fest, Bezeichnungen über t() - die Stufen heissen in jeder Sprache
 // anders, die Farbe bleibt gleich.
 const LEVEL_COLORS = {
@@ -422,7 +426,7 @@ export function renderPatching(body, win) {
       install([{ uid: p.uid, source: p.source, name: p.name }], p.name);
     }));
     view.querySelectorAll("[data-skip]").forEach((b) => b.addEventListener("click", async () => {
-      try { await api.excludePatch(b.dataset.skip, true); } catch (e) { return alert(e.message); }
+      try { await api.excludePatch(b.dataset.skip, true); } catch (e) { return uiAlert(e.message); }
       draw();
     }));
   }
@@ -509,7 +513,7 @@ export function renderPatching(body, win) {
 
     view.querySelector("#pt-switch").addEventListener("change", async (e) => {
       try { await api.setPatchGlobalSwitch(e.target.checked); }
-      catch (err) { alert(err.message); draw(); }
+      catch (err) { uiAlert(err.message); draw(); }
     });
     view.querySelector("#pt-save").addEventListener("click", async () => {
       const values = {
@@ -522,11 +526,11 @@ export function renderPatching(body, win) {
         auto_reboot: view.querySelector("#pt-reboot").checked,
         exclusions: view.querySelector("#pt-excl").value,
       };
-      if (!values.levels) return alert(t("patch_need_level"));
+      if (!values.levels) return uiAlert(t("patch_need_level"));
       try {
         await api.savePatchGlobalRule(values);
         window.notify?.(t("patch_rule_saved"), "success");
-      } catch (e) { alert(e.message); }
+      } catch (e) { uiAlert(e.message); }
       draw();
     });
     view.querySelector("#pt-now").addEventListener("click", async () => {
@@ -538,7 +542,7 @@ export function renderPatching(body, win) {
             scanned: r.scanned, patched: r.patched, errors: r.errors })
             + (r.skipped ? `\n${t("patch_cycle_skipped", { n: r.skipped })}` : ""),
           okText: "OK" });
-      } catch (e) { alert(e.message); }
+      } catch (e) { uiAlert(e.message); }
       setBusy("");
     });
     view.querySelectorAll("[data-policy]").forEach((sel) =>
@@ -547,7 +551,7 @@ export function renderPatching(body, win) {
           await api.setPatchPolicy(sel.dataset.policy, sel.value);
           const c = (state.clients || []).find((x) => x.id === sel.dataset.policy);
           if (c) c.patch_policy = sel.value;
-        } catch (e) { alert(e.message); draw(); }
+        } catch (e) { uiAlert(e.message); draw(); }
       }));
   }
 

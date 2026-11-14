@@ -9,7 +9,7 @@
 //      Fensters rendert (renderWindowContent)
 
 import { state } from "./state.js";
-import { hasAnyClientPerm, hasGlobalPerm, isAdmin } from "./state.js";
+import { hasAnyClientPerm, hasGlobalPerm, isAdmin, findClientByRef, findTenantByRef, findLocationByRef, linkSlug } from "./state.js";
 import { api, saveToken, clearToken } from "./api.js";
 import { dashboardSocket } from "./socket.js";
 import { applyTheme, applyAccent } from "./theme.js";
@@ -37,9 +37,9 @@ window.notifyError = notifyError;
 import "./permdenied.js";
 // renderDist wird LAZY geladen (siehe FEATURE_MODULES), damit eine
 // einzelne fehlende Datei nie den Login der gesamten SPA blockiert.
-import { loadModules, renderModuleApp, openModuleApp, moduleAppPerm, inactiveModuleBox, getModuleApi, onModulesChanged } from "./modules.js";
+import { loadModules, renderModuleApp, openModuleApp, moduleAppPerm, inactiveModuleBox, getModuleApi, onModulesChanged, getClientActions, moduleAppInfo } from "./modules.js";
 import { handleAction as _clientHandleAction } from "./panel.js";
-import { selectClientExternal as _selectClientExternal } from "./sidebar.js";
+import { selectClientExternal as _selectClientExternal, selectTenantExternal as _selectTenantExternal, selectLocationExternal as _selectLocationExternal } from "./sidebar.js";
 import { renderNotifyCenter, attachUnreadDot } from "./notifycenter.js";
 import { updateClientLayouts } from "./dashlayout.js";
 import { initStartMenu, refreshStartMenu, setStartMenuUser, unlockCatalogPruning } from "./startmenu.js";
@@ -762,16 +762,90 @@ function initMenusAndButtons() {
   // Oeffnen-Primitive fuer das URL-Schema-Modul ("url-scheme") global bereitstellen.
   // Das Modul besitzt das Format (parse/resolve) und ruft diese Funktionen auf.
   // So bleibt das Format ein Modul, die eigentliche Fenster-Logik aber im Core.
+  // Einheitliche Dialoge: Jedes Modul baut seine Dialoge selbst (Overlay direkt
+  // in <body>). Damit die Schutzschicht in ui.css auch dort greift (gleiche
+  // Knoepfe/Felder/Auswahlmenues wie in Fenstern), werden solche Overlays
+  // automatisch als Dialog markiert.
+  try {
+    const markDialog = (n) => {
+      if (n.nodeType !== 1 || n.hasAttribute("data-ui-dialog")) return;
+      const st = n.style;
+      if (st && st.position === "fixed" && (st.inset === "0px" || st.inset === "0" || (st.top === "0px" && st.left === "0px" && (st.right === "0px" || st.width === "100%")))
+          && n.querySelector("button, input, select, textarea")) n.setAttribute("data-ui-dialog", "");
+    };
+    new MutationObserver((muts) => { for (const m of muts) for (const n of m.addedNodes) markDialog(n); })
+      .observe(document.body, { childList: true });
+  } catch { /* egal */ }
+
+  // Link-Ziel (ID oder Name) -> Geraet. Meldet selbst, was nicht passt.
+  const _resolveLinkClient = (ref, tenantRef, siteRef) => {
+    const r = findClientByRef(ref, tenantRef || null, siteRef || null);
+    if (r.siteMissing) { window.notify?.(`Standort „${siteRef}“ nicht gefunden.`, "error", 7000); return null; }
+    if (r.client) return r.client;
+    if (r.tenantMissing) { window.notify?.(`Tenant „${tenantRef}“ nicht gefunden.`, "error", 7000); return null; }
+    if (r.ambiguous) {
+      const opts = r.ambiguous.map((c) => {
+        const tn = (state.hierarchy?.tenants || []).find((x) => x.id === c.tenant_id);
+        return tn ? `bytera://${tn.name}/agent/${c.hostname}` : c.id;
+      }).join(", ");
+      window.notify?.(`Mehrere Geräte heißen „${ref}“ – bitte den Tenant mit angeben: ${opts}`, "error", 12000);
+      return null;
+    }
+    window.notify?.(`Gerät „${ref}“ nicht gefunden oder kein Zugriff.`, "error", 7000);
+    return null;
+  };
   window.byteraOpenTarget = {
     openApp: openAppFromMenu,
     openModuleApp,
-    clientAction: (action, clientId, params) => {
-      const c = (state.clients || []).find((x) => x.id === clientId);
-      if (!c) return false;
-      if (action === "edit") openWindow({ key: `edit-${c.id}`, appId: "edit-client",
-        title: `${t("edit")} — ${c.hostname}`, props: { clientId: c.id }, w: 480, h: 520 });
-      else _clientHandleAction(action, c, null, { forceWeb: true, params: params || null });
-      return true;
+    // Geraet per ID ODER Name (Hostname), optional innerhalb eines Tenants/
+    // Standorts. action = JEDE Aktion des Geraets: die festen (terminal,
+    // explorer, vnc, guacamole, taskmanager, edit, tempusb), jeder Knopf, den
+    // ein Modul im Geraete-Panel anbietet (wol, proxmox, registry,
+    // windows-updates ...), und jede Modul-App mit Geraetebezug (appId).
+    clientAction: (action, clientRef, params, tenantRef, siteRef) => {
+      const c = _resolveLinkClient(clientRef, tenantRef, siteRef);
+      if (!c) return true;            // Meldung kam schon aus _resolveLinkClient
+      const a = String(action || "").toLowerCase();
+      if (a === "edit") { openWindow({ key: `edit-${c.id}`, appId: "edit-client",
+        title: `${t("edit")} — ${c.hostname}`, props: { clientId: c.id }, w: 480, h: 520 }); return true; }
+      if (["terminal", "explorer", "vnc", "guacamole", "taskmanager"].includes(a)) {
+        _clientHandleAction(a, c, null, { forceWeb: true, params: params || null });
+        return true;
+      }
+      if (a === "tempusb" || a === "temp-usb" || a === "usb") { window.openRmmApp?.("temp-usb"); return true; }
+      // Knoepfe der Module (Geraete-Panel): per Modul-ID, key oder Beschriftung.
+      const acts = getClientActions().map((x) => {
+        let label = null;
+        try { label = x.label ? x.label(c) : null; } catch { label = null; }
+        return { ...x, _label: label };
+      });
+      const hit = acts.find((x) => x._label && (x.key === a || linkSlug(x._label) === a))
+        || acts.find((x) => x._label && x.mid === a)
+        || acts.find((x) => x._label && linkSlug(x._label).startsWith(a));
+      if (hit) { try { hit.onClick(c); } catch (e) { window.notify?.(String(e?.message || e), "error", 7000); } return true; }
+      if (acts.some((x) => x.mid === a)) {
+        window.notify?.(`„${action}“ ist für ${c.hostname} gerade nicht verfügbar (Gerätestatus oder Recht fehlt).`, "warning", 8000);
+        return true;
+      }
+      // Modul-App mit Geraetebezug (so wie der Fenster-Link sie erzeugt).
+      const info = moduleAppInfo(action) || moduleAppInfo(a);
+      if (info) {
+        openWindow({ key: `${info.id}-${c.id}`, appId: info.id, title: `${info.title || info.label || info.id} – ${c.hostname}`,
+          w: info.w || 800, h: info.h || 600, clientColor: c.color,
+          props: { clientId: c.id, clientName: c.hostname, platform: c.platform, ...(params || {}) } });
+        return true;
+      }
+      return false;
+    },
+    // Alle Aktionen, die es fuer ein Geraet gibt (fuer Hilfe/Fehlermeldungen).
+    clientActionNames: (clientRef, tenantRef) => {
+      const base = ["terminal", "explorer", "remotescreen", "tasks", "guacamole", "edit", "node", "tempusb"];
+      const c = findClientByRef(clientRef, tenantRef || null).client;
+      if (!c) return base;
+      for (const x of getClientActions()) {
+        try { const l = x.label ? x.label(c) : null; if (l) base.push(x.key || linkSlug(l)); } catch { /* egal */ }
+      }
+      return [...new Set(base)];
     },
     // bytera://function/<name> -> Core-App/Menue per Name oeffnen.
     runFunction: (name, _parts, _query) => {
@@ -781,9 +855,38 @@ function initMenusAndButtons() {
       if (map[n]) return openAppFromMenu(map[n]);
       return openAppFromMenu(n);     // evtl. Modul-App
     },
-    selectClient: (id) => { try { _selectClientExternal(id); return true; } catch { state.selection = { type: "client", id }; renderMainContent(); return true; } },
-    openNode: (id) => openWindow({ key: id ? `node-${id}` : "nodes", appId: "node",
-      title: id ? `Node – ${id}` : "Nodes", props: id ? { clientId: id } : {}, w: 820, h: 680 }) ?? true,
+    selectClient: (ref, tenantRef, siteRef) => {
+      const c = _resolveLinkClient(ref, tenantRef, siteRef);
+      if (!c) return true;
+      const id = c.id;
+      try { _selectClientExternal(id); return true; } catch { state.selection = { type: "client", id }; renderMainContent(); return true; }
+    },
+    // Tenants (Seitenleiste) und Mandanten (Modul "tenants") fuer
+    // bytera://<mandant>/agent/<name> bzw. https://host/<mandant>/agent/<name>.
+    hasTenant: (ref) => !!findTenantByRef(ref),
+    hasSite: (ref, tenantRef) => !!findLocationByRef(ref, tenantRef || null),
+    selectSite: (ref, tenantRef) => {
+      const l = findLocationByRef(ref, tenantRef || null);
+      if (!l) return false;
+      try { _selectLocationExternal(l.id, l.tenant_id); } catch { state.selection = { type: "location", id: l.id }; renderMainContent(); }
+      return true;
+    },
+    selectTenant: (ref) => {
+      const tn = findTenantByRef(ref);
+      if (!tn) return false;
+      try { _selectTenantExternal(tn.id); } catch { state.selection = { type: "tenant", id: tn.id }; renderMainContent(); }
+      return true;
+    },
+    // Mandant = eigenes Backend (Modul "tenants"): dort eingebettet oeffnen und
+    // den Rest der Adresse im Mandanten-Dashboard aufloesen lassen.
+    openRemoteTenant: (ref, innerUrl) => {
+      const detail = { ref, go: innerUrl || "", handled: false };
+      try { window.dispatchEvent(new CustomEvent("bytera-tenant-open", { detail })); } catch { /* egal */ }
+      if (detail.handled) { openModuleApp("tenants"); return true; }   // Fenster nach vorne
+      return openModuleApp("tenants", { openTenant: ref, go: innerUrl || "" });
+    },
+    openNode: (ref) => { const id = ref ? (findClientByRef(ref).client?.id || ref) : ref; return openWindow({ key: id ? `node-${id}` : "nodes", appId: "node",
+      title: id ? `Node – ${id}` : "Nodes", props: id ? { clientId: id } : {}, w: 820, h: 680 }) ?? true; },
     openSpace: (name, fullPath) => {
       const api = getModuleApi("spaces");
       if (!api) return false;

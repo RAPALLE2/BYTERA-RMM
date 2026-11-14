@@ -260,7 +260,7 @@ async function renderExplorer(panel) {
   // Dort sammeln sich die gebauten Agent-Installationspakete: jeder Build legt
   // neue Dateien ab, alte Versionen bleiben liegen.
   panel.querySelector("#src-clear-dist").addEventListener("click", async () => {
-    if (!confirm(t("src_dist_confirm"))) return;
+    if (!(await uiConfirm(t("src_dist_confirm"), { danger: true }))) return;
     const status = panel.querySelector("#src-zip-status");
     status.textContent = "…";
     try {

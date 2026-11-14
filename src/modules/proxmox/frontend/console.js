@@ -7,7 +7,7 @@
 // Backend: console_routes.py
 
 import { getToken } from "/js/app/api.js";
-import { esc } from "/js/app/utils.js";
+import { esc, uiPrompt } from "/js/app/utils.js";
 import { openWindow } from "/js/app/windowmanager.js";
 import { preq } from "./common.js";
 
@@ -98,7 +98,7 @@ export function renderConsole(body, win) {
   body.querySelector("[data-full]").addEventListener("click", () => screen.requestFullscreen?.());
   body.querySelector("[data-re]").addEventListener("click", connect);
   body.querySelector("[data-paste]").addEventListener("click", async () => {
-    const text = prompt("Text, der als Tastatureingabe in die Konsole getippt wird:");
+    const text = await uiPrompt("Text senden", { description: "Text, der als Tastatureingabe in die Konsole getippt wird" });
     if (!text || !rfb) return;
     for (const ch of text) {
       const code = ch === "\n" ? 0xff0d : ch.codePointAt(0) < 256 ? ch.codePointAt(0) : 0x01000000 + ch.codePointAt(0);

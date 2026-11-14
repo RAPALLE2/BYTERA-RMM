@@ -4,7 +4,7 @@
 // hochladen/löschen, öffentliche Links kopieren. Alles unter rmm.url.de/dist.
 
 import { getToken } from "/js/app/api.js";
-import { esc, uiConfirm } from "/js/app/utils.js";
+import { esc, uiConfirm, uiPrompt } from "/js/app/utils.js";
 
 async function dq(path, opts = {}) {
   const headers = { Authorization: "Bearer " + (getToken() || "") };
@@ -84,7 +84,7 @@ export function renderDist(body) {
       catch (err) { window.notify?.(err.message, "error"); }
     });
     main.querySelector("[data-rename]").addEventListener("click", async () => {
-      const lbl = prompt("Anzeigename:", f.label); if (lbl == null) return;
+      const lbl = await uiPrompt("Anzeigename", { value: f.label || "" }); if (lbl == null) return;
       try { await dq(`/folders/${encodeURIComponent(active)}`, { method: "PATCH", body: { label: lbl } }); loadFolders(); } catch (err) { window.notify?.(err.message, "error"); }
     });
     main.querySelector("[data-delfolder]")?.addEventListener("click", async () => {
@@ -115,7 +115,7 @@ export function renderDist(body) {
   };
 
   body.querySelector("[data-new]").addEventListener("click", async () => {
-    const name = prompt("Ordnername (nur Buchstaben/Zahlen/-_.):"); if (!name) return;
+    const name = await uiPrompt("Neuer Ordner", { description: "Ordnername (nur Buchstaben/Zahlen/-_.)" }); if (!name) return;
     try { await dq("/folders", { method: "POST", body: { name, label: name, public: true } }); active = name; loadFolders(); }
     catch (e) { window.notify?.(e.message, "error", 6000); }
   });

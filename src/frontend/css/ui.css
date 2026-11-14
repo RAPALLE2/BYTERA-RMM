@@ -379,3 +379,65 @@ label:has(> input[type="checkbox"]), label:has(> input[type="radio"]) {
 
 /* Schnellaktionen im Client-Panel: Symbol + Text linksbündig */
 .quick-actions .btn, .quick-actions button { justify-content: flex-start; }
+
+/* ==========================================================================
+   SCHUTZSCHICHT: EINHEITLICH IN JEDEM FENSTER UND DIALOG
+   --------------------------------------------------------------------------
+   Die Regeln oben haben bewusst Spezifität 0 (:where). Ein Modul mit eigener
+   Klassenregel (.mein-feld { height: 26px }) konnte sie dadurch ungewollt
+   überstimmen - dann sah genau dieses Feld anders aus als alle anderen.
+   Diese Schicht legt Höhe, Schrift, Rahmen und Rundung für ALLE Felder,
+   Auswahlmenüs und Knöpfe in Fenstern und Dialogen verbindlich fest.
+
+   Bewusst ausgenommen (eigene Optik gewollt):
+     .ui-raw / [data-ui-raw]   Element selbst oder ein Vorfahre
+     .input-sm, .btn-sm        kompakte Größe (bleibt 24 px)
+     Terminal-/Editor-Felder   (monospace, randlos - setzen ihr Aussehen inline)
+   Inline-Styles (style="…") gewinnen weiterhin - dort ist die Abweichung Absicht.
+   ========================================================================== */
+:is(.rmm-window-body, .uid-box, [data-ui-dialog]) :is(
+  input:not([type]), input[type="text"], input[type="password"], input[type="email"],
+  input[type="number"], input[type="search"], input[type="url"], input[type="tel"],
+  input[type="date"], input[type="time"], input[type="datetime-local"], input[type="month"],
+  select:not([multiple]):not([size])
+):not(.input-sm):not(.ui-raw):not([data-ui-raw]):not(.ui-raw *):not([data-ui-raw] *) {
+  box-sizing: border-box;
+  height: var(--ui-h);
+  min-height: 0;
+  font-family: inherit;
+  font-size: var(--ui-fs);
+  line-height: 1.2;
+  border-width: 1px;
+  border-style: solid;
+  border-radius: var(--ui-radius);
+}
+:is(.rmm-window-body, .uid-box, [data-ui-dialog]) :is(input, select, textarea).input-sm:not(.ui-raw) {
+  box-sizing: border-box;
+  border-radius: var(--ui-radius);
+}
+/* Knöpfe ohne jede Klasse und ohne eigenes Inline-Aussehen: wie .btn */
+:where(.rmm-window-body, .uid-box, [data-ui-dialog]) button:not([class]):not([style]),
+:where(.rmm-window-body, .uid-box, [data-ui-dialog]) button[class=""]:not([style]),
+:where(.rmm-window-body, .uid-box, [data-ui-dialog]) input:is([type="button"], [type="submit"], [type="reset"]):not([class]):not([style]) {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--ui-gap);
+  box-sizing: border-box; min-height: var(--ui-h); padding: 0 var(--ui-px); margin: 0;
+  border: 1px solid var(--border); border-radius: var(--ui-radius);
+  background: var(--panel-2); color: var(--text);
+  font: inherit; font-size: var(--ui-fs); font-weight: 500; line-height: 1.2;
+  white-space: nowrap; cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+:where(.rmm-window-body, .uid-box, [data-ui-dialog]) button:not([class]):not([style]):hover:not(:disabled) {
+  border-color: var(--accent); color: var(--accent);
+}
+/* Alle Knopf-Varianten: gleiche Schrift und Rundung, egal was ein Modul-CSS sagt */
+:is(.rmm-window-body, .uid-box, [data-ui-dialog]) :is(.btn, .btn-primary, .btn-danger, .btn-warn, .btn-ghost, .action-btn):not(.ui-raw):not([style*="font-size"]) {
+  font-size: var(--ui-fs);
+  border-radius: var(--ui-radius);
+}
+:is(.rmm-window-body, .uid-box, [data-ui-dialog]) :is(.btn, .btn-primary, .btn-danger, .btn-warn, .btn-ghost).btn-sm:not(.ui-raw):not([style*="font-size"]) {
+  font-size: var(--ui-fs-sm);
+  min-height: var(--ui-h-sm);
+}
+/* Werkzeug-Knöpfe in Kopfzeilen: überall gleiche Symbolgröße */
+.btn-tool { font-size: var(--ui-fs); }

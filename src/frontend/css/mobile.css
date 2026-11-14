@@ -441,7 +441,8 @@ html.bars-hide-task .window-layer { bottom: 0; }
   html.bars-hide-top .start-menu-panel,
   html.bars-hide-task .start-menu-panel { max-height: calc(100dvh - 24px - var(--safe-top) - var(--safe-bottom)); }
 
-  /* Knopfgruppe oben links: ☰ Seitenleiste / ▔ Kopfleiste / ▁ Taskleiste */
+  /* Knopfgruppe oben links - IMMER vier Knoepfe in fester Reihenfolge:
+     Taskleiste | Seitenleiste | Kopfleiste | Menue */
   html.bars-fab-on .bars-fab {
     display: flex; gap: 4px; align-items: center;
     position: fixed; z-index: 2060;
@@ -462,6 +463,9 @@ html.bars-hide-task .window-layer { bottom: 0; }
   html.bars-show-top .bars-fab { top: calc(var(--safe-top) + (var(--mob-topbar-h) - var(--safe-top) - 30px) / 2); }
   .bars-fab button:active { background: rgba(255, 255, 255, .16); }
   .bars-fab button.active { background: var(--accent); color: var(--bg, #0b1220); border-color: var(--accent); }
+  .bars-fab button svg { display: block; pointer-events: none; }
+  /* Sehr schmale Geraete: Knoepfe etwas enger, damit rechts Platz bleibt */
+  @media (max-width: 340px) { html.bars-fab-on .bars-fab { gap: 2px; } .bars-fab button { width: 31px; } }
 
   /* Platz fuer die Knopfgruppe: eigener ☰ der Kopfleiste weg, Logo/Titel/Fenstertitel nach rechts */
   html.bars-fab-on .mobile-nav-btn { display: none; }   /* Handy-Navigationsknoepfe (Menue + Geraete) */

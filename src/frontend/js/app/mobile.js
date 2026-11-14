@@ -134,10 +134,20 @@ function init() {
     el.tagName === "TEXTAREA" || el.isContentEditable ||
     el.closest?.(".xterm")   // xterm.js-Terminals fangen Tastatur ueber ein Hidden-Textarea
   );
+  // Nur wenn der BENUTZER das Feld angetippt hat, kommt die Bildschirmtastatur.
+  // Setzt eine App den Fokus von selbst (z.B. ein wiederhergestelltes Terminal-
+  // oder Task-Manager-Fenster mit Autofokus), oeffnet das Handy KEINE Tastatur -
+  // frueher verschwanden dann trotzdem alle Leisten samt der vier Knoepfe, und
+  // man kam erst nach einem Tipper ins Leere wieder an die Bedienung.
+  let lastUserTap = 0;
+  for (const ev of ["pointerdown", "touchstart", "keydown"]) {
+    document.addEventListener(ev, () => { lastUserTap = Date.now(); }, { capture: true, passive: true });
+  }
   document.addEventListener("focusin", (e) => {
     if (!isMobile()) return;
     if (!e.target.closest?.("#app")) return;        // Login etc. unangetastet
     if (!isEditable(e.target)) return;
+    if (Date.now() - lastUserTap > 1200) return;    // Fokus kam nicht vom Benutzer
     closeDrawer();
     document.documentElement.classList.add("kbd-open");
   });

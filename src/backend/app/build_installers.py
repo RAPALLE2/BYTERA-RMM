@@ -1035,7 +1035,9 @@ fi
 cat > /etc/systemd/system/bytera-agent.service <<UNIT
 [Unit]
 Description=BYTERA RMM Agent
-After=network.target
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 WorkingDirectory=$INSTALL_DIR

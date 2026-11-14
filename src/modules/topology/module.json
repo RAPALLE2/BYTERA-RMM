@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "id": "topology",
+  "name": "Netzwerk-Topologie",
+  "version": "1.0.0",
+  "description": "Erkennt alle Geräte im Netzwerk (vom lokalen Netz bis zum Internet) und zeichnet daraus eine bearbeitbare Karte als Baumdiagramm. Geräte mit installiertem Agenten lassen sich direkt aus der Karte öffnen. Erkennung wahlweise vom Backend oder aus dem Netz einer Node.",
+  "author": "BYTERA",
+  "category": "Netzwerk",
+  "icon": "🗺️",
+  "requires": [],
+  "pip": [],
+  "routers": [
+    "topology_routes"
+  ],
+  "hooks": {
+    "startup": "on_startup"
+  },
+  "entry": "module",
+  "apps": [
+    {
+      "id": "topology",
+      "label": "Netzwerk-Topologie",
+      "icon": "🗺️",
+      "title": "Netzwerk-Topologie",
+      "entry": "topology.js",
+      "export": "renderTopology",
+      "w": 980,
+      "h": 680,
+      "perm": "network_scan"
+    }
+  ],
+  "node": {
+    "kind": "python",
+    "requires_docker": false,
+    "autostart": false,
+    "actions": [
+      "up",
+      "down",
+      "restart",
+      "status"
+    ]
+  }
+}

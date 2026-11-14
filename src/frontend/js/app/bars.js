@@ -156,15 +156,38 @@ function makeHotZone(bar) {
 }
 
 // ------------------------------------------------------------------ Handy: Knopfgruppe
+// Am Handy IMMER vier Knoepfe, in fester Reihenfolge:
+//   Taskleiste | Seitenleiste (Geraete) | Kopfleiste | Menue (Anwendungen)
+// Jeder Knopf schaltet genau sein Element ein/aus; aktiv = Akzentfarbe.
+const _svg = (inner) => `<svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">${inner}</svg>`;
+const _frame = `<rect x="2.5" y="3" width="15" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/>`;
 const ICON = {
-  menu: "☰",
-  top: `<svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><rect x="2.5" y="3" width="15" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="2.5" y="3" width="15" height="4.5" rx="2" fill="currentColor"/></svg>`,
-  task: `<svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><rect x="2.5" y="3" width="15" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="2.5" y="12.5" width="15" height="4.5" rx="2" fill="currentColor"/></svg>`,
+  task: _svg(_frame + `<rect x="2.5" y="12.5" width="15" height="4.5" rx="2" fill="currentColor"/>`),
+  side: _svg(_frame + `<rect x="2.5" y="3" width="5.5" height="14" rx="2" fill="currentColor"/>`),
+  top: _svg(_frame + `<rect x="2.5" y="3" width="15" height="4.5" rx="2" fill="currentColor"/>`),
+  menu: _svg(`<rect x="3" y="3" width="5.5" height="5.5" rx="1.3" fill="currentColor"/><rect x="11.5" y="3" width="5.5" height="5.5" rx="1.3" fill="currentColor"/><rect x="3" y="11.5" width="5.5" height="5.5" rx="1.3" fill="currentColor"/><rect x="11.5" y="11.5" width="5.5" height="5.5" rx="1.3" fill="currentColor"/>`),
 };
+const FAB_BUTTONS = [
+  ["task", "Taskleiste ein-/ausblenden"],
+  ["side", "Geräte (Seitenleiste) ein-/ausblenden"],
+  ["top", "Kopfleiste ein-/ausblenden"],
+  ["menu", "Menü (Anwendungen) öffnen/schließen"],
+];
+
+function barVisible(bar) {
+  return !hidden(bar) || root().classList.contains(`bars-show-${bar}`);
+}
+
+function fabToggleBar(bar) {
+  if (hidden(bar)) { toggle(bar); return; }
+  // Leiste ist dauerhaft sichtbar eingestellt: der Knopf blendet sie aus
+  // (schaltet am Handy auf "ausgeblendet") - danach zeigt derselbe Knopf sie wieder.
+  setBarPrefs({ mobile: { [bar]: true } });
+}
 
 function drawFab() {
   let fab = document.getElementById("bars-fab");
-  const need = isMobile() && !isSolo() && (hidden("top") || hidden("task"));
+  const need = isMobile() && !isSolo();
   if (root().classList.contains("bars-fab-on") !== need) root().classList.toggle("bars-fab-on", need);
   if (!need) { fab?.remove(); return; }
   if (!fab) {
@@ -176,19 +199,31 @@ function drawFab() {
       const b = e.target.closest("button[data-bar]");
       if (!b) return;
       e.stopPropagation();
-      if (b.dataset.bar === "menu") {
-        document.getElementById("mobile-sidebar-btn")?.click();
-        return;
-      }
-      toggle(b.dataset.bar);
+      const which = b.dataset.bar;
+      if (which === "side") document.getElementById("mobile-sidebar-btn")?.click();
+      else if (which === "menu") {
+        // Menue liegt in der Taskleiste: beim Oeffnen nichts anderes umschalten.
+        document.getElementById("mobile-menu-btn")?.click();
+      } else fabToggleBar(which);
+      setTimeout(syncFab, 30);
+      setTimeout(syncFab, 350);
     });
+    fab.innerHTML = FAB_BUTTONS.map(([id, label]) =>
+      `<button type="button" data-bar="${id}" title="${label}" aria-label="${label}">${ICON[id]}</button>`).join("");
+    // Zustand von Seitenleiste/Menue aendert sich auch von aussen (Wischen,
+    // Tippen daneben, Esc) -> Knoepfe nachfuehren.
+    try {
+      const mo = new MutationObserver(() => syncFab());
+      mo.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+      mo.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+      const sm = document.getElementById("start-menu");
+      if (sm) mo.observe(sm, { attributes: true, attributeFilter: ["class"] });
+      const sb = document.querySelector("#app .sidebar, #sidebar, aside");
+      if (sb) mo.observe(sb, { attributes: true, attributeFilter: ["class"] });
+    } catch { /* egal */ }
   }
-  fab.innerHTML = `
-    <button type="button" data-bar="menu" title="Geräte (Seitenleiste)" aria-label="Seitenleiste öffnen">${ICON.menu}</button>
-    ${hidden("top") ? `<button type="button" data-bar="top" title="Kopfleiste ein-/ausblenden" aria-label="Kopfleiste ein- oder ausblenden">${ICON.top}</button>` : ""}
-    ${hidden("task") ? `<button type="button" data-bar="task" title="Taskleiste ein-/ausblenden" aria-label="Taskleiste ein- oder ausblenden">${ICON.task}</button>` : ""}`;
   // Breite fuer CSS (Logo/Fenstertitel ruecken um so viel nach rechts)
-  const n = fab.querySelectorAll("button").length;
+  const n = FAB_BUTTONS.length;
   root().style.setProperty("--bars-fab-w", `${n * 34 + (n - 1) * 4 + 10}px`);
   syncFab();
 }
@@ -196,13 +231,17 @@ function drawFab() {
 function syncFab() {
   const fab = document.getElementById("bars-fab");
   if (!fab) return;
-  for (const bar of ["top", "task"]) {
-    const b = fab.querySelector(`[data-bar="${bar}"]`);
-    if (b) {
-      const on = root().classList.contains(`bars-show-${bar}`);
-      b.classList.toggle("active", on);
-      b.setAttribute("aria-pressed", on ? "true" : "false");
-    }
+  const on = {
+    top: barVisible("top"),
+    task: barVisible("task"),
+    menu: !!el.startMenu && !el.startMenu.classList.contains("hidden"),
+    side: !!document.querySelector(".mobile-open"),
+  };
+  for (const [id] of FAB_BUTTONS) {
+    const b = fab.querySelector(`[data-bar="${id}"]`);
+    if (!b) continue;
+    if (b.classList.contains("active") !== on[id]) b.classList.toggle("active", on[id]);
+    b.setAttribute("aria-pressed", on[id] ? "true" : "false");
   }
 }
 

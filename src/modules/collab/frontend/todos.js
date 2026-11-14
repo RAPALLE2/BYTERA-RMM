@@ -15,6 +15,10 @@ import { esc, uiConfirm, uiPrompt } from "/js/app/utils.js";
 import { t } from "/js/app/i18n.js";
 import { registerCleanup } from "/js/app/windowmanager.js";
 
+
+// Einheitliche Meldung statt des nativen Browser-Dialogs alert().
+const uiAlert = (m) => { window.notify?.(String(m ?? ""), "error", 9000); };
+
 const pad = (n) => String(n).padStart(2, "0");
 // Lokales Datum des BROWSERS - niemals toISOString() nehmen, das ist UTC und
 // würde den Tages-Reset je nach Zeitzone um Stunden verschieben.
@@ -235,13 +239,13 @@ export function renderTodos(body, win) {
     try {
       await api.toggleTodo(id, done, todayStr());
     } catch (e) {
-      alert(e.message);
+      uiAlert(e.message);
     }
     load();
   }
 
   async function act(fn) {
-    try { await fn(); } catch (e) { alert(e.message); }
+    try { await fn(); } catch (e) { uiAlert(e.message); }
     load();
   }
 

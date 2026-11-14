@@ -9,7 +9,7 @@
 // RAM used/frei, Netzwerk-Graph mit In/Out-Toggle, beschriftete Verlaufs-
 // Diagramme mit Hover-Tooltip und Zeitspannen-Dropdown.
 
-import { state, findClient } from "./state.js";
+import { state, findClient, clientLinkPath } from "./state.js";
 // URL-Schema-Modul wird beim Klick dynamisch geladen (robust, falls aus/fehlend)
 import { hasClientPerm, hasGlobalPerm, isAdmin } from "./state.js";
 import { formatBytes, formatUptime, esc, gradientDonutSvg, CPU_GRADIENT, RAM_GRADIENT, DISK_GRADIENT, interactiveChart, uiConfirm, uiPrompt, uiChoice } from "./utils.js";
@@ -300,7 +300,7 @@ export function renderActionsPart(target, client) {
       if (btn.dataset.action === "copylink") {
         import("/js/app/modules.js").then(({ getModuleApi }) => {
           const api = getModuleApi("url-scheme");
-          if (api) api.copy(api.make("agent", client.id));
+          if (api) api.copy("bytera://" + clientLinkPath(client));
           else window.notify?.('Das Modul „URL-Schema" ist nicht aktiv.', "warning", 6000);
         }).catch(() => {});
         return;
@@ -1326,7 +1326,9 @@ export function renderPatchesPart(bodyEl, client) {
 
   const stop = () => { clearTimeout(pollTimer); pollTimer = null; };
   // Wird das Panel neu aufgebaut, darf kein Timer weiterlaufen.
-  bodyEl.addEventListener("DOMNodeRemovedFromDocument", stop);
+  // (Frueher per "DOMNodeRemovedFromDocument" - dieses Ereignis gibt es in
+  //  aktuellen Browsern nicht mehr, der Timer lief dann endlos weiter. Jetzt
+  //  prueft der Timer selbst, ob das Panel noch im Dokument haengt.)
 
   async function load() {
     let data;
@@ -1417,6 +1419,7 @@ export function renderPatchesPart(bodyEl, client) {
     function poll() {
       const started = Date.now();
       const tick = async () => {
+        if (!bodyEl.isConnected) { stop(); busy = false; return; }
         let job = null;
         try { job = await api.getPatchJob(client.id); } catch {}
         // Nur abbrechen, wenn das Backend den Auftrag KENNT. Eine leere

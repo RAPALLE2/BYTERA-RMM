@@ -696,6 +696,10 @@ async def connect():
             # auf dem Client wirklich die neue Datei laeuft - eine Versions-
             # nummer allein hat das zuletzt nicht verlaesslich gezeigt.
             "screen_helper": True,
+            # Laeuft gerade eine Fernwartung? Nach einem Neuverbinden weiss das
+            # Backend so, ob der Stream weiterlaeuft oder neu gestartet werden muss.
+            "screen_active": bool(_screen_stream.get("active")),
+            "screen_flow": 1,                      # kennt ACK-Flusskontrolle
             "vdisplay": _vdisplay_status() if IS_WINDOWS else {"supported": False},
             "multiuser_select": IS_WINDOWS,
             "registry": IS_WINDOWS,
@@ -739,6 +743,13 @@ async def on_register_ack(data=None):
     if data.get("ok", True):
         _REGISTERED.set()
         _print("[agent] Anmeldung vom Server bestaetigt - Heartbeats starten")
+        # Marker fuer das Update-Skript: "die neue Version ist am Server
+        # angekommen" (Gesundheitspruefung, sonst Rollback auf die alte Version).
+        try:
+            (Path(__file__).resolve().parent / ".connected").write_text(str(int(time.time())), encoding="utf-8")
+        except Exception:
+            pass
+        await _report_update_failure()
         return
 
     _REGISTERED.clear()
@@ -3948,7 +3959,131 @@ _screen_stream = {"active": False, "thread": None, "sid_loop": None,
                   # Fenster geschlossen), wird der Zaehler erhoeht - die
                   # Abfrage weiss dann, dass niemand mehr zusieht, und startet
                   # KEINEN Stream mehr. Vorher lief der Stream sonst blind los.
-                  "epoch": 0}
+                  "epoch": 0,
+                  # Erzwingt das naechste Bild, auch wenn sich nichts geaendert
+                  # hat (Dashboard verbindet neu / Wachhund im Fenster).
+                  "force": False}
+
+
+# --------------------------------------------------------------------------
+# FLUSSKONTROLLE FUER DIE BILDER (Ursache "Remote Screen bricht ab")
+# --------------------------------------------------------------------------
+# Frueher wurde jedes Bild ohne Rueckmeldung losgeschickt. War der Upload des
+# Geraets langsamer als die erzeugten Bilder, wuchs die Sendewarteschlange von
+# Socket.IO immer weiter - die Ping/Pong-Pakete standen HINTER den Bildern,
+# und nach ~60 s warf der Server den Agenten raus. Ein Keep-alive aendert
+# daran nichts, die Leitung war ja nicht still, sondern verstopft.
+#
+# Jetzt: Jedes Bild wird mit Rueckmeldung (Socket.IO-ACK) gesendet, hoechstens
+# WINDOW Bilder sind gleichzeitig unterwegs. Ist die Leitung voll, wird nicht
+# gestaut, sondern nur das NEUESTE Bild gemerkt ("latest frame wins") und
+# gesendet, sobald Platz ist. Die gemessene Laufzeit steuert zusaetzlich eine
+# Qualitaetsstufe (0 = wie eingestellt, 3 = stark reduziert).
+class _FrameFlow:
+    WINDOW = 2
+    ACK_TIMEOUT = 5.0          # ohne ACK so lange -> Slots freigeben (ACK verloren)
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.sent_ts = _collections.deque()   # Sendezeiten der offenen Bilder
+        self.pending = None
+        self.rtt = 0.3
+        self.level = 0
+        self._lvl_changed = 0.0
+        self.frames = 0
+
+    def reset(self):
+        with self.lock:
+            self.sent_ts.clear()
+            self.pending = None
+            self.rtt = 0.3
+            self.level = 0
+            self.frames = 0
+
+    def congested(self) -> bool:
+        with self.lock:
+            return len(self.sent_ts) >= self.WINDOW
+
+    def _adapt(self, now: float, slow: bool = False):
+        # Hoechstens alle 3 s eine Stufe nach unten (schlechter), alle 6 s
+        # eine Stufe nach oben - sonst pendelt die Qualitaet.
+        if (slow or self.rtt > 1.2) and self.level < 3 and now - self._lvl_changed > 3.0:
+            self.level += 1
+            self._lvl_changed = now
+            _print(f"[screen] Leitung langsam (Laufzeit {self.rtt:.2f}s) -> Qualitaetsstufe {self.level}")
+        elif self.rtt < 0.35 and self.level > 0 and now - self._lvl_changed > 6.0:
+            self.level -= 1
+            self._lvl_changed = now
+
+    def quality(self, configured: int) -> int:
+        return max(20, int(configured) - 15 * self.level)
+
+    def max_width(self, configured_w: int) -> int:
+        caps = {0: 0, 1: 0, 2: 1280, 3: 1024}
+        cap = caps.get(self.level, 0)
+        if not cap:
+            return configured_w
+        return min(configured_w, cap) if configured_w else cap
+
+    def offer(self, payload: dict) -> bool:
+        """Bild abgeben. True = sofort gesendet, False = als 'neuestes' gemerkt."""
+        with self.lock:
+            now = time.time()
+            if self.sent_ts and now - self.sent_ts[0] > self.ACK_TIMEOUT:
+                self.sent_ts.clear()             # Rueckmeldungen verloren -> freigeben
+                self._adapt(now, slow=True)
+            if len(self.sent_ts) >= self.WINDOW:
+                self.pending = payload
+                return False
+            self._emit_locked(payload, now)
+            return True
+
+    def _emit_locked(self, payload, now):
+        if not sio.connected:
+            self.pending = None
+            return
+        self.sent_ts.append(now)
+        self.frames += 1
+
+        def _ack(*_a, _ts=now):
+            self._on_ack(_ts)
+
+        async def _go():
+            try:
+                await sio.emit("screen-frame", payload, namespace="/agent", callback=_ack)
+            except Exception:
+                self._on_ack(None)
+
+        try:
+            asyncio.run_coroutine_threadsafe(_go(), _AGENT_LOOP)
+        except Exception:
+            self.sent_ts.pop()
+
+    def _on_ack(self, ts):
+        with self.lock:
+            now = time.time()
+            if self.sent_ts:
+                self.sent_ts.popleft()
+            if ts:
+                self.rtt = self.rtt * 0.8 + (now - ts) * 0.2
+                self._adapt(now)
+            if self.pending is not None and len(self.sent_ts) < self.WINDOW:
+                p, self.pending = self.pending, None
+                self._emit_locked(p, now)
+
+
+_FLOW = _FrameFlow()
+
+
+def _screen_status(loop, state: str, code: str = "", detail: str = "") -> None:
+    """Zwischenstand der Aufnahme ans Dashboard (z.B. 'paused' bei
+    Sperrbildschirm/UAC, 'live' wenn es wieder Bilder gibt)."""
+    try:
+        asyncio.run_coroutine_threadsafe(
+            sio.emit("screen-status", {"id": DEVICE_ID, "state": state, "code": code,
+                                       "detail": detail[:300]}, namespace="/agent"), loop)
+    except Exception:
+        pass
 
 
 def _detect_from_xorg_process():
@@ -5013,6 +5148,8 @@ def main():
                 state["monitor"] = int(o.get("monitor", state["monitor"]))
                 state["width"] = int(o.get("width", state.get("width", 0)) or 0)
                 state["stream"] = bool(o.get("stream", state["stream"]))
+            elif c == "refresh":
+                state["force"] = True          # naechstes Bild auch ohne Aenderung
             elif c == "input":
                 try: do_input(o.get("data") or {})
                 except Exception as e: log("Eingabe: %s" % e)
@@ -5157,7 +5294,12 @@ def capture(sock, state):
     # Aufnahme neu aufgesetzt und erst nach anhaltenden Fehlern (~15 s) aufgegeben.
     sct = None
     errors = 0
+    frames_ok = 0            # >0 = Sitzung lief schon -> Fehler sind voruebergehend
+    paused = False
+    last_crc = None
+    last_frame = 0.0
     last_send = time.time()
+    import zlib
     def _keepalive():
         nonlocal last_send
         if time.time() - last_send >= 4.0:
@@ -5166,6 +5308,11 @@ def capture(sock, state):
                 last_send = time.time()
             except Exception:
                 state["stop"] = True
+    def _status(st, code="", detail=""):
+        try:
+            send(sock, b"S" + json.dumps({"state": st, "code": code, "detail": str(detail)[:300]}).encode())
+        except Exception:
+            state["stop"] = True
     while not state["stop"]:
         if not state["stream"]:
             _keepalive()
@@ -5176,10 +5323,22 @@ def capture(sock, state):
                 sct = mss.mss()
             mons = sct.monitors
             count = max(1, len(mons) - 1)
-            idx = state["monitor"] if 0 < state["monitor"] <= count else 1
+            idx = state["monitor"] if 0 <= state["monitor"] <= count else 1
             mon = mons[idx]
             state["left"], state["top"] = mon.get("left", 0), mon.get("top", 0)
             shot = sct.grab(mon)
+            errors = 0
+            if paused:
+                paused = False
+                _status("live")
+            # Unveraendertes Bild nicht erneut schicken (alle 3 s trotzdem eins).
+            crc = zlib.crc32(shot.bgra)
+            now = time.time()
+            if crc == last_crc and not state.get("force") and now - last_frame < 3.0:
+                _keepalive()
+                time.sleep(1.0 / max(1, min(30, state["fps"])))
+                continue
+            state["force"] = False
             img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
             # Gleiche Regel wie im direkten Aufnahmeweg des Agenten:
             # hohe Qualitaet -> bis 1920 px, sonst 1280 px.
@@ -5196,7 +5355,8 @@ def capture(sock, state):
             meta = {"width": shot.width, "height": shot.height, "index": idx,
                     "count": count, "left": state["left"], "top": state["top"]}
             payload = b"F" + json.dumps(meta).encode() + b"\0" + buf.getvalue()
-            errors = 0
+            last_crc = crc
+            last_frame = now
         except Exception as e:
             errors += 1
             if errors in (1, 10) or errors % 50 == 0:
@@ -5207,18 +5367,29 @@ def capture(sock, state):
             except Exception:
                 pass
             sct = None
+            last_crc = None
+            if frames_ok > 0:
+                # Sitzung lief schon: Sperrbildschirm, UAC, Benutzerwechsel ...
+                # NICHT aufgeben, sondern pausieren und weiter versuchen.
+                if not paused:
+                    paused = True
+                    _status("paused", "agent_screen_paused", e)
+                _keepalive()
+                time.sleep(min(2.0, 0.3 * errors))
+                continue
             if errors >= 50:
                 try:
                     send(sock, b"F" + json.dumps({"error": str(e)}).encode() + b"\0")
                 except Exception:
                     pass
                 break
-            _keepalive()           # trotz Aufnahmefehler (Sperrbildschirm o.ae.) am Leben bleiben
+            _keepalive()           # trotz Aufnahmefehler am Leben bleiben
             time.sleep(0.3)
             continue
         try:
             send(sock, payload)
             last_send = time.time()
+            frames_ok += 1
         except Exception as e:
             log("Verbindung zum Agenten weg: %s" % e)
             state["stop"] = True
@@ -5712,7 +5883,16 @@ class _ScreenHelper:
         except Exception:
             return None
         if not msg:
-            return None
+            # Gelesen werden konnte, aber nichts kam: Gegenseite hat die
+            # Verbindung geschlossen. Frueher wie "Zeitlimit" behandelt ->
+            # ping() klappte auf dem halb offenen Socket und die Schleife
+            # drehte ohne Bilder endlos weiter.
+            return ("eof", None, None) if msg is None else None
+        if msg[:1] == b"S":
+            try:
+                return "status", json.loads(msg[1:].decode()), None
+            except Exception:
+                return "unknown", None, None
         if msg[:1] == b"F":
             sep = msg.index(b"\0", 1)
             return "frame", json.loads(msg[1:sep].decode()), msg[sep + 1:]
@@ -5780,6 +5960,9 @@ class _ScreenHelper:
                 self.alive = False
                 return None      # Leitung tot -> KEINE stille Ablehnung
             kind, obj, _ = got
+            if kind == "eof":
+                self.alive = False
+                return None      # Helfer weg -> Aufrufer darf neu starten
             if kind == "reply" and "consent" in obj:
                 return bool(obj["consent"])
         return False
@@ -5796,37 +5979,53 @@ class _ScreenHelper:
 def _screen_helper_loop(loop, helper) -> bool:
     """Nimmt die Bilder vom Helfer entgegen und schickt sie ans Dashboard.
     Rueckgabe True = der Helfer ist WAEHREND der Sitzung weggebrochen (der
-    Aufrufer startet ihn neu), False = regulaer beendet oder Fehler gemeldet."""
-    def _hcfg():
-        return {"cmd": "config", "stream": True,
-                "quality": int(_screen_stream.get("quality", 60)),
-                "fps": int(_screen_stream.get("fps", 10)),
-                "monitor": int(_screen_stream.get("monitor", 1) or 1),
-                "width": int(_screen_stream.get("width", 0) or 0)}
-    helper.send(_hcfg())
-    last_cfg = None
+    Aufrufer startet ihn neu), False = regulaer beendet oder Fehler gemeldet.
+
+    Die Bilder laufen ueber _FLOW (Flusskontrolle): Ist die Leitung voll, wird
+    der Helfer NICHT blockiert (Chat/Rechte-Antworten laufen ueber denselben
+    Socket), sondern nur das neueste Bild gemerkt. Qualitaet/Breite des Helfers
+    folgen der Qualitaetsstufe der Flusskontrolle."""
+    def _cfg_tuple():
+        return (_FLOW.quality(int(_screen_stream.get("quality", 60))),
+                int(_screen_stream.get("fps", 10)),
+                int(_screen_stream.get("monitor", 1) or 1),
+                _FLOW.max_width(int(_screen_stream.get("width", 0) or 0)))
+
+    def _hcfg(cfg):
+        q, fps, mon, w = cfg
+        return {"cmd": "config", "stream": True, "quality": q, "fps": fps,
+                "monitor": mon, "width": w}
+
+    _FLOW.reset()
+    last_cfg = _cfg_tuple()
+    helper.send(_hcfg(last_cfg))
+    helper.send({"cmd": "refresh"})
     while _screen_stream["active"] and helper.alive:
-        cfg = (int(_screen_stream.get("quality", 60)),
-               int(_screen_stream.get("fps", 10)),
-               int(_screen_stream.get("monitor", 1) or 1),
-               int(_screen_stream.get("width", 0) or 0))
+        cfg = _cfg_tuple()
         if cfg != last_cfg:
-            helper.send(_hcfg())
+            helper.send(_hcfg(cfg))
             last_cfg = cfg
+        if _screen_stream.get("force"):
+            _screen_stream["force"] = False
+            helper.send({"cmd": "refresh"})
         got = helper.recv(timeout=15.0)
         if got is None:
-            # Nichts gelesen. Der Helfer sendet alle ~4 s ein Lebenszeichen (auch
-            # bei Sperrbildschirm/UAC, wenn gerade kein Bild entsteht). Bleibt es
-            # 15 s GANZ still, pruefen wir die Verbindung aktiv mit einem Ping,
-            # statt die Sitzung sofort zu beenden (fruehere Ursache fuer
-            # "Sitzung geht nach einiger Zeit aus").
+            # 15 s GANZ still (der Helfer sendet sonst alle ~4 s ein Lebens-
+            # zeichen): Verbindung aktiv pruefen statt sofort aufzugeben.
             if helper.ping():
                 continue
             helper.alive = False
             break
         kind, meta, jpeg = got
+        if kind == "eof":
+            helper.alive = False
+            break
         if kind == "keepalive":
-            continue                     # Lebenszeichen - alles in Ordnung
+            continue
+        if kind == "status":
+            st = (meta or {}).get("state") or ""
+            _screen_status(loop, st, (meta or {}).get("code") or "", (meta or {}).get("detail") or "")
+            continue
         if kind == "reply" and isinstance(meta, dict) and meta.get("session"):
             _handle_session_reply(loop, meta)
             continue
@@ -5843,16 +6042,14 @@ def _screen_helper_loop(loop, helper) -> bool:
             return False
         _screen_stream["mon_left"] = meta.get("left", 0)
         _screen_stream["mon_top"] = meta.get("top", 0)
-        b64 = base64.b64encode(jpeg).decode()
-        asyncio.run_coroutine_threadsafe(
-            sio.emit("screen-frame", {
-                "id": DEVICE_ID, "image": b64,
-                "width": meta.get("width"), "height": meta.get("height"),
-                "monitor_index": meta.get("index", 0),
-                "monitor_count": meta.get("count", 1),
-            }, namespace="/agent"),
-            loop,
-        )
+        if not sio.connected:
+            continue                     # Backend gerade weg - Bild verwerfen
+        _FLOW.offer({
+            "id": DEVICE_ID, "image": base64.b64encode(jpeg).decode(),
+            "width": meta.get("width"), "height": meta.get("height"),
+            "monitor_index": meta.get("index", 0),
+            "monitor_count": meta.get("count", 1),
+        })
     died = bool(_screen_stream["active"] and not helper.alive)
     if not died:
         _screen_stream["active"] = False
@@ -5994,53 +6191,102 @@ def _screen_capture_loop(loop):
     _select_monitor(_screen_stream.get("monitor", 1))
     consecutive_errors = 0
     helper_retry_done = False   # Fallback auf die Benutzersitzung nur einmal
+    frames_ok = 0               # >0 = die Sitzung lief schon -> Fehler sind voruebergehend
+    paused = False
+    last_crc = None
+    last_sent = 0.0
+    _FLOW.reset()
+    import zlib as _zlib
 
     while _screen_stream["active"]:
         try:
+            # Backend gerade nicht erreichbar: nichts aufnehmen, nur warten.
+            # Die Sitzung bleibt bestehen und laeuft nach dem Reconnect weiter.
+            if not sio.connected:
+                time.sleep(0.5)
+                continue
+            # Leitung voll? Dann nicht sinnlos weiter kodieren - kurz warten.
+            if _FLOW.congested():
+                time.sleep(0.05)
+                continue
+
             # Live-Wechsel: hat das Dashboard einen anderen Monitor gewählt?
             want = max(0, min(int(_screen_stream.get("monitor", 1)), mon_count))
             if want != cur_idx:
                 _select_monitor(want)
+                last_crc = None
 
+            if sct is None:
+                sct = mss.mss()
+                mon_count = max(1, len(sct.monitors) - 1)
+                _select_monitor(min(cur_idx if cur_idx >= 0 else 1, mon_count))
             raw = sct.grab(monitor)
-            img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
             consecutive_errors = 0  # erfolgreich -> Fehlerzähler zurücksetzen
+            if paused:
+                paused = False
+                _screen_status(loop, "live")
 
-            # Ziel-Breite skaliert mit der gewählten Qualität: hohe Qualität ->
-            # bis 1920px (schärfer), niedrige -> 1280px (spart Bandbreite).
-            _q_now = int(_screen_stream.get("quality", 55))
+            # Unveraendertes Bild nicht erneut schicken (spart auf ruhigen
+            # Bildschirmen fast die ganze Bandbreite). Alle 3 s trotzdem eins,
+            # damit das Dashboard sieht, dass die Sitzung lebt.
+            crc = _zlib.crc32(raw.bgra)
+            now = time.time()
+            force = bool(_screen_stream.get("force"))
+            if crc == last_crc and not force and now - last_sent < 3.0:
+                time.sleep(1.0 / max(1, min(int(_screen_stream.get("fps", 10)), 30)))
+                continue
+            _screen_stream["force"] = False
+
+            img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
+            _q_conf = max(10, min(int(_screen_stream.get("quality", 55)), 95))
             # Zielbreite: fest gewaehlt (bytera://.../resolution=WxH) hat Vorrang,
-            # sonst automatisch nach Qualitaet (1920/1280).
+            # sonst automatisch nach Qualitaet (1920/1280). Die Flusskontrolle
+            # senkt Qualitaet/Breite bei langsamer Leitung zusaetzlich.
             _fixed_w = int(_screen_stream.get("width", 0) or 0)
-            max_width = _fixed_w if _fixed_w > 0 else (1920 if _q_now >= 70 else 1280)
+            max_width = _fixed_w if _fixed_w > 0 else (1920 if _q_conf >= 70 else 1280)
+            max_width = _FLOW.max_width(max_width)
             if img.width > max_width:
                 ratio = max_width / img.width
                 img = img.resize((max_width, int(img.height * ratio)))
 
             buffer = io.BytesIO()
-            _q = int(_screen_stream.get("quality", 55))
-            _q = max(10, min(_q, 95))
-            img.save(buffer, format="JPEG", quality=_q)
+            img.save(buffer, format="JPEG", quality=_FLOW.quality(_q_conf))
             b64 = base64.b64encode(buffer.getvalue()).decode("ascii")
 
-            asyncio.run_coroutine_threadsafe(
-                sio.emit("screen-frame", {
-                    "id": DEVICE_ID,
-                    "image": b64,
-                    "width": screen_w,
-                    "height": screen_h,
-                    "monitor_index": cur_idx,      # aktuell gestreamter Monitor
-                    "monitor_count": mon_count,    # Anzahl verfügbarer Monitore
-                }, namespace="/agent"),
-                loop,
-            )
-            # Sende-Rate aus der Einstellung (Bilder/Sekunde).
+            _FLOW.offer({
+                "id": DEVICE_ID,
+                "image": b64,
+                "width": screen_w,
+                "height": screen_h,
+                "monitor_index": cur_idx,      # aktuell gestreamter Monitor
+                "monitor_count": mon_count,    # Anzahl verfügbarer Monitore
+            })
+            last_crc = crc
+            last_sent = now
+            frames_ok += 1
             _fps = int(_screen_stream.get("fps", 10))
             _fps = max(1, min(_fps, 30))
             time.sleep(1.0 / _fps)
         except Exception as e:
             consecutive_errors += 1
             msg = str(e)
+            # Lief die Sitzung schon (es gab Bilder), ist ein Aufnahmefehler
+            # fast immer voruebergehend: Sperrbildschirm (Win+L), UAC-Abfrage,
+            # Aufloesungs-/Monitorwechsel, Benutzerwechsel. Frueher endete die
+            # Sitzung nach 5 Fehlern - jetzt wird pausiert und weiter versucht,
+            # bis jemand die Sitzung beendet.
+            if frames_ok > 0:
+                if not paused:
+                    paused = True
+                    _print(f"[agent] Aufnahme pausiert ({msg}) - versuche weiter")
+                    _screen_status(loop, "paused", "agent_screen_paused", msg)
+                try:
+                    sct.close()
+                except Exception:
+                    pass
+                sct = None
+                time.sleep(min(2.0, 0.3 * consecutive_errors))
+                continue
             # Linux/headless: kein Sinn weiterzuprobieren -> Shell anbieten.
             if is_linux:
                 _notify_screen_mode(loop, "shell", f"Screen capture aborted: {msg}",
@@ -6049,16 +6295,9 @@ def _screen_capture_loop(loop):
                 break
             # Windows: typischer Fall headless/kein Desktop -> RDP-Angebot.
             if "denied" in msg.lower() or "bitblt" in msg.lower():
-                # ZWEITER VERSUCH ueber die Benutzersitzung.
-                # Grund: Genau dieselbe Fehlermeldung ("BitBlt failed",
-                # "access denied") entsteht auch dann, wenn der Prozess zwar
-                # NICHT in Sitzung 0 sitzt (_needs_session_helper() sagt also
-                # "nicht noetig"), aber trotzdem keinen sichtbaren Desktop
-                # besitzt - z.B. bei einer getrennten RDP-Sitzung, einem
-                # Task-Scheduler-Start "unabhaengig von der Anmeldung" oder
-                # einer verwaisten Sitzung nach Benutzerwechsel. In diesen
-                # Faellen liefert der Helfer in der aktiven Konsolensitzung
-                # sehr wohl ein Bild. Nur EINMAL versuchen, sonst Endlosschleife.
+                # ZWEITER VERSUCH ueber die Benutzersitzung (getrennte RDP-
+                # Sitzung, Task-Start "unabhaengig von der Anmeldung" usw.).
+                # Nur EINMAL versuchen, sonst Endlosschleife.
                 if IS_WINDOWS and not helper_retry_done and os.environ.get("RMM_SCREEN_HELPER") != "1":
                     helper_retry_done = True
                     _print(f"[agent] Direkte Aufnahme scheitert ({msg}) - "
@@ -6086,7 +6325,7 @@ def _screen_capture_loop(loop):
                 )
                 _screen_stream["active"] = False
                 break
-            # Andere Fehler: ein paar Mal tolerieren, dann aufgeben
+            # Andere Fehler beim Start: ein paar Mal tolerieren, dann aufgeben
             if consecutive_errors >= 5:
                 _notify_screen_error(loop, f"Screen capture aborted: {msg}",
                                      code="agent_err_aborted", params={"err": msg})
@@ -6095,7 +6334,8 @@ def _screen_capture_loop(loop):
             time.sleep(1)
 
     try:
-        sct.close()
+        if sct is not None:
+            sct.close()
     except Exception:
         pass
 
@@ -7198,6 +7438,17 @@ async def on_screen_config(data):
         pass
 
 
+@sio.on("screen-refresh", namespace="/agent")
+async def on_screen_refresh(data=None):
+    """Dashboard (neu verbunden / Wachhund) will sofort ein aktuelles Bild -
+    auch wenn sich am Bildschirm nichts geaendert hat."""
+    _screen_stream["force"] = True
+    _FLOW.reset()                     # evtl. verlorene Rueckmeldungen verwerfen
+    h = _screen_stream.get("helper")
+    if h is not None and h.alive and _screen_stream.get("active"):
+        h.send({"cmd": "refresh"})
+
+
 @sio.on("screen-set-monitor", namespace="/agent")
 async def on_screen_set_monitor(data):
     """Wechselt den gestreamten Bildschirm (Multi-Monitor). Der Capture-Loop
@@ -7326,6 +7577,10 @@ async def on_update_agent(data):
     loop = asyncio.get_event_loop()
     detail = await loop.run_in_executor(None, _run_dist_command, "update")
     await _emit_action_log("update", detail.get("stage", "launched"), detail.get("detail", ""))
+    try:
+        asyncio.ensure_future(_watch_update_result())
+    except Exception:
+        pass
 
 
 @sio.on("uninstall-agent", namespace="/agent")
@@ -7344,6 +7599,36 @@ async def on_uninstall_agent(data):
     loop = asyncio.get_event_loop()
     detail = await loop.run_in_executor(None, _run_dist_command, "uninstall")
     await _emit_action_log("uninstall", detail.get("stage", "launched"), detail.get("detail", ""))
+
+
+async def _report_update_failure() -> bool:
+    """Hat das Update-Skript einen Fehlschlag hinterlegt (.update_failed)?
+    Dann ans Dashboard melden: Das Update wurde abgebrochen bzw. zurueckgerollt,
+    der Agent laeuft mit der bisherigen Version weiter."""
+    f = Path(__file__).resolve().parent / ".update_failed"
+    try:
+        if not f.exists():
+            return False
+        reason = f.read_text(encoding="utf-8", errors="replace").strip()[:500]
+        f.unlink()
+    except Exception:
+        return False
+    _print(f"[agent] UPDATE FEHLGESCHLAGEN - laufe mit bisheriger Version weiter: {reason}")
+    await _emit_action_log("update", "error",
+                           f"Update fehlgeschlagen, Agent laeuft mit Version {AGENT_VERSION} weiter: {reason}")
+    return True
+
+
+async def _watch_update_result(minutes: int = 20):
+    """Nach dem Start eines Updates: Bricht das Skript VOR dem Tausch ab, wird
+    dieser Agent nie neu gestartet - dann hier den Grund abholen und melden."""
+    for _ in range(minutes * 6):
+        await asyncio.sleep(10)
+        try:
+            if await _report_update_failure():
+                return
+        except Exception:
+            pass
 
 
 async def _emit_action_log(kind: str, stage: str, detail: str = ""):
@@ -7838,7 +8123,22 @@ async def main():
                               namespaces=["/agent"], wait_timeout=30)
             backoff = 3.0    # Verbindung stand -> Backoff zurücksetzen
             attempts = 0
-            await sio.wait()  # blockiert, solange die Verbindung steht
+            # Blockiert, solange die Verbindung steht - mit Wachhund: Steht die
+            # Leitung zwar, aber der Server bestaetigt die Anmeldung 5 Minuten
+            # lang nicht (haengende/halb offene Verbindung, Server-Stoerung),
+            # blieb der Agent frueher "verbunden" und im Dashboard offline.
+            # Jetzt wird neu verbunden.
+            _wait_task = asyncio.ensure_future(sio.wait())
+            _t_conn = time.time()
+            while not _wait_task.done():
+                await asyncio.wait({_wait_task}, timeout=20)
+                if (not _wait_task.done() and not _REGISTERED.is_set()
+                        and time.time() - _t_conn > 300):
+                    _print("[agent] Verbunden, aber seit 5 Minuten keine Anmelde-"
+                           "Bestaetigung vom Server - verbinde neu")
+                    break
+            if not _wait_task.done():
+                _wait_task.cancel()
             _print(f"[agent] {_at('log_disconnected')}")
         except Exception as e:
             # Der Server weist uns ab, weil er gerade andere Agenten aufnimmt.

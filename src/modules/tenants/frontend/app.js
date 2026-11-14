@@ -10,8 +10,19 @@
 import { nodeHint } from "/js/app/nodechoice.js";
 import { getToken, api } from "/js/app/api.js";
 import { state } from "/js/app/state.js";
-import { esc, uiConfirm } from "/js/app/utils.js";
+import { esc, uiConfirm, uiPrompt } from "/js/app/utils.js";
 import { hasGlobalPerm } from "/js/app/state.js";
+import { registerCleanup } from "/js/app/windowmanager.js";
+
+// Embed-URL um ein Deep-Link-Ziel ergaenzen (?go=bytera://...). Das
+// Mandanten-Dashboard loest es nach dem Autologin selbst auf (Modul url-scheme).
+function withGo(url, go) {
+  if (!go) return url;
+  const i = url.indexOf("#");
+  const base = i >= 0 ? url.slice(0, i) : url;
+  const hash = i >= 0 ? url.slice(i) : "";
+  return base + (base.includes("?") ? "&" : "?") + "go=" + encodeURIComponent(go) + hash;
+}
 
 async function tq(path, opts = {}) {
   const headers = { Authorization: "Bearer " + (getToken() || "") };
@@ -25,7 +36,7 @@ async function tq(path, opts = {}) {
 const canManage = () => { try { return hasGlobalPerm("manage_tenants"); } catch { return false; } };
 const dot = (c) => `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${esc(c || "var(--accent)")}"></span>`;
 
-export async function renderTenants(body) {
+export async function renderTenants(body, win) {
   body.innerHTML = `
     <div style="display:flex;flex-direction:column;height:100%;min-height:0;font-size:13px">
       <div data-bar style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
@@ -40,6 +51,32 @@ export async function renderTenants(body) {
   let tenants = [];
   const open = {};        // tid -> {iframe} offene eingebettete Dashboards (bleiben geladen)
   let active = "home";    // "home" | tid
+  // Link/Adresszeile: der gerade offene Mandant per NAME (bytera://mandant/<name>).
+  if (win) win.getLink = () => {
+    const tn = active !== "home" ? tenants.find((x) => x.id === active) : null;
+    return tn ? "bytera://mandant/" + encodeURIComponent(tn.name) : "bytera://app/tenants";
+  };
+
+  // Mandant per ID oder Name (bytera://<mandant>/agent/<name>)
+  const findRef = (ref) => {
+    const r = String(ref || "").trim().toLowerCase();
+    return tenants.find((x) => x.id === ref) || tenants.find((x) => String(x.name || "").toLowerCase() === r)
+      || tenants.find((x) => String(x.name || "").toLowerCase().replace(/\s+/g, "-") === r) || null;
+  };
+  const openByRef = (ref, go) => {
+    const tn = findRef(ref);
+    if (!tn) { window.notify?.(`Mandant „${ref}“ nicht gefunden oder nicht freigegeben.`, "error", 7000); return; }
+    openTenant(tn.id, "", go || "");
+  };
+  // Schon offenes Fenster: Deep-Links aus dem Core hier annehmen.
+  const onDeepLink = (ev) => {
+    if (!body.isConnected) return;
+    ev.detail.handled = true;
+    const run = () => openByRef(ev.detail.ref, ev.detail.go);
+    if (tenants.length) run(); else load().then(run);
+  };
+  window.addEventListener("bytera-tenant-open", onDeepLink);
+  if (win?.key) registerCleanup(win.key, () => window.removeEventListener("bytera-tenant-open", onDeepLink));
 
   const load = async () => { try { tenants = (await tq("")).tenants; } catch (e) { view.innerHTML = `<div style="padding:16px;color:var(--danger)">${esc(e.message)}</div>`; return; } drawTabs(); show(active); };
 
@@ -87,17 +124,23 @@ export async function renderTenants(body) {
     home.querySelectorAll("[data-spaces]").forEach((b) => b.addEventListener("click", () => spacesDialog(tenants.find((x) => x.id === b.dataset.spaces))));
   };
 
-  const openTenant = async (tid, code) => {
+  const openTenant = async (tid, code, go = "") => {
     const t = tenants.find((x) => x.id === tid);
     if (!t) return;
-    if (!t.has_credentials) { credDialog(t, () => { load().then(() => openTenant(tid)); }); return; }
-    if (open[tid]) { show(tid); return; }
+    if (!t.has_credentials) { credDialog(t, () => { load().then(() => openTenant(tid, "", go)); }); return; }
+    if (open[tid] && !go) { show(tid); return; }
     let res;
     try { res = await tq(`/${tid}/open`, { method: "POST", body: { code: code || "" } }); }
     catch (e) {
-      if (e.status === 401 && e.message === "2fa_required") { const c = prompt("2FA-Code für " + t.name + ":"); if (c) openTenant(tid, c); return; }
-      if (e.status === 412) { credDialog(t, () => load().then(() => openTenant(tid))); return; }
+      if (e.status === 401 && e.message === "2fa_required") { const c = await uiPrompt("2FA-Code", { description: "2FA-Code für " + t.name }); if (c) openTenant(tid, c, go); return; }
+      if (e.status === 412) { credDialog(t, () => load().then(() => openTenant(tid, "", go))); return; }
       window.notify?.(e.message, "error", 7000); return;
+    }
+    if (open[tid]) {
+      // Tab ist schon offen -> mit dem neuen Ziel neu laden.
+      open[tid].iframe.src = withGo(res.url, go);
+      show(tid);
+      return;
     }
     const wrap = document.createElement("div");
     wrap.style.cssText = "position:absolute;inset:0;display:flex;flex-direction:column";
@@ -106,7 +149,7 @@ export async function renderTenants(body) {
         <span style="flex:1"></span>
         <button class="btn btn-sm" data-reload>↻ Neu laden</button>
         <button class="btn btn-sm" data-ext title="In neuem Tab">↗</button></div>
-      <iframe style="flex:1;border:0;width:100%;background:var(--bg)" src="${esc(res.url)}"></iframe>`;
+      <iframe style="flex:1;border:0;width:100%;background:var(--bg)" src="${esc(withGo(res.url, go))}"></iframe>`;
     view.appendChild(wrap);
     const iframe = wrap.querySelector("iframe");
     wrap.querySelector("[data-reload]").addEventListener("click", async () => {
@@ -118,7 +161,10 @@ export async function renderTenants(body) {
   };
 
   body.querySelector("[data-admin]")?.addEventListener("click", () => adminDialog(load));
-  load();
+  load().then(() => {
+    const p = win?.props || {};
+    if (p.openTenant) openByRef(p.openTenant, p.go || "");
+  });
 }
 
 // ------------------------------------------------------------------ Zugangsdaten

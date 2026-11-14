@@ -17,6 +17,10 @@ import { esc, uiConfirm, uiPrompt } from "/js/app/utils.js";
 import { state, hasGlobalPerm, isAdmin } from "/js/app/state.js";
 import { t } from "/js/app/i18n.js";
 
+
+// Einheitliche Meldung statt des nativen Browser-Dialogs alert().
+const uiAlert = (m) => { window.notify?.(String(m ?? ""), "error", 9000); };
+
 const fmtTs = (ms) => ms ? new Date(Number(ms)).toLocaleString("de-DE") : "—";
 const fmtBytes = (b) => {
   if (!b) return "0 B";
@@ -121,7 +125,7 @@ export function renderPrivacy(body, win) {
 
     view.querySelector("#pv-export").addEventListener("click", async () => {
       try { await api.downloadPrivacyExport(null); }
-      catch (e) { alert(e.message); }
+      catch (e) { uiAlert(e.message); }
     });
     const req = async (kind) => {
       const label = kind === "account" ? t("privacy_erase_q_account") : t("privacy_erase_q_content");
@@ -130,7 +134,7 @@ export function renderPrivacy(body, win) {
         danger: kind === "account" })) return;
       const reason = await uiPrompt(t("privacy_reason"), { placeholder: t("privacy_reason_ph") });
       if (reason === null) return;
-      try { await api.requestErasure(kind, reason || ""); } catch (e) { return alert(e.message); }
+      try { await api.requestErasure(kind, reason || ""); } catch (e) { return uiAlert(e.message); }
       draw();
     };
     view.querySelector("#pv-req-content")?.addEventListener("click", () => req("content"));
@@ -181,7 +185,7 @@ export function renderPrivacy(body, win) {
       try {
         await api.setRetention(values);
         window.notify?.(t("privacy_saved"), "success");
-      } catch (e) { alert(e.message); }
+      } catch (e) { uiAlert(e.message); }
       draw();
     });
     view.querySelector("#pv-purge").addEventListener("click", async () => {
@@ -192,7 +196,7 @@ export function renderPrivacy(body, win) {
         const r = await api.runPrivacyPurge();
         const lines = Object.entries(r).map(([k, v]) => `${k}: ${v}`).join("\n");
         await uiConfirm(t("privacy_purge_done"), { description: lines, okText: "OK" });
-      } catch (e) { alert(e.message); }
+      } catch (e) { uiAlert(e.message); }
       draw();
     });
   }
@@ -259,9 +263,9 @@ export function renderPrivacy(body, win) {
       b.addEventListener("click", async () => {
         const note = await uiPrompt(t("privacy_reject_note"), { description: t("privacy_reject_hint") });
         if (note === null) return;
-        if (!note.trim()) return alert(t("privacy_reject_required"));
+        if (!note.trim()) return uiAlert(t("privacy_reject_required"));
         try { await api.resolveErasureRequest(b.dataset.reject, "rejected", note.trim()); }
-        catch (e) { return alert(e.message); }
+        catch (e) { return uiAlert(e.message); }
         draw();
       });
     });
@@ -293,7 +297,7 @@ export function renderPrivacy(body, win) {
     view.querySelectorAll("[data-exp]").forEach((b) => {
       b.addEventListener("click", async () => {
         try { await api.downloadPrivacyExport(b.dataset.exp); }
-        catch (e) { alert(e.message); }
+        catch (e) { uiAlert(e.message); }
       });
     });
     view.querySelectorAll("[data-del]").forEach((b) => {
@@ -317,13 +321,13 @@ export function renderPrivacy(body, win) {
     const typed = await uiPrompt(t("privacy_confirm_name"), {
       description: t("privacy_confirm_expect", { name: username }), placeholder: username });
     if (typed === null) return;
-    if (typed.trim() !== username) return alert(t("privacy_name_mismatch"));
+    if (typed.trim() !== username) return uiAlert(t("privacy_name_mismatch"));
 
     try {
       const r = await api.eraseUser(userId, hard ? "hard" : "anonymize", username);
       const lines = Object.entries(r).map(([k, v]) => `${k}: ${v}`).join("\n");
       await uiConfirm(t("privacy_erase_done"), { description: lines, okText: "OK" });
-    } catch (e) { return alert(e.message); }
+    } catch (e) { return uiAlert(e.message); }
     draw();
   }
 

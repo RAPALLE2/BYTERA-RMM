@@ -22,12 +22,24 @@ peer_state: dict[str, dict] = {}        # "<tid>:<pid>" -> {ok, error, ts}  (Rue
 
 
 def wgsys():
-    """Gemeinsame WireGuard-Systemfunktionen (modules/node/vpn/wgsys.py) fuer das Backend."""
+    """Gemeinsame WireGuard-Systemfunktionen (Node-Teil dieses Moduls: wgsys.py) fuer das Backend."""
     global _wg
     if _wg is None:
-        spec = importlib.util.spec_from_file_location("rmm_backend_wgsys", MODULES_DIR / "node" / "vpn" / "wgsys.py")
-        _wg = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(_wg)
+        # Der Node-Teil liegt IM Modul (modules/vpn/node/). Frueher zeigte der
+        # Pfad auf modules/node/vpn/ - den Ordner gibt es nicht mehr, dadurch
+        # stuerzte die VPN-App beim Oeffnen ab und das Modul wurde abgeschaltet.
+        from pathlib import Path as _P
+        cands = [_P(__file__).resolve().parent.parent / "node" / "wgsys.py",
+                 MODULES_DIR / "vpn" / "node" / "wgsys.py",
+                 MODULES_DIR / "node" / "vpn" / "wgsys.py"]
+        path = next((c for c in cands if c.is_file()), None)
+        if path is None:
+            raise FileNotFoundError("wgsys.py (Node-Teil des VPN-Moduls) nicht gefunden: "
+                                    + ", ".join(str(c) for c in cands))
+        spec = importlib.util.spec_from_file_location("rmm_backend_wgsys", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _wg = mod
     return _wg
 
 
