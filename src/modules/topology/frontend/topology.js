@@ -268,6 +268,7 @@ export function renderTopology(body, win) {
 
   // ---------------- Zeichnen ----------------
   let positions = {};
+  let edgeEls = new Map();          // Knoten-ID -> Linien, die daran haengen
   function draw() {
     const { nodes, edges } = mergedGraph();
     positions = layout(nodes);
@@ -279,14 +280,13 @@ export function renderTopology(body, win) {
 
     const lineCol = "var(--ok, #35c26a)";
 
-    // Linien
+    // Linien (je Knoten gemerkt, damit sie beim Ziehen live mitwandern)
+    edgeEls = new Map();
     for (const e of edges) {
       const pa = positions[e.a], pb = positions[e.b];
       if (!pa || !pb) continue;
       const g = document.createElementNS(SVGNS, "g");
       const line = document.createElementNS(SVGNS, "line");
-      line.setAttribute("x1", pa.x); line.setAttribute("y1", pa.y + 34);
-      line.setAttribute("x2", pb.x); line.setAttribute("y2", pb.y - 34);
       line.setAttribute("stroke", lineCol);
       line.setAttribute("stroke-width", "1.6");
       line.setAttribute("opacity", "0.85");
@@ -303,11 +303,87 @@ export function renderTopology(body, win) {
         g.appendChild(hit);
         g.querySelector("line").setAttribute("stroke-width", "2");
       }
+      const rec = { e, lines: [...g.querySelectorAll("line")] };
+      placeEdge(rec);
+      for (const id of [e.a, e.b]) {
+        if (!edgeEls.has(id)) edgeEls.set(id, []);
+        edgeEls.get(id).push(rec);
+      }
       vp.appendChild(g);
     }
 
     // Knoten
     for (const n of nodes) drawNode(vp, n, positions[n.id]);
+  }
+
+  // Linien-Endpunkte: rasten an der passenden Kante der Knoten-Box ein
+  // (unten/oben bei uebereinander, links/rechts bei nebeneinander).
+  const HALF = 34;
+  function anchors(pa, pb) {
+    const dx = pb.x - pa.x, dy = pb.y - pa.y;
+    if (Math.abs(dy) >= Math.abs(dx) * 0.6) {
+      const s = dy >= 0 ? 1 : -1;
+      return [pa.x, pa.y + s * HALF, pb.x, pb.y - s * HALF];
+    }
+    const s = dx >= 0 ? 1 : -1;
+    return [pa.x + s * HALF, pa.y, pb.x - s * HALF, pb.y];
+  }
+  function placeEdge(rec) {
+    const pa = positions[rec.e.a], pb = positions[rec.e.b];
+    if (!pa || !pb) return;
+    const [x1, y1, x2, y2] = anchors(pa, pb);
+    for (const l of rec.lines) {
+      l.setAttribute("x1", x1); l.setAttribute("y1", y1);
+      l.setAttribute("x2", x2); l.setAttribute("y2", y2);
+    }
+  }
+
+  // Notizen: je Knoten in ovr.meta[id] = {note, note_mode: "hover"|"always"}
+  // (manuelle Knoten hatten frueher "info" - wird als Notiz weitergefuehrt)
+  const noteOf = (n) => ((ovr.meta || {})[n.id]?.note ?? n.info ?? "").trim();
+  const noteMode = (n) => (ovr.meta || {})[n.id]?.note_mode === "always" ? "always" : "hover";
+
+  function wrapLines(text, max = 26, maxLines = 6) {
+    const out = [];
+    for (const para of text.split("\n")) {
+      let cur = "";
+      for (const w of para.split(/\s+/)) {
+        if (!w) continue;
+        if ((cur + " " + w).trim().length > max && cur) { out.push(cur); cur = w; }
+        else cur = (cur + " " + w).trim();
+        while (cur.length > max) { out.push(cur.slice(0, max)); cur = cur.slice(max); }
+      }
+      out.push(cur);
+    }
+    if (out.length > maxLines) { out.length = maxLines; out[maxLines - 1] += " …"; }
+    return out;
+  }
+
+  function drawNote(g, n) {
+    const note = noteOf(n);
+    if (!note) return;
+    if (noteMode(n) === "hover") {          // nur kleines Notiz-Symbol am Knoten
+      const t = document.createElementNS(SVGNS, "text");
+      t.setAttribute("x", 22); t.setAttribute("y", 30);
+      t.setAttribute("font-size", "13");
+      t.textContent = "📝";
+      g.appendChild(t);
+      return;
+    }
+    const lines = wrapLines(note);
+    const w = 160, lh = 14, h = lines.length * lh + 12, top = 72;
+    const box = document.createElementNS(SVGNS, "rect");
+    box.setAttribute("x", -w / 2); box.setAttribute("y", top);
+    box.setAttribute("width", w); box.setAttribute("height", h); box.setAttribute("rx", 6);
+    box.setAttribute("fill", "rgba(250, 204, 21, 0.14)");
+    box.setAttribute("stroke", "rgba(250, 204, 21, 0.7)");
+    box.setAttribute("stroke-width", "1");
+    g.appendChild(box);
+    lines.forEach((ln, i) => {
+      const t = textEl2(ln, -w / 2 + 8, top + 16 + i * lh, "11", "var(--text, #d8dee9)");
+      t.setAttribute("text-anchor", "start");
+      g.appendChild(t);
+    });
   }
 
   function drawNode(vp, n, p) {
@@ -357,6 +433,10 @@ export function renderTopology(body, win) {
     g.appendChild(l1);
     const sub = n.ip && n.ip !== name ? n.ip : (TYPE_LABELS[n.type] || "");
     if (sub) g.appendChild(textEl2(sub, 0, 63, "10.5", "var(--subtext, #94a3b8)"));
+    drawNote(g, n);
+
+    // Rechtsklick: Notiz bearbeiten (auch ausserhalb des Bearbeiten-Modus)
+    g.addEventListener("contextmenu", (ev) => { ev.preventDefault(); openNoteDialog(n); });
 
     // Hover-Tooltip
     g.addEventListener("mouseenter", (ev) => showTip(n, ev));
@@ -394,7 +474,11 @@ export function renderTopology(body, win) {
     if (n.hop) rows.push(`<div>↕ Zwischenstation Richtung Internet</div>`);
     if (n.self) rows.push(`<div>📍 Von hier wurde erkannt</div>`);
     if (n.custom) rows.push(`<div style="color:var(--subtext)">manuell angelegter Knoten</div>`);
-    if (n.info) add("Info", n.info);
+    const note = noteOf(n);
+    if (note) {
+      rows.push(`<div style="margin-top:4px;padding:5px 7px;border-radius:6px;white-space:pre-wrap;
+        background:rgba(250,204,21,.12);border:1px solid rgba(250,204,21,.5)">📝 ${esc(note)}</div>`);
+    }
     if (n.agent) {
       rows.push(`<div style="margin-top:4px;padding-top:4px;border-top:1px solid var(--border)">
         <span style="color:${n.agent.online ? "var(--ok,#34d399)" : "var(--danger)"}">●</span>
@@ -429,6 +513,7 @@ export function renderTopology(body, win) {
       moved = true;
       positions[n.id] = { x: p0.x + dx, y: p0.y + dy };
       g.setAttribute("transform", `translate(${positions[n.id].x},${positions[n.id].y})`);
+      for (const rec of edgeEls.get(n.id) || []) placeEdge(rec);   // Linien sofort mitziehen
       hideTip();
     };
     const onUp = () => {
@@ -504,8 +589,7 @@ export function renderTopology(body, win) {
           <input type="text" id="tpd-name" value="${esc(n.label || n.hostname || n.ip || "")}"></label>
         <label style="display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--subtext)">Icon / Typ
           <select id="tpd-type">${typeOpts}</select></label>
-        ${n.custom ? `<label style="display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--subtext)">Info (Tooltip)
-          <input type="text" id="tpd-info" value="${esc(n.info || "")}"></label>` : ""}
+        ${noteFieldsHtml(n)}
         <div style="font-size:11px;color:var(--subtext)">${esc(n.ip || "")} ${esc(n.mac ? "· " + n.mac : "")}</div>
         <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:4px;flex-wrap:wrap">
           ${n.custom
@@ -522,15 +606,13 @@ export function renderTopology(body, win) {
       const type = dlg.querySelector("#tpd-type").value;
       if (n.custom) {
         const c = (ovr.custom_nodes || []).find((x) => x.id === n.id);
-        if (c) {
-          c.label = label || c.label; c.type = type;
-          c.info = dlg.querySelector("#tpd-info")?.value.trim() || "";
-        }
+        if (c) { c.label = label || c.label; c.type = type; }
       } else {
         ovr.meta[n.id] = { ...(ovr.meta[n.id] || {}) };
         if (label) ovr.meta[n.id].label = label; else delete ovr.meta[n.id].label;
         ovr.meta[n.id].type = type;
       }
+      applyNoteFields(n);
       saveOvr(); closeDialog(); draw();
     };
     const del = dlg.querySelector("#tpd-del");
@@ -548,6 +630,55 @@ export function renderTopology(body, win) {
   }
   function closeDialog() { dlg.style.display = "none"; }
 
+  // ---------------- Notizen ----------------
+  function noteFieldsHtml(n) {
+    const mode = noteMode(n);
+    return `<label style="display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--subtext)">📝 Notiz
+        <textarea id="tpd-note" rows="4" style="width:100%;resize:vertical"
+          placeholder="z. B. Standort, Zugangsdaten-Hinweis, Ansprechpartner …">${esc(noteOf(n))}</textarea></label>
+      <label style="display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--subtext)">Notiz anzeigen
+        <select id="tpd-note-mode">
+          <option value="hover" ${mode === "hover" ? "selected" : ""}>nur beim Drüberfahren (Hover)</option>
+          <option value="always" ${mode === "always" ? "selected" : ""}>immer auf der Karte</option>
+        </select></label>`;
+  }
+  function applyNoteFields(n) {
+    const note = dlg.querySelector("#tpd-note")?.value.trim() ?? "";
+    const mode = dlg.querySelector("#tpd-note-mode")?.value || "hover";
+    ovr.meta[n.id] = { ...(ovr.meta[n.id] || {}) };
+    if (note) { ovr.meta[n.id].note = note; ovr.meta[n.id].note_mode = mode; }
+    else { delete ovr.meta[n.id].note; delete ovr.meta[n.id].note_mode; }
+    if (n.custom) {                    // altes "info"-Feld manueller Knoten ablösen
+      const c = (ovr.custom_nodes || []).find((x) => x.id === n.id);
+      if (c) c.info = "";
+    }
+    if (!Object.keys(ovr.meta[n.id]).length) delete ovr.meta[n.id];
+  }
+
+  // Rechtsklick auf ein Geraet: nur die Notiz bearbeiten (geht immer)
+  function openNoteDialog(n) {
+    hideTip();
+    dlg.innerHTML = `
+      <div style="font-weight:600;margin-bottom:10px">Notiz: ${esc(n.label || n.hostname || n.ip || "Knoten")}</div>
+      <div style="display:flex;flex-direction:column;gap:8px;min-width:300px">
+        ${noteFieldsHtml(n)}
+        <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:4px">
+          ${noteOf(n) ? `<button class="btn btn-danger" id="tpn-del">Notiz löschen</button>` : ""}
+          <button class="btn" id="tpn-cancel">Abbrechen</button>
+          <button class="btn-primary" id="tpn-ok">Speichern</button>
+        </div>
+      </div>`;
+    dlg.style.display = "block";
+    dlg.querySelector("#tpd-note").focus();
+    dlg.querySelector("#tpn-cancel").onclick = closeDialog;
+    dlg.querySelector("#tpn-ok").onclick = () => { applyNoteFields(n); saveOvr(); closeDialog(); draw(); };
+    const del = dlg.querySelector("#tpn-del");
+    if (del) del.onclick = () => {
+      dlg.querySelector("#tpd-note").value = "";
+      applyNoteFields(n); saveOvr(); closeDialog(); draw();
+    };
+  }
+
   // ---------------- Toolbar: Bearbeiten / Knoten / Linie / Layout ----------------
   editBtn.addEventListener("click", () => {
     edit = !edit;
@@ -556,7 +687,7 @@ export function renderTopology(body, win) {
     linkBtn.style.display = edit ? "" : "none";
     if (!edit) { connectFrom = null; linkBtn.classList.remove("active"); closeDialog(); }
     setText(edit
-      ? "Bearbeiten: Knoten ziehen zum Verschieben · Klick zum Umbenennen/Ausblenden · Klick auf eine Linie löscht sie"
+      ? "Bearbeiten: Knoten ziehen zum Verschieben · Klick zum Umbenennen/Notiz/Ausblenden · Klick auf eine Linie löscht sie · Rechtsklick = Notiz"
       : `${countDevices()} Geräte · Änderungen gespeichert`);
     draw();
   });

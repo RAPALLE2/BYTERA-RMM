@@ -5,7 +5,7 @@
 #   "maps":      { "<quelle>": { at, label, own_ip, gateway, nodes, edges } },
 #   "overrides": { "<quelle>": {
 #       "pos":          { "<node-id>": {"x":.., "y":..} },   Position aus dem Edit-Modus
-#       "meta":         { "<node-id>": {"label":.., "type":..} },  Umbenennung/Icon
+#       "meta":         { "<node-id>": {"label":.., "type":.., "note":.., "note_mode":"hover"|"always"} },
 #       "hidden":       ["<node-id>", ...],                  ausgeblendete Geraete
 #       "custom_nodes": [ {id,label,type,x,y,info}, ... ],   selbst angelegte Knoten
 #       "custom_edges": [ ["a","b"], ... ],                  selbst gezogene Linien
@@ -64,14 +64,24 @@ def get_overrides(source: str) -> dict:
     return {**_EMPTY_OVR, **ovr}
 
 
+def _clean_meta(v: dict) -> dict:
+    """Erlaubte Felder je Knoten: Name, Icon-Typ, Notiz + Anzeige (hover/always)."""
+    out = {kk: str(vv)[:120] for kk, vv in v.items() if kk in ("label", "type") and vv}
+    note = str(v.get("note") or "").strip()[:1000]
+    if note:
+        out["note"] = note
+        out["note_mode"] = "always" if v.get("note_mode") == "always" else "hover"
+    return out
+
+
 def set_overrides(source: str, overrides: dict) -> dict:
     clean = {
         "pos": {str(k): {"x": float(v.get("x", 0)), "y": float(v.get("y", 0))}
                 for k, v in (overrides.get("pos") or {}).items()
                 if isinstance(v, dict)},
-        "meta": {str(k): {kk: str(vv)[:120] for kk, vv in v.items() if kk in ("label", "type")}
+        "meta": {str(k): _clean_meta(v)
                  for k, v in (overrides.get("meta") or {}).items()
-                 if isinstance(v, dict)},
+                 if isinstance(v, dict) and _clean_meta(v)},
         "hidden": [str(x)[:120] for x in (overrides.get("hidden") or [])][:500],
         "custom_nodes": [
             {"id": str(n.get("id", ""))[:120], "label": str(n.get("label", ""))[:120],
