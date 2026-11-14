@@ -12,10 +12,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app import db
+from app import bgjobs
 from app.auth import can_access_client, get_current_user, is_super_admin, user_has_permission
 
 from . import match, pve_store
@@ -95,7 +97,17 @@ class ScanBody(BaseModel):
 
 
 @router.post("/scan")
-async def scan(body: ScanBody, user: dict = Depends(get_current_user)):
+async def scan(body: ScanBody, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    async def _work(job):
+        job.update(phase='proxmox.match', detail="Proxmox: Geräte-Zuordnung abgleichen")
+        return await _scan_impl(body=body, user=user)
+    return await bgjobs.run('proxmox.match', 'scan', title="Proxmox: Geräte-Zuordnung abgleichen", user=user, work=_work,
+                            background=background, private=True)
+
+
+async def _scan_impl(body: ScanBody, user: dict = Depends(get_current_user)):
     hosts = [body.host] if body.host else pve_store.connected_ids()
     hosts = [h for h in hosts if pve_store.is_connected(h) and _can(user, "pve_manage", h)]
     if not hosts:

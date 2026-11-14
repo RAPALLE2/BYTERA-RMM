@@ -1,18 +1,19 @@
 // common.js (Modul "proxmox") - gemeinsame Helfer
 import { getToken } from "/js/app/api.js";
+import { withBackground, resolveJob } from "/js/app/bgjobs.js";
 
 export async function preq(path, opts = {}) {
   const token = getToken() || "";
   const headers = { ...(token ? { Authorization: "Bearer " + token } : {}) };
   if (opts.body !== undefined && typeof opts.body !== "string") { opts = { ...opts, body: JSON.stringify(opts.body) }; }
   if (opts.body) headers["Content-Type"] = "application/json";
-  const res = await fetch("/api/proxmox" + path, { ...opts, headers });
+  const res = await fetch(withBackground("/api/proxmox" + path, opts.method), { ...opts, headers });   // Backend-Job, s. bgjobs.js
   if (!res.ok) {
     let msg = res.statusText;
     try { msg = (await res.json()).detail || msg; } catch { /* egal */ }
     const err = new Error(msg); err.status = res.status; throw err;
   }
-  return res.json();
+  return resolveJob(await res.json());
 }
 
 export const fmtBytes = (b) => {

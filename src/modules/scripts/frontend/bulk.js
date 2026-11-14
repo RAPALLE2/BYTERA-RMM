@@ -72,6 +72,24 @@ export function renderBulk(body, win) {
     });
     registerCleanup(win.key, () => detachPicker());
 
+    // Laufender/letzter Bulk-Job (auch von anderen) beim Oeffnen wieder anzeigen
+    const resultsElInit = body.querySelector("#bulk-results");
+    import("/js/app/bgjobs.js").then(({ watchJobs }) => {
+      let ownStart = false;
+      body.querySelector("#bulk-run").addEventListener("click", () => { ownStart = true; }, { capture: true });
+      const stop = watchJobs({ kind: "client.bulk_exec" }, (job) => {
+        if (!job || ownStart) return;
+        if (Date.now() - job.started > 6 * 3600000 && !job.running) return;
+        if (job.running) showProgress(job, resultsElInit);
+        else if (job.status === "done" && job.result) {
+          renderResults(job.result, resultsElInit);
+          resultsElInit.insertAdjacentHTML("afterbegin", `<div style="font-size:12px;color:var(--subtext);margin-bottom:6px">
+            ${esc(job.title)} · ${esc(job.by || "")} · ${new Date(job.finished).toLocaleString()}</div>`);
+        }
+      });
+      registerCleanup(win.key, () => { stop(); try { detachPicker(); } catch {} });
+    }).catch(() => {});
+
     body.querySelector("#bulk-run").addEventListener("click", async () => {
       const selected = clientChecks().filter((cb) => cb.checked).map((cb) => cb.value);
       const command = body.querySelector("#bulk-cmd").value.trim();
@@ -82,27 +100,41 @@ export function renderBulk(body, win) {
 
       resultsEl.innerHTML = `<span style="color:var(--subtext)">${t("bk_running", { n: selected.length })}</span>`;
       try {
-        const results = await api.bulkExec(selected, command);
-        // results: { clientId: {ok, stdout, stderr, code, error} }
-        resultsEl.innerHTML = Object.entries(results).map(([cid, r]) => {
-          const client = state.clients.find((c) => c.id === cid);
-          const name = client ? client.hostname : cid;
-          if (r.ok) {
-            const out = (r.stdout || "").trim() || (r.stderr || "").trim() || `(Exit ${r.code})`;
-            return `<div class="panel" style="margin-bottom:8px">
-              <strong style="color:var(--accent)">✓ ${esc(name)}</strong>
-              <pre style="background:var(--panel-2);padding:8px;border-radius:6px;margin-top:6px;font-size:12px;white-space:pre-wrap;overflow-x:auto">${esc(out)}</pre>
-            </div>`;
-          }
-          return `<div class="panel" style="margin-bottom:8px">
-            <strong style="color:var(--danger)">✗ ${esc(name)}</strong>
-            <div style="color:var(--danger);font-size:12px;margin-top:4px">${esc(r.error || t("u_fehler"))}</div>
-          </div>`;
-        }).join("");
+        // Laeuft als BACKEND-JOB: Fortschritt live, Ergebnis bleibt nach Neuladen sichtbar
+        const results = await api.bulkExec(selected, command, (job) => showProgress(job, resultsEl));
+        renderResults(results, resultsEl);
       } catch (e) {
         resultsEl.innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`;
       }
     });
+  }
+
+  function showProgress(job, el) {
+    if (!job?.running) return;
+    const p = job.progress || {};
+    el.innerHTML = `<div style="color:var(--subtext)">⏳ ${esc(job.title)}${job.by ? " · " + esc(job.by) : ""}</div>
+      <div style="height:6px;border-radius:3px;background:var(--panel-2);overflow:hidden;margin:6px 0">
+        <div style="height:100%;width:${(job.pct || 0).toFixed(1)}%;background:var(--accent)"></div></div>
+      <div style="font-size:12px;color:var(--subtext)">${p.done ?? 0}/${p.total ?? "?"} · ${p.ok ?? 0} ok · ${p.failed ?? 0} Fehler</div>`;
+  }
+
+  function renderResults(results, resultsEl) {
+    // results: { clientId: {ok, stdout, stderr, code, error} }
+    resultsEl.innerHTML = Object.entries(results || {}).map(([cid, r]) => {
+      const client = state.clients.find((c) => c.id === cid);
+      const name = client ? client.hostname : cid;
+      if (r.ok) {
+        const out = (r.stdout || "").trim() || (r.stderr || "").trim() || `(Exit ${r.code})`;
+        return `<div class="panel" style="margin-bottom:8px">
+          <strong style="color:var(--accent)">✓ ${esc(name)}</strong>
+          <pre style="background:var(--panel-2);padding:8px;border-radius:6px;margin-top:6px;font-size:12px;white-space:pre-wrap;overflow-x:auto">${esc(out)}</pre>
+        </div>`;
+      }
+      return `<div class="panel" style="margin-bottom:8px">
+        <strong style="color:var(--danger)">✗ ${esc(name)}</strong>
+        <div style="color:var(--danger);font-size:12px;margin-top:4px">${esc(r.error || t("u_fehler"))}</div>
+      </div>`;
+    }).join("");
   }
 
   draw();

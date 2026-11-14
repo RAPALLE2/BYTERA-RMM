@@ -21,7 +21,7 @@ import hmac
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import Response
 
-from app import db, modules, node_manager
+from app import bgjobs, db, modules, node_manager
 from app.auth import get_current_user, is_super_admin, require_perm, user_has_permission
 from app.config import AGENT_TOKEN
 
@@ -54,6 +54,26 @@ def _perm_any(user: dict) -> set[str] | None:
 
 def _wrap(exc: Exception) -> HTTPException:
     return HTTPException(status_code=400, detail=str(exc))
+
+
+def _host(client_id: str) -> str:
+    return (db.get_client(client_id) or {}).get("hostname") or client_id
+
+
+async def _node_job(kind: str, client_id: str, title: str, user: dict, background: bool, fn,
+                    key_extra: str = "", meta: dict | None = None):
+    """Node-Aktion als BACKEND-JOB (app/bgjobs.py) - Neuladen bricht nichts ab,
+    Fortschritt/Ergebnis sieht jeder Berechtigte in der Aufgaben-Anzeige."""
+    async def work(job):
+        job.update(phase=kind, detail=title)
+        try:
+            return await fn(job)
+        except (node_manager.NodeError, modules.ModuleError) as exc:
+            raise _wrap(exc)
+    return await bgjobs.run(f"node.{kind}", f"{client_id}{key_extra}", title=f"{title} ({_host(client_id)})",
+                            user=user, work=work, background=background, client_id=client_id,
+                            client_perm="manage_nodes",
+                            meta={"client": client_id, **(meta or {})})
 
 
 @router.get("")
@@ -96,33 +116,27 @@ async def get_node(client_id: str, user: dict = Depends(get_current_user)):
 
 
 @router.post("/{client_id}/enable")
-async def enable_node(client_id: str, user: dict = Depends(get_current_user)):
+async def enable_node(client_id: str, background: bool = False, user: dict = Depends(get_current_user)):
     _perm(user, client_id)
-    try:
-        res = await node_manager.enable(client_id)
-    except node_manager.NodeError as exc:
-        raise _wrap(exc)
     db.add_audit_entry(user["username"], "node.enable", target=client_id)
-    return res
+    return await _node_job("enable", client_id, "Node installieren", user, background,
+                           lambda job: node_manager.enable(client_id))
 
 
 @router.post("/{client_id}/disable")
-async def disable_node(client_id: str, user: dict = Depends(get_current_user)):
+async def disable_node(client_id: str, background: bool = False, user: dict = Depends(get_current_user)):
     _perm(user, client_id)
-    res = await node_manager.disable(client_id)
     db.add_audit_entry(user["username"], "node.disable", target=client_id)
-    return res
+    return await _node_job("disable", client_id, "Node entfernen", user, background,
+                           lambda job: node_manager.disable(client_id))
 
 
 @router.post("/{client_id}/update")
-async def update_node(client_id: str, user: dict = Depends(get_current_user)):
+async def update_node(client_id: str, background: bool = False, user: dict = Depends(get_current_user)):
     _perm(user, client_id)
-    try:
-        res = await node_manager.update(client_id)
-    except node_manager.NodeError as exc:
-        raise _wrap(exc)
     db.add_audit_entry(user["username"], "node.update", target=client_id)
-    return res
+    return await _node_job("update", client_id, "Node aktualisieren", user, background,
+                           lambda job: node_manager.update(client_id))
 
 
 @router.post("/{client_id}/refresh")
@@ -135,14 +149,15 @@ async def refresh_node(client_id: str, user: dict = Depends(get_current_user)):
 
 
 @router.post("/{client_id}/docker-install")
-async def docker_install(client_id: str, user: dict = Depends(get_current_user)):
+async def docker_install(client_id: str, background: bool = False, user: dict = Depends(get_current_user)):
     _perm(user, client_id)
-    try:
-        data = await node_manager.docker_install(client_id)
-    except node_manager.NodeError as exc:
-        raise _wrap(exc)
     db.add_audit_entry(user["username"], "node.docker_install", target=client_id)
-    return {"result": data, "node": await node_manager.get_state(client_id)}
+
+    async def fn(job):
+        job.update(detail="Docker wird auf der Node installiert (kann einige Minuten dauern)")
+        data = await node_manager.docker_install(client_id)
+        return {"result": data, "node": await node_manager.get_state(client_id)}
+    return await _node_job("docker_install", client_id, "Docker installieren", user, background, fn)
 
 
 @router.get("/{client_id}/logs")
@@ -152,36 +167,40 @@ def node_logs(client_id: str, user: dict = Depends(get_current_user)):
 
 
 @router.post("/{client_id}/modules/{module_id}")
-async def deploy_module(client_id: str, module_id: str, body: dict | None = None,
+async def deploy_module(client_id: str, module_id: str, body: dict | None = None, background: bool = False,
                         user: dict = Depends(get_current_user)):
     _perm(user, client_id)
-    try:
-        data = await node_manager.deploy_module(client_id, module_id, (body or {}).get("params") or {})
-    except (node_manager.NodeError, modules.ModuleError) as exc:
-        raise _wrap(exc)
     db.add_audit_entry(user["username"], "node.module_deploy", target=client_id, details=module_id)
-    return {"result": data, "node": await node_manager.get_state(client_id)}
+
+    async def fn(job):
+        data = await node_manager.deploy_module(client_id, module_id, (body or {}).get("params") or {})
+        return {"result": data, "node": await node_manager.get_state(client_id)}
+    return await _node_job("module", client_id, f"Node-Modul „{module_id}“ bereitstellen", user, background, fn,
+                           key_extra=f":{module_id}", meta={"module": module_id})
 
 
 @router.delete("/{client_id}/modules/{module_id}")
-async def remove_module(client_id: str, module_id: str, user: dict = Depends(get_current_user)):
+async def remove_module(client_id: str, module_id: str, background: bool = False,
+                        user: dict = Depends(get_current_user)):
     _perm(user, client_id)
-    try:
-        data = await node_manager.remove_module(client_id, module_id)
-    except node_manager.NodeError as exc:
-        raise _wrap(exc)
     db.add_audit_entry(user["username"], "node.module_remove", target=client_id, details=module_id)
-    return {"result": data, "node": await node_manager.get_state(client_id)}
+
+    async def fn(job):
+        data = await node_manager.remove_module(client_id, module_id)
+        return {"result": data, "node": await node_manager.get_state(client_id)}
+    return await _node_job("module_remove", client_id, f"Node-Modul „{module_id}“ entfernen", user, background, fn,
+                           key_extra=f":{module_id}", meta={"module": module_id})
 
 
 @router.post("/{client_id}/modules/{module_id}/action")
-async def module_action(client_id: str, module_id: str, body: dict, user: dict = Depends(get_current_user)):
+async def module_action(client_id: str, module_id: str, body: dict, background: bool = False,
+                        user: dict = Depends(get_current_user)):
     _perm(user, client_id)
     action = str(body.get("action") or "")
     if not action:
         raise HTTPException(status_code=400, detail="action fehlt")
-    try:
+    async def fn(job):
         data = await node_manager.module_action(client_id, module_id, action, body.get("data") or {})
-    except node_manager.NodeError as exc:
-        raise _wrap(exc)
-    return {"result": data, "node": await node_manager.get_state(client_id)}
+        return {"result": data, "node": await node_manager.get_state(client_id)}
+    return await _node_job("module_action", client_id, f"Node-Modul „{module_id}“: {action}", user, background, fn,
+                           key_extra=f":{module_id}:{action}", meta={"module": module_id, "action": action})

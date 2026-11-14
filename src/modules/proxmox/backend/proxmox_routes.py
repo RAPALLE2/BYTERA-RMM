@@ -30,10 +30,12 @@ from __future__ import annotations
 
 import re
 
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from app import db
+from app import bgjobs
 from app.auth import can_access_client, get_current_user, is_super_admin, require_perm, user_has_permission
 
 from . import pve_client, pve_store
@@ -189,7 +191,17 @@ def delete_connection(cid: str, user: dict = Depends(get_current_user)):
 
 
 @router.post("/{cid}/test")
-def test_connection(cid: str, user: dict = Depends(get_current_user)):
+async def test_connection(cid: str, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    async def _work(job):
+        job.update(phase='proxmox.task', detail="Proxmox: Verbindung testen")
+        return await asyncio.to_thread(_test_connection_impl, cid=cid, user=user)
+    return await bgjobs.run('proxmox.task', cid, title="Proxmox: Verbindung testen", user=user, work=_work,
+                            background=background, client_id=cid if db.get_client(cid) else None)
+
+
+def _test_connection_impl(cid: str, user: dict = Depends(get_current_user)):
     _conn_check(user, cid)
     if not pve_store.is_connected(cid):
         raise HTTPException(404, "Bitte zuerst die Verbindung speichern")
@@ -264,7 +276,17 @@ def guest_detail(cid: str, node: str, gtype: str, vmid: int, user: dict = Depend
 
 
 @router.post("/{cid}/guests/{node}/{gtype}/{vmid}/action/{action}")
-def guest_action(cid: str, node: str, gtype: str, vmid: int, action: str, user: dict = Depends(get_current_user)):
+async def guest_action(cid: str, node: str, gtype: str, vmid: int, action: str, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    async def _work(job):
+        job.update(phase='proxmox.task', detail=f"Proxmox {gtype}/{vmid}: {action}")
+        return await _follow_task(job, cid, node, await asyncio.to_thread(_guest_action_impl, cid=cid, node=node, gtype=gtype, vmid=vmid, action=action, user=user))
+    return await bgjobs.run('proxmox.task', f'{cid}:{vmid}', title=f"Proxmox {gtype}/{vmid}: {action}", user=user, work=_work,
+                            background=background, client_id=cid if db.get_client(cid) else None)
+
+
+def _guest_action_impl(cid: str, node: str, gtype: str, vmid: int, action: str, user: dict = Depends(get_current_user)):
     if action not in ACTIONS or (action == "reset" and gtype != "qemu"):
         raise HTTPException(400, "Unbekannte Aktion")
     cl = _guest(user, cid, node, gtype, vmid, "pve_power")
@@ -279,7 +301,17 @@ class ConfigBody(BaseModel):
 
 
 @router.put("/{cid}/guests/{node}/{gtype}/{vmid}/config")
-def guest_config(cid: str, node: str, gtype: str, vmid: int, body: ConfigBody, user: dict = Depends(get_current_user)):
+async def guest_config(cid: str, node: str, gtype: str, vmid: int, body: ConfigBody, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    async def _work(job):
+        job.update(phase='proxmox.task', detail=f"Proxmox {gtype}/{vmid}: Konfiguration ändern")
+        return await asyncio.to_thread(_guest_config_impl, cid=cid, node=node, gtype=gtype, vmid=vmid, body=body, user=user)
+    return await bgjobs.run('proxmox.task', None, title=f"Proxmox {gtype}/{vmid}: Konfiguration ändern", user=user, work=_work,
+                            background=background, client_id=cid if db.get_client(cid) else None)
+
+
+def _guest_config_impl(cid: str, node: str, gtype: str, vmid: int, body: ConfigBody, user: dict = Depends(get_current_user)):
     cl = _guest(user, cid, node, gtype, vmid, "pve_config")
     params = {k: v for k, v in body.params.items() if re.match(r"^[a-z][a-z0-9_]*$", str(k))}
     if body.delete:
@@ -303,7 +335,17 @@ def snapshots(cid: str, node: str, gtype: str, vmid: int, user: dict = Depends(g
 
 
 @router.post("/{cid}/guests/{node}/{gtype}/{vmid}/snapshots")
-def snapshot_create(cid: str, node: str, gtype: str, vmid: int, body: SnapBody, user: dict = Depends(get_current_user)):
+async def snapshot_create(cid: str, node: str, gtype: str, vmid: int, body: SnapBody, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    async def _work(job):
+        job.update(phase='proxmox.task', detail=f"Proxmox {gtype}/{vmid}: Snapshot „{body.name}“ anlegen")
+        return await _follow_task(job, cid, node, await asyncio.to_thread(_snapshot_create_impl, cid=cid, node=node, gtype=gtype, vmid=vmid, body=body, user=user))
+    return await bgjobs.run('proxmox.task', f'{cid}:{vmid}', title=f"Proxmox {gtype}/{vmid}: Snapshot „{body.name}“ anlegen", user=user, work=_work,
+                            background=background, client_id=cid if db.get_client(cid) else None)
+
+
+def _snapshot_create_impl(cid: str, node: str, gtype: str, vmid: int, body: SnapBody, user: dict = Depends(get_current_user)):
     if not _SNAP.match(body.name):
         raise HTTPException(400, "Snapshot-Name: Buchstabe am Anfang, danach Buchstaben/Ziffern/_/- (max. 40)")
     cl = _guest(user, cid, node, gtype, vmid, "pve_snapshot")
@@ -316,7 +358,17 @@ def snapshot_create(cid: str, node: str, gtype: str, vmid: int, body: SnapBody, 
 
 
 @router.post("/{cid}/guests/{node}/{gtype}/{vmid}/snapshots/{name}/rollback")
-def snapshot_rollback(cid: str, node: str, gtype: str, vmid: int, name: str, user: dict = Depends(get_current_user)):
+async def snapshot_rollback(cid: str, node: str, gtype: str, vmid: int, name: str, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    async def _work(job):
+        job.update(phase='proxmox.task', detail=f"Proxmox {gtype}/{vmid}: Snapshot „{name}“ zurückspielen")
+        return await _follow_task(job, cid, node, await asyncio.to_thread(_snapshot_rollback_impl, cid=cid, node=node, gtype=gtype, vmid=vmid, name=name, user=user))
+    return await bgjobs.run('proxmox.task', f'{cid}:{vmid}', title=f"Proxmox {gtype}/{vmid}: Snapshot „{name}“ zurückspielen", user=user, work=_work,
+                            background=background, client_id=cid if db.get_client(cid) else None)
+
+
+def _snapshot_rollback_impl(cid: str, node: str, gtype: str, vmid: int, name: str, user: dict = Depends(get_current_user)):
     if not _SNAP.match(name):
         raise HTTPException(400, "Ungültiger Snapshot-Name")
     cl = _guest(user, cid, node, gtype, vmid, "pve_snapshot")
@@ -326,7 +378,17 @@ def snapshot_rollback(cid: str, node: str, gtype: str, vmid: int, name: str, use
 
 
 @router.delete("/{cid}/guests/{node}/{gtype}/{vmid}/snapshots/{name}")
-def snapshot_delete(cid: str, node: str, gtype: str, vmid: int, name: str, user: dict = Depends(get_current_user)):
+async def snapshot_delete(cid: str, node: str, gtype: str, vmid: int, name: str, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    async def _work(job):
+        job.update(phase='proxmox.task', detail=f"Proxmox {gtype}/{vmid}: Snapshot „{name}“ löschen")
+        return await _follow_task(job, cid, node, await asyncio.to_thread(_snapshot_delete_impl, cid=cid, node=node, gtype=gtype, vmid=vmid, name=name, user=user))
+    return await bgjobs.run('proxmox.task', f'{cid}:{vmid}', title=f"Proxmox {gtype}/{vmid}: Snapshot „{name}“ löschen", user=user, work=_work,
+                            background=background, client_id=cid if db.get_client(cid) else None)
+
+
+def _snapshot_delete_impl(cid: str, node: str, gtype: str, vmid: int, name: str, user: dict = Depends(get_current_user)):
     if not _SNAP.match(name):
         raise HTTPException(400, "Ungültiger Snapshot-Name")
     cl = _guest(user, cid, node, gtype, vmid, "pve_snapshot")
@@ -359,7 +421,17 @@ def backups(cid: str, node: str, gtype: str, vmid: int, user: dict = Depends(get
 
 
 @router.post("/{cid}/guests/{node}/{gtype}/{vmid}/backups")
-def backup_create(cid: str, node: str, gtype: str, vmid: int, body: BackupBody, user: dict = Depends(get_current_user)):
+async def backup_create(cid: str, node: str, gtype: str, vmid: int, body: BackupBody, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    async def _work(job):
+        job.update(phase='proxmox.task', detail=f"Proxmox {gtype}/{vmid}: Backup nach {body.storage}")
+        return await _follow_task(job, cid, node, await asyncio.to_thread(_backup_create_impl, cid=cid, node=node, gtype=gtype, vmid=vmid, body=body, user=user))
+    return await bgjobs.run('proxmox.task', f'{cid}:{vmid}', title=f"Proxmox {gtype}/{vmid}: Backup nach {body.storage}", user=user, work=_work,
+                            background=background, client_id=cid if db.get_client(cid) else None)
+
+
+def _backup_create_impl(cid: str, node: str, gtype: str, vmid: int, body: BackupBody, user: dict = Depends(get_current_user)):
     if not _STORE.match(body.storage) or body.mode not in ("snapshot", "suspend", "stop") \
             or body.compress not in ("zstd", "lzo", "gzip", "0"):
         raise HTTPException(400, "Ungültige Backup-Angaben")
@@ -464,6 +536,7 @@ async def api_explorer(cid: str, path: str, request: Request, user: dict = Depen
     if ".." in path.split("/"):
         raise HTTPException(400, "Ungültiger Pfad")
     params = dict(request.query_params)
+    params.pop("background", None)        # Steuer-Parameter des Dashboards (Backend-Jobs), nicht fuer Proxmox
     if request.method in ("POST", "PUT"):
         try:
             body = await request.json()
@@ -477,3 +550,41 @@ async def api_explorer(cid: str, path: str, request: Request, user: dict = Depen
     if request.method != "GET":
         _audit(user, cid, "api", f"{request.method} /{path}")
     return {"data": data}
+
+
+# ------------------------------------------------------------------ Proxmox-Tasks als Backend-Job
+# Start/Stop, Snapshots und Backups starten in Proxmox einen Task (UPID). Der
+# Backend-Job verfolgt diesen Task bis zum Ende (Status + Task-Log), damit die
+# Aufgaben-Anzeige den echten Stand zeigt - auch nach dem Neuladen und fuer
+# andere Benutzer. Abbrechen stoppt den Proxmox-Task.
+async def _follow_task(job, cid: str, node: str, res: dict) -> dict:
+    upid = (res or {}).get("upid")
+    if not isinstance(upid, str) or not upid.startswith("UPID"):
+        return res
+    import urllib.parse
+    cl = _pve(pve_client.client_for, cid)
+    tpath = f"/nodes/{node}/tasks/{urllib.parse.quote(upid, safe='')}"
+    job.update(phase="task", detail="Proxmox-Task läuft", upid=upid)
+    job.on_cancel = lambda j: asyncio.to_thread(lambda: cl.call("DELETE", tpath))
+    seen = 0
+    while True:
+        await asyncio.sleep(2.0)
+        try:
+            st = await asyncio.to_thread(cl.get, tpath + "/status") or {}
+            lines = await asyncio.to_thread(lambda: cl.get(tpath + "/log", start=seen, limit=500)) or []
+        except Exception as e:                 # Proxmox kurz nicht erreichbar -> weiter warten
+            job.update(detail=f"Proxmox nicht erreichbar ({e}) – warte …")
+            continue
+        for ln in lines:
+            if isinstance(ln, dict) and ln.get("t") not in (None, "no content"):
+                job.log(str(ln.get("t")))
+        seen += len(lines)
+        if lines and isinstance(lines[-1], dict) and lines[-1].get("t"):
+            txt = str(lines[-1]["t"])
+            m = re.search(r"(\d{1,3})%", txt)
+            job.update(detail=txt[:200], pct=float(m.group(1)) if m else None)
+        if st.get("status") == "stopped":
+            ex = str(st.get("exitstatus") or "")
+            if ex != "OK":
+                raise HTTPException(502, f"Proxmox-Task beendet: {ex or 'unbekannt'}")
+            return {**res, "exitstatus": ex}

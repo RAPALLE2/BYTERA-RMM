@@ -64,26 +64,49 @@ def crash_policy(body: CrashPolicy, user: dict = Depends(get_current_user)):
     return modules.set_crash_policy(body.crash_limit)
 
 
-@router.post("/api/modules/{mid}/enable")
-async def enable_module(mid: str, with_deps: bool = False, user: dict = Depends(get_current_user)):
-    _admin(user)
+def _mod_name(mid: str) -> str:
     try:
-        res = await modules.enable(mid, with_deps=with_deps)
-    except modules.ModuleError as exc:
-        raise _wrap(exc)
-    db.add_audit_entry(user["username"], "module.enable", target=mid, details=",".join(res["enabled"]))
-    return {**res, "module": modules.describe(mid)}
+        return modules.describe(mid).get("name") or mid
+    except Exception:
+        return mid
+
+
+@router.post("/api/modules/{mid}/enable")
+async def enable_module(mid: str, with_deps: bool = False, background: bool = False,
+                        user: dict = Depends(get_current_user)):
+    """Modul aktivieren als BACKEND-JOB (app/bgjobs.py): Abhaengigkeiten/Werkzeuge
+    laden kann dauern - Neuladen bricht es nicht ab."""
+    _admin(user)
+    from app import bgjobs
+
+    async def work(job):
+        job.update(phase="enable", detail="Abhängigkeiten werden geprüft/geladen, Modul wird gestartet")
+        try:
+            res = await modules.enable(mid, with_deps=with_deps)
+        except modules.ModuleError as exc:
+            raise _wrap(exc)
+        db.add_audit_entry(user["username"], "module.enable", target=mid, details=",".join(res["enabled"]))
+        return {**res, "module": modules.describe(mid)}
+    return await bgjobs.run("module.toggle", mid, title=f"Modul „{_mod_name(mid)}“ aktivieren", user=user,
+                            work=work, background=background, perm="manage_modules", meta={"module": mid})
 
 
 @router.post("/api/modules/{mid}/disable")
-async def disable_module(mid: str, cascade: bool = False, user: dict = Depends(get_current_user)):
+async def disable_module(mid: str, cascade: bool = False, background: bool = False,
+                         user: dict = Depends(get_current_user)):
     _admin(user)
-    try:
-        res = await modules.disable(mid, cascade=cascade)
-    except modules.ModuleError as exc:
-        raise _wrap(exc)
-    db.add_audit_entry(user["username"], "module.disable", target=mid, details=",".join(res["disabled"]))
-    return {**res, "module": modules.describe(mid)}
+    from app import bgjobs
+
+    async def work(job):
+        job.update(phase="disable", detail="Modul wird beendet")
+        try:
+            res = await modules.disable(mid, cascade=cascade)
+        except modules.ModuleError as exc:
+            raise _wrap(exc)
+        db.add_audit_entry(user["username"], "module.disable", target=mid, details=",".join(res["disabled"]))
+        return {**res, "module": modules.describe(mid)}
+    return await bgjobs.run("module.toggle", mid, title=f"Modul „{_mod_name(mid)}“ deaktivieren", user=user,
+                            work=work, background=background, perm="manage_modules", meta={"module": mid})
 
 
 @router.get("/api/modules/{mid}/settings")

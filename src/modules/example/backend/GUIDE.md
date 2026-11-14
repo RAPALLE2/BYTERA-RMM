@@ -225,6 +225,35 @@ In der Modul-App lässt sich einstellen, nach wie vielen Abstürzen (innerhalb v
   Ressourcen (Sockets, Dateien) schließt du in `on_shutdown`.
 * **Rechte:** Endpunkte schützt du wie im Core: `Depends(get_current_user)`, `require_admin(user)`, `require_perm(user, "…")`.
 * **Neu laden:** Nach Code-Änderungen das Modul in der Modul-App aus- und wieder einschalten.
+* **Aufgaben sind IMMER Backend-Jobs (Pflicht).** Alles, was länger als einen Augenblick dauert
+  oder etwas „tut" (Scan, Update, Installation, Skript, Build, Import, Abgleich …), läuft nie in der
+  Browser-Sitzung, sondern über `app/bgjobs.py`. Neuladen, Fenster schließen oder ein anderer
+  Benutzer ändern nichts am Job; jeder Berechtigte sieht ihn live in der Aufgaben-Anzeige
+  (Taskleiste), Ergebnis und Fehler stehen im Verlauf – auch nach einem Neustart.
+
+  ```python
+  from app import bgjobs
+
+  @router.post("/{cid}/scan")
+  async def scan(cid: str, background: bool = False, user: dict = Depends(get_current_user)):
+      require_perm(user, "mein_recht")                    # Rechte VOR dem Job pruefen
+      async def work(job):
+          job.update(phase="scan", pct=10, detail="läuft …")   # Fortschritt (live)
+          job.log("eine Zeile")                                  # Log (Aufgaben-Anzeige)
+          job.check_cancel()                                     # Abbruch respektieren
+          return {"ergebnis": 42}                                # -> Ergebnis
+      return await bgjobs.run("meinmodul.scan", cid, title="Scan …", user=user, work=work,
+                              background=background, perm="mein_recht", client_id=cid)
+  ```
+
+  * `?background=1` (macht das Dashboard automatisch): Job sofort zurück. Ohne (Skripte,
+    REST-API): wartet wie gewohnt auf das Ergebnis – die Arbeit läuft trotzdem im Job weiter.
+  * Sichtbarkeit: `perm`, `client_id`/`client_perm`, `may_see` oder `private=True`. Ein Job ohne
+    diese Angaben sehen nur Starter und Admins.
+  * Gleicher `key` + gleicher Titel → zweiter Start hängt sich an; anderer Vorgang → 409.
+  * Frontend: `api.js`/`moduleRequest` warten bei ändernden Aufrufen automatisch auf den Job.
+    Eigene fetch-Helfer: `withBackground()` + `resolveJob()` aus `/js/app/bgjobs.js`.
+    Beim Öffnen einer App laufende Jobs wieder anzeigen: `watchJobs({kind, key}, cb)`.
 
 ## 12. Node-Teil (Docker-Dienste auf einem Client)
 

@@ -16,20 +16,20 @@ import { esc } from "/js/app/utils.js";
 import { openWindow, registerCleanup } from "/js/app/windowmanager.js";
 import { nodeHint } from "/js/app/nodechoice.js";
 import { findClient } from "/js/app/state.js";
+import { watchJobs, cancelJob, jobDuration } from "/js/app/bgjobs.js";
+import { dashboardSocket } from "/js/app/socket.js";
 import { iconBody, TYPE_LABELS, EDIT_TYPES } from "./icons.js";
 
 const SVGNS = "http://www.w3.org/2000/svg";
-const PHASES = { queued: "wartet …", ping: "Geräte suchen (Ping-Sweep)",
-  trace: "Weg ins Internet verfolgen", fingerprint: "Geräte untersuchen (Ports)" };
 
 export function renderTopology(body, win) {
+  const ORIGIN = Math.random().toString(36).slice(2, 12);   // eigene Speicherungen erkennen
   // ---------------- Zustand ----------------
   let source = "backend";            // "backend" oder Node-Client-ID
   let mapData = null;                // { nodes, edges, at, label, gateway, own_ip }
   let ovr = emptyOvr();              // Bearbeitungen (Positionen, eigene Knoten ...)
   let edit = false;                  // Bearbeiten-Modus
   let connectFrom = null;            // Linien-Modus: erster angeklickter Knoten
-  let jobId = null, poll = null, destroyed = false;
   let view = { x: 40, y: 40, z: 1 }; // Pan/Zoom
   let saveTimer = null;
 
@@ -98,22 +98,21 @@ export function renderTopology(body, win) {
   viaSel.addEventListener("change", () => {
     source = viaSel.value || "backend";
     connectFrom = null;
-    loadMap();
+    loadMap(true);
+    watchSource();
   });
 
   // ---------------- Karte laden / speichern ----------------
-  async function loadMap() {
+  async function loadMap(refit = true) {
     try {
-      const r = await moduleRequest(`/api/topology/map?source=${encodeURIComponent(source)}`);
+      const want = source;
+      const r = await moduleRequest(`/api/topology/map?source=${encodeURIComponent(want)}`);
+      if (want !== source) return;      // Quelle inzwischen gewechselt
       mapData = r.map;
       ovr = { ...emptyOvr(), ...(r.overrides || {}) };
-      if (mapData) {
-        const when = mapData.at ? new Date(mapData.at).toLocaleString() : "";
-        setText(`${countDevices()} Geräte · ${esc(mapData.label || "")} · Stand: ${when}`);
-      } else {
-        setText("Noch keine Karte für diese Quelle – oben auf „📡 Erkennen“ klicken.");
-      }
-      draw(); fit();
+      if (!job?.running) setText(mapInfo());
+      draw();
+      if (refit) fit();
     } catch (e) {
       setText(e.message, true);
     }
@@ -132,17 +131,68 @@ export function renderTopology(body, win) {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
       try {
-        await moduleRequest(`/api/topology/map?source=${encodeURIComponent(source)}`,
+        await moduleRequest(`/api/topology/map?source=${encodeURIComponent(source)}&origin=${ORIGIN}`,
           { method: "PUT", body: JSON.stringify(ovr) });
         savedEl.style.display = "";
         setTimeout(() => { savedEl.style.display = "none"; }, 1200);
       } catch (e) { setText(`Speichern fehlgeschlagen: ${e.message}`, true); }
+      saveTimer = null;
+      maybeReload();
     }, 350);
   }
 
-  // ---------------- Erkennung ----------------
+  // ---------------- Erkennung = BACKEND-JOB ----------------
+  // Die Seite startet die Erkennung nur und zeigt an, was das Backend meldet.
+  // Neu laden, ein anderes Fenster oder ein anderer Benutzer sehen denselben
+  // Job; das Ergebnis speichert das Backend selbst als Karte der Quelle.
+  let job = null;                    // aktueller Job dieser Quelle (oder null)
+  let stopWatch = null;
+
+  function watchSource() {
+    stopWatch?.();
+    job = null;
+    showJob();
+    let wasRunning = null;
+    stopWatch = watchJobs({ kind: "topology.discover", key: source }, (j) => {
+      job = j;
+      showJob();
+      // Lauf gerade fertig geworden -> neue Karte holen
+      if (j && wasRunning === j.id && !j.running) loadMap(true);
+      wasRunning = j?.running ? j.id : null;
+    });
+  }
+
+  function showJob() {
+    const running = !!job?.running;
+    scanBtn.disabled = running;
+    scanBtn.textContent = running ? "⏳ Erkennung läuft" : "📡 Erkennen";
+    stopBtn.style.display = running ? "" : "none";
+    stopBtn.disabled = !!job?.cancel_requested;
+    progEl.style.display = running ? "" : "none";
+    if (running) {
+      barEl.style.width = `${(job.pct || 0).toFixed(1)}%`;
+      setText(`Erkennung läuft${job.by ? ` (gestartet von ${esc(job.by)})` : ""}: ${esc(job.detail || job.phase || "")}`
+        + (job.cancel_requested ? " · wird abgebrochen …" : ""));
+    } else if (job?.status === "error") {
+      setText(`Letzte Erkennung fehlgeschlagen: ${esc(job.error || "")}`, true);
+    } else {
+      setText(mapInfo());
+    }
+  }
+
+  function mapInfo() {
+    let t = mapData
+      ? `${countDevices()} Geräte · ${esc(mapData.label || "")} · Stand: ${mapData.at ? new Date(mapData.at).toLocaleString() : "?"}`
+      : "Noch keine Karte für diese Quelle – oben auf „📡 Erkennen“ klicken.";
+    if (job && !job.running && job.finished) {
+      const how = job.status === "cancelled"
+        ? `abgebrochen${job.cancelled_by ? " von " + esc(job.cancelled_by) : ""}` : "fertig";
+      t += ` · letzte Erkennung ${how} (${jobDuration(job)}${job.by ? ", " + esc(job.by) : ""})`;
+    }
+    return t;
+  }
+
   async function startScan() {
-    if (jobId) return;
     scanBtn.disabled = true;
     try {
       const target = $("#tp-target").value.trim();
@@ -150,56 +200,32 @@ export function renderTopology(body, win) {
       if (target) q.set("target", target);
       if (viaSel.value) q.set("via", viaSel.value);
       const r = await moduleRequest(`/api/topology/discover/start?${q}`, { method: "POST" });
-      jobId = r.job_id;
-      stopBtn.style.display = ""; progEl.style.display = "";
-      poll = setInterval(pollJob, 800); pollJob();
+      if (r.attached) window.notify?.(`Für diese Quelle läuft bereits eine Erkennung (von ${r.by}) – sie wird angezeigt.`, "info");
+      job = r; showJob();
     } catch (e) {
       scanBtn.disabled = false;
       setText(e.message, true);
     }
   }
 
-  async function pollJob() {
-    if (!jobId || destroyed) return;
-    let job;
-    try { job = await moduleRequest(`/api/topology/discover/job/${encodeURIComponent(jobId)}`); }
-    catch (e) { finishScan(); setText(e.message, true); return; }
-
-    let pct = 0, detail = PHASES[job.phase] || job.phase || "";
-    if (job.phase === "ping" && job.total_hosts) {
-      pct = (job.done_hosts / job.total_hosts) * 80;
-      detail += ` · ${job.done_hosts}/${job.total_hosts} Adressen · ${job.found} gefunden`;
-    } else if (job.phase === "trace") pct = 84;
-    else if (job.phase === "fingerprint") {
-      pct = 86 + (job.fp_total ? (job.fp_done / job.fp_total) * 14 : 0);
-      detail += ` · ${job.fp_done}/${job.fp_total}`;
-    }
-    barEl.style.width = Math.min(100, pct).toFixed(1) + "%";
-    setText(`Erkennung läuft: ${detail}`);
-
-    if (["done", "cancelled", "error"].includes(job.status)) {
-      finishScan();
-      if (job.status === "error") { setText(job.error || "Erkennung fehlgeschlagen", true); return; }
-      if (job.result) {
-        mapData = job.result;
-        const dur = job.finished && job.started ? Math.round((job.finished - job.started) / 1000) : null;
-        setText(`${countDevices()} Geräte erkannt (${esc(job.result.label || "")})`
-          + (dur != null ? ` · ${dur} s` : "") + (job.status === "cancelled" ? " (abgebrochen)" : ""));
-        draw(); fit();
-      }
-    }
-  }
-
-  function finishScan() {
-    clearInterval(poll); poll = null; jobId = null;
-    scanBtn.disabled = false;
-    stopBtn.style.display = "none"; progEl.style.display = "none";
-  }
-
   scanBtn.addEventListener("click", startScan);
   stopBtn.addEventListener("click", async () => {
-    if (jobId) try { await moduleRequest(`/api/topology/discover/job/${encodeURIComponent(jobId)}/cancel`, { method: "POST" }); } catch {}
+    if (!job?.running) return;
+    try { job = await cancelJob(job.id); showJob(); } catch (e) { setText(e.message, true); }
   });
+
+  // Karte/Bearbeitungen von anderswo geaendert (anderer Benutzer, anderes Fenster,
+  // fertige Erkennung) -> nachladen. Laeuft hier gerade eine Bearbeitung, erst danach.
+  let pendingReload = false, dragging = false;
+  const busy = () => dragging || dlg.style.display === "block" || !!saveTimer;
+  function maybeReload() {
+    if (pendingReload && !busy()) { pendingReload = false; loadMap(false); }
+  }
+  const onTopoChanged = (p) => {
+    if (!p || p.source !== source || (p.origin && p.origin === ORIGIN)) return;
+    if (busy()) pendingReload = true; else loadMap(p.what === "map");
+  };
+  dashboardSocket.on("topology:changed", onTopoChanged);
 
   // ---------------- Graph zusammenbauen (Erkennung + Bearbeitungen) ----------------
   function mergedGraph() {
@@ -505,6 +531,7 @@ export function renderTopology(body, win) {
     const start = { x: ev.clientX, y: ev.clientY };
     const p0 = { ...positions[n.id] };
     let moved = false;
+    dragging = true;
 
     const onMove = (e) => {
       const dx = (e.clientX - start.x) / view.z, dy = (e.clientY - start.y) / view.z;
@@ -519,6 +546,7 @@ export function renderTopology(body, win) {
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      dragging = false;
       if (moved) {
         ovr.pos[n.id] = { ...positions[n.id] };
         if (n.custom) {
@@ -628,7 +656,7 @@ export function renderTopology(body, win) {
       saveOvr(); closeDialog(); draw();
     };
   }
-  function closeDialog() { dlg.style.display = "none"; }
+  function closeDialog() { dlg.style.display = "none"; setTimeout(maybeReload, 0); }
 
   // ---------------- Notizen ----------------
   function noteFieldsHtml(n) {
@@ -767,5 +795,10 @@ export function renderTopology(body, win) {
 
   // ---------------- Start ----------------
   loadMap();
-  if (win?.key) registerCleanup(win.key, () => { destroyed = true; clearInterval(poll); clearTimeout(saveTimer); });
+  watchSource();
+  if (win?.key) registerCleanup(win.key, () => {
+    stopWatch?.();
+    dashboardSocket.off("topology:changed", onTopoChanged);
+    clearTimeout(saveTimer);
+  });
 }

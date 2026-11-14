@@ -17,11 +17,13 @@ andere zieht, muss nachvollziehbar sein.
 import json
 import time
 
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
 
 from app import db
+from app import bgjobs
 from rmm_mod_privacy import privacy
 from app.auth import get_current_user, require_perm
 
@@ -123,7 +125,18 @@ def set_retention(body: RetentionBody, user: dict = Depends(get_current_user)):
 
 
 @router.post("/purge")
-def run_purge(user: dict = Depends(get_current_user)):
+async def run_purge(background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    require_perm(user, "manage_privacy")
+    async def _work(job):
+        job.update(phase='privacy.task', detail="Datenschutz: Fristen anwenden (Löschlauf)")
+        return await asyncio.to_thread(_run_purge_impl, user=user)
+    return await bgjobs.run('privacy.task', 'purge', title="Datenschutz: Fristen anwenden (Löschlauf)", user=user, work=_work,
+                            background=background, perm='manage_privacy')
+
+
+def _run_purge_impl(user: dict = Depends(get_current_user)):
     """Fristen sofort anwenden, statt auf den Nacht-Job zu warten."""
     require_perm(user, "manage_privacy")
     result = privacy.purge()
@@ -157,7 +170,19 @@ class EraseBody(BaseModel):
 
 
 @router.post("/users/{user_id}/erase")
-def erase_user(user_id: str, body: EraseBody,
+async def erase_user(user_id: str, body: EraseBody,
+                     background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    require_perm(user, "manage_privacy")
+    async def _work(job):
+        job.update(phase='privacy.task', detail="Datenschutz: Benutzerdaten löschen (Art. 17)")
+        return await asyncio.to_thread(_erase_user_impl, user_id=user_id, body=body, user=user)
+    return await bgjobs.run('privacy.task', user_id, title="Datenschutz: Benutzerdaten löschen (Art. 17)", user=user, work=_work,
+                            background=background, perm='manage_privacy')
+
+
+def _erase_user_impl(user_id: str, body: EraseBody,
                      user: dict = Depends(get_current_user)):
     """
     Löschung ausführen (Art. 17). Nicht umkehrbar, deshalb muss der

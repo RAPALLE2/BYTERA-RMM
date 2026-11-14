@@ -14,10 +14,12 @@
 #   GET    /api/admin/sso/ad-connections             im Modul "Active Directory" verbundene ADs (zur Auswahl)
 #   POST   /api/admin/sso/ad-connections/{cid}/import   eine davon als Realm uebernehmen
 
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app import db
+from app import bgjobs
 from app.auth import get_current_user, require_perm
 
 from . import ldap_auth, guard
@@ -74,7 +76,18 @@ def update_realm(realm_id: str, body: RealmBody, user: dict = Depends(get_curren
 
 
 @router.post("/realms/{realm_id}/test")
-def test_realm(realm_id: str, user: dict = Depends(get_current_user)):
+async def test_realm(realm_id: str, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    require_perm(user, "manage_sso")
+    async def _work(job):
+        job.update(phase='sso.task', detail="SSO: Realm testen")
+        return await asyncio.to_thread(_test_realm_impl, realm_id=realm_id, user=user)
+    return await bgjobs.run('sso.task', realm_id, title="SSO: Realm testen", user=user, work=_work,
+                            background=background, perm='manage_sso')
+
+
+def _test_realm_impl(realm_id: str, user: dict = Depends(get_current_user)):
     """
     Prüft die Realm-Konfiguration: verbindet sich mit dem Bind-Account und
     durchsucht das Base DN. Meldet Erfolg oder eine aussagekräftige Fehlermeldung.
@@ -119,7 +132,19 @@ class ImportAdGroupsBody(BaseModel):
 
 
 @router.post("/realms/{realm_id}/ad-groups/import")
-def import_realm_ad_groups(realm_id: str, body: ImportAdGroupsBody,
+async def import_realm_ad_groups(realm_id: str, body: ImportAdGroupsBody,
+                                 background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    require_perm(user, "manage_sso")
+    async def _work(job):
+        job.update(phase='sso.task', detail="SSO: AD-Gruppen importieren")
+        return await asyncio.to_thread(_import_realm_ad_groups_impl, realm_id=realm_id, body=body, user=user)
+    return await bgjobs.run('sso.task', realm_id, title="SSO: AD-Gruppen importieren", user=user, work=_work,
+                            background=background, perm='manage_sso')
+
+
+def _import_realm_ad_groups_impl(realm_id: str, body: ImportAdGroupsBody,
                                  user: dict = Depends(get_current_user)):
     """
     Importiert AD-Gruppen als RMM-Gruppen (is_ad_group=1). Anschließend können in
@@ -164,7 +189,18 @@ def ad_connections(user: dict = Depends(get_current_user)):
 
 
 @router.post("/sso/ad-connections/{cid}/import")
-def import_ad_connection(cid: str, user: dict = Depends(get_current_user)):
+async def import_ad_connection(cid: str, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    require_perm(user, "manage_sso")
+    async def _work(job):
+        job.update(phase='sso.task', detail="SSO: AD-Verbindung als Realm übernehmen")
+        return await asyncio.to_thread(_import_ad_connection_impl, cid=cid, user=user)
+    return await bgjobs.run('sso.task', cid, title="SSO: AD-Verbindung als Realm übernehmen", user=user, work=_work,
+                            background=background, perm='manage_sso')
+
+
+def _import_ad_connection_impl(cid: str, user: dict = Depends(get_current_user)):
     """Eine AD-Verbindung des Moduls "Active Directory" als SSO-Realm anlegen
     (Bind-Benutzer/Passwort werden uebernommen)."""
     require_perm(user, "manage_sso")

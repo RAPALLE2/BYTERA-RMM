@@ -5,10 +5,12 @@
 # Recht: c_power je Client (wie Herunterfahren/Neustarten).
 from __future__ import annotations
 
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app import db
+from app import bgjobs
 from app.auth import can_access_client, get_current_user, require_perm
 
 from . import store, wake
@@ -75,7 +77,18 @@ class WakeBody(BaseModel):
 
 
 @router.post("/{cid}/wake")
-async def do_wake(cid: str, body: WakeBody, user: dict = Depends(get_current_user)):
+async def do_wake(cid: str, body: WakeBody, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    _client(user, cid)
+    async def _work(job):
+        job.update(phase='wol.wake', detail=f"Einschalten (WOL): {(db.get_client(cid) or {}).get('hostname') or cid}")
+        return await _do_wake_impl(cid=cid, body=body, user=user)
+    return await bgjobs.run('wol.wake', cid, title=f"Einschalten (WOL): {(db.get_client(cid) or {}).get('hostname') or cid}", user=user, work=_work,
+                            background=background, client_id=cid)
+
+
+async def _do_wake_impl(cid: str, body: WakeBody, user: dict = Depends(get_current_user)):
     _client(user, cid)
     try:
         res = await wake.wake(cid, body.via, user)

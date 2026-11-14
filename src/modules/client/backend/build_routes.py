@@ -30,7 +30,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app import db
+from app import bgjobs, db
 from app.auth import get_current_user, require_perm
 from app.paths import STORAGE_DIR
 
@@ -43,6 +43,42 @@ OUT_DIR = STORAGE_DIR / "client"
 _lock = threading.Lock()
 _job: dict = {"running": False, "log": [], "started": None, "finished": None, "result": None,
               "user": "", "version": "", "proc": None, "container": None, "where": ""}
+
+
+# ------------------------------------------------------------------
+# Spiegelung in den Core-Job-Dienst (app/bgjobs.py): Bau und Vorbereitung
+# laufen ohnehin im Backend (Thread); so stehen sie zusaetzlich live in der
+# Aufgaben-Anzeige - mit Log und Abbrechen - fuer jeden Berechtigten.
+# ------------------------------------------------------------------
+def _mirror_bg(kind: str, title: str, user: dict, running, log_list, result, on_cancel):
+    import asyncio
+
+    async def runner(job):
+        last = None          # zuletzt uebernommene Zeile (die Quell-Liste wird gekuerzt)
+        while True:
+            lines = log_list()
+            start = 0
+            if last is not None:
+                idx = max((i for i, ln in enumerate(lines) if ln is last or ln == last), default=-1)
+                start = idx + 1
+            for ln in lines[start:]:
+                job.log(ln)
+            if lines:
+                last = lines[-1]
+                job.update(detail=str(lines[-1])[:200])
+            if not running():
+                break
+            await asyncio.sleep(1.0)
+        res = result()
+        if isinstance(res, dict) and res.get("error"):
+            raise RuntimeError(res["error"])
+        if isinstance(res, dict) and res.get("ok") is False and not res.get("stopped"):
+            raise RuntimeError("Bau fehlgeschlagen – Details im Log")
+        return res
+
+    job, _ = bgjobs.start(kind, "client", title=title, user=user, runner=runner, perm="manage_settings",
+                          on_cancel=lambda j: on_cancel())
+    return job
 
 
 def _script_json(*args) -> dict:
@@ -176,7 +212,10 @@ def build_start(body: BuildBody, user: dict = Depends(get_current_user)):
                      "stopped": False, "where": where})
         target = _run_docker if env["mode"] == "docker" else _run_native
         threading.Thread(target=target, args=(["--available"], user["username"], version), daemon=True).start()
-    return {"ok": True, "version": version, "where": where}
+    job = _mirror_bg("client.build", f"Client-App bauen (Version {version}, {where})", user,
+                     lambda: _job["running"], lambda: list(_job["log"]), lambda: _job["result"],
+                     lambda: build_stop(user))
+    return {"ok": True, "version": version, "where": where, "job_id": job.id}
 
 
 @router.post("/build/stop")
@@ -216,4 +255,9 @@ def build_prepare(body: PrepareBody, user: dict = Depends(get_current_user)):
     started = buildenv.prepare_async(force=body.force)
     if started:
         db.add_audit_entry(user["username"], "client.buildenv_prepare", details=buildenv.IMAGE if env["mode"] == "docker" else "native")
+        st = buildenv._state
+        _mirror_bg("client.buildenv", "Bau-Umgebung der Client-App vorbereiten", user,
+                   lambda: st["preparing"], lambda: list(st["log"]),
+                   lambda: {"error": st["error"]} if st["error"] else {"ok": True},
+                   lambda: st.update({"cancel": True}))
     return {"ok": True, "started": started}

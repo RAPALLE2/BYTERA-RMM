@@ -5,14 +5,15 @@
 // Ablauf/löschen; Gruppe anlegen + Mitglieder; OU anlegen; verschieben per Ziel-OU.
 
 import { getToken } from "/js/app/api.js";
+import { withBackground, resolveJob } from "/js/app/bgjobs.js";
 import { esc, uiConfirm } from "/js/app/utils.js";
 
 async function aq(path, opts = {}) {
   const headers = { Authorization: "Bearer " + (getToken() || "") };
   if (opts.body !== undefined && typeof opts.body !== "string") { headers["Content-Type"] = "application/json"; opts = { ...opts, body: JSON.stringify(opts.body) }; }
-  const res = await fetch("/api/ad" + path, { ...opts, headers });
+  const res = await fetch(withBackground("/api/ad" + path, opts.method), { ...opts, headers });   // Backend-Job, s. bgjobs.js
   if (!res.ok) { let m = res.statusText; try { const j = await res.json(); m = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail); } catch { /* egal */ } throw new Error(m); }
-  return res.json();
+  return resolveJob(await res.json());
 }
 
 const rdnName = (dn) => (dn || "").split(",")[0].split("=").slice(1).join("=");

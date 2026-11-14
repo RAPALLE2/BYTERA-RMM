@@ -142,6 +142,55 @@ def job_update(client_id: str, **fields) -> None:
         return
     j.update(fields)
     _jobs[client_id] = j
+    _mirror(client_id)
+
+
+# ------------------------------------------------------------------
+# Spiegelung in den Core-Job-Dienst (app/bgjobs.py): Suche/Installation
+# erscheinen live in der Aufgaben-Anzeige - fuer jeden Berechtigten, auch nach
+# dem Neuladen. Der patch-eigene Auftragsstand (_jobs) bleibt die Quelle.
+# ------------------------------------------------------------------
+_bg: dict = {}       # client_id -> BgJob
+
+_PHASE_TEXT = {"queued": "wartet", "asking": "Auftrag an den Agenten", "scanning": "sucht Updates",
+               "installing": "installiert", "downloading": "lädt herunter", "done": "fertig", "failed": "Fehler"}
+
+
+def _mirror(client_id: str) -> None:
+    bj = _bg.get(client_id)
+    j = _jobs.get(client_id)
+    if not bj or not j:
+        return
+    total, done = int(j.get("total") or 0), int(j.get("done") or 0)
+    ph = str(j.get("phase") or "")
+    detail = " · ".join(x for x in (_PHASE_TEXT.get(ph, ph), str(j.get("detail") or ""),
+                                    f"{done}/{total}" if total else "") if x)
+    bj.update(phase=ph, pct=(done / total * 100) if total else None, detail=detail,
+              done=done, total=total)
+
+
+def start_bg(kind: str, client_id: str, user: dict | None, coro_factory, hostname: str = ""):
+    """Patch-Auftrag (scan/apply) als Backend-Job starten. coro_factory() liefert
+    die Koroutine (run_scan/run_apply). Rueckgabe: BgJob."""
+    from app import bgjobs
+
+    async def runner(bj):
+        _bg[client_id] = bj
+        _mirror(client_id)
+        try:
+            await coro_factory()
+        finally:
+            if _bg.get(client_id) is bj:
+                _bg.pop(client_id, None)
+        j = job(client_id)
+        if j.get("error"):
+            raise RuntimeError(j["error"])
+        return {k: j.get(k) for k in ("kind", "found", "done", "total", "detail", "sources", "hint")}
+
+    title = ("Update-Suche" if kind == "scan" else "Updates installieren") + f": {hostname or client_id}"
+    bj, _ = bgjobs.start(f"patch.{kind}", client_id, title=title, user=user, runner=runner,
+                         perm="patching", client_id=client_id, meta={"client": client_id})
+    return bj
 
 
 def job_finish(client_id: str, error: str | None = None, **fields) -> None:
@@ -150,6 +199,7 @@ def job_finish(client_id: str, error: str | None = None, **fields) -> None:
               "error": error, "phase": "failed" if error else "done"})
     j.update(fields)
     _jobs[client_id] = j
+    _mirror(client_id)
 
 
 def track(task) -> None:
@@ -168,6 +218,7 @@ def on_progress(client_id: str, payload: dict) -> None:
               "done": int(payload.get("done") or 0),
               "total": int(payload.get("total") or j.get("total") or 0)})
     _jobs[client_id] = j
+    _mirror(client_id)
 
 
 # ==================================================================
@@ -706,7 +757,9 @@ async def run_auto_cycle() -> dict:
             last_scan = int(client.get("patch_last_scan") or 0)
             if _now() - last_scan > interval_ms:
                 job_start(cid, "scan", "System")
-                await run_scan(cid, "System")
+                bj = start_bg("scan", cid, None, lambda cid=cid: run_scan(cid, "System"),
+                              client.get("hostname") or "")
+                await bj.done.wait()
                 scanned += 1
                 continue                     # Installieren beim nächsten Lauf
 
@@ -719,8 +772,11 @@ async def run_auto_cycle() -> dict:
             payload = [{"uid": p["uid"], "source": p["source"], "name": p["name"]}
                        for p in items]
             job_start(cid, "apply", "System", total=len(payload))
-            await run_apply(cid, payload, "System", trigger="auto",
-                            hostname=client.get("hostname") or "")
+            bj = start_bg("apply", cid, None,
+                          lambda cid=cid, payload=payload, client=client: run_apply(
+                              cid, payload, "System", trigger="auto", hostname=client.get("hostname") or ""),
+                          client.get("hostname") or "")
+            await bj.done.wait()
             patched += 1
 
             # Neustart nur, wenn er ausdrücklich erlaubt wurde. Ein

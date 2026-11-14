@@ -9,13 +9,24 @@ Endpunkte:
   GET /api/network/portscan?ip=...   -> Portscan einer einzelnen IP
 Ueberall optional ?via=<Node-ID>: Scan laeuft dann IM NETZ DER NODE (Node-Modul "network",
 muss auf der Node nachgeladen sein). Job-IDs von Node-Scans: "n.<node>.<job>".
+
+BACKEND-JOBS (Grundregel: Aufgaben laufen nie in der Browser-Sitzung):
+  POST /api/network/scan/job            LAN-Scan als Backend-Job (?target=&speed=&via=)
+  POST /api/network/portscan/job        Portscan als Backend-Job (?ip=&mode=&ports=&via=)
+  GET  /api/network/scan/last?source=   letztes fertiges Scan-Ergebnis der Quelle
+Fortschritt, Ergebnis und Abbruch ueber /api/bgjobs (kind "network.scan" bzw.
+"network.portscan"), live per Socket "bgjob:update". Neu laden oder ein anderer
+Benutzer sehen denselben Job; das Ergebnis haelt das Backend.
+Die alten Endpunkte unten bleiben fuer Skripte/REST-API erhalten.
 """
 
+import asyncio
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.auth import get_current_user, require_perm
+from app import bgjobs, db
+from app.auth import can_access_client, get_current_user, require_perm
 from rmm_mod_network.network_scan import (
     scan_local_network, scan_ports, parse_port_spec,
     start_scan_job, get_scan_job, cancel_scan_job, parse_scan_target, SCAN_SPEEDS,
@@ -45,6 +56,7 @@ def _split_job(job_id: str) -> tuple[str, str]:
 
 # Einfacher In-Memory-Zwischenspeicher für das letzte Scan-Ergebnis.
 _last_scan: dict = {"at": None, "devices": []}
+_last_by_source: dict[str, dict] = {}     # Quelle ("backend"/Node-ID) -> letztes fertiges Ergebnis
 _scan_in_progress = False
 
 
@@ -130,9 +142,166 @@ async def scan_job_cancel(job_id: str, user: dict = Depends(get_current_user)):
 
 
 @router.get("/scan/last")
-def get_last_scan(user: dict = Depends(get_current_user)):
+def get_last_scan(source: str = "", user: dict = Depends(get_current_user)):
     require_perm(user, "network_scan")
+    if source:
+        if source != "backend" and not can_access_client(user, source):
+            raise HTTPException(404, "Quelle nicht gefunden")
+        return _last_by_source.get(source) or {"at": None, "devices": []}
     return _last_scan
+
+
+# ------------------------------------------------------------------
+# LAN-Scan + Portscan als BACKEND-JOB (app/bgjobs.py)
+# ------------------------------------------------------------------
+def _check_node(user: dict, via: str) -> None:
+    from app import node_manager
+    if not can_access_client(user, via):
+        raise HTTPException(404, "Node nicht gefunden")
+    try:
+        node_manager.require_module(via, "network")
+    except node_manager.NodeError as e:
+        raise HTTPException(409, str(e))
+
+
+def _scan_runner(source: str, target: str | None, speed: str, via: str):
+    async def runner(job: bgjobs.BgJob):
+        from app import node_manager
+        if via:
+            r = await node_manager.command(via, "net-scan-start", {"target": target, "speed": speed}, timeout=60)
+            jid = r["job_id"]
+
+            async def status():
+                return await node_manager.command(via, "net-scan-status", {"job_id": jid}, timeout=60)
+
+            async def cancel():
+                await node_manager.command(via, "net-scan-cancel", {"job_id": jid}, timeout=30)
+        else:
+            jid = start_scan_job(target, speed)
+
+            async def status():
+                j = get_scan_job(jid)
+                if not j:
+                    raise RuntimeError("Scan verschwunden")
+                return {k: v for k, v in j.items() if k != "cancel"}
+
+            async def cancel():
+                cancel_scan_job(jid)
+
+        sent_cancel, fails = False, 0
+        while True:
+            if job.cancelled and not sent_cancel:
+                sent_cancel = True
+                try:
+                    await cancel()
+                except Exception:
+                    pass
+            try:
+                j = await status()
+                fails = 0
+            except Exception as e:            # Node kurz weg -> nicht sofort aufgeben
+                fails += 1
+                if fails >= 15:
+                    raise RuntimeError(f"Node antwortet nicht mehr: {e}")
+                await asyncio.sleep(2)
+                continue
+            th, dh = j.get("total_hosts") or 0, j.get("done_hosts") or 0
+            job.update(phase="scan", pct=(dh / th * 100) if th else 0,
+                       detail=f"{j.get('label', '')} · {dh:,}/{th:,} Adressen · {j.get('found', 0)} gefunden".replace(",", "."),
+                       label=j.get("label", ""), done_hosts=dh, total_hosts=th,
+                       done_subnets=j.get("done_subnets", 0), total_subnets=j.get("total_subnets", 0),
+                       found=j.get("found", 0), max_parallel=j.get("max_parallel"))
+            if j.get("status") in ("done", "error", "cancelled"):
+                break
+            await asyncio.sleep(0.7)
+
+        if j["status"] == "error":
+            raise RuntimeError(j.get("error") or "Scan fehlgeschlagen")
+        res = {"at": int(time.time() * 1000), "devices": j.get("devices") or [],
+               "label": j.get("label", ""), "source": source, "subnet": target,
+               "complete": j["status"] == "done"}
+        if j["status"] == "done":                 # Ergebnis haelt das BACKEND
+            _last_by_source[source] = res
+            if source == "backend":
+                global _last_scan
+                _last_scan = res
+        return res
+    return runner
+
+
+@router.post("/scan/job")
+async def scan_job_start(target: str | None = None, speed: str = "fast", via: str = "",
+                         user: dict = Depends(get_current_user)):
+    require_perm(user, "network_scan")
+    if speed not in SCAN_SPEEDS:
+        raise HTTPException(400, f"Unbekannte Geschwindigkeit (erlaubt: {', '.join(SCAN_SPEEDS)})")
+    try:
+        _, label = parse_scan_target(target)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if via:
+        _check_node(user, via)
+    source = via or "backend"
+    job, new = bgjobs.start(
+        "network.scan", source, title=f"LAN-Scan {label}", user=user, perm="network_scan",
+        may_see=(lambda u: can_access_client(u, via)) if via else None,
+        runner=_scan_runner(source, target, speed, via),
+        meta={"target": target or "", "speed": speed, "via": via, "label": label})
+    if new:
+        db.add_audit_entry(user["username"], "network.scan", target=f"{source}:{label}")
+    return {**job.public(), "attached": not new}
+
+
+def _portscan_plan(mode: str, ports: str | None) -> tuple[list[int] | None, int, float]:
+    if mode == "all":
+        return list(range(1, 65536)), 500, 0.5
+    if mode == "custom":
+        plist = parse_port_spec(ports or "")
+        if not plist:
+            raise HTTPException(400, "Keine gültigen Ports angegeben.")
+        return plist, (500 if len(plist) > 2000 else 200), 0.6
+    return None, 100, 1.0                      # gaengige Ports
+
+
+@router.post("/portscan/job")
+async def portscan_job_start(ip: str, mode: str = "standard", ports: str | None = None, via: str = "",
+                             user: dict = Depends(get_current_user)):
+    require_perm(user, "port_scan")
+    ip = (ip or "").strip()
+    if not ip:
+        raise HTTPException(400, "IP fehlt")
+    mode = (mode or "standard").lower()
+    plist, conc, tmo = _portscan_plan(mode, ports)
+    if via:
+        _check_node(user, via)
+    source = via or "backend"
+
+    async def runner(job: bgjobs.BgJob):
+        from app import node_manager
+        n = len(plist) if plist else None
+        job.update(phase="scan", detail=f"{ip}: {n:,} Ports werden geprüft".replace(",", ".")
+                   if n else f"{ip}: gängige Ports werden geprüft")
+        if via:
+            r = await node_manager.command(via, "net-portscan",
+                                           {"ip": ip, "ports": plist or [], "concurrency": conc, "timeout": tmo},
+                                           timeout=900 if mode == "all" else 180)
+            found = r.get("open") or []
+        else:
+            found = await scan_ports(ip, plist, concurrency=conc, timeout=tmo)
+        return {"ip": ip, "mode": mode, "scanned": n, "ports": found, "via": via}
+
+    def hard_cancel(job: bgjobs.BgJob):
+        if job._task:                          # Portscan hat keine Zwischenstaende -> sofort beenden
+            job._task.cancel()
+
+    job, new = bgjobs.start(
+        "network.portscan", f"{source}:{ip}", title=f"Portscan {ip}", user=user, perm="port_scan",
+        may_see=(lambda u: can_access_client(u, via)) if via else None,
+        runner=runner, on_cancel=hard_cancel,
+        meta={"ip": ip, "mode": mode, "ports": ports or "", "via": via})
+    if new:
+        db.add_audit_entry(user["username"], "network.portscan", target=f"{source}:{ip}")
+    return {**job.public(), "attached": not new}
 
 
 @router.get("/portscan")

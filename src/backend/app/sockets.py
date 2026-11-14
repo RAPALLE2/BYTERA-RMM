@@ -2217,9 +2217,9 @@ async def dashboard_vdisplay_install(sid, data):
                        "error": "Kein Treiberpaket auf dem Server. Modul „Headless-Bildschirm“ aktivieren."},
                        namespace="/dashboard")
         return
-    await send_to_agent(client_id, "vdisplay-install", pkg)
     await _db.call(_db.add_audit_entry, data.get("username", "?"), "headless.vdisplay_install",
                    target=client_id)
+    await _vdisplay_job("install", client_id, data.get("username"), pkg)
 
 
 @sio.on("vdisplay-remove", namespace="/dashboard")
@@ -2230,9 +2230,46 @@ async def dashboard_vdisplay_remove(sid, data):
         await sio.emit("vdisplay-result", {"id": client_id, "action": "remove", "ok": False,
                        "error": "Keine Berechtigung (manage_headless_screen)."}, namespace="/dashboard")
         return
-    await send_to_agent(client_id, "vdisplay-remove", {})
     await _db.call(_db.add_audit_entry, data.get("username", "?"), "headless.vdisplay_remove",
                    target=client_id)
+    await _vdisplay_job("remove", client_id, data.get("username"), {})
+
+
+# Treiber-Installation/-Entfernung als BACKEND-JOB (app/bgjobs.py): Das Backend
+# wartet auf die Rueckmeldung des Agenten - Neuladen oder andere Benutzer sehen
+# denselben Stand in der Aufgaben-Anzeige.
+_vdisplay_waiters: dict[str, "asyncio.Future"] = {}
+
+
+async def _vdisplay_job(action: str, client_id: str, username: str | None, pkg: dict) -> None:
+    from app import bgjobs, db as _db
+    user = (await _db.call(_db.get_user_by_username, username)) if username else None
+    client = (await _db.call(_db.get_client, client_id)) or {}
+
+    async def work(job):
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+        _vdisplay_waiters[client_id] = fut
+        try:
+            job.update(phase=action, detail="Auftrag an den Agenten gesendet")
+            if not await send_to_agent(client_id, f"vdisplay-{action}", pkg):
+                raise RuntimeError("Client ist offline")
+            job.update(detail="Agent arbeitet (Treiber laden/installieren)")
+            res = await asyncio.wait_for(fut, timeout=600)
+        except asyncio.TimeoutError:
+            raise RuntimeError("Keine Rückmeldung des Agenten innerhalb von 10 Minuten")
+        finally:
+            if _vdisplay_waiters.get(client_id) is fut:
+                _vdisplay_waiters.pop(client_id, None)
+        if not res.get("ok", True):
+            raise RuntimeError(res.get("error") or "Agent meldet einen Fehler")
+        return res
+
+    bgjobs.start("vdisplay." + action, client_id,
+                 title=f"Virtueller Bildschirm {'installieren' if action == 'install' else 'entfernen'}: "
+                       f"{client.get('hostname') or client_id}",
+                 user=user, runner=work, perm="manage_headless_screen", client_id=client_id,
+                 meta={"client": client_id})
 
 
 @sio.on("vdisplay-status", namespace="/agent")
@@ -2242,6 +2279,9 @@ async def on_vdisplay_status(sid, payload):
 
 @sio.on("vdisplay-result", namespace="/agent")
 async def on_vdisplay_result(sid, payload):
+    fut = _vdisplay_waiters.get((payload or {}).get("id") or "")
+    if fut and not fut.done():
+        fut.set_result(payload or {})
     await sio.emit("vdisplay-result", payload, namespace="/dashboard")
 
 

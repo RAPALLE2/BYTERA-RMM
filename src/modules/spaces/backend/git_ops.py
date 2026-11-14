@@ -33,10 +33,12 @@ import subprocess
 import threading
 from pathlib import Path
 
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.auth import get_current_user
+from app import bgjobs
 
 from . import access, store, vfs
 
@@ -254,7 +256,17 @@ def git_init(b: GitBody, user: dict = Depends(get_current_user)):
 
 
 @router.post("/clone")
-def git_clone(b: GitBody, user: dict = Depends(get_current_user)):
+async def git_clone(b: GitBody, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    async def _work(job):
+        job.update(phase='spaces.git', detail="Git: Repository klonen")
+        return await asyncio.to_thread(_git_clone_impl, b=b, user=user)
+    return await bgjobs.run('spaces.git', None, title="Git: Repository klonen", user=user, work=_work,
+                            background=background, private=True)
+
+
+def _git_clone_impl(b: GitBody, user: dict = Depends(get_current_user)):
     if not b.url:
         raise HTTPException(400, "URL fehlt")
     parent = _target(user, b.path)
@@ -293,7 +305,17 @@ def git_remote(b: GitBody, user: dict = Depends(get_current_user)):
 
 
 @router.post("/commit")
-def git_commit(b: GitBody, user: dict = Depends(get_current_user)):
+async def git_commit(b: GitBody, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    async def _work(job):
+        job.update(phase='spaces.git', detail="Git: Commit")
+        return await asyncio.to_thread(_git_commit_impl, b=b, user=user)
+    return await bgjobs.run('spaces.git', None, title="Git: Commit", user=user, work=_work,
+                            background=background, private=True)
+
+
+def _git_commit_impl(b: GitBody, user: dict = Depends(get_current_user)):
     _, p = _repo(user, b.path)
     if not (b.message or "").strip():
         raise HTTPException(400, "Commit-Nachricht fehlt")
@@ -312,17 +334,47 @@ def _remote_op(op: list[str], user, path: str, timeout: int = 600):
 
 
 @router.post("/fetch")
-def git_fetch(b: GitBody, user: dict = Depends(get_current_user)):
+async def git_fetch(b: GitBody, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    async def _work(job):
+        job.update(phase='spaces.git', detail="Git: Fetch")
+        return await asyncio.to_thread(_git_fetch_impl, b=b, user=user)
+    return await bgjobs.run('spaces.git', None, title="Git: Fetch", user=user, work=_work,
+                            background=background, private=True)
+
+
+def _git_fetch_impl(b: GitBody, user: dict = Depends(get_current_user)):
     return _remote_op(["fetch", "--prune", "origin"], user, b.path)
 
 
 @router.post("/pull")
-def git_pull(b: GitBody, user: dict = Depends(get_current_user)):
+async def git_pull(b: GitBody, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    async def _work(job):
+        job.update(phase='spaces.git', detail="Git: Pull")
+        return await asyncio.to_thread(_git_pull_impl, b=b, user=user)
+    return await bgjobs.run('spaces.git', None, title="Git: Pull", user=user, work=_work,
+                            background=background, private=True)
+
+
+def _git_pull_impl(b: GitBody, user: dict = Depends(get_current_user)):
     return _remote_op(["pull", "--rebase", "--autostash", "origin"], user, b.path)
 
 
 @router.post("/push")
-def git_push(b: GitBody, user: dict = Depends(get_current_user)):
+async def git_push(b: GitBody, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    async def _work(job):
+        job.update(phase='spaces.git', detail="Git: Push")
+        return await asyncio.to_thread(_git_push_impl, b=b, user=user)
+    return await bgjobs.run('spaces.git', None, title="Git: Push", user=user, work=_work,
+                            background=background, private=True)
+
+
+def _git_push_impl(b: GitBody, user: dict = Depends(get_current_user)):
     t, p = _repo(user, b.path)
     br = status_of(p)["branch"] or "main"
     out = run(["push", "-u", "origin", br], p, creds=get_creds(t), user=user, timeout=600)
@@ -330,7 +382,17 @@ def git_push(b: GitBody, user: dict = Depends(get_current_user)):
 
 
 @router.post("/sync")
-def git_sync(b: GitBody, user: dict = Depends(get_current_user)):
+async def git_sync(b: GitBody, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    async def _work(job):
+        job.update(phase='spaces.git', detail="Git: Synchronisieren (Pull + Push)")
+        return await asyncio.to_thread(_git_sync_impl, b=b, user=user)
+    return await bgjobs.run('spaces.git', None, title="Git: Synchronisieren (Pull + Push)", user=user, work=_work,
+                            background=background, private=True)
+
+
+def _git_sync_impl(b: GitBody, user: dict = Depends(get_current_user)):
     """Aenderungen committen (falls vorhanden), holen (rebase) und hochladen."""
     t, p = _repo(user, b.path)
     log = []
@@ -364,7 +426,17 @@ def git_branches(b: GitBody, user: dict = Depends(get_current_user)):
 
 
 @router.post("/checkout")
-def git_checkout(b: GitBody, user: dict = Depends(get_current_user)):
+async def git_checkout(b: GitBody, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    async def _work(job):
+        job.update(phase='spaces.git', detail="Git: Branch wechseln")
+        return await asyncio.to_thread(_git_checkout_impl, b=b, user=user)
+    return await bgjobs.run('spaces.git', None, title="Git: Branch wechseln", user=user, work=_work,
+                            background=background, private=True)
+
+
+def _git_checkout_impl(b: GitBody, user: dict = Depends(get_current_user)):
     _, p = _repo(user, b.path)
     if not b.branch:
         raise HTTPException(400, "Branch fehlt")

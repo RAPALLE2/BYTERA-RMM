@@ -7,10 +7,12 @@
 
 import json
 
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app import db
+from app import bgjobs
 from app.auth import get_current_user, require_admin
 from router.admin_routes import build_notification
 
@@ -76,7 +78,18 @@ def update_webhook(webhook_id: str, body: WebhookUpdateBody,
 
 
 @router.post("/webhooks/{webhook_id}/test")
-def test_webhook(webhook_id: str, user: dict = Depends(get_current_user)):
+async def test_webhook(webhook_id: str, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    require_admin(user)
+    async def _work(job):
+        job.update(phase='notify.test', detail="Webhook testen")
+        return await asyncio.to_thread(_test_webhook_impl, webhook_id=webhook_id, user=user)
+    return await bgjobs.run('notify.test', None, title="Webhook testen", user=user, work=_work,
+                            background=background, private=True)
+
+
+def _test_webhook_impl(webhook_id: str, user: dict = Depends(get_current_user)):
     require_admin(user)
     webhook = db.get_webhook(webhook_id)
     if not webhook:

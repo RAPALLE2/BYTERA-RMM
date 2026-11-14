@@ -5,14 +5,18 @@
 //   10.10           -> ein /16, also 256 x 254 Adressen
 //   10.10.0.0/16    -> beliebiges CIDR (ab /8)
 //   leer            -> eigenes Subnetz
-// Große Netze laufen als Hintergrund-Job mit Fortschrittsanzeige. Der
-// ⚡ Speed-Up verteilt die /24-Blöcke auf mehrere parallele Worker.
+// Der Scan laeuft als BACKEND-JOB (app/bgjobs.py): Diese Seite startet ihn nur
+// und zeigt live an, was das Backend meldet. Neu laden, ein anderes Fenster oder
+// ein anderer Benutzer sehen denselben Scan; das Ergebnis haelt das Backend.
+// Der ⚡ Speed-Up verteilt die /24-Blöcke auf mehrere parallele Worker.
 
 import { nodeHint } from "/js/app/nodechoice.js";
 import { api } from "/js/app/api.js";
 import { esc } from "/js/app/utils.js";
 import { openWindow } from "/js/app/windowmanager.js";
 import { registerCleanup } from "/js/app/windowmanager.js";
+import { moduleRequest } from "/js/app/modules.js";
+import { watchJobs, cancelJob, jobDuration } from "/js/app/bgjobs.js";
 
 // Auswahl "Backend oder Node" fuellen (Nodes nur mit nachgeladenem Node-Modul "network")
 function fillVia(sel, preset = "") {
@@ -36,9 +40,8 @@ const SPEEDS = {
 
 export function renderNetwork(body, win) {
   let speed = "fast";
-  let jobId = null;
-  let poll = null;
-  let destroyed = false;
+  let job = null;            // aktueller Scan-Job der gewaehlten Quelle (vom Backend)
+  let stopWatch = null;
 
   body.innerHTML = `
     <div style="display:flex;flex-direction:column;height:100%">
@@ -70,6 +73,7 @@ export function renderNetwork(body, win) {
   const subnetInput = body.querySelector("#net-subnet");
   const viaSel = body.querySelector("#net-via");
   fillVia(viaSel, win?.props?.via || "");
+  const source = () => viaSel.value || "backend";
   const scanBtn = body.querySelector("#net-scan");
   const stopBtn = body.querySelector("#net-stop");
   const statusEl = body.querySelector("#net-status");
@@ -92,7 +96,7 @@ export function renderNetwork(body, win) {
   // ---- Vorschau: wie groß wird der Scan? ----
   let previewTimer = null;
   async function showPreview() {
-    if (jobId) return;
+    if (job?.running) return;
     clearTimeout(previewTimer);
     previewTimer = setTimeout(async () => {
       try {
@@ -123,70 +127,95 @@ export function renderNetwork(body, win) {
   subnetInput.addEventListener("input", showPreview);
   subnetInput.addEventListener("keydown", (e) => { if (e.key === "Enter") scan(); });
 
-  // ---- Scan starten / verfolgen ----
+  // ---- Scan starten / verfolgen (Backend-Job) ----
   async function scan() {
-    if (jobId) return;
-    tbody.innerHTML = `<tr><td colspan="4" style="color:var(--subtext)">${t("nw_scanning")}</td></tr>`;
+    if (job?.running) return;
     scanBtn.disabled = true;
     try {
-      const res = await api.scanStart(subnetInput.value.trim() || null, speed, viaSel.value);
-      jobId = res.job_id;
-      stopBtn.style.display = "";
-      progEl.style.display = "";
-      poll = setInterval(pollJob, 700);
-      pollJob();
+      const q = new URLSearchParams({ speed });
+      const target = subnetInput.value.trim();
+      if (target) q.set("target", target);
+      if (viaSel.value) q.set("via", viaSel.value);
+      const r = await moduleRequest(`/api/network/scan/job?${q}`, { method: "POST" });
+      if (r.attached) window.notify?.(`Auf dieser Quelle läuft bereits ein Scan (von ${r.by}) – er wird angezeigt.`, "info");
+      job = r; showJob();
+      tbody.innerHTML = `<tr><td colspan="4" style="color:var(--subtext)">${t("nw_scanning")}</td></tr>`;
     } catch (e) {
       scanBtn.disabled = false;
       statusEl.style.color = "var(--danger)";
       statusEl.textContent = e.message;
-      tbody.innerHTML = `<tr><td colspan="4" style="color:var(--danger)">${esc(e.message)}</td></tr>`;
     }
   }
 
-  async function pollJob() {
-    if (!jobId || destroyed) return;
-    let job;
-    try { job = await api.scanJob(jobId); }
-    catch (e) { finish(); statusEl.textContent = e.message; return; }
-
-    const pct = job.total_hosts ? (job.done_hosts / job.total_hosts) * 100 : 0;
-    barEl.style.width = Math.min(100, pct).toFixed(1) + "%";
+  function showJob() {
+    const running = !!job?.running;
+    scanBtn.disabled = running;
+    stopBtn.style.display = running ? "" : "none";
+    stopBtn.disabled = !!job?.cancel_requested;
+    progEl.style.display = running ? "" : "none";
+    if (!job) return;
+    const pr = job.progress || {};
+    if (running) {
+      barEl.style.width = `${(job.pct || 0).toFixed(1)}%`;
+      statusEl.style.color = "var(--subtext)";
+      statusEl.textContent =
+        `${pr.label || ""} · ${pr.done_subnets || 0}/${pr.total_subnets || 0} ${t("nw_subnets_word")} · `
+        + `${(pr.done_hosts || 0).toLocaleString()}/${(pr.total_hosts || 0).toLocaleString()} ${t("nw_addresses")} `
+        + `(${(job.pct || 0).toFixed(1)} %) · ${t("nw_found", { n: pr.found || 0 })}`
+        + (pr.max_parallel ? ` · ${t("nw_parallel", { n: pr.max_parallel })}` : "")
+        + (job.by ? ` · gestartet von ${job.by}` : "")
+        + (job.cancel_requested ? " · wird abgebrochen …" : "");
+      return;
+    }
+    if (job.status === "error") {
+      statusEl.style.color = "var(--danger)";
+      statusEl.textContent = job.error || t("nw_scan_failed");
+      tbody.innerHTML = `<tr><td colspan="4" style="color:var(--danger)">${esc(job.error || t("u_fehler"))}</td></tr>`;
+      return;
+    }
+    const devices = job.result?.devices || [];
+    renderDevices(devices);
     statusEl.style.color = "var(--subtext)";
     statusEl.textContent =
-      `${job.label} · ${job.done_subnets}/${job.total_subnets} ${t("nw_subnets_word")} · `
-      + `${job.done_hosts.toLocaleString()}/${job.total_hosts.toLocaleString()} ${t("nw_addresses")} `
-      + `(${pct.toFixed(1)} %) · ${t("nw_found", { n: job.found })}`
-      + (job.max_parallel ? ` · ${t("nw_parallel", { n: job.max_parallel })}` : "");
-
-    if (job.status === "done" || job.status === "cancelled" || job.status === "error") {
-      finish();
-      if (job.status === "error") {
-        statusEl.style.color = "var(--danger)";
-        statusEl.textContent = job.error || t("nw_scan_failed");
-        tbody.innerHTML = `<tr><td colspan="4" style="color:var(--danger)">${esc(job.error || t("u_fehler"))}</td></tr>`;
-        return;
-      }
-      renderDevices(job.devices || []);
-      const dur = job.finished && job.started ? Math.round((job.finished - job.started) / 1000) : null;
-      statusEl.textContent =
-        t("nw_devices_in", { n: (job.devices || []).length, label: job.label })
-        + (dur != null ? ` · ${dur < 90 ? dur + " s" : Math.round(dur / 60) + " min"}` : "")
-        + (job.status === "cancelled" ? ` (${t("nw_cancelled")})` : "");
-    }
+      t("nw_devices_in", { n: devices.length, label: job.result?.label || pr.label || "" })
+      + ` · ${jobDuration(job)}`
+      + (job.status === "cancelled" ? ` (${t("nw_cancelled")}${job.cancelled_by ? " – " + job.cancelled_by : ""})` : "")
+      + ` · ${new Date(job.finished).toLocaleString()}${job.by ? ", " + job.by : ""}`;
   }
 
-  function finish() {
-    clearInterval(poll); poll = null; jobId = null;
-    scanBtn.disabled = false;
-    stopBtn.style.display = "none";
-    progEl.style.display = "none";
+  // Quelle beobachten: laufender oder zuletzt beendeter Scan; sonst letztes Ergebnis
+  function watchSource() {
+    stopWatch?.();
+    job = null;
+    showJob();
+    let first = true;
+    stopWatch = watchJobs({ kind: "network.scan", key: source() }, (j) => {
+      job = j;
+      if (j) showJob();
+      else if (first) loadLast();
+      first = false;
+    });
+  }
+
+  function loadLast() {
+    moduleRequest(`/api/network/scan/last?source=${encodeURIComponent(source())}`).then((res) => {
+      if (job) return;
+      if (res.devices && res.devices.length) {
+        renderDevices(res.devices);
+        statusEl.textContent = t("nw_devices_last", { n: res.devices.length });
+      } else {
+        tbody.innerHTML = `<tr><td colspan="4" style="color:var(--subtext)">${t("nw_not_scanned")}</td></tr>`;
+        showPreview();
+      }
+    }).catch(() => showPreview());
   }
 
   stopBtn.addEventListener("click", async () => {
-    if (!jobId) return;
-    try { await api.scanCancel(jobId); } catch {}
+    if (!job?.running) return;
+    try { job = await cancelJob(job.id); showJob(); } catch (e) { statusEl.textContent = e.message; }
   });
   scanBtn.addEventListener("click", scan);
+  viaSel.addEventListener("change", watchSource);
 
   function renderDevices(devices) {
     if (!devices.length) {
@@ -212,13 +241,8 @@ export function renderNetwork(body, win) {
       }));
   }
 
-  // Beim Öffnen letztes Ergebnis laden (falls vorhanden)
-  api.lastScan().then((res) => {
-    if (res.devices && res.devices.length) {
-      renderDevices(res.devices);
-      statusEl.textContent = t("nw_devices_last", { n: res.devices.length });
-    } else showPreview();
-  }).catch(() => showPreview());
+  // Beim Öffnen: laufenden/letzten Scan der Quelle zeigen (vom Backend)
+  watchSource();
 
-  if (win?.key) registerCleanup(win.key, () => { destroyed = true; clearInterval(poll); });
+  if (win?.key) registerCleanup(win.key, () => { stopWatch?.(); clearTimeout(previewTimer); });
 }

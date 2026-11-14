@@ -26,10 +26,12 @@ from __future__ import annotations
 
 import time
 
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from app import db
+from app import bgjobs
 from app.auth import get_current_user, require_perm
 
 from . import ldap_client, store
@@ -96,7 +98,18 @@ def _apply(body: ConnBody, c: dict, keep_pw: bool) -> dict:
 
 
 @router.post("/connections")
-def create_connection(body: ConnBody, user: dict = Depends(get_current_user)):
+async def create_connection(body: ConnBody, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    _perm(user)
+    async def _work(job):
+        job.update(phase='ad.task', detail="Active Directory: Verbindung anlegen + prüfen")
+        return await asyncio.to_thread(_create_connection_impl, body=body, user=user)
+    return await bgjobs.run('ad.task', None, title="Active Directory: Verbindung anlegen + prüfen", user=user, work=_work,
+                            background=background, perm='manage_ad')
+
+
+def _create_connection_impl(body: ConnBody, user: dict = Depends(get_current_user)):
     _perm(user)
     if not body.name.strip() or not body.server.strip() or not body.base_dn.strip():
         raise HTTPException(400, "Name, Server und Basis-DN sind nötig")
@@ -113,7 +126,18 @@ def create_connection(body: ConnBody, user: dict = Depends(get_current_user)):
 
 
 @router.put("/connections/{cid}")
-def update_connection(cid: str, body: ConnBody, user: dict = Depends(get_current_user)):
+async def update_connection(cid: str, body: ConnBody, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    _perm(user)
+    async def _work(job):
+        job.update(phase='ad.task', detail="Active Directory: Verbindung speichern + prüfen")
+        return await asyncio.to_thread(_update_connection_impl, cid=cid, body=body, user=user)
+    return await bgjobs.run('ad.task', None, title="Active Directory: Verbindung speichern + prüfen", user=user, work=_work,
+                            background=background, perm='manage_ad')
+
+
+def _update_connection_impl(cid: str, body: ConnBody, user: dict = Depends(get_current_user)):
     _perm(user)
 
     def upd(d):
@@ -137,7 +161,18 @@ def delete_connection(cid: str, user: dict = Depends(get_current_user)):
 
 
 @router.post("/connections/{cid}/test")
-def test_connection(cid: str, user: dict = Depends(get_current_user)):
+async def test_connection(cid: str, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    _perm(user)
+    async def _work(job):
+        job.update(phase='ad.task', detail="Active Directory: Verbindung testen")
+        return await asyncio.to_thread(_test_connection_impl, cid=cid, user=user)
+    return await bgjobs.run('ad.task', cid, title="Active Directory: Verbindung testen", user=user, work=_work,
+                            background=background, perm='manage_ad')
+
+
+def _test_connection_impl(cid: str, user: dict = Depends(get_current_user)):
     _perm(user)
     c = store.get(cid)
     if not c:
@@ -150,7 +185,18 @@ class TestNewBody(ConnBody):
 
 
 @router.post("/connections-test")
-def test_new(body: TestNewBody, user: dict = Depends(get_current_user)):
+async def test_new(body: TestNewBody, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    _perm(user)
+    async def _work(job):
+        job.update(phase='ad.task', detail="Active Directory: neue Verbindung testen")
+        return await asyncio.to_thread(_test_new_impl, body=body, user=user)
+    return await bgjobs.run('ad.task', None, title="Active Directory: neue Verbindung testen", user=user, work=_work,
+                            background=background, perm='manage_ad')
+
+
+def _test_new_impl(body: TestNewBody, user: dict = Depends(get_current_user)):
     """Verbindung testen, bevor sie gespeichert ist."""
     _perm(user)
     c = {}
@@ -232,7 +278,18 @@ class UserBody(BaseModel):
 
 
 @router.post("/{cid}/users")
-def create_user(cid: str, body: UserBody, user: dict = Depends(get_current_user)):
+async def create_user(cid: str, body: UserBody, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    _perm(user)
+    async def _work(job):
+        job.update(phase='ad.task', detail=f"Active Directory: Benutzer „{body.sam}“ anlegen")
+        return await asyncio.to_thread(_create_user_impl, cid=cid, body=body, user=user)
+    return await bgjobs.run('ad.task', None, title=f"Active Directory: Benutzer „{body.sam}“ anlegen", user=user, work=_work,
+                            background=background, perm='manage_ad')
+
+
+def _create_user_impl(cid: str, body: UserBody, user: dict = Depends(get_current_user)):
     _perm(user)
     if not body.sam.strip() or not body.ou_dn.strip():
         raise HTTPException(400, "Benutzername (sAMAccountName) und Ziel-OU sind nötig")
@@ -252,7 +309,18 @@ class BulkBody(BaseModel):
 
 
 @router.post("/{cid}/users/bulk")
-def bulk_users(cid: str, body: BulkBody, user: dict = Depends(get_current_user)):
+async def bulk_users(cid: str, body: BulkBody, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    _perm(user)
+    async def _work(job):
+        job.update(phase='ad.task', detail="Active Directory: Benutzer per CSV anlegen")
+        return await asyncio.to_thread(_bulk_users_impl, cid=cid, body=body, user=user)
+    return await bgjobs.run('ad.task', None, title="Active Directory: Benutzer per CSV anlegen", user=user, work=_work,
+                            background=background, perm='manage_ad')
+
+
+def _bulk_users_impl(cid: str, body: BulkBody, user: dict = Depends(get_current_user)):
     _perm(user)
     import csv
     import io

@@ -32,13 +32,30 @@ let loaded = false;
 const initDone = new Set();
 
 async function req(path, opts = {}) {
-  const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
+  // Aendernde Aufrufe laufen als BACKEND-JOB, wo der Endpunkt das kann
+  // (app/bgjobs.py): ?background=1 -> Job sofort, dann live auf das Ergebnis
+  // warten. Endpunkte ohne Job ignorieren den Parameter. opts.noWait /
+  // opts.noJob / opts.onJob wie bei api.js request().
+  const { onJob, noWait, noJob, ...o } = opts;
+  const method = (o.method || "GET").toUpperCase();
+  if (method !== "GET" && !noJob && !/[?&]background=/.test(path)) {
+    path += (path.includes("?") ? "&" : "?") + "background=1";
+  }
+  const headers = { "Content-Type": "application/json", ...(o.headers || {}) };
   const tok = getToken();
   if (tok) headers.Authorization = `Bearer ${tok}`;
-  const res = await fetch(`${BACKEND_URL}${path}`, { ...opts, headers });
+  const res = await fetch(`${BACKEND_URL}${path}`, { ...o, headers });
   let data = null;
   try { data = await res.json(); } catch { /* leere Antwort */ }
   if (!res.ok) throw new Error((data && data.detail) || `HTTP ${res.status}`);
+  if (method !== "GET" && !noWait && data && data.job === true && data.id) {
+    const { waitJob, fetchJob } = await import("./bgjobs.js");
+    try { onJob?.(data); } catch (e) { console.error(e); }
+    const job = data.running ? await waitJob(data.id, onJob) : await fetchJob(data.id);
+    if (job.status === "error") throw new Error(job.error || "Fehler");
+    if (job.status === "cancelled") throw new Error(`Abgebrochen${job.cancelled_by ? " von " + job.cancelled_by : ""}`);
+    return job.result !== undefined ? job.result : (await fetchJob(job.id)).result;
+  }
   return data;
 }
 

@@ -17,10 +17,12 @@ Berechtigung: Admin ODER 'manage_settings' (gleiche Grenze wie die übrigen
 Benachrichtigungs-Einstellungen im Settings-Fenster).
 """
 
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app import db
+from app import bgjobs
 
 from . import engine as notifier   # Regel-Motor des Moduls (gleiche Funktionsnamen wie frueher)
 from app.auth import get_current_user, is_super_admin, user_has_permission
@@ -108,7 +110,18 @@ async def delete_rule(rule_id: str, user: dict = Depends(get_current_user)):
 
 
 @router.post("/rules/{rule_id}/test")
-async def test_rule(rule_id: str, user: dict = Depends(get_current_user)):
+async def test_rule(rule_id: str, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    _require_manage(user)
+    async def _work(job):
+        job.update(phase='notify.test', detail="Benachrichtigungsregel testen")
+        return await _test_rule_impl(rule_id=rule_id, user=user)
+    return await bgjobs.run('notify.test', None, title="Benachrichtigungsregel testen", user=user, work=_work,
+                            background=background, private=True)
+
+
+async def _test_rule_impl(rule_id: str, user: dict = Depends(get_current_user)):
     _require_manage(user)
     rule = notifier.get_rule(rule_id)
     if not rule:
@@ -168,7 +181,18 @@ class SmtpTestBody(BaseModel):
 
 
 @router.post("/smtp/test")
-async def test_smtp(body: SmtpTestBody, user: dict = Depends(get_current_user)):
+async def test_smtp(body: SmtpTestBody, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    _require_manage(user)
+    async def _work(job):
+        job.update(phase='notify.test', detail=f"Test-Mail an {body.to}")
+        return await _test_smtp_impl(body=body, user=user)
+    return await bgjobs.run('notify.test', None, title=f"Test-Mail an {body.to}", user=user, work=_work,
+                            background=background, private=True)
+
+
+async def _test_smtp_impl(body: SmtpTestBody, user: dict = Depends(get_current_user)):
     _require_manage(user)
     import asyncio
     try:

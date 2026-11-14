@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
-from app import db
+from app import bgjobs, db
 from app.auth import (
     get_current_user, require_perm, can_access_client,
     visible_client_ids, user_has_permission,
@@ -336,23 +336,46 @@ def remove_client(client_id: str, user: dict = Depends(get_current_user)):
     return {"ok": True}
 
 
-@router.post("/{client_id}/exec")
-async def exec_on_client(client_id: str, body: ExecBody, user: dict = Depends(get_current_user)):
-    _require_client_perm(user, client_id, "c_terminal")
-    try:
-        result = await request_exec(client_id, body.command, session=body.session,
-                                    shell=body.shell, elevated=body.elevated)
-    except Exception as e:
-        raise HTTPException(504, str(e))
+def _hostname(client_id: str) -> str:
+    return (db.get_client(client_id) or {}).get("hostname") or client_id
 
+
+@router.post("/{client_id}/exec")
+async def exec_on_client(client_id: str, body: ExecBody, background: bool = False,
+                         user: dict = Depends(get_current_user)):
+    """Befehl/Skript auf dem Client ausfuehren - als BACKEND-JOB (app/bgjobs.py):
+    Neuladen oder Schliessen des Fensters bricht ihn nicht ab, das Ergebnis
+    bleibt in der Aufgaben-Anzeige. ?background=1 -> Job sofort zurueck."""
+    _require_client_perm(user, client_id, "c_terminal")
     # Jeder ausgeführte Befehl landet im Audit-Log (wie gewünscht: "wer hat wann was gemacht")
     _mode = f"[{body.shell}{'/admin' if body.elevated else ''}] " if body.shell != "auto" or body.elevated else ""
     db.add_audit_entry(user["username"], "terminal.exec", target=client_id, details=_mode + body.command)
-    return result
+    first = (body.command.strip().splitlines() or [""])[0][:60]
+
+    async def work(job):
+        job.update(phase="exec", detail=f"läuft auf {_hostname(client_id)}")
+        job.log(f"$ {body.command[:2000]}")
+        try:
+            result = await request_exec(client_id, body.command, session=body.session,
+                                        shell=body.shell, elevated=body.elevated)
+        except Exception as e:
+            raise HTTPException(504, str(e))
+        r = result or {}
+        if r.get("stdout"):
+            job.log(str(r["stdout"])[-20000:])
+        if r.get("stderr"):
+            job.log("[stderr] " + str(r["stderr"])[-8000:])
+        job.update(detail=f"Exit-Code {r.get('code')}" if r.get("code") not in (None, 0) else "fertig")
+        return result
+
+    return await bgjobs.run("client.exec", None, title=f"Befehl auf {_hostname(client_id)}: {first}",
+                            user=user, work=work, background=background, client_id=client_id,
+                            client_perm="c_terminal", on_cancel=bgjobs.hard_cancel,
+                            meta={"client": client_id, "command": body.command[:500]})
 
 
 @router.post("/bulk-exec")
-async def bulk_exec(body: BulkExecBody, user: dict = Depends(get_current_user)):
+async def bulk_exec(body: BulkExecBody, background: bool = False, user: dict = Depends(get_current_user)):
     """
     Führt denselben Befehl auf mehreren Clients gleichzeitig aus (Bulk Terminal).
     Alle Anfragen laufen parallel (asyncio.gather), das Ergebnis ist eine
@@ -364,19 +387,37 @@ async def bulk_exec(body: BulkExecBody, user: dict = Depends(get_current_user)):
     allowed_ids = [cid for cid in body.client_ids
                    if user_has_permission(user, "c_terminal", cid)]
 
-    async def run_one(client_id: str) -> tuple[str, dict]:
-        try:
-            result = await request_exec(client_id, body.command)
-            return client_id, {"ok": True, **result}
-        except Exception as e:
-            return client_id, {"ok": False, "error": str(e)}
-
-    results = await asyncio.gather(*(run_one(cid) for cid in allowed_ids))
     db.add_audit_entry(
         user["username"], "terminal.bulk_exec",
         target=",".join(body.client_ids), details=body.command,
     )
-    return dict(results)
+    first = (body.command.strip().splitlines() or [""])[0][:50]
+
+    async def work(job):
+        total = len(allowed_ids)
+        cnt = {"done": 0, "ok": 0, "failed": 0}
+        job.update(phase="exec", pct=0, detail=f"0/{total} Clients", total=total, **cnt)
+
+        async def run_one(client_id: str) -> tuple[str, dict]:
+            try:
+                result = await request_exec(client_id, body.command)
+                res = (client_id, {"ok": True, **result})
+                cnt["ok"] += 1
+            except Exception as e:
+                res = (client_id, {"ok": False, "error": str(e)})
+                cnt["failed"] += 1
+            cnt["done"] += 1
+            job.log(f"{_hostname(client_id)}: {'OK' if res[1]['ok'] else 'FEHLER ' + res[1].get('error', '')}")
+            job.update(pct=cnt["done"] / max(1, total) * 100,
+                       detail=f"{cnt['done']}/{total} Clients · {cnt['ok']} ok · {cnt['failed']} Fehler", **cnt)
+            return res
+
+        return dict(await asyncio.gather(*(run_one(cid) for cid in allowed_ids)))
+
+    return await bgjobs.run("client.bulk_exec", None, title=f"Bulk-Befehl auf {len(allowed_ids)} Clients: {first}",
+                            user=user, perm="bulk_shell", work=work, background=background,
+                            on_cancel=bgjobs.hard_cancel,
+                            meta={"clients": allowed_ids, "command": body.command[:500]})
 
 
 @router.get("/{client_id}/fs")
@@ -498,7 +539,7 @@ async def rename_client_path(client_id: str, body: FsRenameBody, user: dict = De
 
 
 @router.post("/{client_id}/update-agent")
-async def update_client_agent(client_id: str, wait: bool = False,
+async def update_client_agent(client_id: str, wait: bool = False, background: bool = False,
                               user: dict = Depends(get_current_user)):
     """
     Weist den Agenten an, sich selbst zu aktualisieren (laedt das aktuelle
@@ -517,6 +558,9 @@ async def update_client_agent(client_id: str, wait: bool = False,
     _require_client_perm(user, client_id, "manage_agent")
     if not state.is_online(client_id):
         raise HTTPException(409, "Der Agent ist nicht verbunden.")
+    running = bgjobs.active("agent.update", client_id)
+    if running:                                  # laeuft schon -> anhaengen
+        return await bgjobs.respond(running, False, background or not wait)
 
     client = db.get_client(client_id)
     state.update_confirmed.pop(client_id, None)
@@ -533,17 +577,48 @@ async def update_client_agent(client_id: str, wait: bool = False,
     db.add_audit_entry(user["username"], "agent.update_triggered", target=client_id,
                        details=(client or {}).get("hostname"))
 
+    # Das Backend verfolgt das Update als Job (Neuladen/andere Benutzer sehen es)
+    job, new = bgjobs.start("agent.update", client_id,
+                            title=f"Agent-Update {(client or {}).get('hostname') or client_id}",
+                            user=user, runner=_agent_update_runner(client_id), client_id=client_id,
+                            client_perm="manage_agent",
+                            meta={"client": client_id})
+    if background:
+        return await bgjobs.respond(job, new, True)
     if not wait:
-        return {"ok": True, "pending": True}
+        return {"ok": True, "pending": True, "job_id": job.id}
+    return await bgjobs.respond(job, new, False)
 
-    UPDATE_WAIT_S = 55.0
-    deadline = time.monotonic() + UPDATE_WAIT_S
-    while time.monotonic() < deadline:
-        await asyncio.sleep(1.0)
-        if (state.update_jobs.get(client_id) or {}).get("updated"):
-            return {"ok": True, "updated": True}
-    raise HTTPException(504, "Der Agent hat innerhalb von 55 Sekunden kein erfolgreiches "
-                             "Update bestaetigt - bitte /tmp/bytera-agent-update.log pruefen.")
+
+_STAGE_TEXT = {"sent": "Befehl gesendet", "received": "Agent hat den Befehl empfangen",
+               "launched": "Update-Skript läuft, Agent startet neu",
+               "launched-fallback": "Update-Skript läuft (Ausweichweg)",
+               "updated": "aktualisiert", "error": "Fehler"}
+
+
+def _agent_update_runner(client_id: str):
+    async def runner(job):
+        deadline = time.monotonic() + 240.0
+        last = None
+        while time.monotonic() < deadline:
+            uj = state.update_jobs.get(client_id) or {}
+            if uj.get("updated"):
+                v = uj.get("version") or (db.get_client(client_id) or {}).get("agent_version") or ""
+                job.log(f"Agent meldet sich zurück{(' mit Version ' + v) if v else ''}")
+                return {"ok": True, "updated": True, "version": v,
+                        "version_before": uj.get("version_before", "")}
+            stage = uj.get("stage") or "sent"
+            if (stage, uj.get("detail")) != last:
+                last = (stage, uj.get("detail"))
+                job.log(f"{_STAGE_TEXT.get(stage, stage)}{(': ' + uj['detail']) if uj.get('detail') else ''}")
+            job.update(phase=stage, detail=_STAGE_TEXT.get(stage, stage)
+                       + ("" if state.is_online(client_id) else " · Agent getrennt (Neustart)"))
+            if stage == "error":
+                raise HTTPException(502, uj.get("detail") or "Agent meldet einen Fehler beim Update")
+            await asyncio.sleep(1.0)
+        raise HTTPException(504, "Der Agent hat innerhalb von 4 Minuten kein erfolgreiches Update "
+                                 "bestaetigt - bitte /tmp/bytera-agent-update.log pruefen.")
+    return runner
 
 
 @router.get("/{client_id}/update-agent/status")
@@ -576,7 +651,7 @@ class UpdateAllBody(BaseModel):
 
 
 @router.post("/update-all-agents")
-async def update_all_agents(body: UpdateAllBody | None = None,
+async def update_all_agents(body: UpdateAllBody | None = None, background: bool = False,
                             user: dict = Depends(get_current_user)):
     """
     Löst ein Agent-Update für ALLE aktuell verbundenen Clients aus, die der
@@ -632,11 +707,19 @@ async def update_all_agents(body: UpdateAllBody | None = None,
     #
     # Die Aufnahme-Schleuse in sockets.py entschärft nur die Rückkehr. Das
     # Losschicken muss hier gebremst werden - vorher entsteht die Welle.
+    out = {"ok": True, "triggered": len(targets), "offline": offline,
+           "queued_offline": queued, "skipped_no_permission": no_perm}
     if targets:
-        asyncio.create_task(_rollout_agent_updates(targets, user["username"]))
-
-    return {"ok": True, "triggered": len(targets), "offline": offline,
-            "queued_offline": queued, "skipped_no_permission": no_perm}
+        # Ausrollen + Warten auf die Rueckkehr als BACKEND-JOB (Aufgaben-Anzeige)
+        async def work(job):
+            job.update(phase="rollout", pct=0, detail=f"0/{len(targets)} angestoßen", total=len(targets))
+            return await _rollout_agent_updates(targets, user["username"], job)
+        job, _ = bgjobs.start("agent.update_all", "all", title=f"Agent-Update für {len(targets)} Clients",
+                              user=user, runner=work, meta={"clients": targets, "summary": out})
+        out["job_id"] = job.id
+        if background:
+            return {**job.public(), **out, "job": True}
+    return out
 
 
 # Wie viele Agenten gleichzeitig aktualisiert werden und wie lange danach
@@ -655,7 +738,7 @@ def _rollout_settings() -> tuple[int, float]:
     return size, pause
 
 
-async def _rollout_agent_updates(client_ids: list[str], username: str) -> None:
+async def _rollout_agent_updates(client_ids: list[str], username: str, job=None) -> dict:
     """
     Schickt das Update in kleinen Wellen los und wartet dazwischen.
 
@@ -668,27 +751,41 @@ async def _rollout_agent_updates(client_ids: list[str], username: str) -> None:
     print(f"[update] Rollout für {len(client_ids)} Agenten "
           f"({batch_size} gleichzeitig, {pause:.0f}s Pause)")
 
+    total = len(client_ids)
     for start in range(0, len(client_ids), batch_size):
+        if job and job.cancelled:
+            job.log("Abgebrochen - restliche Clients werden nicht mehr angestoßen")
+            break
         chunk = client_ids[start:start + batch_size]
         for cid in chunk:
             if not state.is_online(cid):
+                if job:
+                    job.log(f"{_hostname(cid)}: inzwischen offline - übersprungen")
                 continue   # zwischenzeitlich weg - der Rest läuft weiter
             # Alte Bestätigung verwerfen, damit nur der NEUE Reconnect zählt.
             state.update_confirmed.pop(cid, None)
             try:
                 if await send_to_agent(cid, "update-agent", {}):
                     triggered.append(cid)
+                    if job:
+                        job.log(f"{_hostname(cid)}: Update angestoßen")
             except Exception as e:
                 print(f"[update] {cid} nicht erreicht: {e}")
+                if job:
+                    job.log(f"{_hostname(cid)}: nicht erreicht ({e})")
+        if job:
+            n = min(start + batch_size, total)
+            job.update(pct=n / total * 50, detail=f"{n}/{total} angestoßen (je {batch_size}, {pause:.0f}s Pause)")
         if start + batch_size < len(client_ids):
             await asyncio.sleep(pause)
 
     if triggered:
-        await _await_agents_reconnect(triggered, username)
+        return await _await_agents_reconnect(triggered, username, job=job)
+    return {"triggered": 0, "reconnected": 0, "missing": []}
 
 
 async def _await_agents_reconnect(client_ids: list[str], username: str,
-                                  timeout_seconds: float = 300.0) -> None:
+                                  timeout_seconds: float = 300.0, job=None) -> dict:
     """Wartet, bis alle per Massen-Update angestoßenen Agents ihren Neustart
     durchlaufen haben, und benachrichtigt dann alle Dashboards.
 
@@ -724,6 +821,12 @@ async def _await_agents_reconnect(client_ids: list[str], username: str,
             if cid in state.update_confirmed or state.is_online(cid):
                 state.update_confirmed.pop(cid, None)
                 waiting_online.discard(cid)
+                if job:
+                    job.log(f"{_hostname(cid)}: wieder verbunden")
+        if job:
+            back = total - len(waiting_offline) - len(waiting_online)
+            job.update(phase="reconnect", pct=50 + back / total * 50,
+                       detail=f"{back}/{total} wieder verbunden")
 
     missing = waiting_offline | waiting_online
     reconnected = total - len(missing)
@@ -751,10 +854,15 @@ async def _await_agents_reconnect(client_ids: list[str], username: str,
                        namespace="/dashboard")
     except Exception as e:
         print(f"[update-all] Dashboard-Notify fehlgeschlagen: {e}")
+    if job:
+        job.update(detail=message)
+    return {"triggered": total, "reconnected": reconnected,
+            "missing": [_hostname(c) for c in missing], "message": message}
 
 
 @router.post("/{client_id}/uninstall-agent")
-async def uninstall_client_agent(client_id: str, user: dict = Depends(get_current_user)):
+async def uninstall_client_agent(client_id: str, background: bool = False,
+                                 user: dict = Depends(get_current_user)):
     """
     Deinstalliert den Agenten vollständig und entfernt den Client aus dem
     Dashboard - aber NUR, wenn er wirklich verschwindet. Ablauf:
@@ -785,7 +893,18 @@ async def uninstall_client_agent(client_id: str, user: dict = Depends(get_curren
             "'Bearbeiten → Löschen' aus dem Dashboard entfernen.",
         )
 
+    async def work(job):
+        return await _uninstall_work(job, client_id, client, user)
+
+    return await bgjobs.run("agent.uninstall", client_id, title=f"Agent deinstallieren: {client.get('hostname') or client_id}",
+                            user=user, work=work, background=background, client_id=client_id,
+                            client_perm="manage_agent",
+                            meta={"client": client_id})
+
+
+async def _uninstall_work(job, client_id: str, client: dict, user: dict):
     # 1. Uninstall anstoßen
+    job.update(phase="send", detail="Deinstallations-Auftrag wird gesendet")
     ok = await send_to_agent(client_id, "uninstall-agent", {})
     if not ok:
         raise HTTPException(503, "Client ist offline")
@@ -793,6 +912,7 @@ async def uninstall_client_agent(client_id: str, user: dict = Depends(get_curren
                        details=client.get("hostname"))
 
     # 2. Auf "offline" warten (max. 60 s, alle 2 s prüfen).
+    job.update(phase="wait", detail="warte, bis der Agent offline geht (max. 60 s)")
     deadline = time.monotonic() + 60.0
     while time.monotonic() < deadline:
         await asyncio.sleep(2.0)

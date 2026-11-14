@@ -115,7 +115,7 @@ def client_readiness(client_id: str, user: dict = Depends(get_current_user)):
 
 
 @router.post("/client/{client_id}/selftest")
-async def client_selftest(client_id: str, user: dict = Depends(get_current_user)):
+async def client_selftest(client_id: str, background: bool = False, user: dict = Depends(get_current_user)):
     """
     Kurzer Funktionstest auf dem Client (Sekunden, kein voller Scan).
 
@@ -126,16 +126,23 @@ async def client_selftest(client_id: str, user: dict = Depends(get_current_user)
     _visible_client(user, client_id)
     if not sockets.state.is_online(client_id):
         raise HTTPException(400, "Client ist offline")
-    try:
-        result = await sockets.request_patch_selftest(client_id, timeout_seconds=90.0)
-    except asyncio.TimeoutError:
-        raise HTTPException(504, (
-            "Der Agent hat den Selbsttest nicht beantwortet. Entweder kennt er "
-            "das Kommando nicht (alter Agent-Code), oder sein Event-Loop steht."))
-    except Exception as e:
-        raise HTTPException(502, f"{e.__class__.__name__}: {e}")
-    result["readiness"] = patching.readiness(client_id)
-    return result
+    from app import bgjobs
+
+    async def work(job):
+        job.update(phase="selftest", detail="Agent prüft Rechte, Quellen und Paketverwaltung")
+        try:
+            result = await sockets.request_patch_selftest(client_id, timeout_seconds=90.0)
+        except asyncio.TimeoutError:
+            raise HTTPException(504, (
+                "Der Agent hat den Selbsttest nicht beantwortet. Entweder kennt er "
+                "das Kommando nicht (alter Agent-Code), oder sein Event-Loop steht."))
+        except Exception as e:
+            raise HTTPException(502, f"{e.__class__.__name__}: {e}")
+        result["readiness"] = patching.readiness(client_id)
+        return result
+    host = (db.get_client(client_id) or {}).get("hostname") or client_id
+    return await bgjobs.run("patch.selftest", client_id, title=f"Patch-Selbsttest: {host}", user=user,
+                            work=work, background=background, perm="patching", client_id=client_id)
 
 
 # ------------------------------------------------------------------
@@ -163,9 +170,10 @@ async def scan_client(client_id: str, user: dict = Depends(get_current_user)):
     # ab - täte das erst die Aufgabe selbst, läse die erste Abfrage
     # "läuft nicht" und die Suche wirkte wirkungslos.
     patching.job_start(client_id, "scan", user.get("username", ""))
-    patching.track(asyncio.create_task(
-        patching.run_scan(client_id, user.get("username", ""))))
-    return {"started": True, "job": patching.job(client_id), "hint": ready["message"]}
+    host = (db.get_client(client_id) or {}).get("hostname") or ""
+    bj = patching.start_bg("scan", client_id, user,
+                           lambda: patching.run_scan(client_id, user.get("username", "")), host)
+    return {"started": True, "job": patching.job(client_id), "hint": ready["message"], "bgjob": bj.public()}
 
 
 # ------------------------------------------------------------------
@@ -202,10 +210,10 @@ async def apply_patches(client_id: str, body: ApplyBody,
         raise HTTPException(400, "Keine offenen Aktualisierungen")
 
     patching.job_start(client_id, "apply", user.get("username", ""), total=len(items))
-    patching.track(asyncio.create_task(patching.run_apply(
+    bj = patching.start_bg("apply", client_id, user, lambda: patching.run_apply(
         client_id, items, user.get("username", ""),
-        trigger="manual", hostname=client.get("hostname") or "")))
-    return {"started": True, "count": len(items), "job": patching.job(client_id)}
+        trigger="manual", hostname=client.get("hostname") or ""), client.get("hostname") or "")
+    return {"started": True, "count": len(items), "job": patching.job(client_id), "bgjob": bj.public()}
 
 
 class ExcludeBody(BaseModel):

@@ -3,24 +3,28 @@ topology_routes.py (Modul "topology")
 -------------------------------------
 REST-Schnittstelle fuer die Netzwerk-Topologie-Karte.
 
-  POST /api/topology/discover/start            Erkennung starten (?target=&via=<Node>)
-  GET  /api/topology/discover/job/{id}         Fortschritt (+ Ergebnis bei Abschluss)
-  POST /api/topology/discover/job/{id}/cancel  Erkennung abbrechen
+  POST /api/topology/discover/start            Erkennung als BACKEND-JOB starten (?target=&via=<Node>)
+                                               (laeuft schon eine fuer diese Quelle -> die laufende)
+  Fortschritt/Abbruch ueber den Core-Job-Dienst: /api/bgjobs (kind "topology.discover",
+  key = Quelle), live per Socket "bgjob:update".
   GET  /api/topology/map?source=               gespeicherte Karte + Bearbeitungen + Agent-Zuordnung
   PUT  /api/topology/map?source=               Bearbeitungen (Positionen, eigene Knoten ...) speichern
   GET  /api/topology/sources                   Quellen, fuer die schon Karten existieren
 
 "Quelle" ist "backend" oder die Client-ID einer Node (Erkennung lief im Netz der Node).
-Job-IDs von Node-Erkennungen: "n.<node>.<job>" (wie beim Netzwerk-Scan).
+Die Erkennung haengt NICHT an der Browser-Sitzung: Das Backend verfolgt den Job
+(auch den auf einer Node), speichert das Ergebnis selbst und meldet Aenderungen
+an alle Dashboards ("bgjob:update", "topology:changed").
 Agent-Zuordnung: ein erkanntes Geraet gehoert zu einem Agenten, wenn MAC oder IP
 zu den Live-Messwerten bzw. der bekannten IP des Clients passt.
 """
 
+import asyncio
 import re
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
-from app import db
+from app import bgjobs, db
 from app.auth import can_access_client, get_current_user, require_perm
 from app.sockets import state
 
@@ -37,23 +41,6 @@ def _norm_mac(mac: str | None) -> str:
     return ":".join(h[i:i + 2] for i in range(0, 12, 2)).upper() if len(h) == 12 else ""
 
 
-async def _node(user: dict, via: str, op: str, data: dict, timeout: float = 120):
-    """Befehl an das Node-Modul "topology" der gewaehlten Node."""
-    from app import node_manager
-    if not can_access_client(user, via):
-        raise HTTPException(404, "Node nicht gefunden")
-    try:
-        node_manager.require_module(via, "topology")
-        return await node_manager.command(via, op, data, timeout=timeout)
-    except node_manager.NodeError as e:
-        raise HTTPException(409, str(e))
-
-
-def _split_job(job_id: str) -> tuple[str, str]:
-    if job_id.startswith("n.") and job_id.count(".") >= 2:
-        _, node, jid = job_id.split(".", 2)
-        return node, jid
-    return "", job_id
 
 
 # ------------------------------------------------------------------
@@ -85,6 +72,12 @@ def _agent_index(user: dict) -> tuple[dict, dict]:
     return by_mac, by_ip
 
 
+def _check_source(user: dict, source: str) -> None:
+    """Karten einer Node sieht nur, wer auf die Node zugreifen darf."""
+    if source != "backend" and not can_access_client(user, source):
+        raise HTTPException(404, "Quelle nicht gefunden")
+
+
 def _attach_agents(result: dict, user: dict) -> dict:
     by_mac, by_ip = _agent_index(user)
     out = dict(result)
@@ -105,8 +98,97 @@ def _attach_agents(result: dict, user: dict) -> dict:
 
 
 # ------------------------------------------------------------------
-# Erkennung (Discovery)
+# Erkennung (Discovery) als Backend-Job
 # ------------------------------------------------------------------
+JOB_KIND = "topology.discover"
+_PHASES = {"queued": "wartet", "ping": "Geräte suchen (Ping-Sweep)",
+           "trace": "Weg ins Internet verfolgen", "fingerprint": "Geräte untersuchen (Ports)"}
+
+
+async def notify_changed(source: str, origin: str = "", what: str = "map") -> None:
+    """Alle Dashboards: Karte/Bearbeitungen dieser Quelle haben sich geaendert."""
+    try:
+        from app.sockets import sio
+        await sio.emit("topology:changed", {"source": source, "origin": origin, "what": what},
+                       namespace="/dashboard")
+    except Exception:
+        pass
+
+
+def _mirror(job: bgjobs.BgJob, j: dict) -> None:
+    """Stand der Erkennung (topo_discovery-Job) in den Backend-Job uebernehmen."""
+    phase = j.get("phase") or ""
+    pct, detail = 0.0, _PHASES.get(phase, phase)
+    if phase == "ping" and j.get("total_hosts"):
+        pct = j["done_hosts"] / j["total_hosts"] * 80
+        detail += f" · {j['done_hosts']}/{j['total_hosts']} Adressen · {j.get('found', 0)} gefunden"
+    elif phase == "trace":
+        pct = 84
+    elif phase == "fingerprint":
+        pct = 86 + (j["fp_done"] / j["fp_total"] * 14 if j.get("fp_total") else 0)
+        detail += f" · {j.get('fp_done', 0)}/{j.get('fp_total', 0)}"
+    job.update(phase=phase, pct=pct, detail=detail, label=j.get("label") or "",
+               found=j.get("found", 0))
+
+
+def _make_runner(source: str, target: str | None, via: str):
+    async def runner(job: bgjobs.BgJob):
+        from app import node_manager
+        if via:
+            node_manager.require_module(via, "topology")
+            r = await node_manager.command(via, "topo-start", {"target": target}, timeout=60)
+            jid = r["job_id"]
+
+            async def status():
+                return await node_manager.command(via, "topo-status", {"job_id": jid}, timeout=60)
+
+            async def cancel():
+                await node_manager.command(via, "topo-cancel", {"job_id": jid}, timeout=30)
+        else:
+            jid = start_job(target)
+
+            async def status():
+                j = get_job(jid)
+                if not j:
+                    raise RuntimeError("Erkennung verschwunden")
+                return {k: v for k, v in j.items() if k != "cancel"}
+
+            async def cancel():
+                cancel_job(jid)
+
+        sent_cancel, fails = False, 0
+        while True:
+            if job.cancelled and not sent_cancel:
+                sent_cancel = True
+                try:
+                    await cancel()
+                except Exception:
+                    pass
+            try:
+                j = await status()
+                fails = 0
+            except Exception as e:            # Node kurz weg -> nicht sofort aufgeben
+                fails += 1
+                if fails >= 15:
+                    raise RuntimeError(f"Node antwortet nicht mehr: {e}")
+                await asyncio.sleep(2)
+                continue
+            _mirror(job, j)
+            if j.get("status") in ("done", "error", "cancelled"):
+                break
+            await asyncio.sleep(0.8)
+
+        if j["status"] == "error":
+            raise RuntimeError(j.get("error") or "Erkennung fehlgeschlagen")
+        result = j.get("result")
+        if j["status"] == "done" and result:
+            await db.call(store.set_map, source, result)   # Ergebnis speichert das BACKEND
+            await notify_changed(source, what="map")
+        devices = sum(1 for n in (result or {}).get("nodes", []) if str(n.get("id", "")).startswith("dev:"))
+        return {"devices": devices, "label": (result or {}).get("label", ""), "source": source}
+    return runner
+
+
 @router.post("/discover/start")
 async def discover_start(target: str | None = None, via: str = "",
                          user: dict = Depends(get_current_user)):
@@ -115,43 +197,25 @@ async def discover_start(target: str | None = None, via: str = "",
         parse_target(target)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    source = via or "backend"
     if via:
-        r = await _node(user, via, "topo-start", {"target": target})
-        return {"job_id": f"n.{via}.{r['job_id']}", "via": via}
-    return {"job_id": start_job(target)}
-
-
-@router.get("/discover/job/{job_id}")
-async def discover_job(job_id: str, user: dict = Depends(get_current_user)):
-    require_perm(user, "network_scan")
-    node, jid = _split_job(job_id)
-    if node:
-        job = {**(await _node(user, node, "topo-status", {"job_id": jid})),
-               "id": job_id, "via": node}
-        source = node
-    else:
-        job = get_job(jid)
-        if not job:
-            raise HTTPException(404, "Erkennung nicht gefunden (evtl. abgelaufen)")
-        job = {k: v for k, v in job.items() if k != "cancel"}
-        source = "backend"
-    # Fertige Erkennung: Ergebnis als Karte der Quelle speichern + Agenten zuordnen
-    if job.get("status") == "done" and job.get("result"):
-        store.set_map(source, job["result"])
-        job["result"] = _attach_agents(job["result"], user)
-        job["source"] = source
-    return job
-
-
-@router.post("/discover/job/{job_id}/cancel")
-async def discover_cancel(job_id: str, user: dict = Depends(get_current_user)):
-    require_perm(user, "network_scan")
-    node, jid = _split_job(job_id)
-    if node:
-        return await _node(user, node, "topo-cancel", {"job_id": jid})
-    if not cancel_job(jid):
-        raise HTTPException(404, "Keine laufende Erkennung mit dieser ID")
-    return {"ok": True}
+        from app import node_manager
+        if not can_access_client(user, via):
+            raise HTTPException(404, "Node nicht gefunden")
+        try:
+            node_manager.require_module(via, "topology")
+        except node_manager.NodeError as e:
+            raise HTTPException(409, str(e))
+    label = (target or "").strip() or "eigenes Netz"
+    job, new = bgjobs.start(
+        JOB_KIND, source, title=f"Topologie-Erkennung ({label})", user=user,
+        perm="network_scan",
+        may_see=(lambda u: can_access_client(u, via)) if via else None,
+        runner=_make_runner(source, target, via),
+        meta={"target": target or "", "via": via})
+    if new:
+        db.add_audit_entry(user["username"], "topology.discover", target=f"{source}:{label}")
+    return {**job.public(), "attached": not new}
 
 
 # ------------------------------------------------------------------
@@ -160,6 +224,7 @@ async def discover_cancel(job_id: str, user: dict = Depends(get_current_user)):
 @router.get("/map")
 def get_map(source: str = "backend", user: dict = Depends(get_current_user)):
     require_perm(user, "network_scan")
+    _check_source(user, source)
     result = store.get_map(source)
     return {
         "source": source,
@@ -169,17 +234,20 @@ def get_map(source: str = "backend", user: dict = Depends(get_current_user)):
 
 
 @router.put("/map")
-def put_map(source: str = "backend", overrides: dict = Body(...),
-            user: dict = Depends(get_current_user)):
+async def put_map(source: str = "backend", origin: str = "", overrides: dict = Body(...),
+                  user: dict = Depends(get_current_user)):
     require_perm(user, "network_scan")
+    _check_source(user, source)
     if not isinstance(overrides, dict):
         raise HTTPException(400, "Bearbeitungen fehlen")
-    saved = store.set_overrides(source, overrides)
+    saved = await db.call(store.set_overrides, source, overrides)
     db.add_audit_entry(user["username"], "topology.edit", target=source)
+    await notify_changed(source, origin=origin[:40], what="overrides")   # andere Fenster/Benutzer live
     return {"ok": True, "overrides": saved}
 
 
 @router.get("/sources")
 def get_sources(user: dict = Depends(get_current_user)):
     require_perm(user, "network_scan")
-    return {"sources": store.list_sources()}
+    return {"sources": [x for x in store.list_sources()
+                        if x == "backend" or can_access_client(user, x)]}

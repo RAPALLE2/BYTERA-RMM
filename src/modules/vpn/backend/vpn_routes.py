@@ -15,11 +15,13 @@ import ipaddress
 import time
 from urllib.parse import urlparse
 
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse, Response
 from pydantic import BaseModel
 
 from app import db, modules
+from app import bgjobs
 from app.auth import get_current_user, is_super_admin, user_has_permission, can_access_client
 
 from . import hosting, store, wgconf
@@ -270,7 +272,17 @@ def _new_peers(user: dict, t: dict, m: MembersBody, expires: int) -> list[dict]:
 
 
 @router.post("/tunnels")
-async def create_tunnel(body: TunnelBody, req: Request, user: dict = Depends(get_current_user)):
+async def create_tunnel(body: TunnelBody, req: Request, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    async def _work(job):
+        job.update(phase='vpn.tunnel', detail=f"VPN-Tunnel „{body.name.strip()}“ anlegen")
+        return await _create_tunnel_impl(body=body, req=req, user=user)
+    return await bgjobs.run('vpn.tunnel', None, title=f"VPN-Tunnel „{body.name.strip()}“ anlegen", user=user, work=_work,
+                            background=background, private=True)
+
+
+async def _create_tunnel_impl(body: TunnelBody, req: Request, user: dict = Depends(get_current_user)):
     if not (is_super_admin(user) or user_has_permission(user, "use_vpn")):
         raise HTTPException(403, "Fehlendes Recht: use_vpn")
     if not body.name.strip():
@@ -401,7 +413,17 @@ async def expire_tunnel(tid: str, user: dict = Depends(get_current_user)):
 
 
 @router.delete("/tunnels/{tid}")
-async def delete_tunnel(tid: str, user: dict = Depends(get_current_user)):
+async def delete_tunnel(tid: str, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    async def _work(job):
+        job.update(phase='vpn.tunnel', detail="VPN-Tunnel beenden")
+        return await _delete_tunnel_impl(tid=tid, user=user)
+    return await bgjobs.run('vpn.tunnel', None, title="VPN-Tunnel beenden", user=user, work=_work,
+                            background=background, private=True)
+
+
+async def _delete_tunnel_impl(tid: str, user: dict = Depends(get_current_user)):
     t = _tunnel_or_404(tid)
     if not _may_manage(user, t):
         raise HTTPException(403, "Nur Ersteller oder Administratoren")
@@ -413,7 +435,17 @@ async def delete_tunnel(tid: str, user: dict = Depends(get_current_user)):
 
 
 @router.post("/tunnels/{tid}/retry")
-async def retry_tunnel(tid: str, user: dict = Depends(get_current_user)):
+async def retry_tunnel(tid: str, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    async def _work(job):
+        job.update(phase='vpn.tunnel', detail="VPN-Tunnel neu einrichten")
+        return await _retry_tunnel_impl(tid=tid, user=user)
+    return await bgjobs.run('vpn.tunnel', tid, title="VPN-Tunnel neu einrichten", user=user, work=_work,
+                            background=background, private=True)
+
+
+async def _retry_tunnel_impl(tid: str, user: dict = Depends(get_current_user)):
     t = _tunnel_or_404(tid)
     if not _may_manage(user, t):
         raise HTTPException(403, "Nur Ersteller oder Administratoren")
@@ -423,7 +455,17 @@ async def retry_tunnel(tid: str, user: dict = Depends(get_current_user)):
 
 # ------------------------------------------------------------------ Teilnehmer
 @router.post("/tunnels/{tid}/peers")
-async def add_peers(tid: str, body: MembersBody, user: dict = Depends(get_current_user)):
+async def add_peers(tid: str, body: MembersBody, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    async def _work(job):
+        job.update(phase='vpn.tunnel', detail="VPN-Tunnel: Teilnehmer hinzufügen")
+        return await _add_peers_impl(tid=tid, body=body, user=user)
+    return await bgjobs.run('vpn.tunnel', None, title="VPN-Tunnel: Teilnehmer hinzufügen", user=user, work=_work,
+                            background=background, private=True)
+
+
+async def _add_peers_impl(tid: str, body: MembersBody, user: dict = Depends(get_current_user)):
     t = _tunnel_or_404(tid)
     if not _may_manage(user, t):
         raise HTTPException(403, "Nur Ersteller oder Administratoren")
@@ -445,7 +487,17 @@ async def add_peers(tid: str, body: MembersBody, user: dict = Depends(get_curren
 
 
 @router.delete("/tunnels/{tid}/peers/{pid}")
-async def remove_peer(tid: str, pid: str, user: dict = Depends(get_current_user)):
+async def remove_peer(tid: str, pid: str, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    async def _work(job):
+        job.update(phase='vpn.tunnel', detail="VPN-Tunnel: Teilnehmer entfernen")
+        return await _remove_peer_impl(tid=tid, pid=pid, user=user)
+    return await bgjobs.run('vpn.tunnel', None, title="VPN-Tunnel: Teilnehmer entfernen", user=user, work=_work,
+                            background=background, private=True)
+
+
+async def _remove_peer_impl(tid: str, pid: str, user: dict = Depends(get_current_user)):
     t = _tunnel_or_404(tid)
     p = t["peers"].get(pid)
     if not p:
@@ -654,7 +706,17 @@ async def test_endpoint(tid: str, body: TestBody, user: dict = Depends(get_curre
 
 # ------------------------------------------------------------------ Werkzeuge / Einrichtungsskript
 @router.post("/hosts/{host}/tools")
-async def install_tools(host: str, user: dict = Depends(get_current_user)):
+async def install_tools(host: str, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    async def _work(job):
+        job.update(phase='vpn.tools', detail=f"VPN-Werkzeuge installieren ({host})")
+        return await _install_tools_impl(host=host, user=user)
+    return await bgjobs.run('vpn.tools', host, title=f"VPN-Werkzeuge installieren ({host})", user=user, work=_work,
+                            background=background, private=True)
+
+
+async def _install_tools_impl(host: str, user: dict = Depends(get_current_user)):
     """Fehlende Werkzeuge (wireguard-tools, iptables, iproute2, ggf. wireguard-go) auf dem Host nachladen."""
     import asyncio
     if host == "backend":
@@ -710,7 +772,17 @@ class ProbeBody(BaseModel):
 
 
 @router.post("/probe")
-async def probe(body: ProbeBody, req: Request, user: dict = Depends(get_current_user)):
+async def probe(body: ProbeBody, req: Request, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    async def _work(job):
+        job.update(phase='vpn.probe', detail="VPN-Verbindungstest")
+        return await _probe_impl(body=body, req=req, user=user)
+    return await bgjobs.run('vpn.probe', None, title="VPN-Verbindungstest", user=user, work=_work,
+                            background=background, private=True)
+
+
+async def _probe_impl(body: ProbeBody, req: Request, user: dict = Depends(get_current_user)):
     """Echter Handshake-Test fuer Host + Endpunkt + UDP-Port. Laeuft auf dem Port schon ein Tunnel
     dieses Hosts, wird dieser benutzt; sonst wird ein Test-Tunnel angelegt und danach entfernt."""
     _check_host_perm(user, body.host)

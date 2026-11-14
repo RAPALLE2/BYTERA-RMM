@@ -8,10 +8,16 @@
 //   - standard: die gängigen Ports (schnell)
 //   - all:      alle Ports 1-65535 (dauert länger)
 //   - custom:   frei angegebene Ports/Bereiche, z.B. "22,80,8000-8100"
+//
+// Der Scan laeuft als BACKEND-JOB (app/bgjobs.py) - Fenster schliessen oder
+// Seite neu laden bricht ihn nicht ab; beim Wiederoeffnen wird er angezeigt.
 
 import { nodeHint } from "/js/app/nodechoice.js";
 import { api } from "/js/app/api.js";
 import { esc } from "/js/app/utils.js";
+import { moduleRequest } from "/js/app/modules.js";
+import { registerCleanup } from "/js/app/windowmanager.js";
+import { watchJobs, cancelJob, jobDuration } from "/js/app/bgjobs.js";
 
 // Auswahl "Backend oder Node" fuellen (Nodes nur mit nachgeladenem Node-Modul "network")
 function fillVia(sel, preset = "") {
@@ -43,6 +49,7 @@ export function renderPortscan(body, win) {
         </select>
         <select id="ps-via-${win.key}" title="Von wo aus scannen?"><option value="">🖥 Vom Backend</option></select>
         <button class="btn-primary" id="ps-scan-${win.key}">🔍 ${t("ps_scan")}</button>
+        <button class="btn" id="ps-stop-${win.key}" style="display:none">✋ ${t("cancel")}</button>
       </div>
       <div id="ps-custom-row-${win.key}" class="explorer-toolbar" style="display:none">
         <input type="text" id="ps-ports-${win.key}" placeholder="${t("ps_custom_placeholder")}"
@@ -65,42 +72,90 @@ export function renderPortscan(body, win) {
     customRow.style.display = modeSel.value === "custom" ? "flex" : "none";
   });
 
+  const stopBtn = body.querySelector(`#ps-stop-${win.key}`);
+  const viaOf = () => body.querySelector(`#ps-via-${win.key}`).value;
+  let job = null, stopWatch = null, watchedKey = null;
+
+  function watch(key) {
+    if (key === watchedKey) return;
+    stopWatch?.();
+    watchedKey = key;
+    job = null;
+    stopWatch = watchJobs({ kind: "network.portscan", key }, (j) => {
+      job = j;
+      if (j?.meta?.ip && !ipInput.value.trim()) ipInput.value = j.meta.ip;   // nach Neuladen: IP wieder eintragen
+      showJob();
+    });
+  }
+
+  function showJob() {
+    const running = !!job?.running;
+    scanBtn.disabled = running;
+    stopBtn.style.display = running ? "" : "none";
+    if (!job) return;
+    if (running) {
+      statusEl.textContent = (job.meta?.mode === "all" ? t("ps_scanning_all") : t("ps_scanning"))
+        + (job.by ? ` · gestartet von ${job.by}` : "") + ` · ${jobDuration(job)}`;
+      resultEl.innerHTML = "";
+      return;
+    }
+    if (job.status === "error" || job.status === "cancelled") {
+      statusEl.textContent = "";
+      resultEl.innerHTML = `<div style="color:var(--danger)">${esc(job.status === "error" ? job.error : t("nw_cancelled"))}</div>`;
+      return;
+    }
+    const res = job.result || { ports: [] };
+    const scannedInfo = res.scanned ? ` (${res.scanned} ${t("ps_ports_checked")})` : "";
+    const when = ` · ${new Date(job.finished).toLocaleString()}`;
+    if (!res.ports.length) {
+      statusEl.textContent = t("ps_none") + scannedInfo + when;
+      resultEl.innerHTML = `<div style="color:var(--subtext)">${t("ps_none")}</div>`;
+    } else {
+      statusEl.textContent = `${res.ports.length} ${t("ps_open_found")}${scannedInfo}${when}`;
+      resultEl.innerHTML = `<b>${t("ps_open_ports")}:</b><div style="margin-top:6px">` + res.ports.map((p) =>
+        `<span style="display:inline-block;background:var(--panel);border:1px solid var(--accent);border-radius:5px;padding:2px 8px;margin:3px;font-size:12px">
+          ${p.port} <span style="color:var(--subtext)">${esc(p.service)}</span>
+        </span>`).join("") + `</div>`;
+    }
+  }
+
   async function scan() {
     const ip = ipInput.value.trim();
     if (!ip) { statusEl.textContent = t("ps_need_ip"); return; }
     const mode = modeSel.value;
     const ports = portsInput.value.trim();
     if (mode === "custom" && !ports) { statusEl.textContent = t("ps_need_ports"); return; }
-
-    statusEl.textContent = mode === "all" ? t("ps_scanning_all") : t("ps_scanning");
-    resultEl.innerHTML = "";
     scanBtn.disabled = true;
     try {
-      const res = await api.portScan(ip, mode, ports, body.querySelector(`#ps-via-${win.key}`).value);
-      const scannedInfo = res.scanned ? ` (${res.scanned} ${t("ps_ports_checked")})` : "";
-      if (!res.ports.length) {
-        statusEl.textContent = t("ps_none") + scannedInfo;
-        resultEl.innerHTML = `<div style="color:var(--subtext)">${t("ps_none")}</div>`;
-      } else {
-        statusEl.textContent = `${res.ports.length} ${t("ps_open_found")}${scannedInfo}`;
-        resultEl.innerHTML = `<b>${t("ps_open_ports")}:</b><div style="margin-top:6px">` + res.ports.map((p) =>
-          `<span style="display:inline-block;background:var(--panel);border:1px solid var(--accent);border-radius:5px;padding:2px 8px;margin:3px;font-size:12px">
-            ${p.port} <span style="color:var(--subtext)">${esc(p.service)}</span>
-          </span>`).join("") + `</div>`;
-      }
+      const q = new URLSearchParams({ ip, mode });
+      if (mode === "custom") q.set("ports", ports);
+      const via = viaOf();
+      if (via) q.set("via", via);
+      const r = await moduleRequest(`/api/network/portscan/job?${q}`, { method: "POST" });
+      watch(`${via || "backend"}:${ip}`);
+      job = r; showJob();
     } catch (e) {
+      scanBtn.disabled = false;
       statusEl.textContent = "";
       resultEl.innerHTML = `<div style="color:var(--danger)">${esc(e.message)}</div>`;
-    } finally {
-      scanBtn.disabled = false;
     }
   }
+
+  stopBtn.addEventListener("click", async () => {
+    if (!job?.running) return;
+    try { job = await cancelJob(job.id); showJob(); } catch (e) { statusEl.textContent = e.message; }
+  });
+  if (win?.key) registerCleanup(win.key, () => stopWatch?.());
 
   scanBtn.addEventListener("click", scan);
   ipInput.addEventListener("keydown", (e) => { if (e.key === "Enter") scan(); });
   portsInput.addEventListener("keydown", (e) => { if (e.key === "Enter") scan(); });
 
-  // Wenn die IP schon vorausgefüllt ist (aus dem Netzwerk-Scanner), direkt scannen.
+  // Wenn die IP schon vorausgefüllt ist (aus dem Netzwerk-Scanner), direkt scannen
+  // (laeuft fuer diese IP schon ein Scan, haengt sich das Fenster nur dran).
   if (presetIp) setTimeout(scan, 50);
-  else setTimeout(() => ipInput.focus(), 50);
+  else {
+    watch(undefined);          // ohne IP: zuletzt gelaufenen Portscan zeigen (z.B. nach Neuladen)
+    setTimeout(() => ipInput.focus(), 50);
+  }
 }

@@ -16,9 +16,10 @@ Läuft das Backend NICHT im Container, liefert der Status einfach
 "is_docker: false" - die Oberfläche blendet den Bereich dann aus.
 """
 
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 
-from app import db
+from app import bgjobs, db
 from app import docker_services
 from app import modules
 from app.auth import get_current_user
@@ -43,17 +44,30 @@ def list_services(user: dict = Depends(get_current_user)):
     return docker_services.status()
 
 
+async def _svc_job(key: str, verb: str, user: dict, background: bool, fn):
+    """Docker-Dienst-Aktion als BACKEND-JOB (Image laden/Container starten dauert)."""
+    async def work(job):
+        job.update(phase=verb, detail=f"Dienst „{key}“: {verb} (Image laden/Container starten kann dauern)")
+        return await asyncio.to_thread(fn)
+    return await bgjobs.run("docker.service", key, title=f"Docker-Dienst „{key}“ {verb}", user=user,
+                            work=work, background=background, perm="admin", meta={"service": key})
+
+
 @router.post("/services/{key}/enable")
-def enable_service(key: str, user: dict = Depends(get_current_user)):
+async def enable_service(key: str, background: bool = False, user: dict = Depends(get_current_user)):
     require_admin(user)
     _require_module(key)
+    db.add_audit_entry(user["username"], "docker.enable", target=key)
+    return await _svc_job(key, "starten", user, background, lambda: _enable_service(key))
+
+
+def _enable_service(key: str) -> dict:
     try:
         result = docker_services.enable(key)
     except docker_services.DockerError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(500, f"Dienst konnte nicht gestartet werden: {e}")
-    db.add_audit_entry(user["username"], "docker.enable", target=key)
     # Die frisch gesetzten Werte gleich mitliefern, damit das Dashboard die
     # Formulare ohne zweiten Aufruf vorausfüllen kann.
     result["status"] = docker_services.status()
@@ -66,31 +80,36 @@ def enable_service(key: str, user: dict = Depends(get_current_user)):
 
 
 @router.post("/services/{key}/disable")
-def disable_service(key: str, user: dict = Depends(get_current_user)):
+async def disable_service(key: str, background: bool = False, user: dict = Depends(get_current_user)):
     require_admin(user)
-    try:
-        result = docker_services.disable(key)
-    except docker_services.DockerError as e:
-        raise HTTPException(400, str(e))
-    except Exception as e:
-        raise HTTPException(500, f"Dienst konnte nicht gestoppt werden: {e}")
     db.add_audit_entry(user["username"], "docker.disable", target=key)
-    result["status"] = docker_services.status()
-    return result
+
+    def fn():
+        try:
+            result = docker_services.disable(key)
+        except docker_services.DockerError as e:
+            raise HTTPException(400, str(e))
+        except Exception as e:
+            raise HTTPException(500, f"Dienst konnte nicht gestoppt werden: {e}")
+        result["status"] = docker_services.status()
+        return result
+    return await _svc_job(key, "stoppen", user, background, fn)
 
 
 @router.post("/services/{key}/restart")
-def restart_service(key: str, user: dict = Depends(get_current_user)):
+async def restart_service(key: str, background: bool = False, user: dict = Depends(get_current_user)):
     require_admin(user)
     _require_module(key)
-    try:
-        result = docker_services.restart(key)
-    except docker_services.DockerError as e:
-        raise HTTPException(400, str(e))
-    except Exception as e:
-        raise HTTPException(500, f"Dienst konnte nicht neu gestartet werden: {e}")
     db.add_audit_entry(user["username"], "docker.restart", target=key)
-    return result
+
+    def fn():
+        try:
+            return docker_services.restart(key)
+        except docker_services.DockerError as e:
+            raise HTTPException(400, str(e))
+        except Exception as e:
+            raise HTTPException(500, f"Dienst konnte nicht neu gestartet werden: {e}")
+    return await _svc_job(key, "neu starten", user, background, fn)
 
 
 @router.get("/services/{key}/details")

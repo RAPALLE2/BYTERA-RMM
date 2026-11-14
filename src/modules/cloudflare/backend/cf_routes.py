@@ -17,10 +17,12 @@ from __future__ import annotations
 import secrets
 import time
 
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app import db
+from app import bgjobs
 from app.auth import get_current_user, require_perm
 
 from . import connector, services, store, sync
@@ -203,7 +205,18 @@ KINDS = ("dashboard", "webdav", "sftp", "ftp", "console_ssh", "website", "docker
 
 
 @router.post("/routes")
-def save_route(body: RouteBody, user: dict = Depends(get_current_user)):
+async def save_route(body: RouteBody, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    _perm(user)
+    async def _work(job):
+        job.update(phase='cloudflare.sync', detail="Cloudflare: Route speichern + abgleichen")
+        return await asyncio.to_thread(_save_route_impl, body=body, user=user)
+    return await bgjobs.run('cloudflare.sync', None, title="Cloudflare: Route speichern + abgleichen", user=user, work=_work,
+                            background=background, perm='manage_cloudflare')
+
+
+def _save_route_impl(body: RouteBody, user: dict = Depends(get_current_user)):
     _perm(user)
     if body.kind not in KINDS:
         raise HTTPException(400, "Unbekannte Art")
@@ -247,7 +260,18 @@ def save_route(body: RouteBody, user: dict = Depends(get_current_user)):
 
 
 @router.delete("/routes/{rid}")
-def delete_route(rid: str, user: dict = Depends(get_current_user)):
+async def delete_route(rid: str, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    _perm(user)
+    async def _work(job):
+        job.update(phase='cloudflare.sync', detail="Cloudflare: Route löschen + abgleichen")
+        return await asyncio.to_thread(_delete_route_impl, rid=rid, user=user)
+    return await bgjobs.run('cloudflare.sync', None, title="Cloudflare: Route löschen + abgleichen", user=user, work=_work,
+                            background=background, perm='manage_cloudflare')
+
+
+def _delete_route_impl(rid: str, user: dict = Depends(get_current_user)):
     _perm(user)
     r = store.route(store.load(), rid)
     if not r:
@@ -262,7 +286,18 @@ def delete_route(rid: str, user: dict = Depends(get_current_user)):
 
 
 @router.post("/sync")
-def do_sync(user: dict = Depends(get_current_user)):
+async def do_sync(background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    _perm(user)
+    async def _work(job):
+        job.update(phase='cloudflare.sync', detail="Cloudflare: Abgleich")
+        return await asyncio.to_thread(_do_sync_impl, user=user)
+    return await bgjobs.run('cloudflare.sync', 'sync', title="Cloudflare: Abgleich", user=user, work=_work,
+                            background=background, perm='manage_cloudflare')
+
+
+def _do_sync_impl(user: dict = Depends(get_current_user)):
     _perm(user)
     try:
         return sync.apply(user["username"])
@@ -271,7 +306,18 @@ def do_sync(user: dict = Depends(get_current_user)):
 
 
 @router.post("/connector/{act}")
-def connector_act(act: str, user: dict = Depends(get_current_user)):
+async def connector_act(act: str, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    _perm(user)
+    async def _work(job):
+        job.update(phase='cloudflare.connector', detail=f"Cloudflare-Connector: {act}")
+        return await asyncio.to_thread(_connector_act_impl, act=act, user=user)
+    return await bgjobs.run('cloudflare.connector', 'connector', title=f"Cloudflare-Connector: {act}", user=user, work=_work,
+                            background=background, perm='manage_cloudflare')
+
+
+def _connector_act_impl(act: str, user: dict = Depends(get_current_user)):
     _perm(user)
     t = store.load()["tunnels"].get("server") or {}
     if act == "stop":
@@ -287,7 +333,18 @@ def connector_act(act: str, user: dict = Depends(get_current_user)):
 
 
 @router.delete("/nodes/{cid}")
-def delete_node(cid: str, user: dict = Depends(get_current_user)):
+async def delete_node(cid: str, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    _perm(user)
+    async def _work(job):
+        job.update(phase='cloudflare.sync', detail="Cloudflare: Node-Tunnel entfernen")
+        return await asyncio.to_thread(_delete_node_impl, cid=cid, user=user)
+    return await bgjobs.run('cloudflare.sync', f'node:{cid}', title="Cloudflare: Node-Tunnel entfernen", user=user, work=_work,
+                            background=background, perm='manage_cloudflare')
+
+
+def _delete_node_impl(cid: str, user: dict = Depends(get_current_user)):
     _perm(user)
     try:
         sync.remove_node_tunnel(cid)
@@ -297,7 +354,18 @@ def delete_node(cid: str, user: dict = Depends(get_current_user)):
 
 
 @router.delete("/all")
-def delete_all(user: dict = Depends(get_current_user)):
+async def delete_all(background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    _perm(user)
+    async def _work(job):
+        job.update(phase='cloudflare.sync', detail="Cloudflare: alles entfernen")
+        return await asyncio.to_thread(_delete_all_impl, user=user)
+    return await bgjobs.run('cloudflare.sync', 'all', title="Cloudflare: alles entfernen", user=user, work=_work,
+                            background=background, perm='manage_cloudflare')
+
+
+def _delete_all_impl(user: dict = Depends(get_current_user)):
     _perm(user)
     for r in list(store.load()["routes"]):
         sync.remove_route(r["id"])

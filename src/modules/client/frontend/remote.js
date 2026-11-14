@@ -14,6 +14,7 @@
 // Profil: "Standardmäßig extern / im Browser / jedes Mal fragen" (GET/PUT /api/client/prefs).
 
 import { getToken } from "/js/app/api.js";
+import { withBackground, resolveJob } from "/js/app/bgjobs.js";
 import { esc, uiConfirm } from "/js/app/utils.js";
 
 const PROTO = {
@@ -29,13 +30,13 @@ let _mode = null;          // web | external | ask (Profil)
 async function creq(path, opts = {}) {
   const headers = { Authorization: "Bearer " + (getToken() || "") };
   if (opts.body !== undefined) { headers["Content-Type"] = "application/json"; opts = { ...opts, body: JSON.stringify(opts.body) }; }
-  const res = await fetch("/api/client" + path, { ...opts, headers });
+  const res = await fetch(withBackground("/api/client" + path, opts.method), { ...opts, headers });   // Backend-Job, s. bgjobs.js
   if (!res.ok) {
     let msg = res.statusText;
     try { const j = await res.json(); msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail); } catch { /* egal */ }
     throw new Error(msg);
   }
-  return res.json();
+  return resolveJob(await res.json());
 }
 
 // ------------------------------------------------------------------ Umgebung

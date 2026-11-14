@@ -10,6 +10,7 @@
 // Backend: /api/spaces (spaces_routes.py) und /api/spaces/git (git_ops.py)
 
 import { getToken } from "/js/app/api.js";
+import { withBackground, resolveJob } from "/js/app/bgjobs.js";
 import { esc, uiConfirm, uiPrompt, uiChoice, saveUrlAs } from "/js/app/utils.js";
 
 // ------------------------------------------------------------------ HTTP
@@ -17,14 +18,14 @@ export async function sreq(path, opts = {}) {
   const token = getToken() || "";
   const headers = { ...(token ? { Authorization: "Bearer " + token } : {}), ...(opts.headers || {}) };
   if (opts.body && !(opts.body instanceof FormData)) headers["Content-Type"] = "application/json";
-  const res = await fetch("/api/spaces" + path, { ...opts, headers });
+  const res = await fetch(withBackground("/api/spaces" + path, opts.method), { ...opts, headers });   // Backend-Job, s. bgjobs.js
   if (!res.ok) {
     let msg = res.statusText;
     try { msg = (await res.json()).detail || msg; } catch { /* egal */ }
     throw new Error(msg);
   }
   const ct = res.headers.get("content-type") || "";
-  return ct.includes("json") ? res.json() : res;
+  return ct.includes("json") ? resolveJob(await res.json()) : res;
 }
 const q = (p) => encodeURIComponent(p);
 const join = (...a) => a.filter(Boolean).join("/");

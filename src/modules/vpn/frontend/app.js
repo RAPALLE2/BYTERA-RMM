@@ -3,12 +3,13 @@
 // Ansichten IM Fenster (keine Popups): Liste -> Neuer Tunnel -> Details.
 // Backend: /api/vpn/* (vpn_routes.py). Host = Backend oder Node mit aktivem Node-Modul "vpn".
 import { getToken } from "/js/app/api.js";
+import { withBackground, resolveJob } from "/js/app/bgjobs.js";
 import { esc, uiConfirm } from "/js/app/utils.js";
 import { registerCleanup } from "/js/app/windowmanager.js";
 import { getModuleApi } from "/js/app/modules.js";
 
 async function vq(path, opts = {}) {
-  const res = await fetch("/api/vpn" + path, {
+  const res = await fetch(withBackground("/api/vpn" + path, opts.method), {   // Backend-Job, s. bgjobs.js
     method: opts.method || "GET",
     headers: { "Content-Type": "application/json", Authorization: "Bearer " + (getToken() || "") },
     body: opts.body ? JSON.stringify(opts.body) : undefined,
@@ -16,7 +17,7 @@ async function vq(path, opts = {}) {
   if (opts.raw) { if (!res.ok) throw new Error(`Fehler ${res.status}`); return res; }
   const d = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(d.detail || `Fehler ${res.status}`);
-  return d;
+  return resolveJob(d);
 }
 
 const DUR = [[1, "1 Stunde"], [4, "4 Stunden"], [8, "8 Stunden"], [24, "1 Tag"], [72, "3 Tage"], [168, "7 Tage"], [720, "30 Tage"]];

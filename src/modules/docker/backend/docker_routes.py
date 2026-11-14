@@ -24,7 +24,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app import db
+from app import bgjobs, db
 from app.auth import can_access_client, get_current_user, require_perm
 
 from . import catalog, compose, engine, publish, stacks
@@ -58,6 +58,43 @@ def _stack(user, sid: str, need: int) -> dict:
 
 def _audit(user, act, details=""):
     db.add_audit_entry(user["username"], f"docker.{act}", details=details[:300])
+
+
+# ------------------------------------------------------------------ Backend-Jobs
+# Alle Docker-Aufgaben (Deploy, Pull, Start/Stop, Exec, Image laden ...) laufen
+# als BACKEND-JOB (app/bgjobs.py): Neuladen bricht sie nicht ab, der Fortschritt
+# und das Log stehen live in der Aufgaben-Anzeige - fuer jeden Berechtigten.
+class JobLog(list):
+    """Liste, die jede angehaengte Zeile sofort ins Job-Log schreibt."""
+    def __init__(self, job):
+        super().__init__()
+        self._job = job
+
+    def append(self, line):
+        super().append(line)
+        self._job.log(str(line))
+        self._job.update(detail=str(line)[:200])
+
+    def extend(self, lines):
+        for ln in lines:
+            self.append(ln)
+
+
+async def _djob(kind: str, key: str | None, title: str, user: dict, background: bool, work,
+                may_see=None, meta: dict | None = None):
+    async def runner(job):
+        try:
+            return await work(job)
+        except HTTPException:
+            raise
+        except Exception as e:
+            _err(e)
+    return await bgjobs.run(f"docker.{kind}", key, title=title, user=user, work=runner,
+                            background=background, may_see=may_see, meta=meta)
+
+
+def _stack_may_see(sid: str):
+    return lambda u: bool(stacks.get(sid)) and stacks.level(u, stacks.get(sid)) > 0
 
 
 # ------------------------------------------------------------------ Ziele
@@ -131,7 +168,7 @@ async def list_stacks(user: dict = Depends(get_current_user)):
 
 
 @router.post("/stacks")
-async def create_stack(body: StackBody, user: dict = Depends(get_current_user)):
+async def create_stack(body: StackBody, background: bool = False, user: dict = Depends(get_current_user)):
     require_perm(user, "manage_docker")
     if not stacks.target_ok(user, body.target):
         raise HTTPException(404, "Ziel nicht gefunden")
@@ -140,13 +177,20 @@ async def create_stack(body: StackBody, user: dict = Depends(get_current_user)):
     except Exception as e:
         _err(e)
     _audit(user, "stack_created", f"{st['project']} auf {st['target']}")
-    log = []
-    if body.deploy:
+    if not body.deploy:
+        return {"stack": _pub(stacks.get(st["id"]), user), "log": [], "ok": True}
+
+    async def work(job):
+        log = JobLog(job)
+        job.update(phase="deploy", detail="Stack wird bereitgestellt")
         try:
-            log = await stacks.deploy(st)
+            await stacks.deploy(st, log=log)
         except Exception as e:
-            return {"stack": _pub(stacks.get(st["id"]), user), "log": [f"❌ {e}"], "ok": False}
-    return {"stack": _pub(stacks.get(st["id"]), user), "log": log, "ok": True}
+            log.append(f"❌ {e}")
+            return {"stack": _pub(stacks.get(st["id"]), user), "log": list(log), "ok": False}
+        return {"stack": _pub(stacks.get(st["id"]), user), "log": list(log), "ok": True}
+    return await _djob("stack", st["id"], f"Docker-Stack „{st['name']}“ anlegen + bereitstellen", user,
+                       background, work, may_see=_stack_may_see(st["id"]), meta={"stack": st["id"]})
 
 
 @router.get("/stacks/{sid}")
@@ -184,42 +228,67 @@ def stack_members(sid: str, body: MembersBody, user: dict = Depends(get_current_
 
 
 @router.post("/stacks/{sid}/action/{act}")
-async def stack_action(sid: str, act: str, user: dict = Depends(get_current_user)):
+async def stack_action(sid: str, act: str, background: bool = False, user: dict = Depends(get_current_user)):
     if act not in ("deploy", "pull", "start", "stop", "restart"):
         raise HTTPException(400, "Unbekannte Aktion")
     st = _stack(user, sid, stacks.ADMIN if act in ("deploy", "pull") else stacks.OPERATE)
-    try:
-        log = await stacks.deploy(st, pull_images=(act == "pull")) if act in ("deploy", "pull") else await stacks.action(st, act)
-    except Exception as e:
-        _audit(user, f"stack_{act}_failed", f"{st['project']}: {e}")
-        return {"ok": False, "log": [f"❌ {e}"]}
-    _audit(user, f"stack_{act}", st["project"])
-    return {"ok": True, "log": log}
+
+    async def work(job):
+        log = JobLog(job)
+        job.update(phase=act, detail=f"{act} läuft")
+        try:
+            if act in ("deploy", "pull"):
+                await stacks.deploy(st, pull_images=(act == "pull"), log=log)
+            else:
+                log.extend(await stacks.action(st, act))
+        except Exception as e:
+            _audit(user, f"stack_{act}_failed", f"{st['project']}: {e}")
+            log.append(f"❌ {e}")
+            return {"ok": False, "log": list(log)}
+        _audit(user, f"stack_{act}", st["project"])
+        return {"ok": True, "log": list(log)}
+    names = {"deploy": "bereitstellen", "pull": "Images neu laden + bereitstellen", "start": "starten",
+             "stop": "stoppen", "restart": "neu starten"}
+    return await _djob("stack", sid, f"Docker-Stack „{st['name']}“ {names[act]}", user, background, work,
+                       may_see=_stack_may_see(sid), meta={"stack": sid, "action": act})
 
 
 @router.post("/stacks/{sid}/down")
-async def stack_down(sid: str, body: DownBody, user: dict = Depends(get_current_user)):
+async def stack_down(sid: str, body: DownBody, background: bool = False, user: dict = Depends(get_current_user)):
     st = _stack(user, sid, stacks.ADMIN)
-    try:
+
+    async def work(job):
+        job.update(phase="down", detail="Container werden entfernt")
         log = await stacks.down(st, body.volumes)
-    except Exception as e:
-        _err(e)
-    _audit(user, "stack_down", f"{st['project']} (Volumes: {body.volumes})")
-    return {"ok": True, "log": log}
+        for ln in log:
+            job.log(ln)
+        _audit(user, "stack_down", f"{st['project']} (Volumes: {body.volumes})")
+        return {"ok": True, "log": log}
+    return await _djob("stack", sid, f"Docker-Stack „{st['name']}“ herunterfahren", user, background, work,
+                       may_see=_stack_may_see(sid), meta={"stack": sid})
 
 
 @router.delete("/stacks/{sid}")
-async def delete_stack(sid: str, volumes: bool = False, user: dict = Depends(get_current_user)):
+async def delete_stack(sid: str, volumes: bool = False, background: bool = False,
+                       user: dict = Depends(get_current_user)):
     st = _stack(user, sid, stacks.ADMIN)
-    log = []
-    try:
-        log = await stacks.down(st, volumes)
-    except DockerError as e:
-        log.append(f"⚠ Container konnten nicht entfernt werden: {e}")
-    remove_publications(st)
-    stacks.remove_entry(sid)
-    _audit(user, "stack_deleted", f"{st['project']} (Volumes: {volumes})")
-    return {"ok": True, "log": log}
+
+    async def work(job):
+        job.update(phase="delete", detail="Container werden entfernt, Stack wird gelöscht")
+        log = []
+        try:
+            log = await stacks.down(st, volumes)
+        except DockerError as e:
+            log.append(f"⚠ Container konnten nicht entfernt werden: {e}")
+        for ln in log:
+            job.log(ln)
+        remove_publications(st)
+        stacks.remove_entry(sid)
+        _audit(user, "stack_deleted", f"{st['project']} (Volumes: {volumes})")
+        return {"ok": True, "log": log}
+    return await _djob("stack", sid, f"Docker-Stack „{st['name']}“ löschen", user, background, work,
+                       may_see=lambda u: stacks.manage_all(u) or u.get("username") == user.get("username"),
+                       meta={"stack": sid})
 
 
 # ------------------------------------------------------------------ Veroeffentlichen
@@ -280,7 +349,7 @@ async def publish_list(sid: str, user: dict = Depends(get_current_user)):
 
 
 @router.post("/stacks/{sid}/publish")
-async def publish_add(sid: str, body: PublishBody, user: dict = Depends(get_current_user)):
+async def publish_add(sid: str, body: PublishBody, background: bool = False, user: dict = Depends(get_current_user)):
     st = _stack(user, sid, stacks.ADMIN)
     if body.mode not in ("path", "port") or not (1 <= body.port <= 65535):
         raise HTTPException(400, "Ungültige Angaben")
@@ -306,17 +375,22 @@ async def publish_add(sid: str, body: PublishBody, user: dict = Depends(get_curr
     st = stacks.update(sid, {"publish": (st.get("publish") or []) + [entry]})
     _audit(user, "publish_add", f"{st['project']}/{body.service}:{body.port} -> "
                                 + (f"/docker/{entry.get('name')}/" if body.mode == "path" else f"Port {body.public_port}"))
-    log = []
-    if body.mode == "port" and st.get("deployed"):
+    if not (body.mode == "port" and st.get("deployed")):
+        return {"ok": True, "entry": entry, "log": []}
+
+    async def work(job):
+        log = JobLog(job)
         try:
-            log = await stacks.deploy(st, pull_images=False)
+            await stacks.deploy(st, pull_images=False, log=log)
         except Exception as e:
-            log = [f"❌ {e}"]
-    return {"ok": True, "entry": entry, "log": log}
+            log.append(f"❌ {e}")
+        return {"ok": True, "entry": entry, "log": list(log)}
+    return await _djob("stack", sid, f"Docker-Stack „{st['name']}“: Port freigeben + neu bereitstellen", user,
+                       background, work, may_see=_stack_may_see(sid), meta={"stack": sid})
 
 
 @router.delete("/stacks/{sid}/publish/{pid}")
-async def publish_remove(sid: str, pid: str, user: dict = Depends(get_current_user)):
+async def publish_remove(sid: str, pid: str, background: bool = False, user: dict = Depends(get_current_user)):
     st = _stack(user, sid, stacks.ADMIN)
     entry = next((p for p in st.get("publish") or [] if p.get("id") == pid), None)
     if not entry:
@@ -328,13 +402,18 @@ async def publish_remove(sid: str, pid: str, user: dict = Depends(get_current_us
             pass
     st = stacks.update(sid, {"publish": [p for p in st.get("publish") or [] if p.get("id") != pid]})
     _audit(user, "publish_remove", f"{st['project']}: {entry.get('name') or entry.get('public_port')}")
-    log = []
-    if entry["mode"] == "port" and st.get("deployed"):
+    if not (entry["mode"] == "port" and st.get("deployed")):
+        return {"ok": True, "log": []}
+
+    async def work(job):
+        log = JobLog(job)
         try:
-            log = await stacks.deploy(st, pull_images=False)
+            await stacks.deploy(st, pull_images=False, log=log)
         except Exception as e:
-            log = [f"❌ {e}"]
-    return {"ok": True, "log": log}
+            log.append(f"❌ {e}")
+        return {"ok": True, "log": list(log)}
+    return await _djob("stack", sid, f"Docker-Stack „{st['name']}“: Freigabe entfernen + neu bereitstellen", user,
+                       background, work, may_see=_stack_may_see(sid), meta={"stack": sid})
 
 
 def remove_publications(st: dict) -> None:
@@ -389,21 +468,24 @@ async def containers(target: str = "local", user: dict = Depends(get_current_use
 
 
 @router.post("/containers/{target}/{cid}/action/{act}")
-async def ct_action(target: str, cid: str, act: str, user: dict = Depends(get_current_user)):
+async def ct_action(target: str, cid: str, act: str, background: bool = False, user: dict = Depends(get_current_user)):
     if act not in CT_ACTIONS:
         raise HTTPException(400, "Unbekannte Aktion")
     lv, info = await _ct_level(user, target, cid)
     if lv < (stacks.ADMIN if act == "remove" else stacks.OPERATE):
         raise HTTPException(403, "Keine Berechtigung")
-    try:
+    name = info.get("Name", "").lstrip("/") or cid
+
+    async def work(job):
+        job.update(phase=act, detail=f"{name}: {act}")
         if act == "remove":
             await engine.call(target, "DELETE", f"/containers/{q(cid)}?force=1")
         else:
             await engine.call(target, "POST", f"/containers/{q(cid)}/{act}", timeout=120)
-    except Exception as e:
-        _err(e)
-    _audit(user, f"container_{act}", f"{info.get('Name', '').lstrip('/')} auf {target}")
-    return {"ok": True}
+        _audit(user, f"container_{act}", f"{name} auf {target}")
+        return {"ok": True}
+    return await _djob("container", f"{target}:{cid}", f"Container „{name}“: {act}", user, background, work,
+                       may_see=lambda u: stacks.target_ok(u, target), meta={"target": target, "container": cid})
 
 
 @router.get("/containers/{target}/{cid}/logs")
@@ -452,22 +534,30 @@ class ExecBody(BaseModel):
 
 
 @router.post("/containers/{target}/{cid}/exec")
-async def ct_exec(target: str, cid: str, body: ExecBody, user: dict = Depends(get_current_user)):
+async def ct_exec(target: str, cid: str, body: ExecBody, background: bool = False, user: dict = Depends(get_current_user)):
     """Befehl im Container ausfuehren (ohne interaktive Sitzung) - Rolle "Bedienen"."""
     lv, info = await _ct_level(user, target, cid)
     if lv < stacks.OPERATE:
         raise HTTPException(403, "Keine Berechtigung")
     if not body.cmd.strip():
         raise HTTPException(400, "Befehl fehlt")
-    try:
+    name = info.get("Name", "").lstrip("/") or cid
+    _audit(user, "container_exec", f"{name}: {body.cmd[:150]}")
+
+    async def work(job):
+        job.log(f"$ {body.cmd[:2000]}")
         ex = await engine.call(target, "POST", f"/containers/{q(cid)}/exec", {
             "Cmd": ["/bin/sh", "-c", body.cmd], "AttachStdout": True, "AttachStderr": True, "User": body.user or ""})
         raw = await engine.call(target, "POST", f"/exec/{ex['Id']}/start", {"Detach": False, "Tty": False}, raw=True, timeout=120)
         res = await engine.call(target, "GET", f"/exec/{ex['Id']}/json")
-    except Exception as e:
-        _err(e)
-    _audit(user, "container_exec", f"{info.get('Name', '').lstrip('/')}: {body.cmd[:150]}")
-    return {"output": engine.demux(raw), "exit_code": res.get("ExitCode")}
+        out = engine.demux(raw)
+        if out:
+            job.log(str(out)[-20000:] if not isinstance(out, list) else "\n".join(map(str, out))[-20000:])
+        job.update(detail=f"Exit-Code {res.get('ExitCode')}")
+        return {"output": out, "exit_code": res.get("ExitCode")}
+    return await _djob("exec", None, f"Befehl in Container „{name}“: {body.cmd.strip().splitlines()[0][:50]}", user,
+                       background, work, may_see=lambda u: u.get("username") == user.get("username") or stacks.manage_all(u),
+                       meta={"target": target, "container": cid})
 
 
 # ------------------------------------------------------------------ Images, Volumes, Netzwerke
@@ -494,25 +584,30 @@ async def images(target: str = "local", user: dict = Depends(get_current_user)):
 
 
 @router.post("/images/pull")
-async def image_pull(body: PullBody, user: dict = Depends(get_current_user)):
+async def image_pull(body: PullBody, background: bool = False, user: dict = Depends(get_current_user)):
     _need_manage(user, body.target)
-    log = []
-    try:
-        await stacks.pull(body.target, body.image.strip(), log)
-    except Exception as e:
-        _err(e)
-    _audit(user, "image_pull", f"{body.image} auf {body.target}")
-    return {"ok": True, "log": log}
+    image = body.image.strip()
+
+    async def work(job):
+        log = JobLog(job)
+        job.update(phase="pull", detail=f"{image} wird geladen")
+        await stacks.pull(body.target, image, log)
+        _audit(user, "image_pull", f"{image} auf {body.target}")
+        return {"ok": True, "log": list(log)}
+    return await _djob("pull", f"{body.target}:{image}", f"Image „{image}“ laden ({body.target})", user,
+                       background, work, may_see=lambda u: stacks.target_ok(u, body.target),
+                       meta={"target": body.target, "image": image})
 
 
 @router.delete("/images/{target}/{iid}")
-async def image_delete(target: str, iid: str, user: dict = Depends(get_current_user)):
+async def image_delete(target: str, iid: str, background: bool = False, user: dict = Depends(get_current_user)):
     _need_manage(user, target)
-    try:
+
+    async def work(job):
         await engine.call(target, "DELETE", f"/images/{q(iid)}")
-    except Exception as e:
-        _err(e)
-    return {"ok": True}
+        return {"ok": True}
+    return await _djob("image_delete", f"{target}:{iid}", f"Image {iid} löschen ({target})", user, background, work,
+                       may_see=lambda u: stacks.target_ok(u, target), meta={"target": target, "image": iid})
 
 
 @router.get("/volumes")

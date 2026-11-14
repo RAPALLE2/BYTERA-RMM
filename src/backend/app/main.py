@@ -76,7 +76,13 @@ _rebrand.before_db()        # Umbenennung RAPALLE.net -> BYTERA: Container/dbcon
 from app import dbsync as _dbsync
 _dbsync.startup_restore_if_external()
 db.init_db()
-_rebrand.after_db()         # Einstellungen, gespeicherte Skripte, repo.txt, Standard-Logos
+_rebrand.after_db()
+# Hintergrund-Jobs: Verlaufstabelle + beim letzten Stopp laufende Jobs abschliessen
+try:
+    from app import bgjobs as _bgjobs_boot
+    _bgjobs_boot.startup_recover()
+except Exception as _e:
+    print(f"[bgjobs] Start: {_e}")         # Einstellungen, gespeicherte Skripte, repo.txt, Standard-Logos
 
 # (Aufbewahrungsfristen: siehe Modul 'privacy')
 
@@ -256,6 +262,11 @@ _mount("notes_routes", notes_routes)       # Client-Notizen (Sichtbarkeit + Prot
 # Relay-Explorer bleiben - die brauchen kein VPN.
 _mount("diag_routes", diag_routes)
 _mount("dist_routes", dist_routes)         # Verteilung /dist (Core)
+# Hintergrund-Jobs (Scans, Erkennungen ...): laufen im Backend, nicht in der
+# Browser-Sitzung - Neuladen/andere Benutzer sehen denselben Stand (app/bgjobs.py)
+bgjobs_routes = _import_router("bgjobs_routes")
+if bgjobs_routes is not None:
+    _mount("bgjobs_routes", bgjobs_routes)
 
 # (Guacamole-WebSocket-Tunnel registriert das Modul 'guacamole' selbst.)
 
@@ -669,6 +680,11 @@ async def _db_sync_engine():
 @api.on_event("shutdown")
 async def _final_db_sync():
     """Beim Herunterfahren letzten Stand in die externe DB schreiben."""
+    try:
+        from app import bgjobs as _bgjobs
+        _bgjobs.shutdown()
+    except Exception as e:
+        print(f"[bgjobs] Shutdown fehlgeschlagen: {e}")
     try:
         await _modules.shutdown_all()
     except Exception as e:

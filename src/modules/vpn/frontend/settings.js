@@ -4,10 +4,11 @@
 //   * Verbindungstest: Host + Endpunkt-IP + UDP-Port per echtem WireGuard-Handshake pruefen -
 //     auch BEVOR ein Tunnel existiert (dann legt das Backend kurz einen Test-Tunnel an).
 import { getToken } from "/js/app/api.js";
+import { withBackground, resolveJob } from "/js/app/bgjobs.js";
 import { esc } from "/js/app/utils.js";
 
 async function vq(path, opts = {}) {
-  const res = await fetch("/api/vpn" + path, {
+  const res = await fetch(withBackground("/api/vpn" + path, opts.method), {   // Backend-Job, s. bgjobs.js
     method: opts.method || "GET",
     headers: { "Content-Type": "application/json", Authorization: "Bearer " + (getToken() || "") },
     body: opts.body ? JSON.stringify(opts.body) : undefined,
@@ -15,7 +16,7 @@ async function vq(path, opts = {}) {
   if (opts.raw) { if (!res.ok) throw new Error(`Fehler ${res.status}`); return res; }
   const d = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(d.detail || `Fehler ${res.status}`);
-  return d;
+  return resolveJob(d);
 }
 
 const box = (title, inner) => `<div style="border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:14px">

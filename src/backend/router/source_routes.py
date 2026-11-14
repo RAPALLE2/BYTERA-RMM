@@ -22,7 +22,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
 from pydantic import BaseModel
 
-from app import db
+from app import bgjobs, db
 from app.auth import (get_current_user, require_admin, require_perm,
                       decode_access_token)
 
@@ -561,9 +561,20 @@ def db_create_table(body: CreateTableBody, user: dict = Depends(get_current_user
 
 
 @router.post("/db/backup")
-def db_backup(user: dict = Depends(get_current_user)):
-    """Erstellt eine konsistente Kopie der Datenbank als data/backup/data.sqlite."""
+async def db_backup(background: bool = False, user: dict = Depends(get_current_user)):
+    """Erstellt eine konsistente Kopie der Datenbank als data/backup/data.sqlite
+    (als BACKEND-JOB, siehe app/bgjobs.py)."""
     require_perm(user, "see_source")
+    import asyncio
+
+    async def work(job):
+        job.update(phase="backup", detail="Datenbank wird gesichert")
+        return await asyncio.to_thread(_db_backup_sync, user)
+    return await bgjobs.run("db.backup", "db", title="Datenbank-Sicherung", user=user, work=work,
+                            background=background, perm="see_source")
+
+
+def _db_backup_sync(user: dict) -> dict:
     import sqlite3
     src_path = _DB_FILE
     bak_path = _DB_BACKUP_FILE
@@ -711,7 +722,7 @@ def migrate_export(request: Request,
 
 @router.post("/migrate/import")
 async def migrate_import(request: Request, secrets: bool = False,
-                         backup: bool = True,
+                         backup: bool = True, background: bool = False,
                          user: dict = Depends(get_current_user)):
     """
     Spielt ein Umzugs-Archiv ein (roher Body, wie beim ZIP-Upload).
@@ -726,6 +737,8 @@ async def migrate_import(request: Request, secrets: bool = False,
     import tempfile
     from app import migrate
 
+    # Der Upload selbst kommt zwangslaeufig aus dem Browser; das EINSPIELEN
+    # laeuft danach als BACKEND-JOB (app/bgjobs.py) und wird nicht abgebrochen.
     data = await request.body()
     if not data:
         raise HTTPException(400, "Leeres Archiv")
@@ -733,26 +746,33 @@ async def migrate_import(request: Request, secrets: bool = False,
     tmp_dir = Path(tempfile.mkdtemp(prefix="rmm-migrate-in-"))
     archive = tmp_dir / "migration.zip"
     archive.write_bytes(data)
-    try:
-        report = migrate.apply_import(archive, restore_secrets=secrets,
-                                      keep_backup=backup)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except Exception as e:
-        raise HTTPException(500, f"Einspielen fehlgeschlagen: {e}")
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+    del data
+    import asyncio
 
-    try:
-        db.add_audit_entry(user["username"], "source.migrate_import",
-                           details=f"Quelle: {report['manifest'].get('created_iso')}, "
-                                   f"Version {report['manifest'].get('version')}")
-    except Exception:
-        pass   # Die Datenbank ist gerade ausgetauscht worden - kein Beinbruch.
+    async def work(job):
+        job.update(phase="import", detail="Archiv wird eingespielt (vorheriger Stand wird gesichert)")
+        try:
+            report = await asyncio.to_thread(migrate.apply_import, archive,
+                                             restore_secrets=secrets, keep_backup=backup)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except Exception as e:
+            raise HTTPException(500, f"Einspielen fehlgeschlagen: {e}")
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        try:
+            db.add_audit_entry(user["username"], "source.migrate_import",
+                               details=f"Quelle: {report['manifest'].get('created_iso')}, "
+                                       f"Version {report['manifest'].get('version')}")
+        except Exception:
+            pass   # Die Datenbank ist gerade ausgetauscht worden - kein Beinbruch.
+        job.update(phase="restart", detail="Eingespielt - Backend startet neu")
+        _schedule_restart_after_migration(delay=4.0)
+        report["restart"] = True
+        return report
 
-    _schedule_restart_after_migration()
-    report["restart"] = True
-    return report
+    return await bgjobs.run("migrate.import", "import", title="Umzugs-Archiv einspielen", user=user,
+                            work=work, background=background, perm="admin")
 
 
 def _schedule_restart_after_migration(delay: float = 2.0) -> None:
@@ -850,7 +870,7 @@ def redirect_test(body: RedirectBody, user: dict = Depends(get_current_user)):
 
 
 @router.post("/migrate/redirect")
-async def redirect_start(body: RedirectBody, user: dict = Depends(get_current_user)):
+async def redirect_start(body: RedirectBody, background: bool = False, user: dict = Depends(get_current_user)):
     require_admin(user)
     import asyncio
     url = _norm_target(body.url)
@@ -868,18 +888,30 @@ async def redirect_start(body: RedirectBody, user: dict = Depends(get_current_us
     from app.sockets import _migration_last, send_to_agent, state
     online = [c for c in db.list_clients() if state.is_online(c["id"])]
 
-    async def rollout():
+    async def rollout(job):
+        n = len(online)
         for i, c in enumerate(online):
+            if job.cancelled:
+                job.log("Abgebrochen - restliche Agenten werden nicht mehr umgezogen")
+                break
             _migration_last[c["id"]] = __import__("time").time()
             try:
                 await send_to_agent(c["id"], "update-agent", {})
-            except Exception:
-                pass
+                job.log(f"{c.get('hostname') or c['id']}: Umzug angestoßen")
+            except Exception as e:
+                job.log(f"{c.get('hostname') or c['id']}: nicht erreicht ({e})")
+            job.update(phase="rollout", pct=(i + 1) / max(1, n) * 100, detail=f"{i + 1}/{n} Agenten angestoßen")
             if i % 10 == 9:
                 await asyncio.sleep(2)          # gestaffelt, damit nicht alle gleichzeitig laden
-    asyncio.create_task(rollout())
-    return {"ok": True, "target": url, "triggered": len(online),
-            "offline": len(db.list_clients()) - len(online)}
+        return {"target": url, "triggered": n}
+    out = {"ok": True, "target": url, "triggered": len(online),
+           "offline": len(db.list_clients()) - len(online)}
+    job, _ = bgjobs.start("migrate.redirect", "redirect", title=f"Agenten zum neuen Server umziehen ({len(online)})",
+                          user=user, runner=rollout, perm="admin", meta={"target": url})
+    out["job_id"] = job.id
+    if background:
+        return {**job.public(), **out, "job": True}
+    return out
 
 
 @router.delete("/migrate/redirect")

@@ -239,7 +239,7 @@ async def pull(target: str, image: str, log: list) -> None:
             raise DockerError(f"Image {image} konnte nicht geladen werden: {e}")
 
 
-async def deploy(st: dict, pull_images: bool = True) -> list[str]:
+async def deploy(st: dict, pull_images: bool = True, log: list | None = None) -> list[str]:
     """Stack anlegen/aktualisieren (vorhandene Container des Stacks werden neu erstellt)."""
     text = compose_text(st)
     data, notes = compose.parse(text)
@@ -249,7 +249,9 @@ async def deploy(st: dict, pull_images: bool = True) -> list[str]:
     from . import publish
     publish.inject(st, pl)                          # Port-Freigaben ("eigener Port") eintragen
     t = st["target"]
-    log = [f"ℹ {n}" for n in notes]
+    # log: optional eine "lebende" Liste (z.B. JobLog), die jede Zeile sofort weitergibt
+    log = log if log is not None else []
+    log.extend(f"ℹ {n}" for n in notes)
     for img in sorted({c["image"] for c in pl["containers"]}):
         if pull_images or not await _image_present(t, img):
             await pull(t, img, log)

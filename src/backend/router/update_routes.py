@@ -234,10 +234,15 @@ def _resolve_target(gh: dict, target: str, tag: str | None) -> tuple[str, str]:
     raise HTTPException(400, "Ungültiges Ziel (commit|full|any|custom)")
 
 
-async def _run_update(target: str, tag: str | None, username: str | None) -> dict:
+async def _run_update(target: str, tag: str | None, username: str | None, job=None) -> dict:
     loop = asyncio.get_event_loop()
+    if job:
+        job.update(phase="check", pct=5, detail="GitHub-Stand wird abgefragt")
     gh = await loop.run_in_executor(None, _fetch_github_state)
     ref, desc = _resolve_target(gh, target, tag)
+    if job:
+        job.log(f"Ziel: {desc} ({ref})")
+        job.update(phase="download", pct=20, detail=f"{desc} wird geladen und eingespielt")
 
     await loop.run_in_executor(None, _apply_zip, ref, gh["owner"], gh["repo"])
 
@@ -246,6 +251,11 @@ async def _run_update(target: str, tag: str | None, username: str | None) -> dic
     db.set_setting("server_last_update_target", ref)
     db.add_audit_entry(username, "server.update_applied", details=desc)
     print(f"[update] {desc} eingespielt - Neustart folgt.")
+    if job:
+        job.log(f"{desc} eingespielt - Backend startet neu")
+        # Phase "restart": Der Neustart beendet diesen Job; nach dem Start wird
+        # er im Verlauf als erfolgreich abgeschlossen gefuehrt (bgjobs.startup_recover).
+        job.update(phase="restart", pct=95, detail=f"{desc} eingespielt - Backend startet neu")
     _schedule_restart()
     return {"ok": True, "applied": desc, "ref": ref,
             "restart": "Backend startet in wenigen Sekunden neu"}
@@ -293,14 +303,23 @@ def set_repo(body: RepoBody, user: dict = Depends(get_current_user)):
 
 
 @router.post("/run")
-async def run_update(body: RunBody, user: dict = Depends(get_current_user)):
+async def run_update(body: RunBody, background: bool = False, user: dict = Depends(get_current_user)):
+    """Server-Update als BACKEND-JOB (app/bgjobs.py): Laden + Einspielen laufen im
+    Backend; jeder Admin sieht den Fortschritt in der Aufgaben-Anzeige, auch nach
+    dem Neuladen. Nach dem Neustart steht das Ergebnis im Aufgaben-Verlauf."""
     require_perm(user, "admin_settings")
-    try:
-        return await _run_update(body.target, body.tag, user["username"])
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(500, f"Update fehlgeschlagen: {e}")
+    from app import bgjobs
+
+    async def work(job):
+        try:
+            return await _run_update(body.target, body.tag, user["username"], job=job)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(500, f"Update fehlgeschlagen: {e}")
+    return await bgjobs.run("server.update", "server", title=f"Server-Update ({body.target}{' ' + body.tag if body.tag else ''})",
+                            user=user, work=work, background=background, perm="admin_settings",
+                            meta={"target": body.target, "tag": body.tag})
 
 
 # ------------------------------------------------------------------
@@ -354,10 +373,15 @@ async def auto_update_tick() -> None:
 
     print(f"[auto-update] Neues Ziel gefunden ({channel}): {ref} - Update startet.")
     try:
-        await _run_update(
-            "commit" if channel == "commit" else ("full" if channel == "full" else "any"),
-            None, None,
-        )
+        # Auch das automatische Update laeuft als sichtbarer Job (Aufgaben-Anzeige)
+        from app import bgjobs
+        tgt = "commit" if channel == "commit" else ("full" if channel == "full" else "any")
+        job, _ = bgjobs.start("server.update", "server", title=f"Automatisches Server-Update ({ref})",
+                              user=None, perm="admin_settings",
+                              runner=lambda j: _run_update(tgt, None, None, job=j))
+        await job.done.wait()
+        if job.status == "error":
+            raise RuntimeError(job.error)
     except Exception as e:
         # Ziel trotzdem als "versucht" markieren, damit keine Endlosschleife entsteht.
         db.set_setting("server_last_update_target", ref)

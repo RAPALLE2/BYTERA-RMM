@@ -9,18 +9,32 @@ import { getToken } from "/js/app/api.js";
 import { initSubjectPicker, readSubjectPicker, subjectPickerHtml } from "/js/app/subjectpicker.js";
 import { esc, uiConfirm } from "/js/app/utils.js";
 
+// Aendernde Aufrufe (Deploy, Pull, Start/Stop, Exec, Image laden ...) laufen als
+// BACKEND-JOB (app/bgjobs.py): ?background=1 -> Job sofort zurueck, hier wird auf
+// das Ergebnis gewartet. Neuladen bricht nichts ab; Log/Fortschritt stehen live in
+// der Aufgaben-Anzeige. opts.onJob(job) bekommt die Zwischenstaende (inkl. Log).
 async function dreq(path, opts = {}) {
   const token = getToken() || "";
   const headers = { ...(token ? { Authorization: "Bearer " + token } : {}) };
+  const { onJob, ...o } = opts;
+  opts = o;
   if (opts.body !== undefined && typeof opts.body !== "string") opts = { ...opts, body: JSON.stringify(opts.body) };
   if (opts.body) headers["Content-Type"] = "application/json";
-  const res = await fetch("/api/docker" + path, { ...opts, headers });
+  const mutating = (opts.method || "GET").toUpperCase() !== "GET";
+  const url = "/api/docker" + path + (mutating ? (path.includes("?") ? "&" : "?") + "background=1" : "");
+  const res = await fetch(url, { ...opts, headers });
   if (!res.ok) {
     let msg = res.statusText;
     try { const j = await res.json(); msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail); } catch { /* egal */ }
     throw new Error(msg);
   }
-  return res.json();
+  const data = await res.json();
+  if (!(mutating && data && data.job && data.id)) return data;
+  const { waitJob, fetchJob } = await import("/js/app/bgjobs.js");
+  const job = data.running ? await waitJob(data.id, onJob) : await fetchJob(data.id);
+  if (job.status === "error") throw new Error(job.error || "Fehler");
+  if (job.status === "cancelled") throw new Error(`Abgebrochen${job.cancelled_by ? " von " + job.cancelled_by : ""}`);
+  return job.result;
 }
 const fmtB = (b) => (!b ? "0 B" : b >= 1073741824 ? (b / 1073741824).toFixed(1) + " GB" : b >= 1048576 ? (b / 1048576).toFixed(1) + " MB" : b >= 1024 ? Math.round(b / 1024) + " KB" : b + " B");
 const stateDot = (s) => `<span title="${esc(s || "")}" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${
@@ -147,7 +161,14 @@ export function renderDocker(body) {
       pane.innerHTML = `<div>⏳ ${esc(label)} …</div>`;
       main.querySelectorAll("[data-sa],[data-down],[data-del]").forEach((b) => { b.disabled = true; });
       let r;
-      try { r = await dreq(path, opts); } catch (e) { r = { ok: false, log: [`❌ ${e.message}`] }; }
+      // Live-Log des Backend-Jobs anzeigen, solange er laeuft
+      const live = (job) => {
+        if (!job?.running || !(view.kind === "stack" && view.id === id)) return;
+        const lines = (job.logs || []).map((l) => l.replace(/^\d\d:\d\d:\d\d /, ""));
+        pane.innerHTML = `<div>⏳ ${esc(label)} …${job.by ? ` <span style="color:var(--subtext)">(${esc(job.by)})</span>` : ""}</div>`
+          + (lines.length ? `<pre style="white-space:pre-wrap;font-size:12px;background:var(--panel-2);padding:8px;border-radius:6px;max-height:340px;overflow:auto">${esc(lines.join("\n"))}</pre>` : "");
+      };
+      try { r = await dreq(path, { ...opts, onJob: live }); } catch (e) { r = { ok: false, log: [`❌ ${e.message}`] }; }
       window.notify?.(`${st.name} – ${label}: ${r.ok === false ? "fehlgeschlagen" : "fertig"}`, r.ok === false ? "error" : "success");
       await load();
       // Nur neu zeichnen, wenn man noch auf DIESEM Stack ist (Aktionen koennen dauern)
@@ -155,6 +176,22 @@ export function renderDocker(body) {
     };
     main.querySelectorAll("[data-sa]").forEach((b) => b.addEventListener("click", () =>
       runAct(`/stacks/${id}/action/${b.dataset.sa}`, { method: "POST" }, b.textContent.trim())));
+    // Laeuft fuer diesen Stack schon ein Job (z.B. nach Neuladen oder von einem
+    // anderen Benutzer gestartet)? -> anhaengen und live mitlesen.
+    import("/js/app/bgjobs.js").then(async ({ listJobs, waitJob }) => {
+      const [j] = await listJobs({ kind: "docker.stack", key: id, running: true }).catch(() => []);
+      if (!j || !(view.kind === "stack" && view.id === id)) return;
+      main.querySelectorAll("[data-sa],[data-down],[data-del]").forEach((b) => { b.disabled = true; });
+      const show = (job) => {
+        if (!(view.kind === "stack" && view.id === id) || !job?.running) return;
+        const lines = (job.logs || []).map((l) => l.replace(/^\d\d:\d\d:\d\d /, ""));
+        pane.innerHTML = `<div>⏳ ${esc(job.title)}${job.by ? ` <span style="color:var(--subtext)">(${esc(job.by)})</span>` : ""}</div>`
+          + (lines.length ? `<pre style="white-space:pre-wrap;font-size:12px;background:var(--panel-2);padding:8px;border-radius:6px;max-height:340px;overflow:auto">${esc(lines.join("\n"))}</pre>` : "");
+      };
+      const done = await waitJob(j.id, show);
+      await load();
+      if (view.kind === "stack" && view.id === id) { view.lastLog = done.result?.log || done.logs || []; view.tab = "log"; drawStack(id, "log"); }
+    }).catch(() => {});
     main.querySelector("[data-down]")?.addEventListener("click", async () => {
       const ov = overlay(`<b>Stack herunterfahren?</b><p style="color:var(--subtext)">Alle Container und das Netzwerk des Stacks werden entfernt. Der Stack selbst bleibt und kann wieder bereitgestellt werden.</p>
         <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" data-vol style="width:16px;height:16px;appearance:auto"> auch die Volumes löschen (<b>Daten weg!</b>)</label>

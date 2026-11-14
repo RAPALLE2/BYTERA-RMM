@@ -4,6 +4,7 @@
 // Backend: cf_routes.py (/api/cloudflare), Login fuer Access: oidc_routes.py (/cf-oidc/...)
 
 import { getToken } from "/js/app/api.js";
+import { withBackground, resolveJob } from "/js/app/bgjobs.js";
 import { state } from "/js/app/state.js";
 import { esc, uiConfirm } from "/js/app/utils.js";
 import { initSubjectPicker, readSubjectPicker, subjectPickerHtml } from "/js/app/subjectpicker.js";
@@ -13,13 +14,13 @@ async function cq(path, opts = {}) {
   const headers = { ...(token ? { Authorization: "Bearer " + token } : {}) };
   if (opts.body !== undefined && typeof opts.body !== "string") opts = { ...opts, body: JSON.stringify(opts.body) };
   if (opts.body) headers["Content-Type"] = "application/json";
-  const res = await fetch("/api/cloudflare" + path, { ...opts, headers });
+  const res = await fetch(withBackground("/api/cloudflare" + path, opts.method), { ...opts, headers });   // Backend-Job, s. bgjobs.js
   if (!res.ok) {
     let msg = res.statusText;
     try { const j = await res.json(); msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail); } catch { /* egal */ }
     throw new Error(msg);
   }
-  return res.json();
+  return resolveJob(await res.json());
 }
 
 const KIND = {

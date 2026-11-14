@@ -27,6 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app import db
+from app import bgjobs
 from app.auth import get_current_user, is_super_admin
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
@@ -265,7 +266,17 @@ def _call_ai(api_url: str, api_key: str, model: str, messages: list[dict]) -> st
 
 
 @router.post("/chat")
-async def chat(body: ChatBody, user: dict = Depends(get_current_user)):
+async def chat(body: ChatBody, background: bool = False, user: dict = Depends(get_current_user)):
+    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
+    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    async def _work(job):
+        job.update(phase='ai.chat', detail="KI-Antwort wird erstellt")
+        return await _chat_impl(body=body, user=user)
+    return await bgjobs.run('ai.chat', None, title="KI-Antwort wird erstellt", user=user, work=_work,
+                            background=background, private=True)
+
+
+async def _chat_impl(body: ChatBody, user: dict = Depends(get_current_user)):
     row = _conn().execute("SELECT * FROM ai_connections WHERE id = ?",
                           (body.connection_id,)).fetchone()
     if not row:

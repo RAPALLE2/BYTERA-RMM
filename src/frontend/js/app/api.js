@@ -185,7 +185,28 @@ function _timeoutFor(path) {
   return REQUEST_TIMEOUT_MS;
 }
 
+// ------------------------------------------------------------------
+// Aufgaben als BACKEND-JOB (app/bgjobs.py): Der Endpunkt bekommt
+// ?background=1, startet den Job und antwortet sofort; hier wird dann auf das
+// Ergebnis gewartet (live per Socket). Fuer die aufrufende Stelle sieht das aus
+// wie frueher - aber die Arbeit laeuft im Backend und wird durch Neuladen,
+// Schliessen oder einen Proxy-Timeout NICHT abgebrochen. Jeder Berechtigte
+// sieht sie in der Aufgaben-Anzeige (Taskleiste).
+//   options.onJob(job): Fortschritt (job.detail, job.pct, job.phase ...)
+// ------------------------------------------------------------------
+async function jobRequest(path, options = {}) {
+  return request(path, { timeoutMs: 60000, ...options });
+}
+
 async function request(path, options = {}) {
+  // Aendernde Aufrufe laufen als BACKEND-JOB, wo der Endpunkt das kann
+  // (app/bgjobs.py): ?background=1 -> Job sofort, dann hier live auf das Ergebnis
+  // warten (_awaitJob). Endpunkte ohne Job ignorieren den Parameter einfach.
+  // options.noWait: Job-Antwort direkt zurueckgeben (z.B. Server-Update).
+  // options.onJob(job): Zwischenstaende eines Jobs.
+  const method = (options.method || "GET").toUpperCase();
+  const wantJob = method !== "GET" && !options.noJob && !/[?&]background=/.test(path);
+  if (wantJob) path += (path.includes("?") ? "&" : "?") + "background=1";
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
   const token = getToken();
   if (token) headers["Authorization"] = `Bearer ${token}`;
@@ -242,8 +263,30 @@ async function request(path, options = {}) {
 
   // Manche Endpunkte (z.B. Skript-Downloads) liefern kein JSON zurück
   const contentType = res.headers.get("content-type") || "";
-  if (contentType.includes("application/json")) return res.json();
+  if (contentType.includes("application/json")) {
+    const data = await res.json();
+    if (method !== "GET" && !options.noWait && data && data.job === true && data.id) {
+      return _awaitJob(data, options.onJob);
+    }
+    return data;
+  }
   return res.text();
+}
+
+// Wartet auf einen Backend-Job (live per Socket) und liefert sein Ergebnis -
+// fuer die aufrufende Stelle wie eine normale Antwort. Der Job selbst laeuft
+// im Backend und wird durch Neuladen/Schliessen nicht abgebrochen.
+async function _awaitJob(started, onJob) {
+  const { waitJob, fetchJob } = await import("./bgjobs.js");
+  try { onJob?.(started); } catch (e) { console.error(e); }
+  const job = started.running ? await waitJob(started.id, onJob) : await fetchJob(started.id);
+  if (job.status === "error") throw new Error(job.error || t("error"));
+  if (job.status === "cancelled") {
+    const err = new Error(`Abgebrochen${job.cancelled_by ? " von " + job.cancelled_by : ""}`);
+    err.cancelled = true;
+    throw err;
+  }
+  return job.result !== undefined ? job.result : (await fetchJob(job.id)).result;
 }
 
 export const api = {
@@ -373,8 +416,8 @@ export const api = {
   updateClient: (id, fields) => request(`/api/clients/${id}`, { method: "PUT", body: JSON.stringify(fields) }),
   deleteClient: (id) => request(`/api/clients/${id}`, { method: "DELETE" }),
   execOnClient: (id, command, session, shell = "auto", elevated = false) =>
-    request(`/api/clients/${id}/exec`, { method: "POST", body: JSON.stringify({ command, session, shell, elevated }) }),
-  bulkExec: (client_ids, command) => request("/api/clients/bulk-exec", { method: "POST", body: JSON.stringify({ client_ids, command }) }),
+    jobRequest(`/api/clients/${id}/exec`, { method: "POST", body: JSON.stringify({ command, session, shell, elevated }) }),
+  bulkExec: (client_ids, command, onJob) => jobRequest("/api/clients/bulk-exec", { method: "POST", body: JSON.stringify({ client_ids, command }), onJob }),
   listClientFs: (id, path) => request(`/api/clients/${id}/fs?path=${encodeURIComponent(path)}`),
   listProcesses: (id) => request(`/api/clients/${id}/processes`),
   killProcess: (id, pid) => request(`/api/clients/${id}/processes/kill`, { method: "POST", body: JSON.stringify({ pid }) }),
@@ -479,7 +522,7 @@ export const api = {
   getPatchJob: (id) => request(`/api/patches/client/${id}/job`),
   getPatchReadiness: (id) => request(`/api/patches/client/${id}/readiness`),
   // Kurzer Funktionstest auf dem Client (Sekunden, kein voller Scan).
-  patchSelftest: (id) => request(`/api/patches/client/${id}/selftest`, { method: "POST" }),
+  patchSelftest: (id) => jobRequest(`/api/patches/client/${id}/selftest`, { method: "POST" }),
   applyPatches: (id, items) => request(`/api/patches/client/${id}/apply`, {
     method: "POST", body: JSON.stringify({ items: items || [] }) }),
   excludePatch: (patchId, excluded) => request(`/api/patches/${patchId}/exclude`, {
@@ -601,8 +644,8 @@ export const api = {
     request("/api/enrollment/tokens", { method: "POST", body: JSON.stringify({ tenant_id, location_id, client_name }) }),
   // Fertige Installationspakete (.exe/.msi/.deb/.rpm/.run) auflisten bzw. bauen
   listInstallers: () => request("/api/enrollment/installers"),
-  buildInstallers: (targets = "auto") =>
-    request("/api/enrollment/installers/build", { method: "POST", body: JSON.stringify({ targets }) }),
+  buildInstallers: (targets = "auto", onJob) =>
+    jobRequest("/api/enrollment/installers/build", { method: "POST", body: JSON.stringify({ targets }), onJob }),
 
   // --- Audit-Log ---
   getAuditLog: () => request("/api/audit"),
@@ -621,11 +664,12 @@ export const api = {
   deleteRecording: (id) => request(`/api/recordings/${id}`, { method: "DELETE" }),
 
   // --- Agent-Verwaltung ---
-  updateAgent: (clientId) => request(`/api/clients/${clientId}/update-agent`, { method: "POST" }),
+  // Agent-Update als Backend-Job; wartet auf die Rueckmeldung des Agenten (onJob: Fortschritt)
+  updateAgent: (clientId, onJob) => jobRequest(`/api/clients/${clientId}/update-agent`, { method: "POST", onJob }),
   updateAgentStatus: (clientId) => request(`/api/clients/${clientId}/update-agent/status`),
-  updateAllAgents: (opts = {}) => request("/api/clients/update-all-agents", {
+  updateAllAgents: (opts = {}) => request("/api/clients/update-all-agents?background=1", { noWait: true,
     method: "POST", body: JSON.stringify({ include_offline: !!opts.include_offline }) }),
-  uninstallAgent: (clientId) => request(`/api/clients/${clientId}/uninstall-agent`, { method: "POST" }),
+  uninstallAgent: (clientId, onJob) => jobRequest(`/api/clients/${clientId}/uninstall-agent`, { method: "POST", onJob }),
 
   // --- Effektive Rechte des eingeloggten Benutzers (Frontend-Gating) ---
   getEffectivePermissions: () => request("/api/auth/effective"),
@@ -663,22 +707,22 @@ export const api = {
   // --- Nodes (eigener Prozess auf dem Client, siehe feature/node.js) ---
   listNodes: () => request("/api/nodes"),
   nodeState: (clientId) => request(`/api/nodes/${encodeURIComponent(clientId)}`, { timeoutMs: 5000 }),
-  nodeEnable: (clientId) => request(`/api/nodes/${encodeURIComponent(clientId)}/enable`, { method: "POST" }),
-  nodeDisable: (clientId) => request(`/api/nodes/${encodeURIComponent(clientId)}/disable`, { method: "POST" }),
-  nodeUpdate: (clientId) => request(`/api/nodes/${encodeURIComponent(clientId)}/update`, { method: "POST" }),
+  nodeEnable: (clientId, onJob) => jobRequest(`/api/nodes/${encodeURIComponent(clientId)}/enable`, { method: "POST", onJob }),
+  nodeDisable: (clientId, onJob) => jobRequest(`/api/nodes/${encodeURIComponent(clientId)}/disable`, { method: "POST", onJob }),
+  nodeUpdate: (clientId, onJob) => jobRequest(`/api/nodes/${encodeURIComponent(clientId)}/update`, { method: "POST", onJob }),
   nodeRefresh: (clientId) => request(`/api/nodes/${encodeURIComponent(clientId)}/refresh`, { method: "POST" }),
-  nodeDockerInstall: (clientId) => request(`/api/nodes/${encodeURIComponent(clientId)}/docker-install`, { method: "POST" }),
+  nodeDockerInstall: (clientId, onJob) => jobRequest(`/api/nodes/${encodeURIComponent(clientId)}/docker-install`, { method: "POST", onJob }),
   nodeLogs: (clientId) => request(`/api/nodes/${encodeURIComponent(clientId)}/logs`),
   nodeModules: () => request("/api/nodes/modules"),
   nodeChoices: (moduleId) => request(`/api/nodes/choices/${encodeURIComponent(moduleId)}`),
-  nodeDeploy: (clientId, moduleId, params = {}) =>
-    request(`/api/nodes/${encodeURIComponent(clientId)}/modules/${encodeURIComponent(moduleId)}`,
-      { method: "POST", body: JSON.stringify({ params }) }),
-  nodeRemoveModule: (clientId, moduleId) =>
-    request(`/api/nodes/${encodeURIComponent(clientId)}/modules/${encodeURIComponent(moduleId)}`, { method: "DELETE" }),
-  nodeModuleAction: (clientId, moduleId, action, data = {}) =>
-    request(`/api/nodes/${encodeURIComponent(clientId)}/modules/${encodeURIComponent(moduleId)}/action`,
-      { method: "POST", body: JSON.stringify({ action, data }) }),
+  nodeDeploy: (clientId, moduleId, params = {}, onJob) =>
+    jobRequest(`/api/nodes/${encodeURIComponent(clientId)}/modules/${encodeURIComponent(moduleId)}`,
+      { method: "POST", body: JSON.stringify({ params }), onJob }),
+  nodeRemoveModule: (clientId, moduleId, onJob) =>
+    jobRequest(`/api/nodes/${encodeURIComponent(clientId)}/modules/${encodeURIComponent(moduleId)}`, { method: "DELETE", onJob }),
+  nodeModuleAction: (clientId, moduleId, action, data = {}, onJob) =>
+    jobRequest(`/api/nodes/${encodeURIComponent(clientId)}/modules/${encodeURIComponent(moduleId)}/action`,
+      { method: "POST", body: JSON.stringify({ action, data }), onJob }),
 
   // --- Port-Weiterleitung (ohne VPN) ---
   listForwards: () => request("/api/portforward"),
@@ -741,8 +785,8 @@ export const api = {
     body: JSON.stringify(webdav === undefined ? { mode } : { mode, webdav }) }),
   // --- Container-Dienste (nur im Docker-Betrieb) ---
   dockerServices: () => request("/api/admin/docker/services"),
-  dockerEnable: (key) => request(`/api/admin/docker/services/${key}/enable`, { method: "POST" }),
-  dockerDisable: (key) => request(`/api/admin/docker/services/${key}/disable`, { method: "POST" }),
+  dockerEnable: (key, onJob) => jobRequest(`/api/admin/docker/services/${key}/enable`, { method: "POST", onJob }),
+  dockerDisable: (key, onJob) => jobRequest(`/api/admin/docker/services/${key}/disable`, { method: "POST", onJob }),
   dockerDbCredentials: () => request("/api/admin/docker/db-credentials"),
   // dist/ leeren (gebaute Agent-Installationspakete)
   sourceClearDist: () => request("/api/source/dist/clear", { method: "POST" }),
@@ -751,7 +795,7 @@ export const api = {
   // Server-Umzug: Agenten zum neuen Backend schicken
   migrateRedirectState: () => request("/api/source/migrate/redirect"),
   migrateRedirectTest: (url) => request("/api/source/migrate/redirect/test", { method: "POST", body: JSON.stringify({ url }) }),
-  migrateRedirectStart: (url, agent_token) => request("/api/source/migrate/redirect", { method: "POST", body: JSON.stringify({ url, agent_token }) }),
+  migrateRedirectStart: (url, agent_token) => request("/api/source/migrate/redirect?background=1", { method: "POST", noWait: true, body: JSON.stringify({ url, agent_token }) }),
   migrateRedirectStop: () => request("/api/source/migrate/redirect", { method: "DELETE" }),
   migrateExportUrl: (opts = {}) => {
     const q = new URLSearchParams({
@@ -808,7 +852,7 @@ export const api = {
     request("/api/source/db/drop-table", { method: "POST", body: JSON.stringify({ table }) }),
   sourceDbCreateTable: (name, columns) =>
     request("/api/source/db/create-table", { method: "POST", body: JSON.stringify({ name, columns }) }),
-  sourceDbBackup: () => request("/api/source/db/backup", { method: "POST" }),
+  sourceDbBackup: () => jobRequest("/api/source/db/backup", { method: "POST" }),
   // ZIP hochladen + extrahieren (multipart; NICHT über request(), da FormData).
   sourceUploadZip: async (fileObj, path = "") => {
     const fd = new FormData();
@@ -887,10 +931,13 @@ export const api = {
   getSettings: () => request("/api/admin/settings"),  updateSettings: (data) => request("/api/admin/settings", { method: "PUT", body: JSON.stringify(data) }),
   getServerUpdateInfo: () => request("/api/admin/update/info"),
   setServerUpdateRepo: (url) => request("/api/admin/update/repo", { method: "PUT", body: JSON.stringify({ url }) }),
-  runServerUpdate: (target, tag) => request("/api/admin/update/run", { method: "POST", body: JSON.stringify({ target, tag: tag || null }) }),
+  // Server-Update als Backend-Job: Antwort sofort, Fortschritt in der Aufgaben-Anzeige
+  // (das Backend startet am Ende neu - deshalb nicht auf das Ergebnis warten).
+  runServerUpdate: (target, tag) => request("/api/admin/update/run?background=1", { method: "POST", noWait: true, body: JSON.stringify({ target, tag: tag || null }) }),
   getDatabaseInfo: () => request("/api/admin/database/info"),
   testDatabase: (cfg) => request("/api/admin/database/test", { method: "POST", body: JSON.stringify(cfg) }),
-  switchDatabase: (cfg) => request("/api/admin/database/switch", { method: "POST", body: JSON.stringify(cfg) }),
+  // Wechsel laeuft als Backend-Job; Fortschritt kommt ueber databaseProgress()/Aufgaben-Anzeige
+  switchDatabase: (cfg) => request("/api/admin/database/switch", { method: "POST", noWait: true, body: JSON.stringify(cfg) }),
   databaseProgress: () => request("/api/admin/database/progress"),
   databaseDocker: () => request("/api/admin/database/docker"),     // Modul "sql"
   databaseBackups: () => request("/api/admin/database/backups"),

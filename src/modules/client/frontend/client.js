@@ -8,18 +8,19 @@
 
 import { getToken } from "/js/app/api.js";
 import { esc, uiConfirm, uiPrompt } from "/js/app/utils.js";
+import { withBackground, resolveJob } from "/js/app/bgjobs.js";
 
 async function creq(path, opts = {}) {
   const token = getToken() || "";
   const headers = { ...(token ? { Authorization: "Bearer " + token } : {}) };
   if (opts.body && !(opts.body instanceof FormData)) headers["Content-Type"] = "application/json";
-  const res = await fetch("/api/client" + path, { ...opts, headers });
+  const res = await fetch(withBackground("/api/client" + path, opts.method), { ...opts, headers });   // Backend-Job, s. bgjobs.js
   if (!res.ok) {
     let msg = res.statusText;
     try { msg = (await res.json()).detail || msg; } catch { /* egal */ }
     throw new Error(msg);
   }
-  return (res.headers.get("content-type") || "").includes("json") ? res.json() : res;
+  return (res.headers.get("content-type") || "").includes("json") ? resolveJob(await res.json()) : res;
 }
 
 const PLAT = {

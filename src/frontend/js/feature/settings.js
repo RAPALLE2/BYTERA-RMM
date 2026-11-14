@@ -408,6 +408,24 @@ export function renderSettings(body, win) {
       }
     });
 
+    // Massen-Update laeuft als Backend-Job -> Fortschritt live (auch nach Neuladen)
+    let stopUpdAll = null;
+    async function watchUpdateAll() {
+      if (stopUpdAll) return;
+      const { watchJobs, jobStatusText } = await import("../app/bgjobs.js");
+      stopUpdAll = watchJobs({ kind: "agent.update_all", key: "all" }, (job) => {
+        const msg = root.querySelector("#ge-updateall-msg");
+        const btn = root.querySelector("#ge-updateall");
+        if (!root.isConnected) { stopUpdAll?.(); return; }
+        if (!job || !msg) return;
+        if (btn) btn.disabled = !!job.running;
+        if (job.running || Date.now() - (job.finished || 0) < 15 * 60000) {
+          msg.textContent = `${job.title}: ${jobStatusText(job)}`;
+        }
+      });
+    }
+    if (root.querySelector("#ge-updateall")) watchUpdateAll();
+
     root.querySelector("#ge-updateall")?.addEventListener("click", async () => {
       const btn = root.querySelector("#ge-updateall");
       const msg = root.querySelector("#ge-updateall-msg");
@@ -427,6 +445,7 @@ export function renderSettings(body, win) {
           (res.offline && !res.queued_offline ? `, ${t("set_upd_skipped", { n: res.offline })}` : "");
         if (msg) msg.textContent = txt + " – " + t("set_upd_notify_short");
         window.notify?.(txt + ". " + t("set_upd_notify_long"), "info", 8000);
+        watchUpdateAll();
       } catch (e) {
         if (msg) msg.textContent = "";
         window.notify?.("Fehlgeschlagen: " + e.message, "error");
@@ -482,6 +501,36 @@ export function renderSettings(body, win) {
       } catch (e) { err.textContent = e.message; err.classList.remove("hidden"); }
     });
 
+    // Server-Update ist ein BACKEND-JOB: Stand immer vom Backend anzeigen -
+    // auch nach dem Neuladen und fuer andere Admins.
+    (async () => {
+      const { watchJobs, jobStatusText } = await import("../app/bgjobs.js");
+      let reloadPlanned = false, seenRunning = false;
+      const stop = watchJobs({ kind: "server.update", key: "server" }, (job) => {
+        const btn = root.querySelector("#up-run");
+        const err = root.querySelector("#up-error");
+        if (!btn || !job) return;
+        if (job.running) {
+          seenRunning = true;
+          btn.disabled = true;
+          btn.textContent = job.phase === "restart"
+            ? "✓ Update eingespielt — Backend startet neu…"
+            : `⏳ ${job.detail || t("u_update_lauft")}${job.by ? " (" + job.by + ")" : ""}`;
+          if (job.phase === "restart" && !reloadPlanned) {
+            reloadPlanned = true;
+            window.notify?.(`${job.detail} – Seite wird gleich neu geladen.`, "success");
+            setTimeout(() => location.reload(), 9000);
+          }
+          return;
+        }
+        if (!seenRunning) return;            // nur Laeufe aus dieser Sitzung zuruecksetzen
+        btn.disabled = false; btn.textContent = "⬇️ Update installieren";
+        if (job.status === "error" && err) { err.textContent = jobStatusText(job); err.classList.remove("hidden"); }
+      });
+      const obs = new MutationObserver(() => { if (!root.isConnected) { stop(); obs.disconnect(); } });
+      obs.observe(document.body, { childList: true, subtree: true });
+    })();
+
     root.querySelector("#up-run").addEventListener("click", async () => {
       const err = root.querySelector("#up-error"); err.classList.add("hidden");
       const target = root.querySelector('input[name="up-target"]:checked').value;
@@ -493,10 +542,8 @@ export function renderSettings(body, win) {
       const btn = root.querySelector("#up-run");
       btn.disabled = true; btn.textContent = t("u_update_lauft");
       try {
-        const res = await api.runServerUpdate(target, tag);
-        btn.textContent = "✓ Update eingespielt — Backend startet neu…";
-        window.notify?.(`${res.applied} eingespielt — Backend startet neu. Seite gleich neu laden.`, "success");
-        setTimeout(() => location.reload(), 8000);
+        // Laeuft als Backend-Job; Fortschritt/Ende zeigt watchServerUpdate()
+        await api.runServerUpdate(target, tag);
       } catch (e) {
         btn.disabled = false; btn.textContent = "⬇️ Update installieren";
         err.textContent = e.message; err.classList.remove("hidden");

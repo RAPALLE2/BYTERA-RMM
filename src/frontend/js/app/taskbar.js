@@ -295,6 +295,9 @@ export function initTaskbar() {
     resizeTimer = setTimeout(renderTaskbar, 120);
   });
 
+  // Aufgaben (Hintergrund-Jobs des Backends) - live, fuer alle gleich
+  import("./jobtray.js").then((m) => m.initJobTray()).catch((e) => console.error("[jobtray]", e));
+
   // Uhr aktualisieren
   const clock = document.getElementById("taskbar-clock");
   function tick() {
