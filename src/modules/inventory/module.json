@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "id": "inventory",
+  "name": "Inventar",
+  "version": "1.0.0",
+  "description": "Inventarverwaltung für alle Arten von Geräten (z. B. Laptops der Mitarbeiter, Handys, Monitore, Möbel): Notizen, Kosten, Garantie, Seriennummer und Besitzer. Geräte lassen sich an Besitzer ausgeben oder in Lager mit Regalen einlagern – mit Verlauf jeder Änderung.",
+  "author": "BYTERA",
+  "category": "Verwaltung",
+  "icon": "📦",
+  "requires": [],
+  "pip": [],
+  "entry": "module",
+  "routers": [
+    "inventory_routes"
+  ],
+  "hooks": {
+    "startup": "on_startup"
+  },
+  "apps": [
+    {
+      "id": "inventory",
+      "label": "Inventar",
+      "icon": "📦",
+      "title": "Inventar",
+      "entry": "inventory.js",
+      "export": "renderInventory",
+      "w": 1100,
+      "h": 700,
+      "perm": "see_inventory"
+    }
+  ]
+}

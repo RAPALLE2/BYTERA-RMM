@@ -1302,6 +1302,8 @@
  "perm_ticket_create": "ein Ticket erstellen",
  "perm_manage_privacy": "Datenschutz-Vorgänge bearbeiten",
  "perm_manage_patching": "Updates verwalten",
+ "perm_see_inventory": "das Inventar ansehen",
+ "perm_manage_inventory": "das Inventar verwalten",
  "perm_customize_dashboard": "das Dashboard anpassen",
  "mg_fleet_overview": "Flotten-Übersicht",
  "mg_warranty": "Garantie",

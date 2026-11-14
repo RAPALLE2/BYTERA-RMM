@@ -2826,6 +2826,8 @@ GLOBAL_PERM_KEYS = [
     "use_vpn", "vpn_unlimited",
     "ticket_read", "ticket_create", "ticket_edit", "ticket_comment",
     "ticket_assign", "ticket_resolve", "ticket_delete",
+    # Modul "inventory": Inventar ansehen bzw. Geraete/Lager verwalten
+    "see_inventory", "manage_inventory",
 ]
 
 # Pro-Client-Rechte:
@@ -2959,6 +2961,8 @@ _PERM_IMPLIES = {
     "ticket_assign": ["ticket_read"],
     "ticket_resolve": ["ticket_read"],
     "ticket_delete": ["ticket_read"],
+    # Inventar verwalten setzt Ansehen voraus.
+    "manage_inventory": ["see_inventory"],
 }
 
 

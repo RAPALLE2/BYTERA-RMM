@@ -180,6 +180,8 @@ PERM_LABELS = {
     "manage_privacy": "Datenschutz: Fristen, Auskunft, Löschung (DSGVO)",
     "patching": "Updates sehen und installieren",
     "manage_patching": "Auto-Patch-Regeln festlegen",
+    "see_inventory": "Inventar ansehen",
+    "manage_inventory": "Inventar verwalten (Geräte, Besitzer, Lager)",
     "super_admin": "⭐ Super-Admin (alle Rechte)",
     "add_client": "Clients hinzufügen (Enrollment)",
     "see_org": "Organigramm ansehen",

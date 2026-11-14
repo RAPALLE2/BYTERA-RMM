@@ -1302,6 +1302,8 @@
  "perm_ticket_create": "create a ticket",
  "perm_manage_privacy": "handle privacy requests",
  "perm_manage_patching": "manage updates",
+ "perm_see_inventory": "view the inventory",
+ "perm_manage_inventory": "manage the inventory",
  "perm_customize_dashboard": "customise the dashboard",
  "mg_fleet_overview": "Fleet overview",
  "mg_warranty": "Warranty",

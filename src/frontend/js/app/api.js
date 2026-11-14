@@ -122,6 +122,8 @@ const _PERM_KEY = {
   ticket_create: "perm_ticket_create",
   manage_privacy: "perm_manage_privacy",
   manage_patching: "perm_manage_patching",
+  see_inventory: "perm_see_inventory",
+  manage_inventory: "perm_manage_inventory",
   customize_dashboard: "perm_customize_dashboard",
 };
 
