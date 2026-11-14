@@ -188,4 +188,18 @@ def module_frontend_file(mid: str, rel: str):
     f = modules.frontend_file(mid, rel)
     if f is None:
         raise HTTPException(status_code=404, detail="Nicht gefunden")
+    # Fehlende Exporte durch Platzhalter ergaenzen (app/frontend_guard.py) -
+    # sonst faellt ein ganzer Modulbaum aus, nur weil eine Datei nicht zum
+    # Stand der anderen passt.
+    if str(rel).lower().endswith(".js"):
+        try:
+            from app import frontend_guard
+            extra = frontend_guard.patch_for(f"/modules/frontend/{mid}/{rel}")
+            if extra:
+                from fastapi.responses import Response as _Resp
+                return _Resp(content=open(f, "rb").read() + extra.encode("utf-8"),
+                             media_type="text/javascript; charset=utf-8",
+                             headers={"Cache-Control": "no-cache"})
+        except Exception:
+            pass
     return FileResponse(f, headers={"Cache-Control": "no-cache"})

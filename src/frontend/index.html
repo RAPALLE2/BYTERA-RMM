@@ -207,8 +207,10 @@
   </div>
 
   <!-- Eigener Code, als ES-Modul geladen (erlaubt "import" zwischen Dateien) -->
-  <script type="module" src="/js/app/icons.js"></script>
-  <script type="module" src="/js/app/app.js"></script>
-  <script type="module" src="/js/app/mobile.js"></script>
+  <!-- Sicherer Lader: laedt icons.js, app.js, mobile.js einzeln per import().
+       Scheitert ein Teil (fehlender Export, Syntaxfehler, alter Cache), zeigt
+       er eine Fehlermeldung bzw. den Notfall-Modus (Anmeldung, Update, Hotfix,
+       Neustart) statt einer toten Seite. Notfall-Modus manuell: /?notfall=1 -->
+  <script src="/js/boot.js"></script>
 </body>
 </html>

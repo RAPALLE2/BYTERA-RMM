@@ -818,8 +818,21 @@ class _RevalidatingStatic(StaticFiles):
             return self.DEFAULT_MAX_AGE
 
     async def get_response(self, path: str, scope):
-        response = await super().get_response(path, scope)
         low = path.lower()
+        # Schutz gegen fehlende Exporte (app/frontend_guard.py): Passt eine
+        # Datei nicht zur Version, werden Platzhalter angehaengt, damit nicht
+        # der GESAMTE Modulbaum (inkl. Anmeldung) ausfaellt.
+        if low.endswith(".js"):
+            try:
+                from app import frontend_guard
+                extra = frontend_guard.patch_for("/" + path.lstrip("/").replace("\\", "/"))
+            except Exception:
+                extra = ""
+            if extra:
+                patched = await self._patched_response(path, scope, extra)
+                if patched is not None:
+                    return patched
+        response = await super().get_response(path, scope)
         if low.endswith(self.ALWAYS_FRESH):
             response.headers["Cache-Control"] = "no-cache"
         elif low.endswith(self.REVALIDATE):
@@ -828,6 +841,41 @@ class _RevalidatingStatic(StaticFiles):
                 f"private, max-age={secs}, must-revalidate" if secs else "no-cache")
         return response
 
+
+    async def _patched_response(self, path: str, scope, extra: str):
+        """Datei + Platzhalter ausliefern (mit eigener ETag, damit der Browser
+        keine alte, ungepatchte Fassung aus dem Cache nimmt)."""
+        import hashlib
+        from starlette.responses import Response as _Resp
+        try:
+            full = (FRONTEND_DIR / path.lstrip("/")).resolve()
+            if FRONTEND_DIR.resolve() not in full.parents or not full.is_file():
+                return None
+            body = full.read_bytes() + extra.encode("utf-8")
+        except OSError:
+            return None
+        etag = '"g-' + hashlib.sha1(body).hexdigest()[:20] + '"'
+        headers = {"ETag": etag, "Cache-Control": "no-cache"}
+        inm = dict(scope.get("headers") or []).get(b"if-none-match", b"").decode("latin-1")
+        if inm and etag in inm:
+            return _Resp(status_code=304, headers=headers)
+        return _Resp(content=body, media_type="text/javascript; charset=utf-8", headers=headers)
+
+
+@api.get("/api/frontend/health")
+async def _frontend_health():
+    """Ohne Anmeldung abrufbar (nur Dateinamen): Welche Frontend-Dateien
+    importieren Funktionen, die es in der Zieldatei nicht gibt? Wird vom
+    sicheren Lader (js/boot.js) im Notfall-Modus angezeigt."""
+    from app import frontend_guard
+    return frontend_guard.health()
+
+
+try:
+    from app import frontend_guard as _fg
+    _fg.check_on_startup()
+except Exception as _e:
+    print(f"[frontend-guard] {_e}")
 
 api.mount("/", _RevalidatingStatic(directory=FRONTEND_DIR, html=True), name="frontend")
 
