@@ -48,6 +48,7 @@ class ProfileBody(BaseModel):
     theme: str | None = None      # "dark" oder "light"
     accent: str | None = None     # Farbpalette, z.B. "teal", "violet", ...
     email: str | None = None
+    design: str | None = None     # "futuristic" | "standard" | "" (= Standard der Installation)
 
 
 def _auth_realm_of(user) -> str | None:
@@ -75,6 +76,10 @@ def _public_user(user: dict) -> dict:
         "language": user["language"],
         "theme": user["theme"],
         "accent": user["accent"] if "accent" in user.keys() else "teal",
+        # Oberflaechen-Design: design = was gilt, design_choice = eigene Wahl ("" = Standard)
+        "design": db.effective_design(user),
+        "design_choice": (user["design"] if "design" in user.keys() else "") or "",
+        "default_design": db.get_setting("default_design", "futuristic") or "futuristic",
         "email": (user["email"] if "email" in user.keys() else None) or "",
         # Realm-ID (AD/LDAP/SSO) oder null bei lokalem Konto - das Frontend
         # blendet damit u.a. die Passwort-ändern-Funktion aus.
@@ -413,7 +418,8 @@ def update_profile(body: ProfileBody, user: dict = Depends(get_current_user)):
             other = db.get_user_by_email(email)
             if other and other["id"] != user["id"]:
                 raise HTTPException(400, "Diese E-Mail-Adresse wird bereits verwendet")
-    db.update_user_profile(user["id"], new_name, body.language, body.theme, body.accent, email=email)
+    db.update_user_profile(user["id"], new_name, body.language, body.theme, body.accent, email=email,
+                           design=body.design)
     return _public_user(db.get_user_by_id(user["id"]))
 
 

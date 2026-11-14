@@ -59,7 +59,19 @@ export function renderProfile(body, win) {
         <select id="pr-lang" data-lang-select></select>
       </div>
       <div class="form-row">
-        <label>Design</label>
+        <label>Oberfläche</label>
+        <select id="pr-design">
+          <option value="" ${!u.design_choice ? "selected" : ""}>Standard der Installation (${(u.default_design || "futuristic") === "standard" ? "Standard" : "Futuristisch"})</option>
+          <option value="standard" ${u.design_choice === "standard" ? "selected" : ""}>Standard – klassisch (Navigation links, Tabs)</option>
+          <option value="futuristic" ${u.design_choice === "futuristic" ? "selected" : ""}>Futuristisch – Desktop mit Fenstern</option>
+        </select>
+        <div style="font-size:11px;color:var(--subtext);margin-top:3px">
+          Standard: schlicht wie Proxmox, Tactical RMM oder NinjaOne – feste Navigation links,
+          Apps öffnen sich als Tabs. Ein Wechsel lädt die Oberfläche neu.
+        </div>
+      </div>
+      <div class="form-row">
+        <label>Hell / Dunkel</label>
         <select id="pr-theme">
           <option value="dark" ${u.theme === "dark" ? "selected" : ""}>Dunkel</option>
           <option value="light" ${u.theme === "light" ? "selected" : ""}>Hell</option>
@@ -405,9 +417,17 @@ export function renderProfile(body, win) {
         language: body.querySelector("#pr-lang").value,  // volle Locale, z.B. de_DE
         theme: body.querySelector("#pr-theme").value,
         accent: selectedAccent,
+        design: body.querySelector("#pr-design").value,
       });
     } catch (e) { window.notify?.(e.message || "Speichern fehlgeschlagen", "error", 6000); return; }
+    const designChanged = (state.user?.design || "futuristic") !== (updated.design || "futuristic");
     state.user = updated;
+    if (designChanged) {
+      // Die Bedienung (Fenster vs. Tabs) wird beim Start aufgebaut -> neu laden
+      window.notify?.("Oberfläche wird umgestellt …", "info", 3000);
+      setTimeout(() => location.reload(), 400);
+      return;
+    }
     applyTheme(updated.theme);
     applyAccent(updated.accent || "teal");
     setLanguage(updated.language);

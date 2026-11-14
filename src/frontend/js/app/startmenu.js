@@ -322,7 +322,43 @@ function render() {
   layout.items.forEach((it) => {
     if (it.t === "folder" && it.open) gridEl.appendChild(folderDrawer(it));
   });
+  _menuListeners.forEach((fn) => { try { fn(); } catch (e) { console.error(e); } });
 }
+
+// -------------------------------------------------------------
+// Schnittstelle fuer das klassische Design (classic.js): Die linke Navigation
+// zeigt GENAU die Apps und Ordner dieses Menues - gleiche Anordnung, gleiche
+// Rechte (isAllowed). Aenderungen am Menue melden sich ueber onMenuChange().
+// -------------------------------------------------------------
+const _menuListeners = [];
+export function onMenuChange(fn) { _menuListeners.push(fn); }
+
+/** [{t:"app", id, icon, label} | {t:"folder", id, name, apps:[{id, icon, label}]}]
+ *  in Menue-Reihenfolge (Slot), nur erlaubte Apps, leere Ordner ausgelassen. */
+export function getMenuModel() {
+  const app = (id) => {
+    const c = CATALOG[id];
+    return c && isAllowed(id) ? { t: "app", id, icon: c.icon || "", label: c.label } : null;
+  };
+  const items = [...layout.items].sort((a, b) => (a.pos ?? 0) - (b.pos ?? 0));
+  const out = [];
+  for (const it of items) {
+    if (it.t === "app") {
+      const a = app(it.id);
+      if (a) out.push(a);
+    } else if (it.t === "folder") {
+      const apps = (it.apps || []).map(app).filter(Boolean);
+      if (apps.length) out.push({ t: "folder", id: it.id, name: it.name, apps });
+    }
+  }
+  return out;
+}
+
+/** App wie per Klick im Menue oeffnen. */
+export function openMenuApp(id) { openApp(id); }
+
+/** Icon/Label einer App aus dem Katalog (fuer Tabs). */
+export function catalogEntry(id) { return CATALOG[id] || null; }
 
 // Leerer Rasterplatz: nimmt per Drop ein Item auf und weist ihm den Slot zu.
 function emptyCell(slot) {

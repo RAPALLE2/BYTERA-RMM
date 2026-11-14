@@ -6,9 +6,7 @@
   <title>BYTERA RMM</title>
 
   <!-- Socket.IO Client-Bibliothek von einem CDN (kein npm/Build nötig) -->
-  <!-- Socket.IO-Client LOKAL (4.7.5). Frueher von cdnjs geladen: war das CDN nicht
-       erreichbar (Firmennetz, offline, Filter), blieb das ganze Dashboard leer. -->
-  <script src="/js/vendor/socket.io.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
   <!-- guacamole-common-js wird NICHT mehr hier vorab geladen: Das npm-Paket
        1.5.0 enthält kein klassisches <script>-Bundle (nur dist/esm + dist/cjs,
        beide als <script src> untauglich -> 404 bzw. "module is not defined").
@@ -19,6 +17,8 @@
   <link rel="stylesheet" href="/css/style.css" />
   <link rel="stylesheet" href="/css/ui.css" />
   <link rel="stylesheet" href="/css/mobile.css" />
+  <!-- Design "Standard" (klassisch) - greift nur mit body.design-standard / body.cl-layout -->
+  <link rel="stylesheet" href="/css/classic.css" />
   <link rel="icon" href="/image/logo_r.png"/>
 </head>
 <body>

@@ -7,6 +7,7 @@
 // - Bei VIELEN offenen Fenstern schaltet die Leiste automatisch in den
 //   Icon-Modus: nur noch das Symbol, der Titel erscheint beim Überfahren.
 
+import { renderClassicTabs } from "./classic.js";
 import { state } from "./state.js";
 import { focusWindow, toggleMinimize, toggleMaximize, togglePin, closeWindow, minimizeAll, openWindow, snapWindowTo } from "./windowmanager.js";
 import { bindContextMenu } from "./contextmenu.js";
@@ -77,6 +78,8 @@ const MIN_LABEL_WIDTH = 108;   // px, die ein Button mit Text mindestens braucht
 const _btnCache = new Map();
 
 export function renderTaskbar() {
+  // Klassisches Design: Tab-Leiste mitziehen (Fensterliste hat sich geaendert)
+  try { renderClassicTabs(); } catch (e) { console.error(e); }
   const container = document.getElementById("taskbar-windows");
   if (!container) return;
 

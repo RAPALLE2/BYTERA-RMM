@@ -307,6 +307,19 @@ export function renderSettings(body, win) {
         </div>
         </div>
 
+        <h3 style="margin-top:24px">Oberfläche</h3>
+        <div class="form-row">
+          <label>Standard-Oberfläche für neue Benutzer</label>
+          <select id="ge-default-design">
+            <option value="futuristic" ${(s.default_design || "futuristic") === "futuristic" ? "selected" : ""}>Futuristisch – Desktop mit Fenstern</option>
+            <option value="standard" ${s.default_design === "standard" ? "selected" : ""}>Standard – klassisch (Navigation links, Tabs)</option>
+          </select>
+          <p style="color:var(--subtext);font-size:12px;margin:4px 0 0">
+            Gilt für alle, die im Profil „Standard der Installation“ eingestellt haben (neue Benutzer).
+            Jeder Benutzer kann im Profil selbst umstellen.
+          </p>
+        </div>
+
         <h3 style="margin-top:24px">${t("set_agent_autoupd")}</h3>
         <p style="color:var(--subtext);font-size:13px">
           ${t("set_agent_autoupd_hint")}
@@ -383,6 +396,7 @@ export function renderSettings(body, win) {
         agent_auto_update: root.querySelector("#ge-autoupdate").checked ? "1" : "0",
         agent_auto_update_offline: root.querySelector("#ge-autoupdate-offline").checked ? "1" : "0",
       };
+      if (has("ge-default-design")) payload.default_design = val("ge-default-design");
       if (has("ge-server-host")) {
         payload.server_host = val("ge-server-host").trim();
         payload.server_domain = val("ge-server-domain").trim();

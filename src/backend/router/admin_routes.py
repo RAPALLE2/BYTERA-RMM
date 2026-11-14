@@ -513,6 +513,9 @@ class SettingsBody(BaseModel):
     # Server-Selbst-Update (Settings -> Update)
     server_auto_update: str | None = None            # "1" | "0"
     server_auto_update_channel: str | None = None    # "commit" | "full" | "any"
+    # Oberflaechen-Design fuer Benutzer ohne eigene Wahl (neue Benutzer):
+    # "futuristic" (Desktop mit Fenstern) | "standard" (klassisch: Navigation links, Tabs)
+    default_design: str | None = None
     # --- VPN (WireGuard-kompatibel) ---
     # Port und Netz sind bewusst STRINGS: leer bedeutet "Standard verwenden",
     # und das liesse sich mit int nicht ausdrücken.
@@ -559,6 +562,8 @@ def update_settings(body: SettingsBody, user: dict = Depends(get_current_user)):
         require_perm(user, "admin_settings")
     if any(k not in ADMIN_SETTING_KEYS for k in changed):
         require_perm(user, "manage_settings")
+    if "default_design" in changed and changed["default_design"] not in ("futuristic", "standard"):
+        raise HTTPException(400, "Unbekanntes Design (erlaubt: futuristic, standard)")
     # server_url darf bewusst auf "" gesetzt werden (= wieder automatisch).
     for key, value in changed.items():
         db.set_setting(key, value)

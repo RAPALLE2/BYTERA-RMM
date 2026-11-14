@@ -876,6 +876,10 @@ def init_db() -> None:
     _migrate_add_column("users", "silent_screen", "INTEGER DEFAULT 0")
     _migrate_add_column("users", "ui_prefs", "TEXT")
     _migrate_add_column("users", "email", "TEXT")
+    # Oberflaechen-Design je Benutzer: '' = Standard der Installation
+    # (Einstellung "default_design"), 'futuristic' = Desktop mit Fenstern,
+    # 'standard' = klassisch (feste Navigation links, Inhalte als Tabs).
+    _migrate_add_column("users", "design", "TEXT DEFAULT ''")
     # Client-Websites: Öffnen im internen Browser-Fenster oder externen Tab.
     _migrate_add_column("client_websites", "open_mode", "TEXT DEFAULT 'external'")
     _migrate_add_column("clients", "agent_version", "TEXT")  # gemeldete Agent-Version (für "veraltet"-Hinweis)
@@ -2034,7 +2038,23 @@ def set_user_totp(user_id: str, secret: str | None = None,
     _conn.commit()
 
 
-def update_user_profile(user_id: str, display_name: str | None = None, language: str | None = None, theme: str | None = None, accent: str | None = None, email: str | None = None) -> None:
+DESIGNS = ("futuristic", "standard")
+
+
+def effective_design(user) -> str:
+    """Design, das fuer den Benutzer gilt: eigene Wahl, sonst Standard der Installation."""
+    own = ""
+    try:
+        own = (user["design"] if "design" in user.keys() else "") or ""
+    except Exception:
+        own = ""
+    if own in DESIGNS:
+        return own
+    d = get_setting("default_design", "futuristic") or "futuristic"
+    return d if d in DESIGNS else "futuristic"
+
+
+def update_user_profile(user_id: str, display_name: str | None = None, language: str | None = None, theme: str | None = None, accent: str | None = None, email: str | None = None, design: str | None = None) -> None:
     """Aktualisiert nur die übergebenen Felder (die anderen bleiben unverändert)."""
     user = get_user_by_id(user_id)
     if not user:
@@ -2051,6 +2071,9 @@ def update_user_profile(user_id: str, display_name: str | None = None, language:
             user_id,
         ),
     )
+    if design is not None:
+        _conn.execute("UPDATE users SET design = ? WHERE id = ?",
+                      (design if design in DESIGNS else "", user_id))
     _conn.commit()
 
 
