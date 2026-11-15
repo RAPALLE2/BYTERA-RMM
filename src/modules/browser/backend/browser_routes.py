@@ -51,11 +51,21 @@ def _need(user):
 
 
 # ------------------------------------------------------------------ Status / Installation
+_auto_try = {"at": 0.0}
+AUTO_RETRY = 10 * 60          # failed automatic installation: try again after 10 minutes
+
+
 @router.get("/status")
-def status(user: dict = Depends(get_current_user)):
+async def status(user: dict = Depends(get_current_user)):
     from app import bgjobs
+    import time
     ok, why = _bs.available()
     job = bgjobs.active("browser.install", "chromium")
+    # not ready -> install automatically (no button needed), at most every AUTO_RETRY
+    if install.status()["status"] != "ready" and not job and time.time() - _auto_try["at"] > AUTO_RETRY:
+        _auto_try["at"] = time.time()
+        job = install.start_install_job(None)
+        ok, why = False, "The browser engine is being installed …"
     return {"ready": ok and install.status()["status"] == "ready", "reason": why, "may_use": _perm(user),
             "install": install.status(), "install_job": job.id if job else None,
             "may_install": is_super_admin(user) or user_has_permission(user, "manage_modules"),

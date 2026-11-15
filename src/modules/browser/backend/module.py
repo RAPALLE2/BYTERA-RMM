@@ -14,6 +14,9 @@ async def _ensure_chromium():
         return
     print(f"[browser] Chromium does not start ({why}) - starting the installation")
     try:
+        from .browser_routes import _auto_try
+        import time
+        _auto_try["at"] = time.time()
         install.start_install_job(None)
     except Exception as e:
         print(f"[browser] the installation could not be started: {e}")

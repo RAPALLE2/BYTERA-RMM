@@ -154,14 +154,17 @@ function installScreen(root, st, retry) {
   let stopWatch = null;
   const draw = (job) => {
     const running = job && job.running;
+    const failed = job && !running && job.status === "error";
     root.innerHTML = `<div class="fxb-msg">
       <div style="font-size:40px">🧭</div>
-      <div style="font-size:16px;color:var(--text)">The browser engine is not installed yet</div>
-      <div>${esc(st.install?.detail || st.reason || "")}</div>
-      ${job ? `<div style="width:min(420px,90%)"><div style="height:6px;border-radius:3px;background:var(--fx-line);overflow:hidden">
+      <div style="font-size:16px;color:var(--text)">${running ? "The browser engine is being installed automatically …" : failed ? "The browser engine could not be installed" : "The browser engine is not installed yet"}</div>
+      ${running ? `<div style="font-size:12px">This takes a few minutes (download + system libraries). You can close this window – the installation keeps running on the server.</div>` : ""}
+      ${job ? `<div style="width:min(460px,90%)"><div style="height:6px;border-radius:3px;background:var(--fx-line);overflow:hidden">
           <div style="height:100%;width:${Math.round(job.pct || 0)}%;background:var(--fx-acc);transition:width .3s"></div></div>
-          <div style="margin-top:6px;font-size:12px">${esc(job.detail || job.phase || "")}${job.status === "error" ? ` – <span style="color:var(--danger)">${esc(job.error || "failed")}</span>` : ""}</div></div>` : ""}
-      ${!running && st.may_install ? `<button class="btn btn-primary" data-inst>${job ? "Try again" : "Install browser engine"}</button>` : ""}
+          <div style="margin-top:6px;font-size:12px;word-break:break-word">${esc(job.detail || job.phase || "")}</div></div>` : ""}
+      ${failed ? `<div style="max-width:640px;font-size:12px;color:var(--danger);word-break:break-word">${esc(job.error || "failed")}</div>
+        <div style="font-size:12px">It is tried again automatically every 10 minutes. Details: task list (taskbar) → “Server browser: install Chromium”.</div>` : ""}
+      ${!running && st.may_install ? `<button class="btn btn-primary" data-inst>${job ? "Try again now" : "Install browser engine"}</button>` : ""}
       ${!st.may_install && !running ? `<div>An administrator has to install it (Modules → Web Browser).</div>` : ""}
     </div>`;
     root.querySelector("[data-inst]")?.addEventListener("click", async () => {
@@ -171,7 +174,7 @@ function installScreen(root, st, retry) {
   };
   const watch = () => { stopWatch?.(); stopWatch = watchJobs({ kind: "browser.install", key: "chromium" }, draw); };
   draw(null);
-  if (st.install_job) watch();
+  watch();                                   // running job or the result of the last one
 }
 
 // ---------------------------------------------------------------- the browser
