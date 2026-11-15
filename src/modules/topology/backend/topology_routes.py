@@ -10,6 +10,9 @@ REST-Schnittstelle fuer die Netzwerk-Topologie-Karte.
   GET  /api/topology/map?source=               gespeicherte Karte + Bearbeitungen + Agent-Zuordnung
   PUT  /api/topology/map?source=               Bearbeitungen (Positionen, eigene Knoten ...) speichern
   GET  /api/topology/sources                   Quellen, fuer die schon Karten existieren
+  GET  /api/topology/agents                    Agents, die man Knoten zuweisen kann
+  GET  /api/topology/prefs                     eigene Ansicht (Hintergrund, Raster) - je Benutzer
+  PUT  /api/topology/prefs
 
 "Quelle" ist "backend" oder die Client-ID einer Node (Erkennung lief im Netz der Node).
 Die Erkennung haengt NICHT an der Browser-Sitzung: Das Backend verfolgt den Job
@@ -221,16 +224,55 @@ async def discover_start(target: str | None = None, via: str = "",
 # ------------------------------------------------------------------
 # Karte + Bearbeitungen
 # ------------------------------------------------------------------
+def _agent_info(user: dict, cid: str) -> dict | None:
+    if not cid or not can_access_client(user, cid):
+        return None
+    c = db.get_client(cid) if hasattr(db, "get_client") else next((x for x in db.list_clients() if x["id"] == cid), None)
+    if not c:
+        return None
+    return {"id": c["id"], "hostname": c.get("hostname"), "color": c.get("color"),
+            "online": state.is_online(c["id"]), "platform": c.get("platform"), "ip": c.get("ip")}
+
+
 @router.get("/map")
 def get_map(source: str = "backend", user: dict = Depends(get_current_user)):
     require_perm(user, "network_scan")
     _check_source(user, source)
     result = store.get_map(source)
+    ovr = store.get_overrides(source)
+    # agents assigned by hand (own nodes and discovered ones)
+    ids = {n.get("agent_id") for n in ovr["custom_nodes"]} | {m.get("agent_id") for m in ovr["meta"].values()}
+    agents = {cid: a for cid in ids if cid for a in [_agent_info(user, cid)] if a}
     return {
         "source": source,
         "map": _attach_agents(result, user) if result else None,
-        "overrides": store.get_overrides(source),
+        "overrides": ovr,
+        "agents": agents,
     }
+
+
+@router.get("/agents")
+def list_agents(user: dict = Depends(get_current_user)):
+    require_perm(user, "network_scan")
+    out = []
+    for c in db.list_clients():
+        if can_access_client(user, c["id"]):
+            out.append({"id": c["id"], "hostname": c.get("hostname") or c["id"][:8], "ip": c.get("ip") or "",
+                        "platform": c.get("platform") or "", "online": state.is_online(c["id"])})
+    out.sort(key=lambda a: a["hostname"].lower())
+    return {"agents": out}
+
+
+@router.get("/prefs")
+def get_prefs(user: dict = Depends(get_current_user)):
+    require_perm(user, "network_scan")
+    return store.get_prefs(user["id"])
+
+
+@router.put("/prefs")
+def put_prefs(prefs: dict = Body(...), user: dict = Depends(get_current_user)):
+    require_perm(user, "network_scan")
+    return store.set_prefs(user["id"], prefs if isinstance(prefs, dict) else {})
 
 
 @router.put("/map")

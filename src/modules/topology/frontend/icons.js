@@ -95,24 +95,61 @@ const ICONS = {
              <path ${S} d="M6 20h26M6 28h26M15 12v8m8 0v8m-8 0v8"/>
              <path ${S} d="M34 22l8-3v8c0 6-4 9-8 11z"/>`,
 
+  // Management (Konsole mit Zahnrad)
+  management: `<rect ${S} x="5" y="8" width="30" height="22" rx="2"/>
+               <path ${S} d="M14 38h12m-6-8v8M10 15l5 4-5 4M18 23h7"/>
+               <circle ${S} cx="38" cy="32" r="4"/>
+               <path ${S} d="M38 25v3m0 8v3m7-7h-3m-8 0h-3m11.9-4.9-2.1 2.1m-5.6 5.6-2.1 2.1m9.8 0-2.1-2.1m-5.6-5.6-2.1-2.1"/>`,
+
+  // Controller (WLAN-/SDN-Controller: Box mit Verteilung nach unten)
+  controller: `<rect ${S} x="12" y="6" width="24" height="14" rx="2"/>
+               <circle ${F} cx="18" cy="13" r="1.6"/><path ${S} d="M23 13h8"/>
+               <path ${S} d="M24 20v6M10 26h28M10 26v5m14-5v5m14-5v5"/>
+               <rect ${S} x="5" y="31" width="10" height="9" rx="1.5"/>
+               <rect ${S} x="19" y="31" width="10" height="9" rx="1.5"/>
+               <rect ${S} x="33" y="31" width="10" height="9" rx="1.5"/>`,
+
+  // Subnetz (Netzwerk-Wolke aus Punkten)
+  subnet: `<circle ${S} cx="24" cy="24" r="16" stroke-dasharray="4 3"/>
+           <circle ${F} cx="24" cy="14" r="2.6"/><circle ${F} cx="15" cy="28" r="2.6"/>
+           <circle ${F} cx="33" cy="28" r="2.6"/>
+           <path ${S} d="M24 14l-9 14h18z"/>`,
+
+  // LXC-Container (Box mit Linux-Kaestchen)
+  lxc: `<path ${S} d="M24 6l16 8v20l-16 8-16-8V14z"/>
+        <path ${S} d="M8 14l16 8 16-8M24 22v20"/>
+        <path ${S} d="M13 25v6l5 2.5"/>`,
+
+  // Virtuelle Maschine (Monitor mit Wuerfel)
+  vm: `<rect ${S} x="5" y="8" width="38" height="26" rx="2"/>
+       <path ${S} d="M17 42h14m-7-8v8"/>
+       <path ${S} d="M24 13l8 4v8l-8 4-8-4v-8zM16 17l8 4 8-4M24 21v8"/>`,
+
+  // Docker-Container (Container-Stapel auf dem Wal)
+  docker: `<path ${S} d="M5 26h34c3 0 4-3 4-3s-2-2-5-1c0-3-2-5-2-5s-3 2-2 6c-1 0-3 0-29 3z"/>
+           <path ${S} d="M5 26c1 7 7 12 17 12 9 0 16-5 19-13"/>
+           <path ${S} d="M10 20h6v6h-6zm7 0h6v6h-6zm7 0h6v6h-6zm-7-7h6v6h-6zm7 0h6v6h-6z"/>`,
+
   // unbekanntes Geraet
   device: `<rect ${S} x="10" y="10" width="28" height="28" rx="4"/>
            <path ${S} d="M20 20a4 4 0 1 1 5.5 3.7c-1 .4-1.5 1-1.5 2.3"/>
            <circle ${F} cx="24" cy="31" r="1.8"/>`,
 };
 
-// Typ -> deutscher Name (fuer Tooltip und Bearbeiten-Dialog)
+// type -> name (tooltip, edit dialog)
 export const TYPE_LABELS = {
-  www: "Internet", isp: "Provider", router: "Router", switch: "Switch",
-  ap: "Access Point", server: "Server", hypervisor: "Hypervisor",
-  nas: "NAS", storage: "Speicher/SAN", pc: "PC", laptop: "Laptop",
-  printer: "Drucker", phone: "Smartphone", tv: "TV/Media", camera: "Kamera",
-  iot: "IoT-Gerät", firewall: "Firewall", device: "Gerät",
+  www: "Internet", isp: "Provider", router: "Router", switch: "Switch", firewall: "Firewall",
+  ap: "Access point", controller: "Controller", management: "Management", subnet: "Subnet",
+  server: "Server", hypervisor: "Hypervisor", vm: "Virtual machine", lxc: "LXC container",
+  docker: "Docker container", nas: "NAS", storage: "Storage/SAN", pc: "PC", laptop: "Laptop",
+  printer: "Printer", phone: "Smartphone", tv: "TV/Media", camera: "Camera",
+  iot: "IoT device", device: "Device",
 };
 
-// Typen, die sich im Bearbeiten-Dialog auswaehlen lassen
-export const EDIT_TYPES = ["router", "switch", "ap", "firewall", "server", "hypervisor",
-  "nas", "storage", "pc", "laptop", "printer", "phone", "tv", "camera", "iot", "device", "isp", "www"];
+// selectable in the edit dialog (grouped)
+export const EDIT_TYPES = ["router", "switch", "firewall", "ap", "controller", "management", "subnet",
+  "server", "hypervisor", "vm", "lxc", "docker", "nas", "storage", "pc", "laptop", "printer", "phone",
+  "tv", "camera", "iot", "device", "isp", "www"];
 
 /** Inhalt eines 48x48-Icons fuer den Typ (unbekannte Typen -> Fragezeichen-Box). */
 export function iconBody(type) {

@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "id": "topology",
-  "name": "Netzwerk-Topologie",
-  "version": "1.0.0",
-  "description": "Erkennt alle Geräte im Netzwerk (vom lokalen Netz bis zum Internet) und zeichnet daraus eine bearbeitbare Karte als Baumdiagramm. Geräte mit installiertem Agenten lassen sich direkt aus der Karte öffnen. Erkennung wahlweise vom Backend oder aus dem Netz einer Node.",
+  "name": "Network Topology",
+  "version": "2.0.0",
+  "description": "Discovers all devices in the network and draws an editable map – an editor in the style of Upload Labs: node types incl. management, controller, subnet, VM, LXC and Docker, own nodes with name/IP/OS and assigned agents, lines in four styles (Default, PCB, Web, Cable) with colours, names, end labels (port, WAN, LAN2 …) and arrows, named flows with legend (e.g. Backup, Sync, VPN), boxes around areas, snap grid, multi-select, personal backgrounds.",
   "author": "BYTERA",
   "category": "Netzwerk",
   "icon": "🗺️",
@@ -19,9 +19,9 @@
   "apps": [
     {
       "id": "topology",
-      "label": "Netzwerk-Topologie",
+      "label": "Network Topology",
       "icon": "🗺️",
-      "title": "Netzwerk-Topologie",
+      "title": "Network Topology",
       "entry": "topology.js",
       "export": "renderTopology",
       "w": 980,
