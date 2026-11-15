@@ -48,7 +48,7 @@ class ProfileBody(BaseModel):
     theme: str | None = None      # "dark" oder "light"
     accent: str | None = None     # Farbpalette, z.B. "teal", "violet", ...
     email: str | None = None
-    design: str | None = None     # "futuristic" | "standard" | "" (= Standard der Installation)
+    design: str | None = None     # "futuristic" | "standard" | "classic_hard" | "" (= Standard der Installation)
 
 
 def _auth_realm_of(user) -> str | None:

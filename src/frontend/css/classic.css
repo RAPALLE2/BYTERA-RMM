@@ -280,3 +280,30 @@ body.cl-layout #cl-body > .main-content:has(> .clv) { padding: 0 !important; ove
 .clv-mcard-head { padding: 6px 10px; font-weight: 600; font-size: 12.5px; border-bottom: 1px solid var(--border); background: var(--panel-2); }
 .clv-mcard-body { flex: 1; position: relative; min-height: 180px; padding: 6px; overflow: auto; }
 .clv-label { display: block; color: var(--subtext); font-size: 12px; margin-bottom: 4px; }
+
+/* ---- Classic + Classic Hard: farbarm ---------------------------------------
+   App-, Menue-, Tab- und Navigations-Symbole einfarbig (wie Proxmox). Farbe
+   bleibt nur dort, wo sie etwas bedeutet: Status-Punkte, Warnungen, Diagramme. */
+body.design-standard .cl-nav-ico,
+body.design-standard .cl-tab-ico,
+body.design-standard .nav-ico,
+body.design-standard .clv-cat-ico,
+body.design-standard .start-menu-panel .app-icon,
+body.design-standard .start-menu-panel .sm-folder-icon,
+body.design-standard .taskbar .app-icon,
+body.design-standard .taskbar .svgicon,
+body.design-standard .rmm-window-titlebar .svgicon,
+body.design-standard .rmm-window-titlebar .app-icon,
+body.design-standard .context-menu .svgicon,
+body.design-standard .tree-row .svgicon,
+body.design-standard .quick-actions .svgicon,
+body.design-standard .actions-panel .btn .svgicon {
+  filter: grayscale(1) contrast(1.1);
+  opacity: .85;
+}
+body.design-standard.theme-light .cl-nav-ico,
+body.design-standard.theme-light .cl-tab-ico,
+body.design-standard.theme-light .nav-ico,
+body.design-standard.theme-light .clv-cat-ico { filter: grayscale(1) brightness(.55); }
+/* Start-Menue-Kacheln ohne farbige Verlaeufe/Leuchten */
+body.design-standard .start-menu-panel .sm-tile { background: var(--panel-2); box-shadow: none; }

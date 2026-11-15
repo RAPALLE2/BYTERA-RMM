@@ -64,8 +64,8 @@ export function renderMainContent() {
   // entfernen (sonst konnten sie über den Client-Wechsel hinaus stehenbleiben).
   try { hideFleetTip(); } catch {}
   const el = content();
-  // Klassisches Design (Proxmox-Aufbau): Baum-Auswahl + Kategorien statt Widgets
-  if (document.body.classList.contains("cl-layout")) return renderClassicView(el);
+  // Classic Hard (Proxmox-Aufbau): Baum-Auswahl + Kategorien statt Widgets
+  if (document.body.classList.contains("cl-layout") && document.body.classList.contains("cl-hard")) return renderClassicView(el);
   if (!state.selection || state.selection.type === "dashboard") {
     // Ohne das Recht 'see_dashboard' bleibt die Dashboard-Ansicht bewusst eine
     // leere schwarze Seite (keine Zahlen, Widgets oder Favoriten).

@@ -4,11 +4,14 @@
 //
 //   * Aussehen: body.design-standard (flach, kompakt, neutrale Farben) - css/classic.css
 //   * Bedienung: body.cl-layout
-//       - feste Navigation links: Apps nach Kategorien gruppiert (dieselben
-//         Kategorien wie die Standardordner im Startmenue, appcategories.js),
-//         darunter Favoriten + Geraete-Baum (Rechenzentrum > Mandant > Standort > Geraet)
-//       - Tab "Uebersicht" wie Proxmox: Kategorie-Spalte + feste Ansicht des
-//         gewaehlten Objekts statt Widgets (classicview.js)
+//       - feste Navigation links, darunter Favoriten + Geraete-Baum
+//   Zwei Auspraegungen (Design-Wert):
+//     "standard"     = Classic: Navigation = Ordner/Apps des Startmenues,
+//                      Tab "Uebersicht" = normales Dashboard (Widgets), farbarm
+//     "classic_hard" = wie Proxmox (body.cl-hard): Navigation = feste
+//                      Kategorien (appcategories.js), Baum-Wurzel "Rechenzentrum",
+//                      Tab "Uebersicht" = Kategorie-Spalte + feste Ansicht des
+//                      gewaehlten Objekts statt Widgets (classicview.js)
 //       - Inhalte als TABS im Hauptbereich statt schwebender Fenster:
 //         erster Tab "Uebersicht" (Dashboard / ausgewaehlter Client), dann je
 //         offenes Fenster ein Tab (Klick = anzeigen, x / Mittelklick = schliessen)
@@ -24,7 +27,7 @@
 
 import { state } from "./state.js";
 import { focusWindow, closeWindow, windowLink } from "./windowmanager.js";
-import { getCatalogApps, openMenuApp, onMenuChange, catalogEntry } from "./startmenu.js";
+import { getCatalogApps, getMenuModel, openMenuApp, onMenuChange, catalogEntry } from "./startmenu.js";
 import { groupApps } from "./appcategories.js";
 import { esc } from "./utils.js";
 
@@ -34,12 +37,17 @@ let tabsEl = null, navEl = null, enabled = false;
 const NAV_KEY = () => `rmm_clnav:${state.user?.username || "default"}`;
 
 export const isClassicLayout = () => enabled;
+const isHard = () => document.body.classList.contains("cl-hard");
 
-/** Design anwenden ("standard" | "futuristic"). Nur die Klasse - der Umbau
+/** Design anwenden ("futuristic" | "standard" = Classic | "classic_hard"). Nur die Klasse - der Umbau
  *  der Bedienung passiert einmalig in initClassic() (ein Wechsel laedt neu). */
 export function applyDesign(design) {
   document.body.classList.toggle("design-standard", design === "standard");
-  document.body.classList.toggle("design-futuristic", design !== "standard");
+  const classic = design === "standard" || design === "classic_hard";
+  document.body.classList.toggle("design-standard", classic);
+  document.body.classList.toggle("design-futuristic", !classic);
+  // Classic Hard: Proxmox-Aufbau (Kategorien-Navigation + classicview.js statt Dashboard)
+  document.body.classList.toggle("cl-hard", design === "classic_hard");
 }
 
 /** Klassische Bedienung aufbauen (nach dem Login, vor dem Wiederherstellen der Fenster). */
@@ -67,9 +75,9 @@ export function initClassic() {
   body.append(main, layer);
   stage.append(tabsEl, body);
 
-  // Wurzel des Geraete-Baums heisst wie in Proxmox "Rechenzentrum"
+  // Classic Hard: Wurzel des Geraete-Baums heisst wie in Proxmox "Rechenzentrum"
   const dash = document.getElementById("sidebar-dashboard");
-  if (dash) dash.innerHTML = `<span class="nav-ico">🗄️</span> Rechenzentrum`;
+  if (dash && isHard()) dash.innerHTML = `<span class="nav-ico">🗄️</span> Rechenzentrum`;
 
   // ---- Navigation (Apps) oben in der Seitenleiste ----
   navEl = document.createElement("div");
@@ -233,16 +241,19 @@ function saveNavState(s) {
 function renderNav() {
   if (!navEl) return;
   const st = navState();
-  // Apps nach den festen Kategorien gruppiert (dieselben wie die
-  // Standardordner im Startmenü des futuristischen Designs).
-  const model = groupApps(getCatalogApps()).map((g) => ({ t: "folder", id: `cat_${g.key}`, name: g.name, icon: g.icon, apps: g.apps }));
+  // Classic Hard: Apps nach den festen Kategorien gruppiert (dieselben wie die
+  // Standardordner im Startmenü). Classic: genau die Anordnung des Startmenüs.
+  const hard = isHard();
+  const model = hard
+    ? groupApps(getCatalogApps()).map((g) => ({ t: "folder", id: `cat_${g.key}`, name: g.name, icon: g.icon, apps: g.apps }))
+    : getMenuModel();
   const item = (a, indent) => `
     <div class="cl-nav-item" data-app="${esc(a.id)}" style="padding-left:${10 + indent}px" title="${esc(a.label)}">
       <span class="cl-nav-ico">${a.icon}</span><span class="cl-nav-label">${esc(a.label)}</span>
     </div>`;
   const body = model.map((it) => {
     if (it.t === "app") return item(it, 0);
-    const open = st[it.id] === true;          // Kategorien standardmaessig zugeklappt
+    const open = hard ? st[it.id] === true : st[it.id] !== false;   // Hard: Kategorien zu, Classic: Ordner offen
     return `<div class="cl-nav-folder${open ? " open" : ""}" data-folder="${esc(it.id)}">
         <span class="cl-caret">${open ? "▾" : "▸"}</span><span class="cl-nav-ico">${it.icon || ""}</span><span class="cl-nav-label">${esc(it.name)}</span>
         <span class="cl-nav-count">${it.apps.length}</span>
@@ -267,7 +278,8 @@ function renderNav() {
   });
   navEl.querySelectorAll(".cl-nav-folder").forEach((el) => el.addEventListener("click", () => {
     const s = navState(); const id = el.dataset.folder;
-    s[id] = s[id] !== true; saveNavState(s); renderNav();
+    const wasOpen = isHard() ? s[id] === true : s[id] !== false;
+    s[id] = !wasOpen; saveNavState(s); renderNav();
   }));
   navEl.querySelectorAll(".cl-nav-item").forEach((el) => el.addEventListener("click", () => openMenuApp(el.dataset.app)));
   markNav();

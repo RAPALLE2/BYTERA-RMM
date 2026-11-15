@@ -2038,7 +2038,9 @@ def set_user_totp(user_id: str, secret: str | None = None,
     _conn.commit()
 
 
-DESIGNS = ("futuristic", "standard")
+# futuristic = Desktop mit Fenstern | standard = Classic (Navigation + Apps +
+# Dashboard, schlicht) | classic_hard = wie Proxmox (Baum + Kategorien, keine Widgets)
+DESIGNS = ("futuristic", "standard", "classic_hard")
 
 
 def effective_design(user) -> str:

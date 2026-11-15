@@ -61,13 +61,15 @@ export function renderProfile(body, win) {
       <div class="form-row">
         <label>Oberfläche</label>
         <select id="pr-design">
-          <option value="" ${!u.design_choice ? "selected" : ""}>Standard der Installation (${(u.default_design || "futuristic") === "standard" ? "Standard" : "Futuristisch"})</option>
-          <option value="standard" ${u.design_choice === "standard" ? "selected" : ""}>Standard – klassisch (Navigation links, Tabs)</option>
+          <option value="" ${!u.design_choice ? "selected" : ""}>Standard der Installation (${({ standard: "Classic", classic_hard: "Classic Hard" })[u.default_design] || "Futuristisch"})</option>
+          <option value="standard" ${u.design_choice === "standard" ? "selected" : ""}>Classic – Navigation links, Apps als Tabs, Dashboard (schlicht)</option>
+          <option value="classic_hard" ${u.design_choice === "classic_hard" ? "selected" : ""}>Classic Hard – wie Proxmox: Baum + Kategorien, ohne Widgets</option>
           <option value="futuristic" ${u.design_choice === "futuristic" ? "selected" : ""}>Futuristisch – Desktop mit Fenstern</option>
         </select>
         <div style="font-size:11px;color:var(--subtext);margin-top:3px">
-          Standard: schlicht wie Proxmox, Tactical RMM oder NinjaOne – feste Navigation links,
-          Apps öffnen sich als Tabs. Ein Wechsel lädt die Oberfläche neu.
+          Classic: schlicht und farbarm, feste Navigation links, Apps als Tabs, Dashboard bleibt.
+          Classic Hard: wie die Proxmox-Oberfläche – Baum links, rechts Kategorien, keine Widgets.
+          Ein Wechsel lädt die Oberfläche neu.
         </div>
       </div>
       <div class="form-row">

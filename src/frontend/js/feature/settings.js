@@ -312,7 +312,8 @@ export function renderSettings(body, win) {
           <label>Standard-Oberfläche für neue Benutzer</label>
           <select id="ge-default-design">
             <option value="futuristic" ${(s.default_design || "futuristic") === "futuristic" ? "selected" : ""}>Futuristisch – Desktop mit Fenstern</option>
-            <option value="standard" ${s.default_design === "standard" ? "selected" : ""}>Standard – klassisch (Navigation links, Tabs)</option>
+            <option value="standard" ${s.default_design === "standard" ? "selected" : ""}>Classic – Navigation links, Apps als Tabs, Dashboard (schlicht)</option>
+            <option value="classic_hard" ${s.default_design === "classic_hard" ? "selected" : ""}>Classic Hard – wie Proxmox: Baum + Kategorien, ohne Widgets</option>
           </select>
           <p style="color:var(--subtext);font-size:12px;margin:4px 0 0">
             Gilt für alle, die im Profil „Standard der Installation“ eingestellt haben (neue Benutzer).
