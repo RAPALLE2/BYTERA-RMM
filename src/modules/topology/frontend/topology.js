@@ -22,7 +22,7 @@ import { nodeHint } from "/js/app/nodechoice.js";
 import { findClient } from "/js/app/state.js";
 import { watchJobs, cancelJob, jobDuration } from "/js/app/bgjobs.js";
 import { dashboardSocket } from "/js/app/socket.js";
-import { iconBody, TYPE_LABELS, EDIT_TYPES } from "./icons.js";
+import { iconBody, TYPE_LABELS, EDIT_TYPES, clientIconType } from "./icons.js";
 
 const NS = "http://www.w3.org/2000/svg";
 const GRID = 20;
@@ -273,9 +273,12 @@ export function renderTopology(body, win) {
     const meta = custom ? {} : ((ovr.meta || {})[n.id] || {});
     const agentId = custom ? n.agent_id : meta.agent_id;
     const agent = (agentId && agentsById[agentId]) || (agentId ? null : n.agent) || null;
+    // a node with an agent shows the agent's icon (sidebar/panel) unless the map sets its own
+    const agentType = agent ? clientIconType(findClient(agent.id) || agent) : "";
+    const ownType = custom ? n.type : meta.type;
     return {
-      ...n, custom, _meta: meta,
-      type: (custom ? n.type : meta.type || n.type) || "device",
+      ...n, custom, _meta: meta, agentType, ownType: ownType || "",
+      type: ownType || agentType || n.type || "device",
       label: (custom ? n.label : meta.label || n.label) || "",
       ip: (custom ? n.ip : meta.ip || n.ip) || "",
       os: (custom ? n.os : meta.os || n.os) || (agent?.platform || ""),
@@ -971,7 +974,8 @@ export function renderTopology(body, win) {
   async function openNodeDialog(n, noteOnly = false) {
     if (!edit && !noteOnly) return;
     if (!agentList) { try { agentList = (await moduleRequest("/api/topology/agents")).agents; } catch { agentList = []; } }
-    const typeOpts = EDIT_TYPES.map((t) => `<option value="${t}" ${t === n.type ? "selected" : ""}>${TYPE_LABELS[t] || t}</option>`).join("");
+    const typeOpts = (n.agent ? `<option value="">Same as agent (${TYPE_LABELS[n.agentType] || n.agentType})</option>` : "")
+      + EDIT_TYPES.map((t) => `<option value="${t}" ${t === (n.agent ? n.ownType : n.type) ? "selected" : ""}>${TYPE_LABELS[t] || t}</option>`).join("");
     const agOpts = `<option value="">${n.agent && !n.agentId ? `automatic: ${esc(n.agent.hostname || "")}` : "— none —"}</option>` +
       agentList.map((a) => `<option value="${esc(a.id)}" ${a.id === n.agentId ? "selected" : ""}>${a.online ? "●" : "○"} ${esc(a.hostname)}${a.ip ? " · " + esc(a.ip) : ""}</option>`).join("");
     const mode = noteMode(n);
@@ -994,6 +998,16 @@ export function renderTopology(body, win) {
           <button class="btn" id="d-cancel">Cancel</button><button class="btn-primary" id="d-ok">Apply</button>
         </div></div>`);
     dlg.querySelector("#d-cancel").onclick = closeDialog;
+    const agSel = dlg.querySelector("#d-agent"), tySel = dlg.querySelector("#d-type");
+    if (agSel) agSel.onchange = () => {             // picking an agent -> take over its icon
+      const c = agSel.value ? (findClient(agSel.value) || agentList.find((x) => x.id === agSel.value)) : (n.agent && !n.agentId ? n.agent : null);
+      let opt = tySel.querySelector('option[value=""]');
+      if (!c) { if (opt && !n.agent) opt.remove(); return; }
+      const t = clientIconType(c);
+      if (!opt) { opt = document.createElement("option"); opt.value = ""; tySel.prepend(opt); }
+      opt.textContent = `Same as agent (${TYPE_LABELS[t] || t})`;
+      tySel.value = "";
+    };
     dlg.querySelector("#d-ok").onclick = () => {
       const v = (id) => dlg.querySelector(id)?.value.trim() ?? null;
       const meta = { ...(ovr.meta[n.id] || {}) };
@@ -1005,7 +1019,7 @@ export function renderTopology(body, win) {
         } else {
           for (const [k, val] of Object.entries(fields)) {
             const auto = k === "label" ? (n.hostname || "") : k === "ip" ? (mapData?.nodes?.find((x) => x.id === n.id)?.ip || "")
-              : k === "type" ? (mapData?.nodes?.find((x) => x.id === n.id)?.type || "") : "";
+              : k === "type" && !n.agent ? (mapData?.nodes?.find((x) => x.id === n.id)?.type || "") : "";
             if (val && val !== auto) meta[k] = val; else delete meta[k];
           }
         }

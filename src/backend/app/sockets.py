@@ -1408,8 +1408,10 @@ async def _do_register(sid, payload) -> tuple[bool, str]:
             await _maybe_auto_update(client_id, payload.get("agent_version"))
 
     async def _device_type():
-        if await db.call(db.apply_detected_device_type, client_id,
-                         payload.get("device_type")):
+        changed = await db.call(db.apply_detected_device_type, client_id, payload.get("device_type"))
+        if await db.call(db.apply_detected_kind, client_id, payload.get("device_kind")):
+            changed = True
+        if changed:
             _emit_clients_changed_soon()
 
     async def _crash_report():

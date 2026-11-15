@@ -11,6 +11,7 @@ import { state } from "./state.js";
 import { esc } from "./utils.js";
 import { t } from "./i18n.js";
 import { api } from "./api.js";
+import { clientIconSvg, batteryHtml } from "./deviceicons.js";
 
 // Wird von app.js gesetzt, um bei Auswahl das Haupt-Panel zu aktualisieren
 let onSelectCallback = null;
@@ -280,7 +281,9 @@ function clientDot(client) {
   let color = "var(--subtext)"; // offline
   if (client.status_override === "maintenance") color = "var(--warn)";
   else if (client.online) color = "var(--online)";
-  return `<span class="dot" style="background:${color}"></span>`;
+  // status dot + device icon (same icon as the topology map)
+  return `<span class="dot" style="background:${color}"></span>`
+    + clientIconSvg(client, 15, `margin-left:2px;${client.online ? "" : "opacity:.55"}`);
 }
 
 // Rendert rekursiv die Ordnerstruktur + Clients innerhalb einer Location
@@ -366,7 +369,8 @@ function renderClientNode(client) {
     <div class="tree-node">
       <div class="tree-row row-anim ${selected ? "selected" : ""}" data-select-client="${client.id}" data-drag-client="${client.id}" draggable="true">
         ${children.length ? `<span data-toggle="${client.id}">${isOpen ? "▾" : "▸"}</span>` : `<span style="width:10px;display:inline-block"></span>`}
-        ${clientDot(client)} <span style="flex:1">${esc(client.hostname)}</span>
+        ${clientDot(client)} <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(client.hostname)}</span>
+        ${batteryHtml(client)}
         ${favStar("clients", client.id)}
       </div>
       ${isOpen && children.length ? `<div class="tree-children">${children.map(renderClientNode).join("")}</div>` : ""}
@@ -590,7 +594,8 @@ function renderFavorites() {
     for (const c of favClients) {
       h += `
         <div class="tree-row row-anim fav-row" data-fav-select="client:${c.id}">
-          ${clientDot(c)} <span style="flex:1">${esc(c.hostname)}</span>
+          ${clientDot(c)} <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(c.hostname)}</span>
+          ${batteryHtml(c)}
           ${favStarHtml("clients", c.id)}
         </div>`;
     }

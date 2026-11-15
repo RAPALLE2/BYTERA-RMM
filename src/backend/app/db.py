@@ -891,6 +891,11 @@ def init_db() -> None:
     # das aber erst nach BESTÄTIGUNG durch den Nutzer im Client-Panel.
     _migrate_add_column("clients", "detected_device_type", "TEXT")
     _migrate_add_column("clients", "device_type_ack", "INTEGER NOT NULL DEFAULT 0")
+    # Device icon: the agent reports its kind (laptop/pc/server/hypervisor/vm/lxc/docker),
+    # icon_type is the manual choice in the edit dialog ('' = automatic). Same icons as
+    # the topology map (frontend js/app/deviceicons.js).
+    _migrate_add_column("clients", "detected_kind", "TEXT")
+    _migrate_add_column("clients", "icon_type", "TEXT NOT NULL DEFAULT ''")
     # --- NODE-STUFE -------------------------------------------------
     # Ein normaler Client meldet Metriken und fuehrt Befehle aus. Eine NODE
     # kann zusaetzlich als Brueckenkopf ins Netz dienen: eigener
@@ -2382,6 +2387,24 @@ def apply_detected_device_type(client_id: str, detected: str | None) -> bool:
     return True
 
 
+DEVICE_KINDS = ("laptop", "pc", "server", "hypervisor", "vm", "lxc", "docker")
+ICON_TYPES = ("www", "isp", "router", "switch", "firewall", "ap", "controller", "management", "subnet",
+              "server", "hypervisor", "vm", "lxc", "docker", "nas", "storage", "pc", "laptop", "printer",
+              "phone", "tv", "camera", "iot", "device")
+
+
+def apply_detected_kind(client_id: str, kind: str | None) -> bool:
+    """Stores the device kind the agent detected (for the icon). True = changed."""
+    if kind not in DEVICE_KINDS:
+        return False
+    row = _conn.execute("SELECT detected_kind FROM clients WHERE id = ?", (client_id,)).fetchone()
+    if not row or row["detected_kind"] == kind:
+        return False
+    _conn.execute("UPDATE clients SET detected_kind = ? WHERE id = ?", (kind, client_id))
+    _conn.commit()
+    return True
+
+
 def list_clients() -> list[dict]:
     return [dict(r) for r in _conn.execute("SELECT * FROM clients ORDER BY hostname").fetchall()]
 
@@ -2573,7 +2596,7 @@ def update_client(client_id: str, fields: dict) -> dict | None:
     allowed = {
         "hostname", "tenant_id", "location_id", "folder_id", "parent_client_id",
         "color", "notes", "status_override", "active", "device_type", "auto_update",
-        "device_type_ack", "fav_dir", "warranty_until", "patch_policy",
+        "device_type_ack", "fav_dir", "warranty_until", "patch_policy", "icon_type",
     }
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:

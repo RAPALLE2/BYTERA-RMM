@@ -58,7 +58,7 @@ def _agent_index(user: dict) -> tuple[dict, dict]:
             continue
         info = {"id": c["id"], "hostname": c.get("hostname"),
                 "color": c.get("color"), "online": state.is_online(c["id"]),
-                "platform": c.get("platform")}
+                "platform": c.get("platform"), **_icon_fields(c)}
         if c.get("ip"):
             by_ip.setdefault(str(c["ip"]), info)
         m = state.live_metrics.get(c["id"]) or {}
@@ -224,6 +224,12 @@ async def discover_start(target: str | None = None, via: str = "",
 # ------------------------------------------------------------------
 # Karte + Bearbeitungen
 # ------------------------------------------------------------------
+def _icon_fields(c: dict) -> dict:
+    """What the frontend needs to pick the agent's icon (js/app/deviceicons.js clientIconType)."""
+    return {"icon_type": c.get("icon_type") or "", "detected_kind": c.get("detected_kind") or "",
+            "device_type": c.get("device_type") or "", "release": c.get("release") or ""}
+
+
 def _agent_info(user: dict, cid: str) -> dict | None:
     if not cid or not can_access_client(user, cid):
         return None
@@ -231,7 +237,7 @@ def _agent_info(user: dict, cid: str) -> dict | None:
     if not c:
         return None
     return {"id": c["id"], "hostname": c.get("hostname"), "color": c.get("color"),
-            "online": state.is_online(c["id"]), "platform": c.get("platform"), "ip": c.get("ip")}
+            "online": state.is_online(c["id"]), "platform": c.get("platform"), "ip": c.get("ip"), **_icon_fields(c)}
 
 
 @router.get("/map")
@@ -258,7 +264,7 @@ def list_agents(user: dict = Depends(get_current_user)):
     for c in db.list_clients():
         if can_access_client(user, c["id"]):
             out.append({"id": c["id"], "hostname": c.get("hostname") or c["id"][:8], "ip": c.get("ip") or "",
-                        "platform": c.get("platform") or "", "online": state.is_online(c["id"])})
+                        "platform": c.get("platform") or "", "online": state.is_online(c["id"]), **_icon_fields(c)})
     out.sort(key=lambda a: a["hostname"].lower())
     return {"agents": out}
 

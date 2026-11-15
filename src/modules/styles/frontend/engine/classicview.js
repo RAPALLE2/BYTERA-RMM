@@ -28,6 +28,7 @@ import {
 import { renderClientMetric, clientPresetById, presetAvailable } from "/js/app/clientmetrics.js";
 import { warrantyInfo } from "/js/app/dashwidgets.js";
 import { api } from "/js/app/api.js";
+import { clientIconSvg, batteryHtml } from "/js/app/deviceicons.js";
 
 const CAT_KEY = "rmm_clview_cat";
 let catByType = (() => { try { return JSON.parse(localStorage.getItem(CAT_KEY) || "{}"); } catch { return {}; } })();
@@ -147,7 +148,8 @@ function headHtml(s, client) {
   if (s.type === "client") {
     const st = statusOf(client);
     const path = [client.tenant_id && tenantName(client.tenant_id), client.location_id && locationName(client.location_id)].filter(Boolean);
-    return `<div class="clv-title">${dot(st.color)}<b>${esc(client.hostname)}</b>
+    return `<div class="clv-title">${dot(st.color)}${clientIconSvg(client, 20, "margin:0 4px")}<b>${esc(client.hostname)}</b>
+        ${batteryHtml(client, "full")}
         <span class="clv-sub">${osIcon(client.platform, client.release)} ${esc(osLabel(client.platform, client.release))}${client.ip ? " · " + esc(client.ip) : ""}</span></div>
       <div class="clv-crumbs">${path.map(esc).join(" › ")}${path.length ? " · " : ""}${esc(st.label)}</div>`;
   }

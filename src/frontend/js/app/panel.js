@@ -23,6 +23,7 @@ import { favStarHtml, favState, cycleFav } from "./sidebar.js";
 import { renderClientLayout } from "./dashlayout.js";
 import { hideFleetTip, showFleetTip, attachHoverTip, scaleToContainer } from "./fleetcharts.js";
 import { renderMainByStyle } from "./styles.js";
+import { clientIconSvg, batteryHtml } from "./deviceicons.js";
 
 // Zeilen-Hover (wie Dashboard/clientmetrics): Zeile hervorheben + Tooltip
 // mit Label + VOLLSTÄNDIGEM Wert genau dieser Zeile.
@@ -104,10 +105,11 @@ function renderClientView(el, clientId) {
   el.innerHTML = `
     <div class="client-view-head" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
       <h2 style="margin:0;display:flex;align-items:center;gap:8px">
-        <span class="status-dot-lg ${status.cls}"></span>${esc(client.hostname)}
+        <span class="status-dot-lg ${status.cls}"></span>${clientIconSvg(client, 24)}${esc(client.hostname)}
         ${favStarHtml("clients", client.id)}
       </h2>
       <span style="display:flex;align-items:center;gap:12px">
+        ${batteryHtml(client, "full")}
         <span style="color:var(--subtext);font-size:13px">${osIcon(client.platform, client.release)} ${esc(osLabel(client.platform, client.release))} · ${esc(client.ip || "")}</span>
         <span id="dash-layout-toolbar"></span>
       </span>
@@ -632,7 +634,6 @@ export function renderChildrenPart(target, client) {
   target.appendChild(head);
 
   for (const kid of kids) {
-    const isLxc = (kid.device_type || "") === "lxc";
     const dot = kid.online ? "var(--online, #3ecf8e)" : "var(--subtext)";
     const cpu = kid.metrics?.cpuLoad;
     const memPct = kid.metrics?.memTotal
@@ -646,7 +647,7 @@ export function renderChildrenPart(target, client) {
     row.style.cssText = "display:flex;align-items:center;gap:8px;padding-right:8px";
     row.innerHTML = `
       <span style="color:${dot};flex:none">●</span>
-      <span style="flex:none">${isLxc ? "📦" : "🖥️"}</span>
+      ${clientIconSvg(kid, 18)}
       <span style="flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.2;text-align:left">
         <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(kid.hostname || kid.id)}</span>
         <span style="font-size:10.5px;color:var(--subtext)">${esc(info)}</span>

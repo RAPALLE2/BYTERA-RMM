@@ -43,6 +43,7 @@ import { handleAction as _clientHandleAction } from "./panel.js";
 import { selectClientExternal as _selectClientExternal } from "./sidebar.js";
 import { renderNotifyCenter, attachUnreadDot } from "./notifycenter.js";
 import { updateClientLayouts } from "./dashlayout.js";
+import { updateBatteryIndicators, clientIconType } from "./deviceicons.js";
 import { initStartMenu, refreshStartMenu, setStartMenuUser, unlockCatalogPruning } from "./startmenu.js";
 import { t, initLanguages, loadLocale } from "./i18n.js";
 
@@ -962,11 +963,15 @@ function initLiveUpdates() {
   dashboardSocket.on("client:metrics", ({ id, metrics }) => {
     const client = state.clients.find((c) => c.id === id);
     const wasOnline = client ? !!client.online : true;
+    const iconBefore = client ? clientIconType(client) : null;
     if (client) {
       client.metrics = metrics;
       client.online = true;
     }
     recordMetrics(id, metrics);
+    try { updateBatteryIndicators(client); } catch {}
+    // icon derived from the metrics (e.g. a battery appeared) -> redraw the tree
+    if (client && wasOnline && iconBefore !== clientIconType(client)) { try { renderSidebar(); } catch {} }
 
     // Live-Refresh für Dashboard-Widgets (aggregierte Flotten-Werte).
     try { window.dispatchEvent(new CustomEvent("metrics-updated", { detail: { id } })); } catch {}

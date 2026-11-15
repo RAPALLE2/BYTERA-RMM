@@ -1036,6 +1036,82 @@ def _detect_device_type():
 DETECTED_DEVICE_TYPE = _detect_device_type()
 
 
+# SMBIOS chassis types (DMI / Win32_SystemEnclosure)
+_CHASSIS_LAPTOP = {8, 9, 10, 11, 12, 14, 18, 21, 30, 31, 32}
+_CHASSIS_DESKTOP = {3, 4, 5, 6, 7, 13, 15, 16, 24, 34, 35, 36}
+_CHASSIS_SERVER = {17, 22, 23, 25, 28, 29}
+
+
+def _detect_device_kind():
+    """
+    Kind of device for the icon in the dashboard (same icons as the topology map):
+    "laptop" | "pc" | "server" | "hypervisor" | "vm" | "lxc" | "docker" | None.
+    Best effort - the user can override the icon in the edit dialog.
+    """
+    try:
+        sysname = platform.system().lower()
+        if sysname == "linux":
+            virt = ""
+            try:
+                virt = subprocess.run(["systemd-detect-virt"], capture_output=True,
+                                      text=True, timeout=5).stdout.strip().lower()
+            except Exception:
+                pass
+            if virt in ("docker", "podman") or Path("/.dockerenv").exists() or Path("/run/.containerenv").exists():
+                return "docker"
+            if Path("/usr/bin/pveversion").exists() or Path("/etc/pve").is_dir():
+                return "hypervisor"                       # Proxmox VE host
+            if DETECTED_DEVICE_TYPE in ("vm", "lxc"):
+                return DETECTED_DEVICE_TYPE
+        elif DETECTED_DEVICE_TYPE == "vm":
+            return "vm"
+        try:
+            if psutil.sensors_battery() is not None:
+                return "laptop"
+        except Exception:
+            pass
+        chassis = set()
+        if sysname == "linux":
+            try:
+                chassis = {int(Path("/sys/class/dmi/id/chassis_type").read_text().strip())}
+            except Exception:
+                pass
+        elif sysname == "windows":
+            try:
+                out = subprocess.run(
+                    ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                     "(Get-CimInstance Win32_SystemEnclosure).ChassisTypes -join ','"],
+                    capture_output=True, text=True, timeout=20,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+                chassis = {int(x) for x in out.replace(",", " ").split() if x.strip().isdigit()}
+            except Exception:
+                pass
+        if chassis & _CHASSIS_LAPTOP:
+            return "laptop"
+        if chassis & _CHASSIS_SERVER:
+            return "server"
+        if sysname == "windows":
+            try:
+                if "server" in (platform.win32_edition() or "").lower() or "server" in platform.release().lower():
+                    return "server"
+            except Exception:
+                pass
+            return "pc"
+        if sysname == "darwin":
+            return "pc"
+        if chassis & _CHASSIS_DESKTOP:
+            # a desktop chassis without a graphical session manager is used as a server
+            gui = any(Path(p).exists() for p in ("/usr/bin/gnome-shell", "/usr/bin/plasmashell",
+                      "/usr/bin/xfce4-session", "/usr/sbin/lightdm", "/usr/sbin/gdm3", "/usr/sbin/sddm", "/usr/bin/cinnamon"))
+            return "pc" if gui else "server"
+        return "server"
+    except Exception:
+        return None
+
+
+DETECTED_DEVICE_KIND = _detect_device_kind()
+
+
 def _read_and_clear_last_crash():
     """
     Liest last_crash.txt (vom Crash-Schutz in __main__ geschrieben), löscht
@@ -1100,6 +1176,7 @@ async def connect():
             "patch_protocol": PATCH_PROTOCOL,
             "patch_sources": _patch_sources(),
             "device_type": DETECTED_DEVICE_TYPE,   # "vm"/"lxc"/"physical"/None (Auto-Erkennung)
+            "device_kind": DETECTED_DEVICE_KIND,   # icon: laptop/pc/server/hypervisor/vm/lxc/docker
             "last_crash": _read_and_clear_last_crash(),  # Traceback des letzten Absturzes (falls vorhanden)
         },
         namespace="/agent",

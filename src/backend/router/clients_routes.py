@@ -255,6 +255,8 @@ class UpdateClientBody(BaseModel):
     auto_update: str | None = None
     # Bestätigung der Gerätetyp-Auto-Erkennung (1 = Nutzer hat entschieden)
     device_type_ack: int | None = None
+    # Icon in sidebar/panel/topology ('' = automatic from the detected kind)
+    icon_type: str | None = None
     # Favorisierter Arbeitsordner (erscheint im Web-Explorer in der Wurzelansicht)
     fav_dir: str | None = None
     # Garantie-Ende (Unix-ms). 0/None = keine Garantie hinterlegt.
@@ -318,6 +320,10 @@ def update_client(client_id: str, body: UpdateClientBody, user: dict = Depends(g
         fields["active"] = int(fields["active"])  # SQLite kennt kein echtes Bool
     if "device_type" in fields and fields["device_type"] not in ("physical", "vm", "lxc", None):
         raise HTTPException(400, "Ungültiger Gerätetyp (physical|vm|lxc)")
+    if "icon_type" in fields:
+        fields["icon_type"] = fields["icon_type"] or ""
+        if fields["icon_type"] and fields["icon_type"] not in db.ICON_TYPES:
+            raise HTTPException(400, "Invalid icon type")
     if "auto_update" in fields and fields["auto_update"] not in ("global", "on", "off", None):
         raise HTTPException(400, "Ungültiger Auto-Update-Modus (global|on|off)")
     if fields.get("auto_update") is None and "auto_update" in fields:

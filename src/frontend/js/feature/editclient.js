@@ -10,6 +10,7 @@ import { esc, uiConfirm } from "../app/utils.js";
 import { closeWindow, openWindow } from "../app/windowmanager.js";
 // t() unter Alias: "t" ist hier bereits als lokaler Variablenname belegt.
 import { t as tr } from "../app/i18n.js";
+import { CLIENT_TYPES, TYPE_LABELS, clientIconType, deviceIconSvg } from "../app/deviceicons.js";
 
 // Wird von app.js gesetzt, um nach Änderungen alles neu zu laden
 let onChanged = null;
@@ -100,6 +101,17 @@ export function renderEditClient(body, win) {
         </select>
       </div>
 
+      <div class="form-row">
+        <label>Icon <span style="font-weight:400;color:var(--subtext)">(sidebar, panel, topology)</span></label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span id="ec-icon-prev" style="display:inline-flex;color:var(--text)">${deviceIconSvg(clientIconType(client), 26)}</span>
+          <select id="ec-icon" style="flex:1">
+            <option value="">Automatic (${esc(TYPE_LABELS[clientIconType({ ...client, icon_type: "" })] || "")})</option>
+            ${CLIENT_TYPES.map((k) => `<option value="${k}" ${client.icon_type === k ? "selected" : ""}>${esc(TYPE_LABELS[k] || k)}</option>`).join("")}
+          </select>
+        </div>
+      </div>
+
       <div class="form-row" id="ec-host-row" style="${client.device_type === "vm" || client.device_type === "lxc" ? "" : "display:none"}">
         <label>${tr("ec_host")}</label>
         <select id="ec-host">
@@ -166,6 +178,9 @@ export function renderEditClient(body, win) {
   const locationSel = body.querySelector("#ec-location");
   const folderSel = body.querySelector("#ec-folder");
   const devTypeSel = body.querySelector("#ec-devtype");
+  body.querySelector("#ec-icon").addEventListener("change", (e) => {
+    body.querySelector("#ec-icon-prev").innerHTML = deviceIconSvg(clientIconType({ ...client, icon_type: e.target.value }), 26);
+  });
   // Gerätetyp IMMER frisch: state.clients kann veraltet sein (z.B. wenn der
   // Agent den Typ per Auto-Erkennung gerade erst gemeldet hat). Deshalb wird
   // der Client beim Öffnen direkt vom Backend geholt und der Typ übernommen -
@@ -227,6 +242,7 @@ export function renderEditClient(body, win) {
         active: body.querySelector("#ec-active").checked,
         device_type: devTypeSel.value,
         auto_update: body.querySelector("#ec-autoupdate").value,
+        icon_type: body.querySelector("#ec-icon").value,
         // Host nur setzen, wenn VM/LXC — sonst kein Parent
         parent_client_id: (devTypeSel.value === "vm" || devTypeSel.value === "lxc")
           ? (body.querySelector("#ec-host").value || null)

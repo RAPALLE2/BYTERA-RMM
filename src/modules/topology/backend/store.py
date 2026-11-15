@@ -137,7 +137,7 @@ def set_overrides(source: str, overrides: dict) -> dict:
                  if isinstance(v, dict) and _clean_meta(v)},
         "hidden": [_s(x) for x in (o.get("hidden") or [])][:1000],
         "custom_nodes": [
-            {"id": _s(n.get("id")), "label": _s(n.get("label")), "type": _s(n.get("type") or "device", 32),
+            {"id": _s(n.get("id")), "label": _s(n.get("label")), "type": _s(n.get("type") or "", 32),
              "x": _f(n.get("x")), "y": _f(n.get("y")), "ip": _s(n.get("ip"), 120), "os": _s(n.get("os"), 120),
              "agent_id": _s(n.get("agent_id"), 64), "info": _s(n.get("info"), 500)}
             for n in (o.get("custom_nodes") or []) if isinstance(n, dict) and n.get("id")
