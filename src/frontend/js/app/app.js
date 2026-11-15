@@ -43,6 +43,7 @@ import { handleAction as _clientHandleAction } from "./panel.js";
 import { selectClientExternal as _selectClientExternal } from "./sidebar.js";
 import { renderNotifyCenter, attachUnreadDot } from "./notifycenter.js";
 import { updateClientLayouts } from "./dashlayout.js";
+import { updateClassicView } from "./classicview.js";
 import { initStartMenu, refreshStartMenu, setStartMenuUser, unlockCatalogPruning } from "./startmenu.js";
 import { t, initLanguages, loadLocale } from "./i18n.js";
 
@@ -979,6 +980,7 @@ function initLiveUpdates() {
     try {
       touched = updateClientLayouts(id);
     } catch { touched = 0; }
+    try { touched += updateClassicView(id); } catch {}
     // Fallback nur für Ansichten, die (noch) kein Layout-Host-Update können.
     const sel = state.selection;
     if (!touched && sel && (

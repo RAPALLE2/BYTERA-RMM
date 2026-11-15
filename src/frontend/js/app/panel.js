@@ -22,6 +22,7 @@ import { renderDashboard } from "../feature/dashboard.js";
 import { favStarHtml, favState, cycleFav } from "./sidebar.js";
 import { renderClientLayout } from "./dashlayout.js";
 import { hideFleetTip, showFleetTip, attachHoverTip, scaleToContainer } from "./fleetcharts.js";
+import { renderClassicView } from "./classicview.js";
 
 // Zeilen-Hover (wie Dashboard/clientmetrics): Zeile hervorheben + Tooltip
 // mit Label + VOLLSTÄNDIGEM Wert genau dieser Zeile.
@@ -63,6 +64,8 @@ export function renderMainContent() {
   // entfernen (sonst konnten sie über den Client-Wechsel hinaus stehenbleiben).
   try { hideFleetTip(); } catch {}
   const el = content();
+  // Klassisches Design (Proxmox-Aufbau): Baum-Auswahl + Kategorien statt Widgets
+  if (document.body.classList.contains("cl-layout")) return renderClassicView(el);
   if (!state.selection || state.selection.type === "dashboard") {
     // Ohne das Recht 'see_dashboard' bleibt die Dashboard-Ansicht bewusst eine
     // leere schwarze Seite (keine Zahlen, Widgets oder Favoriten).

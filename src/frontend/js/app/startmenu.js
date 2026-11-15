@@ -16,6 +16,7 @@
 import { uiPrompt, uiConfirm } from "./utils.js";
 import { getDashEdit } from "./persist.js";
 import { t } from "./i18n.js";
+import { CATEGORIES, categoryOf, categoryInfo } from "./appcategories.js";
 
 let CATALOG = {};          // id -> { id, icon, label }
 let CATALOG_ORDER = [];    // Reihenfolge aus dem DOM (für Neu-Apps)
@@ -88,11 +89,65 @@ function reconcile() {
     return false;
   });
 
-  // Neue Apps (im Katalog, aber nirgends platziert) hinten anhängen
+  // Standardordner: Einmalig (neue Benutzer UND bestehende Layouts) alle
+  // losen Apps nach Kategorien in Ordner sortieren - erst wenn auch die
+  // Modul-Apps bekannt sind. Eigene Ordner der Benutzer bleiben, wie sie sind.
+  if (!layout.grouped && !pruneLocked) { groupLooseApps(placed); layout.grouped = true; }
+
+  // Neue Apps (im Katalog, aber nirgends platziert): bei gruppiertem Layout in
+  // den passenden Kategorie-Ordner, sonst hinten anhängen.
   for (const id of CATALOG_ORDER) {
-    if (!placed.has(id) && CATALOG[id]) layout.items.push({ t: "app", id });
+    if (placed.has(id) || !CATALOG[id]) continue;
+    placed.add(id);
+    if (layout.grouped) categoryFolder(categoryOf(id)).apps.push(id);
+    else layout.items.push({ t: "app", id });
   }
   save();
+}
+
+// Kategorie-Ordner holen bzw. anlegen (am Ende, in Kategorie-Reihenfolge).
+function categoryFolder(key) {
+  let f = layout.items.find((x) => x.t === "folder" && x.cat === key);
+  if (!f) {
+    const info = categoryInfo(key);
+    f = { t: "folder", id: `cat_${key}`, cat: key, name: info.name, open: false, apps: [] };
+    layout.items.push(f);
+  }
+  return f;
+}
+
+// Alle Apps, die direkt im Menü liegen, in ihre Kategorie-Ordner verschieben.
+function groupLooseApps() {
+  const loose = layout.items.filter((it) => it.t === "app").map((it) => it.id);
+  if (!loose.length) return;
+  layout.items = layout.items.filter((it) => it.t !== "app");
+  // freie Slots neu vergeben: eigene Ordner zuerst (alte Reihenfolge), dann Kategorien
+  layout.items.sort((a, b) => (a.pos ?? 0) - (b.pos ?? 0)).forEach((it) => { delete it.pos; });
+  const byCat = new Map();
+  for (const id of loose) {
+    const k = categoryOf(id);
+    if (!byCat.has(k)) byCat.set(k, []);
+    byCat.get(k).push(id);
+  }
+  for (const c of CATEGORIES) {
+    const ids = byCat.get(c.key);
+    if (ids) categoryFolder(c.key).apps.push(...ids.filter((id) => !categoryFolder(c.key).apps.includes(id)));
+  }
+}
+
+/** Startmenü komplett nach den Standard-Kategorien ordnen (Knopf im
+ *  Bearbeiten-Modus). Auch Apps aus eigenen Ordnern wandern zurück. */
+export function resetToCategories() {
+  const all = [];
+  for (const it of layout.items) {
+    if (it.t === "app") all.push(it.id);
+    else if (it.t === "folder") all.push(...(it.apps || []));
+  }
+  layout = { items: all.map((id) => ({ t: "app", id })), grouped: false };
+  groupLooseApps();
+  layout.grouped = true;
+  reconcile();
+  render();
 }
 
 // -------------------------------------------------------------
@@ -192,6 +247,7 @@ function buildChrome(root) {
     <span>Anwendungen</span>
     <span class="sm-tools">
       <button class="sm-newfolder-btn" title="Neuen Ordner erstellen" style="display:none">+ Ordner</button>
+      <button class="sm-catreset-btn" title="Alle Apps wieder in die Standardordner (Kategorien) einsortieren" style="display:none">Nach Kategorien ordnen</button>
       <button class="sm-done-btn" title="Bearbeiten beenden" style="display:none">Bearbeiten beenden</button>
     </span>`;
   header.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px";
@@ -202,6 +258,11 @@ function buildChrome(root) {
     const { setDashEdit } = await import("./persist.js");
     setDashEdit(false);
     try { window.dispatchEvent(new CustomEvent("dashedit-changed")); } catch {}
+  });
+  header.querySelector(".sm-catreset-btn").addEventListener("click", async () => {
+    const ok = await uiConfirm("Alle Apps wieder in die Standardordner einsortieren? Eigene Ordner werden dabei aufgelöst.",
+      { okText: "Neu ordnen" });
+    if (ok) resetToCategories();
   });
   header.querySelector(".sm-newfolder-btn").addEventListener("click", async () => {
     const name = await uiPrompt("Neuen Ordner erstellen", {
@@ -227,6 +288,7 @@ function buildChrome(root) {
 function applyEditChrome() {
   if (headerEl) {
     headerEl.querySelector(".sm-newfolder-btn").style.display = editMode ? "" : "none";
+    headerEl.querySelector(".sm-catreset-btn").style.display = editMode ? "" : "none";
     headerEl.querySelector(".sm-done-btn").style.display = editMode ? "" : "none";
   }
   const panel = gridEl && gridEl.closest(".start-menu-panel");
@@ -352,6 +414,13 @@ export function getMenuModel() {
     }
   }
   return out;
+}
+
+/** Alle erlaubten Apps des Katalogs (Katalog-Reihenfolge) - fuer die nach
+ *  Kategorien gruppierte Navigation im klassischen Design. */
+export function getCatalogApps() {
+  return CATALOG_ORDER.filter((id) => CATALOG[id] && isAllowed(id))
+    .map((id) => ({ id, icon: CATALOG[id].icon || "", label: CATALOG[id].label }));
 }
 
 /** App wie per Klick im Menue oeffnen. */

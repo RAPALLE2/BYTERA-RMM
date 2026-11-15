@@ -22,6 +22,7 @@ import { getToken } from "./api.js";
 import { BACKEND_URL } from "./config.js";
 import { openWindow } from "./windowmanager.js";
 import { addCatalogEntry, removeCatalogEntry } from "./startmenu.js";
+import { setAppCategory } from "./appcategories.js";
 
 const mods = new Map();          // moduleId -> Manifest aus dem Backend
 const apps = new Map();          // appId -> { mid, app, base }
@@ -161,6 +162,7 @@ export async function loadModules() {
   for (const id of oldApps) if (!apps.has(id) && addedToMenu.has(id)) { removeCatalogEntry(id); addedToMenu.delete(id); }
   for (const [id, { app }] of apps) {
     if (app.startmenu === false || addedToMenu.has(id)) continue;
+    setAppCategory(id, app.category);          // optional aus module.json
     addCatalogEntry(id, app.icon || "🧩", app.label || id);
     addedToMenu.add(id);
   }

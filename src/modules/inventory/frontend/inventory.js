@@ -1,7 +1,7 @@
 // inventory.js (Modul "inventory")
 // --------------------------------
 // Inventar-App:
-//   links   Ansichten (Status, Garantie), Besitzer, Lager mit Regalen
+//   links   Ansichten (Status, Garantie), Besitzer, Büros, Abteilungen, Lager mit Regalen
 //   Mitte   Geraeteliste mit Suche, Typ-Filter, Sortierung, Summen, CSV-Export
 //   rechts  Details eines Geraets: Daten, Notizen, Aktionen, Verlauf
 // Rechte: see_inventory (ansehen), manage_inventory (alles aendern).
@@ -49,7 +49,7 @@ function badge(status) {
 }
 
 export function renderInventory(body, win) {
-  let data = { warehouses: [], items: [], users: [], can_manage: false };
+  let data = { warehouses: [], items: [], users: [], offices: [], departments: [], can_manage: false };
   let filter = { kind: "all", value: "" };
   let search = "", catFilter = "";
   let sort = { key: "name", dir: 1 };
@@ -67,6 +67,7 @@ export function renderInventory(body, win) {
           </select>
           <button class="btn-primary" id="iv-new" style="display:none">➕ Gerät</button>
           <button class="btn" id="iv-wh" style="display:none">🏬 Lager verwalten</button>
+          <button class="btn" id="iv-pl" style="display:none" title="Büros und Abteilungen für Geräte im Einsatz">🏢 Büros &amp; Abteilungen</button>
           <button class="btn" id="iv-csv" title="Aktuelle Liste als CSV herunterladen">⬇ CSV</button>
         </div>
         <div style="flex:1;overflow:auto;min-height:0">
@@ -89,6 +90,9 @@ export function renderInventory(body, win) {
       data = await moduleRequest("/api/inventory/overview");
       $("#iv-new").style.display = data.can_manage ? "" : "none";
       $("#iv-wh").style.display = data.can_manage ? "" : "none";
+      $("#iv-pl").style.display = data.can_manage ? "" : "none";
+      data.offices = data.offices || [];
+      data.departments = data.departments || [];
       drawAll();
     } catch (e) {
       tableEl.innerHTML = `<tr><td style="padding:20px;color:var(--danger)">${esc(e.message)}</td></tr>`;
@@ -113,8 +117,15 @@ export function renderInventory(body, win) {
     const w = whById(it.warehouse_id), s = shelfById(it.shelf_id);
     return (w ? w.name : "?") + (s ? ` / ${s.name}` : "");
   }
+  const placeById = (id) => id ? [...data.offices, ...data.departments].find((p) => p.id === id) : null;
+  // "Büro X · Abteilung Y" (nur Geräte im Einsatz)
+  function placeText(it) {
+    if (it.status !== "in_use") return "";
+    const o = placeById(it.office_id), d = placeById(it.department_id);
+    return [o ? `🏢 ${o.name}` : "", d ? `👥 ${d.name}` : ""].filter(Boolean).join(" · ");
+  }
   function whereText(it) {
-    if (it.status === "in_use") return `👤 ${it.owner_name}`;
+    if (it.status === "in_use") return `👤 ${it.owner_name}` + (placeText(it) ? ` · ${placeText(it)}` : "");
     const loc = locationText(it);
     return loc ? `🏬 ${loc}` : (it.owner_name ? `👤 ${it.owner_name}` : "–");
   }
@@ -125,6 +136,8 @@ export function renderInventory(body, win) {
       case "status": return it.status === filter.value;
       case "warranty": { const n = daysUntil(it.warranty_until); return n != null && n <= WARN_DAYS && it.status !== "retired"; }
       case "owner": return it.owner_name === filter.value && it.status === "in_use";
+      case "office": return it.status === "in_use" && (it.office_id || "") === filter.value;
+      case "department": return it.status === "in_use" && (it.department_id || "") === filter.value;
       case "warehouse": return it.warehouse_id === filter.value;
       case "shelf": return it.shelf_id === filter.value;
       case "noshelf": return it.warehouse_id === filter.value && !it.shelf_id;
@@ -138,7 +151,7 @@ export function renderInventory(body, win) {
       if (catFilter && it.category !== catFilter) return false;
       if (!q) return true;
       return [it.name, it.manufacturer, it.model, it.serial, it.asset_tag, it.owner_name,
-        it.notes, it.supplier, locationText(it), cat(it.category)[1]]
+        it.notes, it.supplier, locationText(it), placeText(it), cat(it.category)[1]]
         .some((v) => (v || "").toLowerCase().includes(q));
     });
     const val = (it) => {
@@ -185,6 +198,21 @@ export function renderInventory(body, win) {
       ? ownerNames.map((o) => row("owner", o, `👤 ${esc(o)}`, owners[o])).join("")
       : `<div style="padding:4px 8px;color:var(--subtext);font-size:12px">noch niemand</div>`;
 
+    // Bueros + Abteilungen (Geraete im Einsatz)
+    const inUse = items.filter((i) => i.status === "in_use");
+    for (const [kind, list, title, ico, field] of [
+      ["office", data.offices, "Büros", "🏢", "office_id"],
+      ["department", data.departments, "Abteilungen", "👥", "department_id"],
+    ]) {
+      if (!list.length && !data.can_manage) continue;
+      html += head(`${title} (${list.length})`, data.can_manage
+        ? `<button class="btn btn-sm iv-side-pl" title="Büros &amp; Abteilungen verwalten" style="padding:0 6px">⚙</button>` : "");
+      html += list.length
+        ? list.map((p) => row(kind, p.id, `${ico} ${esc(p.name)}`, inUse.filter((i) => i[field] === p.id).length)).join("")
+          + (inUse.some((i) => !i[field]) ? row(kind, "", `<i>ohne ${kind === "office" ? "Büro" : "Abteilung"}</i>`, inUse.filter((i) => !i[field]).length, 0) : "")
+        : `<div style="padding:4px 8px;color:var(--subtext);font-size:12px">Noch keine angelegt.</div>`;
+    }
+
     // Lager + Regale
     html += head("Lager", data.can_manage
       ? `<button class="btn btn-sm" id="iv-side-wh" title="Lager verwalten" style="padding:0 6px">⚙</button>` : "");
@@ -219,6 +247,7 @@ export function renderInventory(body, win) {
       drawAll();
     }));
     sideEl.querySelector("#iv-side-wh")?.addEventListener("click", openWarehouseManager);
+    sideEl.querySelectorAll(".iv-side-pl").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); openPlaceManager(); }));
   }
 
   // ---------------- Tabelle ----------------
@@ -302,6 +331,8 @@ export function renderInventory(body, win) {
 
         <div style="font-size:13px">
           ${field("Besitzer", it.status === "in_use" && it.owner_name ? `👤 ${esc(it.owner_name)}` : "")}
+          ${field("Büro", it.status === "in_use" && placeById(it.office_id) ? `🏢 ${esc(placeById(it.office_id).name)}` : "")}
+          ${field("Abteilung", it.status === "in_use" && placeById(it.department_id) ? `👥 ${esc(placeById(it.department_id).name)}` : "")}
           ${field("Lagerort", locationText(it) ? `🏬 ${esc(locationText(it))}` : "")}
           ${field("Hersteller", esc(it.manufacturer))}
           ${field("Modell", esc(it.model))}
@@ -335,7 +366,8 @@ export function renderInventory(body, win) {
       detailEl.querySelector("#ivd-store").onclick = () => openStore(it);
       detailEl.querySelector("#ivd-edit").onclick = () => openEditor(it);
       detailEl.querySelector("#ivd-dup").onclick = () => openEditor({ ...it, id: null, name: `${it.name} (Kopie)`,
-        serial: "", asset_tag: "", notes: it.notes, status: "storage", owner_name: "", owner_user_id: "" }, true);
+        serial: "", asset_tag: "", notes: it.notes, status: "storage", owner_name: "", owner_user_id: "",
+        office_id: "", department_id: "" }, true);
       detailEl.querySelector("#ivd-del").onclick = async () => {
         if (!(await uiConfirm(`„${it.name}“ löschen?`, { danger: true, description: "Das Gerät und sein Verlauf werden endgültig entfernt." }))) return;
         try { await call(`/api/inventory/items/${it.id}`, "DELETE"); selectedId = null; await load(); }
@@ -386,6 +418,11 @@ export function renderInventory(body, win) {
   const ownerDatalist = (id) => `<datalist id="${id}">${ownerSuggestions().map((n) => `<option value="${esc(n)}">`).join("")}</datalist>`;
   const userIdFor = (name) => data.users.find((u) => u.name === name)?.id || "";
 
+  function placeOptions(kind, sel) {
+    const list = kind === "office" ? data.offices : data.departments;
+    return `<option value="">– ${kind === "office" ? "kein Büro" : "keine Abteilung"} –</option>`
+      + list.map((p) => `<option value="${esc(p.id)}" ${p.id === sel ? "selected" : ""}>${esc(p.name)}</option>`).join("");
+  }
   function warehouseOptions(sel) {
     return `<option value="">– Lager wählen –</option>` + data.warehouses.map((w) =>
       `<option value="${esc(w.id)}" ${w.id === sel ? "selected" : ""}>${esc(w.name)}</option>`).join("");
@@ -424,6 +461,8 @@ export function renderInventory(body, win) {
             `<option value="${k}" ${it.status === k ? "selected" : ""}>${ic} ${l}</option>`).join("")}</select></div>
         <div class="form-row" id="ive-owner-row"><label>Besitzer *</label>
           <input id="ive-owner" list="ive-owners" value="${v("owner_name")}" placeholder="Name des Mitarbeiters" />${ownerDatalist("ive-owners")}</div>
+        <div class="form-row ive-inuse"><label>Büro</label><select id="ive-office">${placeOptions("office", it.office_id)}</select></div>
+        <div class="form-row ive-inuse"><label>Abteilung</label><select id="ive-dept">${placeOptions("department", it.department_id)}</select></div>
         <div class="form-row" id="ive-wh-row"><label>Lager</label><select id="ive-wh">${warehouseOptions(it.warehouse_id)}</select></div>
         <div class="form-row" id="ive-sh-row"><label>Regal</label><select id="ive-sh">${shelfOptions(it.warehouse_id, it.shelf_id)}</select></div>
 
@@ -447,6 +486,7 @@ export function renderInventory(body, win) {
     const syncStatus = () => {
       const s = statusSel.value;
       d.querySelector("#ive-owner-row").style.display = s === "in_use" ? "" : "none";
+      d.querySelectorAll(".ive-inuse").forEach((r) => { r.style.display = s === "in_use" ? "" : "none"; });
       d.querySelector("#ive-wh-row").style.display = s === "in_use" ? "none" : "";
       d.querySelector("#ive-sh-row").style.display = s === "in_use" ? "none" : "";
     };
@@ -464,6 +504,7 @@ export function renderInventory(body, win) {
         manufacturer: g("#ive-man"), model: g("#ive-model"), serial: g("#ive-serial"),
         status: g("#ive-status"), owner_name: owner, owner_user_id: userIdFor(owner),
         warehouse_id: g("#ive-wh"), shelf_id: g("#ive-sh"),
+        office_id: g("#ive-office"), department_id: g("#ive-dept"),
         purchase_date: g("#ive-buy"), cost: costRaw === "" ? null : Number(costRaw),
         warranty_until: g("#ive-war"), supplier: g("#ive-sup"),
         client_id: g("#ive-client"), notes: d.querySelector("#ive-notes").value,
@@ -485,6 +526,10 @@ export function renderInventory(body, win) {
       <div style="font-size:13px;color:var(--subtext);margin-bottom:10px">${esc(it.name)} · derzeit: ${esc(whereText(it))}</div>
       <div class="form-row"><label>Neuer Besitzer</label>
         <input id="iva-owner" list="iva-owners" placeholder="Name des Mitarbeiters" />${ownerDatalist("iva-owners")}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px">
+        <div class="form-row"><label>Büro</label><select id="iva-office">${placeOptions("office", it.status === "in_use" ? it.office_id : "")}</select></div>
+        <div class="form-row"><label>Abteilung</label><select id="iva-dept">${placeOptions("department", it.status === "in_use" ? it.department_id : "")}</select></div>
+      </div>
       <div class="form-row"><label>Notiz (optional, landet im Verlauf)</label>
         <input id="iva-note" placeholder="z. B. Übergabe mit Netzteil + Tasche" /></div>
       <div class="form-error hidden" id="iva-err"></div>
@@ -498,7 +543,8 @@ export function renderInventory(body, win) {
       const owner = d.querySelector("#iva-owner").value.trim();
       try {
         await call(`/api/inventory/items/${it.id}/assign`, "POST",
-          { owner_name: owner, owner_user_id: userIdFor(owner), note: d.querySelector("#iva-note").value });
+          { owner_name: owner, owner_user_id: userIdFor(owner), note: d.querySelector("#iva-note").value,
+            office_id: d.querySelector("#iva-office").value, department_id: d.querySelector("#iva-dept").value });
         closeDialog(); await load();
       } catch (e) { const el = d.querySelector("#iva-err"); el.textContent = e.message; el.classList.remove("hidden"); }
     };
@@ -608,14 +654,57 @@ export function renderInventory(body, win) {
     }));
   }
 
+  // ---------------- Bueros + Abteilungen verwalten ----------------
+  function openPlaceManager() {
+    const cnt = (field, id) => data.items.filter((i) => i.status === "in_use" && i[field] === id).length;
+    const block = (kind, list, title, ico, field, ph) => `
+      <div style="border:1px solid var(--border);border-radius:10px;padding:10px">
+        <div style="display:flex;align-items:center;margin-bottom:6px">
+          <b style="flex:1">${ico} ${title}</b>
+          <button class="btn btn-sm" data-act="add" data-kind="${kind}" data-ph="${esc(ph)}">➕ ${kind === "office" ? "Büro" : "Abteilung"}</button>
+        </div>
+        ${list.length ? list.map((p) => `
+          <div style="display:flex;gap:6px;align-items:center;font-size:13px;padding:2px 0">
+            <span style="flex:1">${esc(p.name)} <span style="color:var(--subtext);font-size:11px">(${cnt(field, p.id)} Geräte)</span>
+              ${p.notes ? `<div style="font-size:11px;color:var(--subtext)">${esc(p.notes)}</div>` : ""}</span>
+            <button class="btn btn-sm" data-act="ren" data-id="${esc(p.id)}" title="Umbenennen">✏️</button>
+            <button class="btn btn-sm btn-danger" data-act="del" data-id="${esc(p.id)}" title="Löschen">🗑</button>
+          </div>`).join("") : `<div style="font-size:12px;color:var(--subtext)">Noch keine angelegt.</div>`}
+      </div>`;
+    const d = showDialog("🏢 Büros & Abteilungen", `
+      <div style="font-size:12px;color:var(--subtext);margin-bottom:10px">Geräte „im Einsatz“ können einem Büro und einer Abteilung zugeordnet werden.</div>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:12px">
+        ${block("office", data.offices, "Büros", "🏢", "office_id", "z. B. Büro Bielefeld 2. OG")}
+        ${block("department", data.departments, "Abteilungen", "👥", "department_id", "z. B. Buchhaltung")}
+      </div>
+      <div style="display:flex;justify-content:flex-end"><button class="btn" id="ivp-close">Fertig</button></div>`, 480);
+    d.querySelector("#ivp-close").onclick = closeDialog;
+    const refresh = async () => { await load(); openPlaceManager(); };
+    const guarded = async (fn) => { try { await fn(); await refresh(); } catch (e) { notify(e.message, "error"); } };
+    d.querySelectorAll("button[data-act]").forEach((b) => b.addEventListener("click", async () => {
+      const p = placeById(b.dataset.id);
+      if (b.dataset.act === "add") {
+        const name = await uiPrompt(b.dataset.kind === "office" ? "Name des Büros" : "Name der Abteilung", { placeholder: b.dataset.ph });
+        if (name?.trim()) guarded(() => call("/api/inventory/places", "POST", { kind: b.dataset.kind, name }));
+      } else if (b.dataset.act === "ren") {
+        const name = await uiPrompt("Umbenennen", { value: p.name });
+        if (name?.trim()) guarded(() => call(`/api/inventory/places/${p.id}`, "PUT", { kind: p.kind, name, notes: p.notes || "" }));
+      } else if (b.dataset.act === "del") {
+        if (await uiConfirm(`„${p.name}“ löschen?`, { danger: true })) guarded(() => call(`/api/inventory/places/${p.id}`, "DELETE"));
+      }
+    }));
+  }
+
   // ---------------- CSV-Export ----------------
   function exportCsv() {
     const q = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
     const head = ["Name", "Typ", "Inventar-Nr.", "Hersteller", "Modell", "Seriennummer", "Status",
-      "Besitzer", "Lager", "Regal", "Kaufdatum", "Kosten", "Garantie bis", "Lieferant", "Notizen"];
+      "Besitzer", "Büro", "Abteilung", "Lager", "Regal", "Kaufdatum", "Kosten", "Garantie bis", "Lieferant", "Notizen"];
     const rows = visibleItems().map((i) => [
       i.name, cat(i.category)[1], i.asset_tag, i.manufacturer, i.model, i.serial, STATUS[i.status]?.[1] || i.status,
-      i.status === "in_use" ? i.owner_name : "", whById(i.warehouse_id)?.name || "", shelfById(i.shelf_id)?.name || "",
+      i.status === "in_use" ? i.owner_name : "",
+      i.status === "in_use" ? placeById(i.office_id)?.name || "" : "", i.status === "in_use" ? placeById(i.department_id)?.name || "" : "",
+      whById(i.warehouse_id)?.name || "", shelfById(i.shelf_id)?.name || "",
       i.purchase_date, i.cost != null ? String(i.cost).replace(".", ",") : "", i.warranty_until, i.supplier, i.notes,
     ].map(q).join(";"));
     downloadText(`inventar-${new Date().toISOString().slice(0, 10)}.csv`,
@@ -640,10 +729,13 @@ export function renderInventory(body, win) {
       Object.assign(pre, { status: "storage", warehouse_id: s?.warehouse_id, shelf_id: filter.value });
     }
     if (filter.kind === "owner") Object.assign(pre, { status: "in_use", owner_name: filter.value });
+    if (filter.kind === "office") Object.assign(pre, { status: "in_use", office_id: filter.value });
+    if (filter.kind === "department") Object.assign(pre, { status: "in_use", department_id: filter.value });
     if (filter.kind === "status") pre.status = filter.value;
     openEditor(pre, true);
   });
   $("#iv-wh").addEventListener("click", openWarehouseManager);
+  $("#iv-pl").addEventListener("click", openPlaceManager);
   $("#iv-csv").addEventListener("click", exportCsv);
 
   load();

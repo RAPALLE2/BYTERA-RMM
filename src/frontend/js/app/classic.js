@@ -4,8 +4,11 @@
 //
 //   * Aussehen: body.design-standard (flach, kompakt, neutrale Farben) - css/classic.css
 //   * Bedienung: body.cl-layout
-//       - feste Navigation links: die Apps/Ordner des Startmenues als Baum,
-//         darunter wie gewohnt Favoriten + Geraete
+//       - feste Navigation links: Apps nach Kategorien gruppiert (dieselben
+//         Kategorien wie die Standardordner im Startmenue, appcategories.js),
+//         darunter Favoriten + Geraete-Baum (Rechenzentrum > Mandant > Standort > Geraet)
+//       - Tab "Uebersicht" wie Proxmox: Kategorie-Spalte + feste Ansicht des
+//         gewaehlten Objekts statt Widgets (classicview.js)
 //       - Inhalte als TABS im Hauptbereich statt schwebender Fenster:
 //         erster Tab "Uebersicht" (Dashboard / ausgewaehlter Client), dann je
 //         offenes Fenster ein Tab (Klick = anzeigen, x / Mittelklick = schliessen)
@@ -21,7 +24,8 @@
 
 import { state } from "./state.js";
 import { focusWindow, closeWindow, windowLink } from "./windowmanager.js";
-import { getMenuModel, openMenuApp, onMenuChange, catalogEntry } from "./startmenu.js";
+import { getCatalogApps, openMenuApp, onMenuChange, catalogEntry } from "./startmenu.js";
+import { groupApps } from "./appcategories.js";
 import { esc } from "./utils.js";
 
 let active = "overview";      // "overview" oder Fenster-Key
@@ -62,6 +66,10 @@ export function initClassic() {
   mainArea.insertBefore(stage, main);
   body.append(main, layer);
   stage.append(tabsEl, body);
+
+  // Wurzel des Geraete-Baums heisst wie in Proxmox "Rechenzentrum"
+  const dash = document.getElementById("sidebar-dashboard");
+  if (dash) dash.innerHTML = `<span class="nav-ico">🗄️</span> Rechenzentrum`;
 
   // ---- Navigation (Apps) oben in der Seitenleiste ----
   navEl = document.createElement("div");
@@ -225,16 +233,18 @@ function saveNavState(s) {
 function renderNav() {
   if (!navEl) return;
   const st = navState();
-  const model = getMenuModel();
+  // Apps nach den festen Kategorien gruppiert (dieselben wie die
+  // Standardordner im Startmenü des futuristischen Designs).
+  const model = groupApps(getCatalogApps()).map((g) => ({ t: "folder", id: `cat_${g.key}`, name: g.name, icon: g.icon, apps: g.apps }));
   const item = (a, indent) => `
     <div class="cl-nav-item" data-app="${esc(a.id)}" style="padding-left:${10 + indent}px" title="${esc(a.label)}">
       <span class="cl-nav-ico">${a.icon}</span><span class="cl-nav-label">${esc(a.label)}</span>
     </div>`;
   const body = model.map((it) => {
     if (it.t === "app") return item(it, 0);
-    const open = st[it.id] !== false;
+    const open = st[it.id] === true;          // Kategorien standardmaessig zugeklappt
     return `<div class="cl-nav-folder${open ? " open" : ""}" data-folder="${esc(it.id)}">
-        <span class="cl-caret">${open ? "▾" : "▸"}</span><span class="cl-nav-label">${esc(it.name)}</span>
+        <span class="cl-caret">${open ? "▾" : "▸"}</span><span class="cl-nav-ico">${it.icon || ""}</span><span class="cl-nav-label">${esc(it.name)}</span>
         <span class="cl-nav-count">${it.apps.length}</span>
       </div>
       ${open ? it.apps.map((a) => item(a, 14)).join("") : ""}`;
@@ -257,7 +267,7 @@ function renderNav() {
   });
   navEl.querySelectorAll(".cl-nav-folder").forEach((el) => el.addEventListener("click", () => {
     const s = navState(); const id = el.dataset.folder;
-    s[id] = s[id] === false; saveNavState(s); renderNav();
+    s[id] = s[id] !== true; saveNavState(s); renderNav();
   }));
   navEl.querySelectorAll(".cl-nav-item").forEach((el) => el.addEventListener("click", () => openMenuApp(el.dataset.app)));
   markNav();
