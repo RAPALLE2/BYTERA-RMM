@@ -192,6 +192,8 @@ class FxBrowser {
     this.downloads = new Map();
     this.vp = { w: 0, h: 0 };
     this.frameTab = null;
+    this.frameSeq = 0;
+    this.drawnSeq = 0;
     this.closed = false;
     this.retry = 0;
     this.build();
@@ -360,19 +362,26 @@ class FxBrowser {
     }
   }
 
+  // Every received frame is acknowledged once it is drawn (or dropped) - the
+  // server only sends new pictures while at most 2 are on the way. That keeps
+  // the delay at one network round trip, even on slow links.
   async onFrame(buf) {
+    const seq = ++this.frameSeq;
     const u8 = new Uint8Array(buf);
     const n = u8[0];
     const tid = new TextDecoder().decode(u8.subarray(1, 1 + n));
-    if (tid !== this.active) return;
     try {
+      if (tid !== this.active) return;
       const bmp = await createImageBitmap(new Blob([u8.subarray(1 + n)], { type: "image/jpeg" }));
-      if (tid !== this.active) { bmp.close?.(); return; }
+      if (tid !== this.active || seq < this.drawnSeq) { bmp.close?.(); return; }   // a newer one is already up
+      this.drawnSeq = seq;
       this.lastBitmap?.close?.();
       this.lastBitmap = bmp;
-      this.ctx2d.drawImage(bmp, 0, 0);
+      this.ctx2d.drawImage(bmp, 0, 0, this.el.canvas.width, this.el.canvas.height);
       this.frameTab = tid;
-    } catch { /* broken frame */ }
+    } catch { /* broken frame */ } finally {
+      this.send({ cmd: "ack" });
+    }
   }
 
   get tab() { return this.tabs.find((t) => t.id === this.active) || null; }

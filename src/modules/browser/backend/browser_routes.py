@@ -238,15 +238,22 @@ async def upload(cid: str, files: list[UploadFile] = File(default=[]), user: dic
 
 
 # ------------------------------------------------------------------ Live-Browser (WebSocket)
+MAX_INFLIGHT = 2               # frames sent but not yet drawn by the dashboard
+
+
 class Viewer:
-    """Eine verbundene Ansicht. Ein einziger Sender je Verbindung; von den
-    Bildern wird immer nur das NEUESTE gesendet (alte werden verworfen)."""
+    """One connected view. Flow control like remote desktop: the dashboard
+    acknowledges every frame it has drawn ({"cmd": "ack"}); at most MAX_INFLIGHT
+    frames are on the way. Meanwhile only the NEWEST frame is kept - older ones
+    are dropped instead of piling up in network buffers (= no growing delay on
+    slow links)."""
 
     def __init__(self, ws: WebSocket):
         self.ws = ws
         self._json: asyncio.Queue = asyncio.Queue(maxsize=500)
         self._frame: bytes | None = None
-        self._frame_sent: asyncio.Future | None = None
+        self.inflight = 0
+        self.last_sent = 0.0
         self._wake = asyncio.Event()
         self.alive = True
         self.task = asyncio.get_running_loop().create_task(self._sender())
@@ -260,21 +267,18 @@ class Viewer:
         except asyncio.QueueFull:
             pass
 
-    async def send_frame(self, blob: bytes) -> None:
+    def send_frame(self, blob: bytes) -> None:
         if not self.alive:
             return
-        if self._frame_sent and not self._frame_sent.done():
-            self._frame_sent.set_result(False)          # aelteres Bild verworfen
-        self._frame = blob
-        self._frame_sent = asyncio.get_running_loop().create_future()
-        fut = self._frame_sent
+        self._frame = blob                              # replaces an unsent older frame
         self._wake.set()
-        try:
-            await asyncio.wait_for(fut, timeout=5)
-        except Exception:
-            pass
+
+    def ack(self) -> None:
+        self.inflight = max(0, self.inflight - 1)
+        self._wake.set()
 
     async def _sender(self) -> None:
+        import time
         try:
             while self.alive:
                 await self._wake.wait()
@@ -282,11 +286,16 @@ class Viewer:
                 while not self._json.empty():
                     await self.ws.send_text(self._json.get_nowait())
                 if self._frame is not None:
-                    blob, fut = self._frame, self._frame_sent
-                    self._frame = None
-                    await self.ws.send_bytes(blob)
-                    if fut and not fut.done():
-                        fut.set_result(True)
+                    # safety net: an old dashboard without acks / a lost ack must not freeze the picture
+                    if self.inflight >= MAX_INFLIGHT and time.time() - self.last_sent > 3:
+                        self.inflight = 0
+                    if self.inflight < MAX_INFLIGHT:
+                        blob, self._frame = self._frame, None
+                        self.inflight += 1
+                        self.last_sent = time.time()
+                        await self.ws.send_bytes(blob)
+                    else:
+                        asyncio.get_running_loop().call_later(0.5, self._wake.set)
         except Exception:
             self.alive = False
 
@@ -300,9 +309,41 @@ class Viewer:
     def close(self) -> None:
         self.alive = False
         self._wake.set()
-        if self._frame_sent and not self._frame_sent.done():
-            self._frame_sent.set_result(False)
         self.task.cancel()
+
+
+class InputLane:
+    """Ordered input events. Mouse moves and wheel ticks that are still waiting
+    are merged (only the newest position counts, wheel deltas are added up) -
+    a slow page can never make the mouse lag behind."""
+
+    def __init__(self):
+        self.items: list[dict] = []
+        self.ev = asyncio.Event()
+
+    def put(self, m: dict) -> None:
+        ev = m.get("ev") or {}
+        last = self.items[-1] if self.items else None
+        lev = (last or {}).get("ev") or {}
+        if last and last.get("tab") == m.get("tab"):
+            if ev.get("type") == "mouse" and ev.get("action") == "move" and lev.get("type") == "mouse" \
+                    and lev.get("action") == "move":
+                self.items[-1] = m
+                return
+            if ev.get("type") == "wheel" and lev.get("type") == "wheel":
+                lev["dx"] = float(lev.get("dx", 0)) + float(ev.get("dx", 0))
+                lev["dy"] = float(lev.get("dy", 0)) + float(ev.get("dy", 0))
+                lev["x"], lev["y"] = ev.get("x", lev.get("x")), ev.get("y", lev.get("y"))
+                return
+        if len(self.items) < 1000:
+            self.items.append(m)
+        self.ev.set()
+
+    async def get(self) -> dict:
+        while not self.items:
+            self.ev.clear()
+            await self.ev.wait()
+        return self.items.pop(0)
 
 
 @router.websocket("/ws")
@@ -342,7 +383,7 @@ async def browser_ws(websocket: WebSocket):
     # Two ordered lanes + an express lane: a page action can block (e.g. a click
     # that opens alert() waits until the dialog is answered) - the answer must
     # not queue up behind it.
-    lanes = {"input": asyncio.Queue(), "ctl": asyncio.Queue()}
+    lanes = {"input": InputLane(), "ctl": asyncio.Queue()}
 
     async def run(m):
         try:
@@ -364,11 +405,12 @@ async def browser_ws(websocket: WebSocket):
             except Exception:
                 continue
             cmd = m.get("cmd")
-            if cmd in EXPRESS:
+            if cmd == "ack":
+                viewer.ack()
+            elif cmd in EXPRESS:
                 asyncio.get_running_loop().create_task(run(m))
             elif cmd == "input":
-                if lanes["input"].qsize() < 500:
-                    lanes["input"].put_nowait(m)
+                lanes["input"].put(m)
             else:
                 lanes["ctl"].put_nowait(m)
     except Exception:

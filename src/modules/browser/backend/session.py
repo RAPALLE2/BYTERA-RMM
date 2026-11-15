@@ -45,7 +45,9 @@ IDLE_CLOSE = 30 * 60          # no viewer for 30 min -> close the browser (main 
 APP_WIN_GRACE = 90            # web-app window without viewer -> closed after 90 s
 MAX_TABS = 60                 # per user, all windows
 DEFAULT_VP = (1280, 800)
-JPEG_QUALITY = 62
+JPEG_QUALITY = 55             # live frames while something moves (small = low latency)
+JPEG_SHARP = 85               # one sharp frame once the picture stands still
+SHARP_AFTER = 0.35            # seconds without a new frame -> send the sharp frame
 NEWTAB = "about:newtab"       # drawn by the dashboard itself (new-tab page)
 MAIN = "main"
 
@@ -121,6 +123,10 @@ JS_FIND_COUNT = r"""(q) => {
 }"""
 
 
+def _modmask(ev: dict) -> int:
+    return (1 if ev.get("alt") else 0) | (2 if ev.get("ctrl") else 0) | (4 if ev.get("meta") else 0) | (8 if ev.get("shift") else 0)
+
+
 def _task(coro):
     return asyncio.get_running_loop().create_task(coro)
 
@@ -147,6 +153,9 @@ class Tab:
         self.last_frame = 0.0
         self.crashed = False
         self.socks_err_mark = 0
+        self.sharp_timer: asyncio.TimerHandle | None = None
+        self.buttons = 0                   # pressed mouse buttons (bit mask) for drag moves
+        self.hovering = False
 
     def view(self) -> dict:
         return {"id": self.id, "title": self.title or self._fallback_title(), "url": self.pending_url or self.url,
@@ -567,27 +576,49 @@ class UserBrowser:
         tab.streaming = False
 
     async def _frame(self, tab: Tab, params: dict) -> None:
-        tab.last_frame = time.time()
+        # Ack at once: Chromium never waits for the network. Flow control happens
+        # per viewer (browser_routes.Viewer): only the NEWEST frame is kept, and a
+        # frame is only sent when the dashboard has drawn the previous ones - so no
+        # stale pictures pile up in network buffers (that was the big lag).
         try:
-            if tab.win.active == tab.id and tab.win.viewers:
-                await self._send_frame(tab, base64.b64decode(params["data"]))
-        finally:
-            try:                                      # ack only AFTER sending = backpressure
-                await tab.cdp.send("Page.screencastFrameAck", {"sessionId": params["sessionId"]})
-            except Exception:
-                pass
+            _task(tab.cdp.send("Page.screencastFrameAck", {"sessionId": params["sessionId"]}))
+        except Exception:
+            pass
+        tab.last_frame = time.time()
+        if tab.win.active == tab.id and tab.win.viewers:
+            self._send_frame(tab, base64.b64decode(params["data"]))
+            self._schedule_sharp(tab)
 
-    async def _send_frame(self, tab: Tab, jpeg: bytes) -> None:
+    def _send_frame(self, tab: Tab, jpeg: bytes) -> None:
         tid = tab.id.encode()
         blob = bytes([len(tid)]) + tid + jpeg
-        await asyncio.gather(*(v.send_frame(blob) for v in list(tab.win.viewers)), return_exceptions=True)
+        for v in list(tab.win.viewers):
+            v.send_frame(blob)
 
-    async def snapshot(self, tab: Tab | None) -> None:
+    def _schedule_sharp(self, tab: Tab) -> None:
+        if tab.sharp_timer:
+            tab.sharp_timer.cancel()
+        tab.sharp_timer = asyncio.get_running_loop().call_later(SHARP_AFTER, lambda: _task(self._sharp(tab)))
+
+    async def _sharp(self, tab: Tab) -> None:
+        """The picture stands still: replace the light live frame by a sharp one."""
+        tab.sharp_timer = None
+        if tab.win.active != tab.id or not tab.win.viewers or time.time() - tab.last_frame < SHARP_AFTER * 0.9:
+            return
+        await self.snapshot(tab, JPEG_SHARP)
+
+    async def snapshot(self, tab: Tab | None, quality: int = JPEG_SHARP) -> None:
         if not tab or tab.url == NEWTAB or tab.pending_url:
             return
         try:
-            jpeg = await tab.page.screenshot(type="jpeg", quality=JPEG_QUALITY, timeout=5000)
-            await self._send_frame(tab, jpeg)
+            if tab.cdp:                               # CDP directly: faster than page.screenshot
+                r = await tab.cdp.send("Page.captureScreenshot", {"format": "jpeg", "quality": quality,
+                                                                   "optimizeForSpeed": True})
+                jpeg = base64.b64decode(r["data"])
+            else:
+                jpeg = await tab.page.screenshot(type="jpeg", quality=quality, timeout=5000)
+            if tab.win.active == tab.id:
+                self._send_frame(tab, jpeg)
         except Exception:
             pass
 
@@ -916,13 +947,18 @@ class UserBrowser:
         w = tab.win
         kind = ev.get("type")
         try:
-            if kind == "mouse":
+            if kind == "mouse" and tab.cdp:
+                # mouse straight to CDP (Playwright adds round trips). Moves are
+                # fire-and-forget: CDP keeps the order, nothing waits for them.
                 x, y = float(ev.get("x", 0)), float(ev.get("y", 0))
                 act = ev.get("action")
                 btn = ev.get("button") or "left"
+                bit = {"left": 1, "right": 2, "middle": 4}.get(btn, 1)
+                mods = _modmask(ev)
                 if act == "move":
-                    await p.mouse.move(x, y)
-                    await self._hover(tab, x, y)
+                    self._cdp(tab, {"type": "mouseMoved", "x": x, "y": y, "modifiers": mods,
+                                    "button": "left" if tab.buttons & 1 else "none", "buttons": tab.buttons})
+                    self._hover(tab, x, y)
                 elif act == "down":
                     if btn == "left":
                         info = await p.evaluate(JS_SELECT_INFO, [x, y])
@@ -931,15 +967,21 @@ class UserBrowser:
                             w.emit({"t": "select", "tab": tab.id, "x": x, "y": y, **info})
                             return
                     w.select_hold = None
-                    await p.mouse.move(x, y)
-                    await p.mouse.down(button=btn, click_count=int(ev.get("clicks") or 1))
+                    tab.buttons |= bit
+                    await tab.cdp.send("Input.dispatchMouseEvent", {
+                        "type": "mousePressed", "x": x, "y": y, "button": btn, "buttons": tab.buttons,
+                        "clickCount": int(ev.get("clicks") or 1), "modifiers": mods})
                 elif act == "up":
                     if w.select_hold:
                         return
-                    await p.mouse.up(button=btn, click_count=int(ev.get("clicks") or 1))
-            elif kind == "wheel":
-                await p.mouse.move(float(ev.get("x", 0)), float(ev.get("y", 0)))
-                await p.mouse.wheel(float(ev.get("dx", 0)), float(ev.get("dy", 0)))
+                    tab.buttons &= ~bit
+                    await tab.cdp.send("Input.dispatchMouseEvent", {
+                        "type": "mouseReleased", "x": x, "y": y, "button": btn, "buttons": tab.buttons,
+                        "clickCount": int(ev.get("clicks") or 1), "modifiers": mods})
+            elif kind == "wheel" and tab.cdp:
+                self._cdp(tab, {"type": "mouseWheel", "x": float(ev.get("x", 0)), "y": float(ev.get("y", 0)),
+                                "deltaX": float(ev.get("dx", 0)), "deltaY": float(ev.get("dy", 0)),
+                                "modifiers": _modmask(ev)})
             elif kind == "key":
                 await self._key(tab, ev)
             elif kind in ("paste", "text"):
@@ -980,22 +1022,38 @@ class UserBrowser:
             await asyncio.sleep(0.05)
             await self.copy_selection(tab)
 
-    async def _hover(self, tab: Tab, x: float, y: float) -> None:
+    def _cdp(self, tab: Tab, params: dict) -> None:
+        """Mouse event without waiting for the answer."""
+        async def go():
+            try:
+                await tab.cdp.send("Input.dispatchMouseEvent", params)
+            except Exception:
+                pass
+        _task(go())
+
+    def _hover(self, tab: Tab, x: float, y: float) -> None:
+        """Cursor shape + link under the mouse - in the background, never blocks the input."""
         w = tab.win
         now = time.time()
-        if now - w.hover_at < 0.12:
+        if tab.hovering or now - w.hover_at < 0.15:
             return
         w.hover_at = now
-        try:
-            info = await tab.page.evaluate(JS_AT, [x, y])
-        except Exception:
-            return
-        if not info:
-            return
-        cur = (info.get("cursor"), info.get("link"))
-        if cur != w.hover_last:
-            w.hover_last = cur
-            w.emit({"t": "hover", "cursor": cur[0], "link": cur[1]})
+        tab.hovering = True
+
+        async def look():
+            try:
+                info = await tab.page.evaluate(JS_AT, [x, y])
+            except Exception:
+                info = None
+            finally:
+                tab.hovering = False
+            if not info:
+                return
+            cur = (info.get("cursor"), info.get("link"))
+            if cur != w.hover_last:
+                w.hover_last = cur
+                w.emit({"t": "hover", "cursor": cur[0], "link": cur[1]})
+        _task(look())
 
     async def element_at(self, tab: Tab | None, x: float, y: float) -> dict:
         if not tab or tab.url == NEWTAB or tab.pending_url:
