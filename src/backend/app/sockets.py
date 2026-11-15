@@ -808,6 +808,15 @@ async def request_fs_op(client_id: str, event: str, data: dict,
 
 _AUTO_UPDATE_COOLDOWN_S = 1800   # 30 min zwischen zwei Auto-Update-Versuchen
 _auto_update_last: dict[str, float] = {}
+# Nach einem Backend-Neustart verbinden sich ALLE Agenten gleichzeitig neu.
+# Ohne Bremse bekaemen dann alle veralteten Agenten im selben Moment das
+# Update (Last-Spitze auf Hosts mit vielen Gaesten, alle Clients kurz weg).
+# Deshalb: in den ersten Minuten nach dem Start zufaellig verzoegert, und
+# hoechstens _AUTO_UPDATE_PARALLEL Updates werden gleichzeitig angestossen.
+# Der Cooldown steht zusaetzlich in der DB, damit er einen Neustart ueberlebt.
+_PROC_START = time.time()
+_AUTO_UPDATE_PARALLEL = 2
+_auto_update_sem: "asyncio.Semaphore | None" = None
 # Letzter Heartbeat-basierter Versions-Check pro Client (max. 1x/60s).
 _auto_update_hb_check: dict[str, float] = {}
 # Drossel für die Metrik-Schwellwert-Prüfung (Benachrichtigungs-Regeln).
@@ -955,8 +964,36 @@ async def _maybe_auto_update(client_id: str, agent_version: str | None) -> None:
     last = _auto_update_last.get(client_id)
     if last is not None and now - last < _AUTO_UPDATE_COOLDOWN_S:
         return   # kürzlich schon versucht -> keine Update-Schleife bauen
+    try:   # Cooldown auch ueber einen Backend-Neustart hinweg
+        last_wall = float(await db.call(db.get_setting, f"agent_auto_update_last:{client_id}", "0") or 0)
+    except Exception:
+        last_wall = 0.0
+    if time.time() - last_wall < _AUTO_UPDATE_COOLDOWN_S:
+        _auto_update_last[client_id] = now
+        return
     _auto_update_last[client_id] = now
+    try:
+        await db.call(db.set_setting, f"agent_auto_update_last:{client_id}", str(int(time.time())))
+    except Exception:
+        pass
+    asyncio.create_task(_staggered_auto_update(client_id, client, agent_version, latest))
 
+
+async def _staggered_auto_update(client_id: str, client: dict, agent_version, latest) -> None:
+    global _auto_update_sem
+    import random
+    if time.time() - _PROC_START < 300:
+        await asyncio.sleep(random.uniform(60, 240))       # kurz nach dem Start: verteilen
+    if _auto_update_sem is None:
+        _auto_update_sem = asyncio.Semaphore(_AUTO_UPDATE_PARALLEL)
+    async with _auto_update_sem:
+        if not state.is_online(client_id):
+            return
+        await _send_auto_update(client_id, client, agent_version, latest)
+        await asyncio.sleep(45)                             # Platz erst nach einer Weile freigeben
+
+
+async def _send_auto_update(client_id: str, client: dict, agent_version, latest) -> None:
     ok = await send_to_agent(client_id, "update-agent", {})
     if ok:
         await db.call(db.add_audit_entry, None, "agent.auto_update_triggered",

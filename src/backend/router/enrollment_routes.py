@@ -809,133 +809,205 @@ def agent_update_sh(request: Request, lang: str = ""):
     def L(key, **kw):
         return _t(key, _L, **kw)
 
+    token_line = ('  sed -i "s#AGENT_TOKEN=.*#AGENT_TOKEN=' + new_token + '#" "$INSTALL_DIR/.env"') if new_token else ''
     script = f"""#!/bin/bash
-# BYTERA RMM - Agent-Update (Linux)
-set -e
+# BYTERA RMM - agent update (Linux)
+# ---------------------------------------------------------------------------
+# SAFE UPDATE: nothing is deleted until the new version is proven to work.
+#   1. download + unpack (agent keeps running if this fails)
+#   2. stop agent, MOVE the current install to $INSTALL_DIR.bak (complete,
+#      incl. venv - restorable in one step)
+#   3. lay out the new version, build venv/packages (fallback: old venv)
+#   4. start the agent and WAIT until it has registered with the server
+#      (the agent writes the file .connected) - up to HEALTH_TIMEOUT seconds
+#   5. success -> delete backup | any failure -> ROLLBACK to the old version,
+#      write .update_failed (the old agent reports it to the dashboard)
+# No "set -e": every step is checked explicitly, so the script can never
+# stop half-way and leave the device without a running agent.
+# ---------------------------------------------------------------------------
 INSTALL_DIR="/opt/bytera-rmm-agent"
+BACKUP_DIR="/opt/bytera-rmm-agent.bak"
+LEGACY_DIR="/opt/rapalle-rmm-agent"
+UNIT=/etc/systemd/system/bytera-agent.service
+LOG=/var/log/bytera-agent-update.log
+HEALTH_TIMEOUT=180
+TMP=/tmp/bytera-agent-update.$$
 
-# Rootrechte: notfalls selbst per sudo neu starten (wenn es eine Skriptdatei
-# gibt - beim Aufruf durch eine Pipe greifen die sudo-Aufrufe weiter unten).
-if [ "$(id -u)" != "0" ] && [ -f "$0" ] && command -v sudo >/dev/null 2>&1; then
-  exec sudo -E "$0" "$@"
+if [ "$(id -u)" != "0" ]; then
+  echo "Please run as root, e.g.: curl -fsSL '{backend_url}/agent-dist/update.sh' | sudo bash"
+  exit 1
 fi
-
-# Alles mitprotokollieren - das Skript laeuft losgeloest ohne Terminal.
-sudo mkdir -p "$INSTALL_DIR"
-exec > >(sudo tee -a "$INSTALL_DIR/update.log") 2>&1
+exec > >(tee -a "$LOG") 2>&1
 echo "=== {L('ins_upd_title')} ($(date)) ==="
 
-# --- 1. Neues Paket holen ---------------------------------------------------
-echo "{L('ins_downloading')}"
-curl -sSL "{backend_url}/agent-dist/agent.zip" -o /tmp/bytera-agent.zip
-rm -rf /tmp/bytera-agent-extract
-mkdir -p /tmp/bytera-agent-extract
-unzip -o /tmp/bytera-agent.zip -d /tmp/bytera-agent-extract >/dev/null
+SWAPPED=0
+LEGACY_ONLY=0
 
-# --- 2. Laufenden Agenten stoppen -------------------------------------------
+restart_old() {{
+  if [ "$LEGACY_ONLY" = "1" ]; then
+    systemctl enable --now rapalle-agent 2>/dev/null || true
+  else
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable bytera-agent 2>/dev/null || true
+    systemctl restart bytera-agent 2>/dev/null || true
+  fi
+}}
+
+rollback() {{
+  echo "!!! ROLLBACK: $1"
+  systemctl stop bytera-agent 2>/dev/null || true
+  pkill -f "$INSTALL_DIR/agent[.]py" 2>/dev/null || true
+  sleep 1
+  if [ -d "$BACKUP_DIR" ]; then
+    rm -rf "$INSTALL_DIR.failed"
+    [ -d "$INSTALL_DIR" ] && mv "$INSTALL_DIR" "$INSTALL_DIR.failed"
+    mv "$BACKUP_DIR" "$INSTALL_DIR"
+    [ -f "$INSTALL_DIR/.unit.bak" ] && cp "$INSTALL_DIR/.unit.bak" "$UNIT"
+    echo "Previous version restored (failed version kept in $INSTALL_DIR.failed for analysis)."
+  fi
+  rm -f "$INSTALL_DIR/.connected" "$INSTALL_DIR/.updated"
+  [ -d "$INSTALL_DIR" ] && echo "$1" > "$INSTALL_DIR/.update_failed"
+  restart_old
+  cp "$LOG" "$INSTALL_DIR/update.log" 2>/dev/null || true
+  rm -rf "$TMP"
+  exit 1
+}}
+
+fail() {{
+  # Error BEFORE anything was replaced: just make sure the agent runs again.
+  if [ "$SWAPPED" = "1" ]; then rollback "$1"; fi
+  echo "!!! UPDATE ABORTED: $1"
+  [ -d "$INSTALL_DIR" ] && echo "$1" > "$INSTALL_DIR/.update_failed"
+  restart_old
+  rm -rf "$TMP"
+  exit 1
+}}
+
+# --- 1. Download + unpack (agent still running) -----------------------------
+echo "{L('ins_downloading')}"
+rm -rf "$TMP"; mkdir -p "$TMP/x"
+curl -fsSL "{backend_url}/agent-dist/agent.zip" -o "$TMP/agent.zip" || fail "download of agent.zip failed"
+if command -v unzip >/dev/null 2>&1; then
+  unzip -oq "$TMP/agent.zip" -d "$TMP/x" || fail "agent.zip could not be unpacked"
+else
+  python3 -m zipfile -e "$TMP/agent.zip" "$TMP/x" || fail "agent.zip could not be unpacked (no unzip/python3)"
+fi
+[ -f "$TMP/x/agent/agent.py" ] || fail "agent.zip is incomplete (agent/agent.py missing)"
+
+# --- 2. Stop agent, keep the current install as backup -----------------------
 echo "{L('ins_stopping')}"
-sudo systemctl stop bytera-agent 2>/dev/null || true
-sudo pkill -f "$INSTALL_DIR/agent.py" 2>/dev/null || true
-# Umbenennung: Agent unter altem Namen (RAPALLE.net RMM) ebenfalls stoppen -
-# er wird hier in den neuen Ordner umgezogen (Identitaet bleibt erhalten).
-LEGACY_DIR="/opt/rapalle-rmm-agent"
+if [ ! -d "$INSTALL_DIR" ] && [ -d "$LEGACY_DIR" ]; then
+  LEGACY_ONLY=1
+  echo "Legacy install (RAPALLE.net RMM) found - migrating to $INSTALL_DIR."
+fi
+systemctl stop bytera-agent 2>/dev/null || true
+pkill -f "$INSTALL_DIR/agent[.]py" 2>/dev/null || true
 if [ -d "$LEGACY_DIR" ] || [ -f /etc/systemd/system/rapalle-agent.service ]; then
-  echo "Altinstallation (RAPALLE.net RMM) gefunden - ziehe nach $INSTALL_DIR um."
-  sudo systemctl disable --now rapalle-agent 2>/dev/null || true
-  sudo systemctl disable --now rapalle-node 2>/dev/null || true
-  sudo pkill -f "$LEGACY_DIR/" 2>/dev/null || true
+  systemctl stop rapalle-agent rapalle-node 2>/dev/null || true
+  pkill -f "$LEGACY_DIR/agent[.]py" 2>/dev/null || true
 fi
 sleep 2
 
-# --- 3. Identitaet sichern --------------------------------------------------
-# .env und .device-id MUESSEN erhalten bleiben, sonst erscheint das Geraet
-# nach dem Neuausrollen als NEUER Client im Dashboard.
-KEEP=/tmp/bytera-agent-keep
-sudo rm -rf "$KEEP"; sudo mkdir -p "$KEEP"
-for f in .env .device-id; do
-  if [ -f "$INSTALL_DIR/$f" ]; then
-    sudo cp "$INSTALL_DIR/$f" "$KEEP/$f"
-  elif [ -f "$LEGACY_DIR/$f" ]; then
-    sudo cp "$LEGACY_DIR/$f" "$KEEP/$f"          # aus der Altinstallation uebernehmen
-  fi
-done
+rm -rf "$BACKUP_DIR" "$INSTALL_DIR.failed"
+if [ -d "$INSTALL_DIR" ]; then
+  mv "$INSTALL_DIR" "$BACKUP_DIR" || fail "could not move $INSTALL_DIR to $BACKUP_DIR"
+  [ -f "$UNIT" ] && cp "$UNIT" "$BACKUP_DIR/.unit.bak"
+  SWAPPED=1
+fi
+mkdir -p "$INSTALL_DIR" || rollback "could not create $INSTALL_DIR"
+[ -f "$BACKUP_DIR/agent.log" ] && cp "$BACKUP_DIR/agent.log" "$INSTALL_DIR/agent.log"
 
-# --- 4. Programmordner leeren (KOMPLETTES Neuausrollen) ---------------------
-# Alte .pyc, verwaiste Skripte und eine halb kaputte venv sollen weg. Nur die
-# Logdateien bleiben fuer die Fehlersuche stehen.
-echo "{L('ins_cleaning')}"
-sudo find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
-     ! -name 'agent.log' ! -name 'update.log' -exec rm -rf {{}} ';' 2>/dev/null || true
-
-# --- 5. Neue Dateien auslegen (rekursiv) ------------------------------------
+# --- 3. New files + identity ---------------------------------------------------
 echo "{L('ins_deploying')}"
-sudo cp -a /tmp/bytera-agent-extract/agent/. "$INSTALL_DIR/"
+cp -a "$TMP/x/agent/." "$INSTALL_DIR/" || rollback "copying the new files failed"
 for f in .env .device-id; do
-  [ -f "$KEEP/$f" ] && sudo cp "$KEEP/$f" "$INSTALL_DIR/$f"
+  if [ -f "$BACKUP_DIR/$f" ]; then cp "$BACKUP_DIR/$f" "$INSTALL_DIR/$f"
+  elif [ -f "$LEGACY_DIR/$f" ]; then cp "$LEGACY_DIR/$f" "$INSTALL_DIR/$f"; fi
 done
-if [ -f "$INSTALL_DIR/.env" ]; then
-  sudo sed -i "s#BACKEND_URL=.*#BACKEND_URL={backend_url}#" "$INSTALL_DIR/.env"
-{('  sudo sed -i "s#AGENT_TOKEN=.*#AGENT_TOKEN=' + new_token + '#" "$INSTALL_DIR/.env"') if new_token else ''}
-fi
+[ -f "$INSTALL_DIR/.env" ] || rollback ".env (server address/token) missing - keeping the old version"
+sed -i "s#BACKEND_URL=.*#BACKEND_URL={backend_url}#" "$INSTALL_DIR/.env"
+{token_line}
 
+# --- 4. Python environment -----------------------------------------------------
+# New venv first. If that fails (no python3-venv, no internet for pip), the
+# OLD venv is reused - it lives at the same path, so it works unchanged.
 cd "$INSTALL_DIR"
-# --- 6. Virtuelle Umgebung frisch bauen -------------------------------------
-# Erst daneben bauen, dann tauschen. Scheitert es (kein python3-venv-Paket),
-# faellt der Dienst auf das System-Python zurueck statt gar nicht zu starten.
+PYEXEC=""
 SYSPY="$(command -v python3 || true)"
-if [ -n "$SYSPY" ]; then
+if [ -n "$SYSPY" ] && "$SYSPY" -m venv "$INSTALL_DIR/venv" >/dev/null 2>&1 && [ -x "$INSTALL_DIR/venv/bin/python" ]; then
   echo "{L('ins_venv', py='$SYSPY')}"
-  sudo rm -rf "$INSTALL_DIR/venv.new"
-  if sudo "$SYSPY" -m venv "$INSTALL_DIR/venv.new" 2>/dev/null; then
-    sudo rm -rf "$INSTALL_DIR/venv"
-    sudo mv "$INSTALL_DIR/venv.new" "$INSTALL_DIR/venv"
+  echo "{L('ins_deps')}"
+  "$INSTALL_DIR/venv/bin/pip" install --upgrade pip --quiet >/dev/null 2>&1 || true
+  if "$INSTALL_DIR/venv/bin/pip" install -r requirements.txt; then
+    PYEXEC="$INSTALL_DIR/venv/bin/python"
   else
-    echo "{L('ins_warn_venv')}"
-    sudo rm -rf "$INSTALL_DIR/venv.new"
+    echo "WARNING: package installation failed - trying the previous environment."
+    rm -rf "$INSTALL_DIR/venv"
   fi
 fi
-if [ -x "$INSTALL_DIR/venv/bin/python" ]; then
+if [ -z "$PYEXEC" ] && [ -x "$BACKUP_DIR/venv/bin/python" ]; then
+  echo "Reusing the previous venv."
+  cp -a "$BACKUP_DIR/venv" "$INSTALL_DIR/venv" || rollback "could not copy the previous venv"
+  "$INSTALL_DIR/venv/bin/pip" install -r requirements.txt --quiet || echo "WARNING: some packages could not be updated (offline?) - continuing, health check decides."
   PYEXEC="$INSTALL_DIR/venv/bin/python"
-  echo "{L('ins_deps')}"
-  sudo "$INSTALL_DIR/venv/bin/pip" install --upgrade pip --quiet || true
-  sudo "$INSTALL_DIR/venv/bin/pip" install -r requirements.txt
-else
-  PYEXEC="$(command -v python3)"
-  sudo "$PYEXEC" -m pip install -r requirements.txt --break-system-packages 2>/dev/null || \
-    sudo "$PYEXEC" -m pip install -r requirements.txt || true
 fi
+if [ -z "$PYEXEC" ] && [ -n "$SYSPY" ]; then
+  echo "{L('ins_warn_venv')}"
+  "$SYSPY" -m pip install -r requirements.txt --break-system-packages >/dev/null 2>&1 || \
+    "$SYSPY" -m pip install -r requirements.txt >/dev/null 2>&1 || true
+  PYEXEC="$SYSPY"
+fi
+[ -n "$PYEXEC" ] || rollback "no usable Python found"
 
-# Autostart-Unit (neu) schreiben -> garantiert vorhanden fuer den Neustart.
-sudo tee /etc/systemd/system/bytera-agent.service > /dev/null <<UNIT
+# --- 5. Service unit + start -----------------------------------------------------
+cat > "$UNIT" <<UNITEOF
 [Unit]
 Description=BYTERA RMM Agent
-After=network.target
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 WorkingDirectory=$INSTALL_DIR
 ExecStart=$PYEXEC $INSTALL_DIR/agent.py
 Restart=always
+RestartSec=5
 User=root
 
 [Install]
 WantedBy=multi-user.target
-UNIT
+UNITEOF
+rm -f "$INSTALL_DIR/.connected" "$INSTALL_DIR/.update_failed"
+touch "$INSTALL_DIR/.updated"
+systemctl daemon-reload
+systemctl enable bytera-agent >/dev/null 2>&1 || true
+systemctl restart bytera-agent || rollback "systemctl restart bytera-agent failed"
 
-sudo systemctl daemon-reload
-sudo systemctl enable bytera-agent 2>/dev/null || true
-# Marker anlegen: nach dem Neustart meldet der Agent dem Backend "updated".
-sudo touch "$INSTALL_DIR/.updated"
-# NEU STARTEN (nicht nur start) - bringt den Agenten mit neuer Version hoch.
-sudo systemctl restart bytera-agent
-# Umbenennung: Reste der Altinstallation entfernen.
-if [ -d "$LEGACY_DIR" ] || [ -f /etc/systemd/system/rapalle-agent.service ]; then
-  sudo rm -f /etc/systemd/system/rapalle-agent.service /etc/systemd/system/rapalle-node.service
-  sudo systemctl daemon-reload 2>/dev/null || true
-  sudo systemctl reset-failed rapalle-agent rapalle-node 2>/dev/null || true
-  sudo rm -rf "$LEGACY_DIR"
-  echo "Altinstallation (RAPALLE.net RMM) entfernt."
+# --- 6. Health check: new agent must register with the server -------------------
+echo "Waiting for the new agent to connect (max. $HEALTH_TIMEOUT s)..."
+OK=0
+for i in $(seq 1 $HEALTH_TIMEOUT); do
+  if [ -f "$INSTALL_DIR/.connected" ]; then OK=1; break; fi
+  sleep 1
+done
+if [ "$OK" != "1" ]; then
+  journalctl -u bytera-agent -n 30 --no-pager 2>/dev/null | sed 's/^/  [journal] /'
+  rollback "new version did not connect to the server within $HEALTH_TIMEOUT s"
 fi
-echo "Update fertig - Agent neu gestartet."
+echo "New agent is connected."
+
+# --- 7. Clean up -----------------------------------------------------------------
+rm -rf "$BACKUP_DIR" "$TMP"
+if [ -d "$LEGACY_DIR" ] || [ -f /etc/systemd/system/rapalle-agent.service ]; then
+  systemctl disable --now rapalle-agent rapalle-node 2>/dev/null || true
+  rm -f /etc/systemd/system/rapalle-agent.service /etc/systemd/system/rapalle-node.service
+  systemctl daemon-reload 2>/dev/null || true
+  systemctl reset-failed rapalle-agent rapalle-node 2>/dev/null || true
+  rm -rf "$LEGACY_DIR"
+  echo "Legacy install (RAPALLE.net RMM) removed."
+fi
+cp "$LOG" "$INSTALL_DIR/update.log" 2>/dev/null || true
+echo "Update finished - agent restarted."
 """
     return PlainTextResponse(script, media_type="text/x-sh")
 
@@ -953,10 +1025,26 @@ def agent_update_ps1(request: Request, lang: str = ""):
     def L(key, **kw):
         return _t(key, _L, **kw)
 
-    script = f"""# BYTERA RMM - Agent-Update (Windows) - als Administrator ausfuehren
-$ErrorActionPreference = "Stop"
+    script = f"""# BYTERA RMM - agent update (Windows) - run as administrator
+# ---------------------------------------------------------------------------
+# SAFE UPDATE: nothing is deleted until the new version is proven to work.
+#   1. download + unpack (agent keeps running if this fails)
+#   2. stop agent, keep the complete current install (incl. venv) as
+#      "<InstallDir>.bak"
+#   3. lay out the new version, build venv/packages (fallback: old venv)
+#   4. start the agent and WAIT until it has registered with the server
+#      (the agent writes .connected) - up to $HealthTimeout seconds
+#   5. success -> delete backup | any failure -> ROLLBACK to the old version,
+#      write .update_failed (the old agent reports it to the dashboard)
+# ---------------------------------------------------------------------------
+$ErrorActionPreference = "Continue"
 $InstallDir = "C:\\Program Files\\ByteraRmmAgent"
-# Adminrechte: notfalls per UAC neu starten (Program Files + Aufgabenplanung).
+$BackupDir  = "C:\\Program Files\\ByteraRmmAgent.bak"
+$FailedDir  = "C:\\Program Files\\ByteraRmmAgent.failed"
+$LegacyDir  = "C:\\Program Files\\RapalleRmmAgent"
+$TaskName   = "ByteraRmmAgent"
+$HealthTimeout = 180
+# Admin rights: relaunch via UAC if needed (Program Files + Task Scheduler).
 $id = [Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
         [Security.Principal.WindowsBuiltInRole]::Administrator)) {{
@@ -966,152 +1054,215 @@ if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
          -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $enc)
     exit $p.ExitCode
 }}
-# Alles mitprotokollieren - das Skript laeuft als SYSTEM ohne sichtbares
-# Fenster. Ohne diese Datei war nach einem misslungenen Update nicht
-# nachvollziehbar, WO es klemmte.
-New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-try {{ Start-Transcript -Path "$InstallDir\\update.log" -Force | Out-Null }} catch {{}}
+# Log OUTSIDE the install folder - an open log file inside it would block
+# moving the folder to the backup.
+$LogFile = "$env:ProgramData\\ByteraRmmAgent-update.log"
+try {{ Start-Transcript -Path $LogFile -Append -Force | Out-Null }} catch {{}}
 Write-Host "=== {L('ins_upd_title')} ($(Get-Date)) ==="
 
-# --- 1. Neues Paket holen ---------------------------------------------------
-Write-Host "{L('ins_downloading')}"
-Invoke-WebRequest -Uri "{backend_url}/agent-dist/agent.zip" -OutFile "$env:TEMP\\bytera-agent.zip"
-if (Test-Path "$env:TEMP\\bytera-agent-extract") {{ Remove-Item -Recurse -Force "$env:TEMP\\bytera-agent-extract" }}
-Expand-Archive -Path "$env:TEMP\\bytera-agent.zip" -DestinationPath "$env:TEMP\\bytera-agent-extract" -Force
-$Src = "$env:TEMP\\bytera-agent-extract\\agent"
+$script:Swapped = $false
+$script:LegacyOnly = (-not (Test-Path $InstallDir)) -and (Test-Path $LegacyDir)
 
-# --- 2. Laufenden Agenten UND Bildschirm-Helfer beenden ---------------------
-# Der Helfer (_screen_helper.py) laeuft in der Benutzersitzung und haelt sonst
-# eine alte Datei offen -> die neue Fassung wuerde erst nach Reboot greifen.
-Write-Host "{L('ins_stopping')}"
-try {{ Stop-ScheduledTask -TaskName "ByteraRmmAgent" -ErrorAction SilentlyContinue }} catch {{}}
-# Umbenennung: Agent unter altem Namen (RAPALLE.net RMM) stoppen und abmelden -
-# er wird hier in den neuen Ordner umgezogen (Identitaet bleibt erhalten).
-$LegacyDir = "C:\\Program Files\\RapalleRmmAgent"
-$LegacyFound = (Test-Path $LegacyDir) -or [bool](Get-ScheduledTask -TaskName "RapalleRmmAgent" -ErrorAction SilentlyContinue)
-if ($LegacyFound) {{
-    Write-Host "Altinstallation (RAPALLE.net RMM) gefunden - ziehe nach $InstallDir um."
-    foreach ($t in @("RapalleRmmAgent", "RapalleNode")) {{
-        try {{ Stop-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue }} catch {{}}
-        try {{ Unregister-ScheduledTask -TaskName $t -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
+function Stop-Agent {{
+    try {{ Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue }} catch {{}}
+    try {{
+        Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" |
+            Where-Object {{ $_.CommandLine -like "*ByteraRmmAgent*" -or $_.CommandLine -like "*RapalleRmmAgent*" -or $_.CommandLine -like "*_screen_helper.py*" }} |
+            ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}
+    }} catch {{}}
+}}
+
+function Start-Old {{
+    if ($script:LegacyOnly) {{
+        try {{ Enable-ScheduledTask -TaskName "RapalleRmmAgent" -ErrorAction SilentlyContinue | Out-Null; Start-ScheduledTask -TaskName "RapalleRmmAgent" -ErrorAction SilentlyContinue }} catch {{}}
+    }} else {{
+        try {{ Enable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Out-Null }} catch {{}}
+        try {{ Start-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue }} catch {{}}
     }}
 }}
+
+function Invoke-Rollback([string]$Reason) {{
+    Write-Host "!!! ROLLBACK: $Reason" -ForegroundColor Red
+    Stop-Agent
+    Start-Sleep -Seconds 2
+    if (Test-Path $BackupDir) {{
+        if (Test-Path $FailedDir) {{ Remove-Item -Recurse -Force $FailedDir -ErrorAction SilentlyContinue }}
+        $moved = $false
+        if (Test-Path $InstallDir) {{
+            try {{ Rename-Item $InstallDir (Split-Path $FailedDir -Leaf) -ErrorAction Stop; $moved = $true }} catch {{}}
+        }} else {{ $moved = $true }}
+        if ($moved) {{
+            Rename-Item $BackupDir (Split-Path $InstallDir -Leaf) -ErrorAction SilentlyContinue
+        }} else {{
+            # Folder locked: restore by copying the backup back
+            Get-ChildItem $InstallDir -Force -ErrorAction SilentlyContinue | Where-Object {{ $_.Name -ne "agent.log" }} |
+                ForEach-Object {{ Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }}
+            Copy-Item "$BackupDir\\*" $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -Recurse -Force $BackupDir -ErrorAction SilentlyContinue
+        }}
+        Write-Host "Previous version restored."
+    }}
+    Remove-Item "$InstallDir\\.connected", "$InstallDir\\.updated" -Force -ErrorAction SilentlyContinue
+    if (Test-Path $InstallDir) {{ Set-Content -Path "$InstallDir\\.update_failed" -Value $Reason -Encoding UTF8 }}
+    Start-Old
+    try {{ Stop-Transcript | Out-Null }} catch {{}}
+    Copy-Item $LogFile "$InstallDir\\update.log" -Force -ErrorAction SilentlyContinue
+    exit 1
+}}
+
+function Stop-Update([string]$Reason) {{
+    if ($script:Swapped) {{ Invoke-Rollback $Reason }}
+    Write-Host "!!! UPDATE ABORTED: $Reason" -ForegroundColor Red
+    if (Test-Path $InstallDir) {{ Set-Content -Path "$InstallDir\\.update_failed" -Value $Reason -Encoding UTF8 }}
+    Start-Old
+    try {{ Stop-Transcript | Out-Null }} catch {{}}
+    exit 1
+}}
+
+# --- 1. Download + unpack (agent still running) -----------------------------
+Write-Host "{L('ins_downloading')}"
+$Tmp = "$env:TEMP\\bytera-agent-update"
+Remove-Item -Recurse -Force $Tmp -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $Tmp | Out-Null
 try {{
-    Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" |
-        Where-Object {{ $_.CommandLine -like "*ByteraRmmAgent*" -or $_.CommandLine -like "*RapalleRmmAgent*" -or $_.CommandLine -like "*agent.py*" -or $_.CommandLine -like "*_screen_helper.py*" }} |
-        ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}
-}} catch {{}}
+    Invoke-WebRequest -Uri "{backend_url}/agent-dist/agent.zip" -OutFile "$Tmp\\agent.zip" -UseBasicParsing -ErrorAction Stop
+    Expand-Archive -Path "$Tmp\\agent.zip" -DestinationPath "$Tmp\\x" -Force -ErrorAction Stop
+}} catch {{ Stop-Update "download/unpack of agent.zip failed: $_" }}
+$Src = "$Tmp\\x\\agent"
+if (-not (Test-Path "$Src\\agent.py")) {{ Stop-Update "agent.zip is incomplete (agent\\agent.py missing)" }}
+
+# --- 2. Stop agent (also the screen helper), keep current install as backup --
+Write-Host "{L('ins_stopping')}"
+# Pause the watchdog trigger of the task so it cannot start a half-installed agent.
+try {{ Disable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Out-Null }} catch {{}}
+Stop-Agent
+foreach ($t in @("RapalleRmmAgent", "RapalleNode")) {{
+    try {{ Stop-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue }} catch {{}}
+}}
 Start-Sleep -Seconds 3
 
-# --- 3. Identitaet sichern --------------------------------------------------
-# .env (Token/Backend) und .device-id (Client-Identitaet) MUESSEN das
-# Neuausrollen ueberleben, sonst taucht das Geraet als NEUER Client auf.
-$Keep = "$env:TEMP\\bytera-agent-keep"
-if (Test-Path $Keep) {{ Remove-Item -Recurse -Force $Keep }}
-New-Item -ItemType Directory -Force -Path $Keep | Out-Null
-foreach ($f in @(".env", ".device-id")) {{
-    if (Test-Path "$InstallDir\\$f") {{ Copy-Item "$InstallDir\\$f" "$Keep\\$f" -Force }}
-    elseif (Test-Path "$LegacyDir\\$f") {{ Copy-Item "$LegacyDir\\$f" "$Keep\\$f" -Force }}   # aus der Altinstallation
+Remove-Item -Recurse -Force $BackupDir -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force $FailedDir -ErrorAction SilentlyContinue
+if (Test-Path $InstallDir) {{
+    $renamed = $false
+    for ($i = 0; $i -lt 5 -and -not $renamed; $i++) {{
+        try {{ Rename-Item $InstallDir (Split-Path $BackupDir -Leaf) -ErrorAction Stop; $renamed = $true }}
+        catch {{ Stop-Agent; Start-Sleep -Seconds 2 }}
+    }}
+    if (-not $renamed) {{
+        # Something still holds a file open: copy as backup, then clear.
+        Write-Host "Install folder is locked - using a copy as backup."
+        try {{ Copy-Item $InstallDir $BackupDir -Recurse -Force -ErrorAction Stop }} catch {{ Stop-Update "could not create a backup of $InstallDir : $_" }}
+        Get-ChildItem $InstallDir -Force -ErrorAction SilentlyContinue | Where-Object {{ $_.Name -ne "agent.log" }} |
+            ForEach-Object {{ Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }}
+    }}
+    $script:Swapped = $true
+}}
+New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+if ((Test-Path "$BackupDir\\agent.log") -and -not (Test-Path "$InstallDir\\agent.log")) {{
+    Copy-Item "$BackupDir\\agent.log" "$InstallDir\\agent.log" -Force -ErrorAction SilentlyContinue
 }}
 
-# --- 4. Programmordner leeren (KOMPLETTES Neuausrollen) ---------------------
-# Bewusst alles weg: alte .pyc, verwaiste Helfer-Skripte und eine womoeglich
-# halb kaputte venv. Nur agent.log bleibt fuer die Fehlersuche stehen.
-Write-Host "{L('ins_cleaning')}"
-Get-ChildItem -Path $InstallDir -Force -ErrorAction SilentlyContinue |
-    Where-Object {{ $_.Name -notin @("agent.log", "update.log") }} |
-    ForEach-Object {{ Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }}
-
-# --- 5. Neue Dateien auslegen (rekursiv, inkl. Unterordner) -----------------
+# --- 3. New files + identity --------------------------------------------------
 Write-Host "{L('ins_deploying')}"
-Copy-Item -Path "$Src\\*" -Destination $InstallDir -Recurse -Force
+try {{ Copy-Item -Path "$Src\\*" -Destination $InstallDir -Recurse -Force -ErrorAction Stop }}
+catch {{ Invoke-Rollback "copying the new files failed: $_" }}
 foreach ($f in @(".env", ".device-id")) {{
-    if (Test-Path "$Keep\\$f") {{ Copy-Item "$Keep\\$f" "$InstallDir\\$f" -Force }}
+    if (Test-Path "$BackupDir\\$f") {{ Copy-Item "$BackupDir\\$f" "$InstallDir\\$f" -Force }}
+    elseif (Test-Path "$LegacyDir\\$f") {{ Copy-Item "$LegacyDir\\$f" "$InstallDir\\$f" -Force }}
 }}
-if (Test-Path "$InstallDir\\.env") {{
-    (Get-Content "$InstallDir\\.env") -replace 'BACKEND_URL=.*', 'BACKEND_URL={backend_url}' | Set-Content "$InstallDir\\.env"
-}}
+if (-not (Test-Path "$InstallDir\\.env")) {{ Invoke-Rollback ".env (server address/token) missing - keeping the old version" }}
+(Get-Content "$InstallDir\\.env") -replace 'BACKEND_URL=.*', 'BACKEND_URL={backend_url}' | Set-Content "$InstallDir\\.env"
 
-# --- 6. Virtuelle Umgebung frisch bauen -------------------------------------
-# Wichtig: Erst NEBEN die alte bauen ("venv.new"). Nur wenn das klappt, wird
-# getauscht. Findet sich kein System-Python (SYSTEM hat oft einen anderen
-# PATH als der installierende Benutzer), bleibt die vorhandene venv bestehen -
-# ein kaputtes Update ist schlimmer als eine alte Bibliothek.
+# --- 4. Python environment ------------------------------------------------------
+# New venv first. If that fails (SYSTEM often has no python in PATH, pip
+# offline), the OLD venv is reused - same path, so it works unchanged.
+$VenvPy = "$InstallDir\\venv\\Scripts\\python.exe"
 $SysPy = $null
-foreach ($cand in @("python.exe", "python3.exe")) {{
+foreach ($cand in @("python.exe", "python3.exe", "py.exe")) {{
     $c = Get-Command $cand -ErrorAction SilentlyContinue
     if ($c) {{ $SysPy = $c.Source; break }}
 }}
 if (-not $SysPy) {{
-    $py = Get-Command "py.exe" -ErrorAction SilentlyContinue
-    if ($py) {{ $SysPy = $py.Source }}
-}}
-if (-not $SysPy) {{
-    foreach ($g in @("$env:LOCALAPPDATA\\Programs\\Python\\Python3*\\python.exe",
-                     "$env:ProgramFiles\\Python3*\\python.exe",
-                     "C:\\Python3*\\python.exe")) {{
+    foreach ($g in @("$env:ProgramFiles\\Python3*\\python.exe", "C:\\Python3*\\python.exe",
+                     "C:\\Users\\*\\AppData\\Local\\Programs\\Python\\Python3*\\python.exe")) {{
         $hit = Get-ChildItem $g -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($hit) {{ $SysPy = $hit.FullName; break }}
     }}
 }}
+$EnvOk = $false
 if ($SysPy) {{
     Write-Host "{L('ins_venv', py='$SysPy')}"
-    if (Test-Path "$InstallDir\\venv.new") {{ Remove-Item -Recurse -Force "$InstallDir\\venv.new" }}
-    & $SysPy -m venv "$InstallDir\\venv.new"
-    if ($LASTEXITCODE -eq 0 -and (Test-Path "$InstallDir\\venv.new\\Scripts\\python.exe")) {{
-        if (Test-Path "$InstallDir\\venv") {{ Remove-Item -Recurse -Force "$InstallDir\\venv" -ErrorAction SilentlyContinue }}
-        Rename-Item "$InstallDir\\venv.new" "venv"
+    & $SysPy -m venv "$InstallDir\\venv" 2>&1 | Out-Host
+    if ($LASTEXITCODE -eq 0 -and (Test-Path $VenvPy)) {{
+        Write-Host "{L('ins_deps')}"
+        & $VenvPy -m pip install --upgrade pip --quiet 2>&1 | Out-Null
+        & $VenvPy -m pip install -r "$InstallDir\\requirements.txt" 2>&1 | Out-Host
+        if ($LASTEXITCODE -eq 0) {{ $EnvOk = $true }}
+        else {{ Write-Host "WARNING: package installation failed - trying the previous environment." -ForegroundColor Yellow }}
     }} else {{
         Write-Host "{L('ins_warn_venv')}" -ForegroundColor Yellow
-        Remove-Item -Recurse -Force "$InstallDir\\venv.new" -ErrorAction SilentlyContinue
     }}
 }} else {{
     Write-Host "{L('ins_warn_nopy')}" -ForegroundColor Yellow
 }}
-if (-not (Test-Path "$InstallDir\\venv\\Scripts\\python.exe")) {{
-    Write-Host "{L('ins_err_novenv')}" -ForegroundColor Red
-    try {{ Stop-Transcript | Out-Null }} catch {{}}
-    exit 1
+if (-not $EnvOk) {{
+    Remove-Item -Recurse -Force "$InstallDir\\venv" -ErrorAction SilentlyContinue
+    if (Test-Path "$BackupDir\\venv\\Scripts\\python.exe") {{
+        Write-Host "Reusing the previous venv."
+        try {{ Copy-Item "$BackupDir\\venv" "$InstallDir\\venv" -Recurse -Force -ErrorAction Stop }}
+        catch {{ Invoke-Rollback "could not copy the previous venv: $_" }}
+        & $VenvPy -m pip install -r "$InstallDir\\requirements.txt" --quiet 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {{ Write-Host "WARNING: some packages could not be updated (offline?) - continuing, health check decides." -ForegroundColor Yellow }}
+    }}
 }}
-Write-Host "{L('ins_deps')}"
-& "$InstallDir\\venv\\Scripts\\python.exe" -m pip install --upgrade pip --quiet
-& "$InstallDir\\venv\\Scripts\\pip.exe" install -r "$InstallDir\\requirements.txt"
-if ($LASTEXITCODE -ne 0) {{
-    Write-Host "{L('ins_err_deps')}" -ForegroundColor Red
-    try {{ Stop-Transcript | Out-Null }} catch {{}}
-    exit 1
-}}
+if (-not (Test-Path $VenvPy)) {{ Invoke-Rollback "{L('ins_err_novenv')}" }}
 
-# --- 7. Autostart-Task IMMER neu registrieren -------------------------------
-# Frueher wurde der Task nur angefasst, wenn er nicht auf SYSTEM lief. Dadurch
-# behielten Altinstallationen fehlerhafte Einstellungen (z.B. das 72-Stunden-
-# Zeitlimit) und der "neue" Agent verhielt sich weiter wie der alte.
+# --- 5. Autostart task (always re-registered) -----------------------------------
 Write-Host "{L('ins_task')}"
-$Action = New-ScheduledTaskAction -Execute "$InstallDir\\venv\\Scripts\\pythonw.exe" -Argument "`"$InstallDir\\agent.py`"" -WorkingDirectory $InstallDir
-$TrigBoot  = New-ScheduledTaskTrigger -AtStartup
-$TrigWatch = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
-$Principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0)  # 0 = KEIN Zeitlimit (sonst stiller Kill nach 72h)
-try {{ Unregister-ScheduledTask -TaskName "ByteraRmmAgent" -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
-Register-ScheduledTask -TaskName "ByteraRmmAgent" -Action $Action -Trigger $TrigBoot,$TrigWatch -Principal $Principal -Settings $Settings -Force | Out-Null
+try {{
+    $Action = New-ScheduledTaskAction -Execute "$InstallDir\\venv\\Scripts\\pythonw.exe" -Argument "`"$InstallDir\\agent.py`"" -WorkingDirectory $InstallDir
+    $TrigBoot  = New-ScheduledTaskTrigger -AtStartup
+    $TrigWatch = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
+    $Principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0)  # 0 = no time limit
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $TrigBoot,$TrigWatch -Principal $Principal -Settings $Settings -Force -ErrorAction Stop | Out-Null
+}} catch {{ Invoke-Rollback "registering the autostart task failed: $_" }}
 
-# --- 8. Wartungs-Tasks nachziehen -------------------------------------------
-try {{ iwr "{backend_url}/agent-dist/elevate.ps1" -UseBasicParsing | iex }} catch {{ Write-Host "  (Wartungs-Tasks: $_)" }}
+# Maintenance tasks (non-fatal)
+try {{ iwr "{backend_url}/agent-dist/elevate.ps1" -UseBasicParsing | iex }} catch {{ Write-Host "  (maintenance tasks: $_)" }}
 
-# --- 9. NEU STARTEN ---------------------------------------------------------
+# --- 6. Start + health check: new agent must register with the server -----------
+Remove-Item "$InstallDir\\.connected", "$InstallDir\\.update_failed" -Force -ErrorAction SilentlyContinue
 New-Item -ItemType File -Force "$InstallDir\\.updated" | Out-Null
-Start-ScheduledTask -TaskName "ByteraRmmAgent"
-Write-Host "=== {L('ins_done')} ==="
-try {{ Stop-Transcript | Out-Null }} catch {{}}
+Start-ScheduledTask -TaskName $TaskName
+Write-Host "Waiting for the new agent to connect (max. $HealthTimeout s)..."
+$ok = $false
+for ($i = 0; $i -lt $HealthTimeout; $i++) {{
+    if (Test-Path "$InstallDir\\.connected") {{ $ok = $true; break }}
+    Start-Sleep -Seconds 1
+}}
+if (-not $ok) {{
+    if (Test-Path "$InstallDir\\agent.log") {{ Get-Content "$InstallDir\\agent.log" -Tail 30 | ForEach-Object {{ Write-Host "  [agent.log] $_" }} }}
+    Invoke-Rollback "new version did not connect to the server within $HealthTimeout s"
+}}
+Write-Host "New agent is connected."
 
-# --- Umbenennung: Reste der Altinstallation (RAPALLE.net RMM) entfernen ----
-# Bewusst ganz am Ende: das alte Wartungs-Task kann genau dieses Skript
-# gestartet haben. Was hier haengen bleibt, raeumt der neue Agent beim Start auf.
-if ($LegacyFound) {{
+# --- 7. Clean up ---------------------------------------------------------------
+Remove-Item -Recurse -Force $BackupDir -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force $Tmp -ErrorAction SilentlyContinue
+if ((Test-Path $LegacyDir) -or [bool](Get-ScheduledTask -TaskName "RapalleRmmAgent" -ErrorAction SilentlyContinue)) {{
+    foreach ($t in @("RapalleRmmAgent", "RapalleNode", "RapalleRmmUninstall", "RapalleRmmUpdate")) {{
+        try {{ Unregister-ScheduledTask -TaskName $t -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
+    }}
     Remove-Item -LiteralPath $LegacyDir -Recurse -Force -ErrorAction SilentlyContinue
     try {{ if ([System.Diagnostics.EventLog]::SourceExists("RapalleRMM")) {{ Remove-EventLog -Source "RapalleRMM" }} }} catch {{}}
-    foreach ($t in @("RapalleRmmUninstall", "RapalleRmmUpdate")) {{ schtasks /delete /tn $t /f 2>$null | Out-Null }}
+    Write-Host "Legacy install (RAPALLE.net RMM) removed."
 }}
+Write-Host "=== {L('ins_done')} ==="
+try {{ Stop-Transcript | Out-Null }} catch {{}}
+Copy-Item $LogFile "$InstallDir\\update.log" -Force -ErrorAction SilentlyContinue
 """
     # Waehrend eines Umzugs mit neuem Token: exakt dieselbe Zeile wie fuer BACKEND_URL, nur fuer AGENT_TOKEN
     if new_token:

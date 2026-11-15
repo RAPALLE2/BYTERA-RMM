@@ -598,7 +598,9 @@ _STAGE_TEXT = {"sent": "Befehl gesendet", "received": "Agent hat den Befehl empf
 
 def _agent_update_runner(client_id: str):
     async def runner(job):
-        deadline = time.monotonic() + 240.0
+        # Update-Skript: Download + Pakete + bis zu 180 s Gesundheitspruefung
+        # (danach ggf. Rollback) -> grosszuegig warten.
+        deadline = time.monotonic() + 420.0
         last = None
         while time.monotonic() < deadline:
             uj = state.update_jobs.get(client_id) or {}
@@ -616,8 +618,9 @@ def _agent_update_runner(client_id: str):
             if stage == "error":
                 raise HTTPException(502, uj.get("detail") or "Agent meldet einen Fehler beim Update")
             await asyncio.sleep(1.0)
-        raise HTTPException(504, "Der Agent hat innerhalb von 4 Minuten kein erfolgreiches Update "
-                                 "bestaetigt - bitte /tmp/bytera-agent-update.log pruefen.")
+        raise HTTPException(504, "Der Agent hat innerhalb von 7 Minuten kein erfolgreiches Update "
+                                 "bestaetigt - Log auf dem Client: /var/log/bytera-agent-update.log "
+                                 "(Linux) bzw. C:\\ProgramData\\ByteraRmmAgent-update.log (Windows).")
     return runner
 
 
@@ -639,7 +642,7 @@ def update_client_agent_status(client_id: str, user: dict = Depends(get_current_
             job["audited"] = True
             db.add_audit_entry(job.get("by") or user["username"], "agent.updated",
                                target=client_id, details=client.get("hostname"))
-    elif job["stage"] != "error" and elapsed > 240:
+    elif job["stage"] != "error" and elapsed > 420:
         out["stage"] = "timeout"
     return out
 

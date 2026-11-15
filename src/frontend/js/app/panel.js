@@ -1152,7 +1152,7 @@ export async function handleQuickAction(action, client) {
         + (res?.version ? ` (${res.version})` : ""), "success", 8000, tag);
     } catch (e) {
       window.notify?.(t("pn_update_failed") + ": " + e.message
-        + (/4 Minuten/.test(e.message) ? " (Linux: /tmp/bytera-agent-update.log, Windows: Aufgabenplanung „ByteraRmmUpdate“)" : ""),
+        + (/rollback|did not connect/i.test(e.message) ? " – the previous agent version keeps running." : ""),
         "error", 30000, tag);
     }
     return;
