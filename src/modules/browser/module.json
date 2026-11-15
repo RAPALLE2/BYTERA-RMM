@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "id": "browser",
-  "name": "Web-Browser",
-  "version": "1.0.0",
-  "description": "Vollwertiger Browser über den Server: ein echter Chromium (headless) läuft im Backend, sein Bildschirm wird live ins Dashboard gestreamt (Bilder, JavaScript, Cookies, POST – alles funktioniert). Firefox-ähnliche Oberfläche mit Tabs und Lesezeichen. Optionaler Proxy/VPN-Egress, um interne Seiten im Netz des Backends/Agenten zu erreichen.",
+  "name": "Web Browser",
+  "version": "2.0.0",
+  "description": "Firefox-like browser that runs in the backend: a real Chromium loads the pages and the picture is streamed live into the dashboard. Images, JavaScript, logins, forms (POST), uploads and downloads work. Tabs, bookmarks toolbar and folders, history, find in page, zoom, home page and search engine. The session keeps running in the backend (closing or reloading the window loses nothing). Together with the VPN module, internal pages in the network of an agent open directly (Backend ↔ Agent link, no WireGuard needed on the server). Chromium is installed automatically when the module is enabled.",
   "author": "BYTERA",
   "category": "Werkzeuge",
   "icon": "🧭",
@@ -12,8 +12,7 @@
     "playwright"
   ],
   "routers": [
-    "browser_routes",
-    "webproxy_routes"
+    "browser_routes"
   ],
   "apps": [
     {
@@ -23,47 +22,32 @@
       "title": "Browser",
       "entry": "webbrowser.js",
       "export": "renderWebBrowser",
-      "w": 1020,
-      "h": 720
+      "w": 1180,
+      "h": 780,
+      "perm": "use_browser"
     },
     {
       "id": "webapp",
-      "label": "Web-App",
+      "label": "Web App",
       "icon": "🌐",
-      "title": "Web-App",
+      "title": "Web App",
       "entry": "webbrowser.js",
       "export": "renderWebApp",
       "w": 1020,
       "h": 720,
-      "startmenu": false
+      "startmenu": false,
+      "perm": "use_browser"
     }
   ],
   "init": {
     "entry": "index.js",
     "export": "init"
   },
-  "node": {
-    "kind": "python",
-    "requires_docker": false,
-    "autostart": false,
-    "actions": [
-      "up",
-      "down",
-      "restart",
-      "status"
-    ]
-  },
-  "settings": [
-    {
-      "key": "browser_proxy",
-      "type": "string",
-      "label": "Proxy/VPN-Egress des Server-Browsers",
-      "default": "",
-      "help": "z. B. socks5://10.77.0.1:1080 oder http://proxy:3128 – leer = direkt. Über einen VPN-Endpunkt werden interne Seiten erreichbar."
-    }
-  ],
+  "settings": [],
   "entry": "module",
   "hooks": {
+    "startup": "on_startup",
+    "enable": "on_enable",
     "disable": "on_disable",
     "shutdown": "on_shutdown"
   }

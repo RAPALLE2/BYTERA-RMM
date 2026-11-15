@@ -86,6 +86,121 @@ export function renderVpn(body, win) {
     root.querySelector("[data-new]")?.addEventListener("click", () => create(d));
     root.querySelector("[data-script]")?.addEventListener("click", downloadScript);
     root.querySelectorAll("[data-open]").forEach((el) => el.addEventListener("click", () => detail(el.dataset.open)));
+    const linksBox = document.createElement("div");
+    root.appendChild(linksBox);
+    agentLinks(linksBox);
+  }
+
+  // ------------------------------------------------------------ Backend <-> Agent (browser access)
+  // No WireGuard needed: the backend opens TCP connections through the agent's
+  // existing connection (the agent resolves internal names). Used by the
+  // server browser ("Web Browser" module) to open internal pages directly.
+  async function agentLinks(box) {
+    let d;
+    try { d = await vq("/agent-links"); } catch (e) { box.innerHTML = ""; return; }
+    const modeTxt = (l) => l.mode === "all" ? "all traffic via the agent"
+      : `${(l.networks || []).join(", ") || "no networks"}${(l.domains || []).length ? " · " + l.domains.join(" ") : ""}`;
+    box.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;margin:22px 0 6px">
+        <h2 style="margin:0;flex:1;font-size:17px">🔗 Backend ↔ Agent (browser access)</h2>
+        ${d.may_create ? `<button class="btn btn-primary btn-sm" data-al-new>＋ New agent link</button>` : ""}
+      </div>
+      <p style="color:var(--subtext);margin:0 0 12px">Lets the server browser open internal pages in the network of an agent
+        (e.g. a NAS, a router or Proxmox at a customer site) – without WireGuard on the server. Only the listed networks and
+        internal names go through the agent (split tunnel); everything else stays direct. Choose the network in the browser
+        via the network button in the address bar.</p>
+      ${d.links.length ? d.links.map((l) => `
+        <div style="border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin-bottom:8px;background:var(--panel-2);opacity:${l.expires && l.expires * 1000 < Date.now() ? .55 : 1}">
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <b style="font-size:14px;flex:1">${esc(l.name)}</b>
+            <span style="font-size:12px;color:${l.online ? "#3ecf8e" : "var(--subtext)"}">${l.online ? "● agent online" : "○ agent offline"}</span>
+            <span style="font-size:12px;color:var(--subtext)">${l.expires ? (l.expires * 1000 < Date.now() ? "expired" : "until " + new Date(l.expires * 1000).toLocaleString()) : "unlimited"}</span>
+            <button class="btn btn-sm" data-al-test="${esc(l.id)}">Test</button>
+            ${l.may_manage ? `<button class="btn btn-sm" data-al-edit="${esc(l.id)}">Edit</button>
+              <button class="btn btn-sm btn-danger" data-al-del="${esc(l.id)}">Delete</button>` : ""}
+          </div>
+          <div style="font-size:12px;color:var(--subtext);margin-top:3px">🖥 ${esc(l.client_name)} · ${esc(modeTxt(l))}${l.shared ? " · shared with everyone allowed to use VPN on this agent" : ""} · by ${esc(l.created_by || "?")}</div>
+          <div data-al-out="${esc(l.id)}"></div>
+        </div>`).join("") : `<div style="color:var(--subtext)">No agent links yet.</div>`}`;
+    box.querySelector("[data-al-new]")?.addEventListener("click", () => agentLinkForm(d, null));
+    box.querySelectorAll("[data-al-edit]").forEach((b) => b.onclick = () => agentLinkForm(d, d.links.find((l) => l.id === b.dataset.alEdit)));
+    box.querySelectorAll("[data-al-del]").forEach((b) => b.onclick = async () => {
+      if (!(await uiConfirm("Delete this agent link?", { okText: "Delete", danger: true }))) return;
+      try { await vq(`/agent-links/${b.dataset.alDel}`, { method: "DELETE" }); } catch (e) { window.notify?.(e.message, "error"); }
+      agentLinks(box);
+    });
+    box.querySelectorAll("[data-al-test]").forEach((b) => b.onclick = () => {
+      const out = box.querySelector(`[data-al-out="${b.dataset.alTest}"]`);
+      out.innerHTML = `<div style="display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap">
+        <input data-th placeholder="host or IP in the agent's network" style="flex:1;min-width:200px"><input data-tp value="80" style="width:70px">
+        <button class="btn btn-sm btn-primary" data-tgo>Connect</button><span data-tres></span></div>`;
+      out.querySelector("[data-tgo]").onclick = async () => {
+        const res = out.querySelector("[data-tres]"); res.textContent = "…";
+        try {
+          const r = await vq(`/agent-links/${b.dataset.alTest}/test`, { method: "POST",
+            body: { host: out.querySelector("[data-th]").value, port: Number(out.querySelector("[data-tp]").value || 80) } });
+          res.innerHTML = r.ok ? `<span style="color:#3ecf8e">✔ reachable via agent (${r.ms} ms)</span>${r.route === "direct" ? ` <span style="color:#f5a524">– note: the browser would load this host DIRECTLY (not in the link's networks)</span>` : ""}`
+            : `<span style="color:var(--danger)">✘ ${esc(r.error)}</span>`;
+        } catch (e) { res.innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`; }
+      };
+    });
+  }
+
+  async function agentLinkForm(meta, link) {
+    stop();
+    root.innerHTML = "Loading …";
+    let cand = { agents: [] };
+    if (!link) {
+      try { cand = await vq("/agent-links/candidates"); }
+      catch (e) { root.innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`; return; }
+    }
+    const durs = DUR.filter(([h]) => meta.unlimited || h <= meta.max_hours);
+    const hoursLabel = { 1: "1 hour", 4: "4 hours", 8: "8 hours", 24: "1 day", 72: "3 days", 168: "7 days", 720: "30 days" };
+    root.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px"><button class="btn btn-sm" data-back>← Back</button>
+        <h2 style="margin:0;font-size:18px">${link ? "Edit agent link" : "New agent link"}</h2></div>
+      <div style="display:grid;grid-template-columns:170px 1fr;gap:9px 12px;align-items:center;max-width:820px">
+        <label>Agent</label>${link ? `<div>🖥 ${esc(link.client_name)}</div>` : `<select data-f="agent">${cand.agents.map((a) =>
+          `<option value="${esc(a.id)}">${a.online ? "●" : "○"} ${esc(a.name)}${a.online ? "" : " (offline)"}</option>`).join("")}</select>`}
+        <label>Name</label><input data-f="name" placeholder="e.g. Office Vienna" value="${esc(link?.name || "")}">
+        <label>Route</label><div style="display:flex;gap:14px;flex-wrap:wrap">
+          <label style="display:flex;gap:6px;align-items:center"><input type="radio" name="alm" value="split" ${link?.mode !== "all" ? "checked" : ""}> Only internal networks (split tunnel)</label>
+          <label style="display:flex;gap:6px;align-items:center"><input type="radio" name="alm" value="all" ${link?.mode === "all" ? "checked" : ""}> All traffic via the agent</label></div>
+        <label>Networks</label><input data-f="nets" placeholder="192.168.1.0/24, 10.0.0.0/8" value="${esc((link?.networks || []).join(", "))}">
+        <label>Internal names</label><input data-f="doms" value="${esc((link?.domains || meta.default_domains || []).join(" "))}" placeholder=".local .lan .fritz.box">
+        <label>Runtime</label><select data-f="hours">${link ? `<option value="">unchanged</option>` : ""}${durs.map(([h]) =>
+          `<option value="${h}" ${!link && h === 24 ? "selected" : ""}>${hoursLabel[h] || h + " h"}</option>`).join("")}${meta.unlimited ? `<option value="0">unlimited</option>` : ""}</select>
+        <label>Shared</label><label style="display:flex;gap:6px;align-items:center"><input type="checkbox" data-f="shared" ${link?.shared ? "checked" : ""}>
+          Everyone allowed to use VPN on this agent may use the link</label>
+      </div>
+      <p style="color:var(--subtext);max-width:820px;margin-top:10px">Names without a dot (e.g. <code>nas</code>) always go through the agent.
+        Networks are suggested from the agent's network interfaces.</p>
+      <div style="display:flex;gap:8px;justify-content:flex-end;max-width:820px;margin-top:10px"><button class="btn" data-back2>Cancel</button>
+        <button class="btn btn-primary" data-ok>${link ? "Save" : "Create link"}</button></div>
+      <div data-msg style="margin-top:8px;max-width:820px"></div>`;
+    const $ = (q) => root.querySelector(q);
+    const fillNets = () => {
+      const a = cand.agents.find((x) => x.id === $('[data-f="agent"]')?.value);
+      if (a && !$('[data-f="nets"]').dataset.touched) $('[data-f="nets"]').value = (a.networks || []).join(", ");
+      if (a && !$('[data-f="name"]').dataset.touched) $('[data-f="name"]').value = `Network of ${a.name}`;
+    };
+    $('[data-f="nets"]').addEventListener("input", (e) => { e.target.dataset.touched = "1"; });
+    $('[data-f="name"]').addEventListener("input", (e) => { e.target.dataset.touched = "1"; });
+    $('[data-f="agent"]')?.addEventListener("change", fillNets);
+    if (!link) { if (!cand.agents.length) $("[data-msg]").innerHTML = `<span style="color:var(--danger)">No agent with VPN permission available.</span>`; fillNets(); }
+    $("[data-back]").onclick = list; $("[data-back2]").onclick = list;
+    $("[data-ok]").onclick = async () => {
+      const split = (v) => v.split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean);
+      const h = $('[data-f="hours"]').value;
+      const body = { name: $('[data-f="name"]').value.trim(), networks: split($('[data-f="nets"]').value),
+        domains: split($('[data-f="doms"]').value), mode: root.querySelector('input[name="alm"]:checked').value,
+        shared: $('[data-f="shared"]').checked, hours: h === "" ? null : Number(h) };
+      try {
+        if (link) await vq(`/agent-links/${link.id}`, { method: "PUT", body });
+        else await vq("/agent-links", { method: "POST", body: { ...body, client_id: $('[data-f="agent"]').value } });
+        list();
+      } catch (e) { $("[data-msg]").innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`; }
+    };
   }
 
   // ------------------------------------------------------------ Neuer Tunnel

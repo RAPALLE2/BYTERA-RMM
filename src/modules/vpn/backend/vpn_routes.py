@@ -904,3 +904,131 @@ async def quick_access(body: QuickBody, req: Request, user: dict = Depends(get_c
     t = store.get(tid)
     agent = next(p for p in t["peers"].values() if p["kind"] == "agent" and p["ref"] == body.client_id)
     return {"tunnel": tid, "agent_ip": agent["ip"], "name": t["name"], "host_name": _view(user, t, True)["host_name"]}
+
+
+# ==================================================================
+# Backend <-> Agent: Netz-Zugang fuer den Server-Browser (agentlinks.py)
+# ------------------------------------------------------------------
+#   GET    /api/vpn/agent-links                 Liste (nutzbar fuer diesen Benutzer)
+#   GET    /api/vpn/agent-links/candidates      Agents + vorgeschlagene Netze
+#   POST   /api/vpn/agent-links                 anlegen
+#   PUT    /api/vpn/agent-links/{lid}           aendern (Name, Netze, Domains, Modus, Laufzeit, geteilt)
+#   DELETE /api/vpn/agent-links/{lid}           entfernen
+#   POST   /api/vpn/agent-links/{lid}/test      Ziel host:port ueber den Agenten pruefen
+# Kein Kernel-WireGuard: Verbindungen laufen ueber die Agenten-Verbindung.
+# ==================================================================
+from . import agentlinks as _al
+
+
+def _al_view(user: dict, l: dict) -> dict:
+    from app.sockets import state as _st
+    return {**l, "client_name": _cname(l["client_id"]),
+            "online": l["client_id"] in _st.client_id_to_sid,
+            "may_manage": _al.may_manage(user, l)}
+
+
+def _al_or_404(lid: str) -> dict:
+    l = _al.get(lid)
+    if not l:
+        raise HTTPException(404, "Agent link not found")
+    return l
+
+
+class AgentLinkBody(BaseModel):
+    name: str = ""
+    client_id: str = ""
+    networks: list[str] | None = None
+    domains: list[str] | None = None
+    mode: str = "split"
+    hours: float | None = None        # None: create = 24 h, edit = unchanged; 0 = unlimited
+    shared: bool = False
+
+
+@router.get("/agent-links")
+def agent_links(user: dict = Depends(get_current_user)):
+    links = [_al_view(user, l) for l in _al.for_user(user)]
+    may_create = is_super_admin(user) or user_has_permission(user, "use_vpn")
+    return {"links": sorted(links, key=lambda x: x["name"].lower()), "may_create": may_create,
+            "default_domains": _al.DEFAULT_DOMAINS, "max_hours": float(_set("max_hours", 168)),
+            "unlimited": user_has_permission(user, "vpn_unlimited")}
+
+
+@router.get("/agent-links/candidates")
+def agent_link_candidates(user: dict = Depends(get_current_user)):
+    if not (is_super_admin(user) or user_has_permission(user, "use_vpn")):
+        raise HTTPException(403, "Missing permission: use_vpn")
+    from app.sockets import state as _st
+    out = []
+    for c in db.list_clients():
+        if not (can_access_client(user, c["id"]) and user_has_permission(user, "c_vpn", c["id"])):
+            continue
+        out.append({"id": c["id"], "name": c.get("hostname") or c["id"][:8],
+                    "online": c["id"] in _st.client_id_to_sid, "platform": c.get("platform") or "",
+                    "networks": _al.suggest_networks(c["id"])})
+    return {"agents": sorted(out, key=lambda x: (not x["online"], x["name"].lower()))}
+
+
+@router.post("/agent-links")
+def create_agent_link(body: AgentLinkBody, user: dict = Depends(get_current_user)):
+    if not (is_super_admin(user) or user_has_permission(user, "use_vpn")):
+        raise HTTPException(403, "Missing permission: use_vpn")
+    cid = body.client_id
+    if not db.get_client(cid):
+        raise HTTPException(404, "Client not found")
+    if not (can_access_client(user, cid) and user_has_permission(user, "c_vpn", cid)):
+        raise HTTPException(403, f"No VPN permission for {_cname(cid)}")
+    expires = _check_hours(user, 24.0 if body.hours is None else float(body.hours), [cid])
+    nets = body.networks if body.networks is not None else _al.suggest_networks(cid)
+    doms = body.domains if body.domains is not None else _al.DEFAULT_DOMAINS
+    try:
+        rec = _al.create(body.name or f"Network of {_cname(cid)}", cid, nets, doms, body.mode,
+                         expires, user["username"], body.shared)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _al_view(user, rec)
+
+
+@router.put("/agent-links/{lid}")
+def edit_agent_link(lid: str, body: AgentLinkBody, user: dict = Depends(get_current_user)):
+    l = _al_or_404(lid)
+    if not _al.may_manage(user, l):
+        raise HTTPException(403, "Only the creator or an admin can change this link")
+    fields = {"name": body.name or None, "networks": body.networks, "domains": body.domains,
+              "mode": body.mode, "shared": body.shared}
+    if body.hours is not None:
+        fields["expires"] = _check_hours(user, float(body.hours or 0), [l["client_id"]])
+    try:
+        rec = _al.update(lid, **fields)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _al_view(user, rec)
+
+
+@router.delete("/agent-links/{lid}")
+def delete_agent_link(lid: str, user: dict = Depends(get_current_user)):
+    l = _al_or_404(lid)
+    if not _al.may_manage(user, l):
+        raise HTTPException(403, "Only the creator or an admin can delete this link")
+    _al.delete(lid)
+    return {"ok": True}
+
+
+class AgentLinkTest(BaseModel):
+    host: str
+    port: int = 80
+
+
+@router.post("/agent-links/{lid}/test")
+async def test_agent_link(lid: str, body: AgentLinkTest, user: dict = Depends(get_current_user)):
+    l = _al_or_404(lid)
+    if not _al.may_use(user, l):
+        raise HTTPException(403, "No permission for this link")
+    from app import agent_streams
+    t0 = time.time()
+    try:
+        s = await agent_streams.open_stream(l["client_id"], body.host.strip(), int(body.port), tag=lid, timeout=10)
+        await s.close()
+        return {"ok": True, "ms": int((time.time() - t0) * 1000),
+                "route": "agent" if _al.via_agent(l, body.host) else "direct"}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "ms": int((time.time() - t0) * 1000)}

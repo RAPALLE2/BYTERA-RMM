@@ -96,6 +96,7 @@ from app import modules as _modules
 recording = _modules.optional("recordings", "recording")      # Modul 'recordings'
 patching = _modules.optional("patching", "patching")          # Modul 'patching'
 portforward = _modules.optional("network", "portforward")     # Modul 'network' (Port-Weiterleitung)
+from app import agent_streams                                 # TCP durch Agenten (Core-Baustein)
 rdp_gateway = _modules.optional("guacamole", "rdp_gateway")   # Modul 'guacamole'
 
 sio = socketio.AsyncServer(
@@ -1467,19 +1468,25 @@ async def _handle_heartbeat(client_id, payload):
 # jetzt eine andere - nicht mehr der (entfernte) Userspace-Stack, sondern
 # unmittelbar die Weiterleitung.
 
+# Zusaetzlich: app/agent_streams.py (TCP durch einen Agenten fuer Module, z.B.
+# den Server-Browser). Beide Seiten kennen nur ihre eigenen Stream-IDs.
+
 @sio.on("vpn-open-result", namespace="/agent")
 async def on_forward_open_result(sid, payload):
     portforward.on_open_result(payload or {})
+    agent_streams.on_open_result(payload or {})
 
 
 @sio.on("vpn-data", namespace="/agent")
 async def on_forward_data(sid, payload):
     portforward.on_data(payload or {})
+    agent_streams.on_data(payload or {})
 
 
 @sio.on("vpn-close", namespace="/agent")
 async def on_forward_close(sid, payload):
     portforward.on_close(payload or {})
+    agent_streams.on_close(payload or {})
 
 
 # 'node-wg-result' und request_node_wg() sind mit dem VPN entfallen: Sie
@@ -1746,6 +1753,7 @@ async def disconnect(sid):
     if client_id:
         state.client_id_to_sid.pop(client_id, None)
         state.live_metrics.pop(client_id, None)
+        agent_streams.close_all_for(client_id)          # TCP-Streams durch diesen Agenten beenden
         await sio.emit("client:offline", {"id": client_id}, namespace="/dashboard")
         _emit_clients_changed_soon()
         # Benachrichtigungs-Regeln: "Client geht offline".
