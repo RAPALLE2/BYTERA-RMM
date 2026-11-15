@@ -60,7 +60,7 @@ SRC = ROOT / "src"
 AGENT_DIR = SRC / "agent"
 BACKEND_ENV = SRC / "backend" / "data" / ".env"
 BRANDING = SRC / "frontend" / "image"
-DIST_DIR = SRC / "backend" / "temp" / "dist"
+DIST_DIR = SRC / "backend" / "storage" / "dist" / "agent"   # = rmm.url/dist/agent
 
 PKG_NAME = "bytera-rmm-agent"
 WIN_INSTALL_DIR = r"C:\Program Files\ByteraRmmAgent"

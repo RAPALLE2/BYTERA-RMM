@@ -16,7 +16,9 @@
 #
 # Woher die Pakete kommen (neuere/gleichnamige Dateien in storage gewinnen):
 #   src/client/release/        mitgeliefert, gebaut von src/client/build_installers.py
-#   backend/storage/client/    hochgeladen (Modul-Einstellungen) oder selbst gebaut
+#   backend/storage/dist/client/  hochgeladen (Modul-Einstellungen) oder selbst gebaut
+#                                 (= auch rmm.url/dist/client; mitgelieferte Pakete werden
+#                                 dorthin gespiegelt, gelten aber weiter als "release")
 
 from __future__ import annotations
 
@@ -26,12 +28,12 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse
 
-from app.paths import STORAGE_DIR
+from app.paths import DIST_CLIENT_DIR
 
 router = APIRouter(tags=["client-dist"])
 
 RELEASE_DIR = Path(__file__).resolve().parents[3] / "client" / "release"
-UPLOAD_DIR = STORAGE_DIR / "client"
+UPLOAD_DIR = DIST_CLIENT_DIR
 
 PLATFORM_EXT = {
     "windows": (".exe", ".msi", ".msix", ".zip"),
@@ -62,6 +64,19 @@ def platform_of(name: str) -> str | None:
     return None
 
 
+def _source(f: Path) -> str:
+    """'release' = mitgeliefert (auch die nach dist/client gespiegelte Kopie), sonst 'upload'."""
+    if f.parent != UPLOAD_DIR:
+        return "release"
+    rel = RELEASE_DIR / f.name
+    try:
+        if rel.is_file() and rel.stat().st_size == f.stat().st_size:
+            return "release"
+    except OSError:
+        pass
+    return "upload"
+
+
 def files() -> list[dict]:
     """Alle verfuegbaren Pakete (hochgeladene ueberschreiben mitgelieferte)."""
     found: dict[str, Path] = {}
@@ -76,7 +91,7 @@ def files() -> list[dict]:
         m = re.search(r"(\d+\.\d+(?:\.\d+)?)", name)
         out.append({"name": name, "platform": platform_of(name), "ext": ext_of(name), "kind": KIND.get(ext_of(name), "Datei"),
                     "version": m.group(1) if m else "", "size": f.stat().st_size, "mtime": int(f.stat().st_mtime * 1000),
-                    "url": f"/client-dist/files/{name}", "source": "upload" if f.parent == UPLOAD_DIR else "release"})
+                    "url": f"/client-dist/files/{name}", "source": _source(f)})
     # Je Plattform + Format nur die NEUESTE Version anbieten (gleiche Version: gebaut/hochgeladen vor mitgeliefert)
     def _vt(x):
         try:

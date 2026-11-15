@@ -170,21 +170,34 @@ def _serve(parts: list[str]):
     eigene HTML-Startseite (Einstellung), sonst index.html, sonst automatische Dateiliste."""
     from app import modules
     wh = modules.use("webserver", "webhost")
-    return wh.serve(store.base(), parts, "/deployment",
+    return wh.serve(store.base(), parts, PUBLIC_BASE,
                     title=db.get_setting(store.SETTING_TITLE) or "Deployment",
                     custom_html=db.get_setting(store.SETTING_HTML) or "", listing=True)
 
 
-@router.get("/deployment", include_in_schema=False)
-@router.get("/deployment/", include_in_schema=False)
+# Oeffentliche Adresse: rmm.url/web/deploy (Ordner storage/web/deploy). Die
+# fruehere Adresse /deployment leitet dauerhaft dorthin um.
+PUBLIC_BASE = "/web/deploy"
+
+
+@router.get("/web/deploy", include_in_schema=False)
+@router.get("/web/deploy/", include_in_schema=False)
 def deployment_index():
     if not store.is_public():
         return _OFF
     return _serve([])
 
 
-@router.get("/deployment/{full_path:path}", include_in_schema=False)
+@router.get("/web/deploy/{full_path:path}", include_in_schema=False)
 def deployment_file(full_path: str, request: Request):
     if not store.is_public():
         return _OFF
     return _serve([p for p in full_path.split("/") if p])
+
+
+@router.get("/deployment", include_in_schema=False)
+@router.get("/deployment/", include_in_schema=False)
+@router.get("/deployment/{full_path:path}", include_in_schema=False)
+def deployment_old(full_path: str = ""):
+    from starlette.responses import RedirectResponse
+    return RedirectResponse(f"{PUBLIC_BASE}/{full_path}", status_code=308)

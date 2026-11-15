@@ -969,8 +969,8 @@ def _adopt_former_core_features() -> None:
     def _deployment_used():
         if not en.get("relay"):
             return False
-        from app.paths import STORAGE_DIR
-        d = STORAGE_DIR / "deployment"
+        from app.paths import STORAGE_DIR, DEPLOYMENT_DIR
+        d = DEPLOYMENT_DIR if DEPLOYMENT_DIR.is_dir() else STORAGE_DIR / "deployment"
         public = str(_db().get_setting("deployment_public") or "0").lower() in ("1", "true", "yes", "on")
         return public or (d.is_dir() and any(d.iterdir()))
 

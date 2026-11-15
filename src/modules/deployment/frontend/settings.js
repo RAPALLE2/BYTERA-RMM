@@ -1,6 +1,6 @@
 // settings.js (Modul "deployment")
 // ---------------------------------
-// Deployment-Server: öffentliche Seite /deployment (Einstellungen) und die
+// Deployment-Server: öffentliche Seite /web/deploy (Einstellungen) und die
 // Dateien darin. Gezeigt in der Modul-App (Einstellungen) und als App
 // "Deployment" im Startmenü (Recht manage_settings).
 // Backend: deployment_routes.py
@@ -53,7 +53,7 @@ export async function renderDeploymentSettings(root) {
           <span>
             <span style="color:var(--text)">${t("set_dep_public")}</span>
             <div style="font-size:11.5px;margin-top:2px">
-              <code>${esc(origin)}/deployment</code> · ${t("set_dep_public_hint")}
+              <code>${esc(origin)}/web/deploy</code> · ${t("set_dep_public_hint")}
             </div>
           </span>
         </label>
@@ -71,14 +71,14 @@ export async function renderDeploymentSettings(root) {
           <div style="font-size:11.5px;margin-top:4px">
             Wird der Code leer gelassen, zeigt die Seite automatisch alle Dateien
             aus dem Ordner. Eigene Dateien verlinkst du mit
-            <code>/deployment/&lt;dateiname&gt;</code>, Bilder z.B. mit
-            <code>&lt;img src="/deployment/logo.png"&gt;</code>.
+            <code>/web/deploy/&lt;dateiname&gt;</code>, Bilder z.B. mit
+            <code>&lt;img src="/web/deploy/logo.png"&gt;</code>.
           </div>
         </div>
 
         <div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">
           <button class="btn-primary" id="dep-save">${t("save")}</button>
-          <a class="btn" href="/deployment" target="_blank" rel="noopener">${t("set_open_page")} ↗</a>
+          <a class="btn" href="/web/deploy" target="_blank" rel="noopener">${t("set_open_page")} ↗</a>
           <span style="font-size:11.5px">Dateien verwaltest du unten unter „Dateien“.</span>
         </div>`;
 
@@ -106,6 +106,6 @@ export async function renderDeploymentSettings(root) {
   const pane = root.querySelector('[data-pane="files"]');
   async function drawFiles() {
     const { renderFileManager } = await import("/modules/frontend/webserver/files.js");
-    renderFileManager(pane, { api: "/api/deployment", publicBase: "/deployment" });
+    renderFileManager(pane, { api: "/api/deployment", publicBase: "/web/deploy" });
   }
 }

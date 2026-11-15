@@ -77,6 +77,13 @@ from app import dbsync as _dbsync
 _dbsync.startup_restore_if_external()
 db.init_db()
 _rebrand.after_db()
+# EIN Ablageort fuer alle Dateien (src/backend/storage): alte Orte (media/,
+# temp/dist, storage/deployment, dist/enrollment, ...) einmalig dorthin schieben.
+try:
+    from app import storage_layout as _storage_layout
+    _storage_layout.migrate()
+except Exception as _e:
+    print(f"[storage] Umzug uebersprungen: {_e}")
 # Hintergrund-Jobs: Verlaufstabelle + beim letzten Stopp laufende Jobs abschliessen
 try:
     from app import bgjobs as _bgjobs_boot

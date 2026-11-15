@@ -85,8 +85,9 @@ def runtime_info() -> dict:
         "locked_settings": ["PORT", "HOST"] if docker else [],
         "data_paths": {
             "database": "src/backend/data/data.sqlite",
-            "recordings": "src/backend/media/recordings",
-            "media": "src/backend/media/audio",
+            "files": "src/backend/storage",
+            "recordings": "src/backend/storage/recordings",
+            "media": "src/backend/storage/audio",
             "branding": "src/frontend/image",
         },
     }

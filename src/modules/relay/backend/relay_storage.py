@@ -15,7 +15,7 @@ Zwei Ordner, die dem SERVER gehoeren und nicht einem Client:
                mit 'see_source', schreibbar nur mit 'edit_source'.
 
   Deployment   (nur mit Modul "deployment") Ablage, zusaetzlich oeffentlich abrufbar unter
-               /deployment/<datei>. Damit laesst sich ein Bild, eine Datei
+               /web/deploy/<datei>. Damit laesst sich ein Bild, eine Datei
                oder ein Skript per Link weitergeben, ohne dafuer erst einen
                Webserver aufzusetzen. Genau dafuer ist der Ordner gedacht -
                was hier liegt, ist (bei eingeschalteter Freigabe) fuer jeden
@@ -53,7 +53,7 @@ SECTIONS = {
     "Spaces": None,
     # Virtuell: Websites des Moduls "webserver", an denen der Benutzer mitarbeitet
     "Websites": None,
-    "Deployment": "deployment",
+    "Deployment": "web/deploy",          # = storage/web/deploy (rmm.url/web/deploy)
     # Source liegt NICHT unter backend/relay/, sondern ist die Projekt-Wurzel
     # selbst (siehe _SPECIAL_BASE). Der Wert hier ist deshalb nur ein Platz-
     # halter, damit die Sektion in allen Schleifen ueber SECTIONS mitlaeuft.

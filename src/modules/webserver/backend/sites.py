@@ -42,7 +42,7 @@ def site_prefix(name: str) -> str:
 REG = MODULES_DATA_DIR / "webserver" / "sites.json"
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
 # Immer gesperrt (zusaetzlich zu allen belegten Adressen, siehe reserved())
-RESERVED = {"api", "dav", "deployment", "agent-dist", "client-dist", "modules", "css", "js", "image", "images",
+RESERVED = {"api", "dav", "deployment", "deploy", "agent-dist", "client-dist", "modules", "css", "js", "image", "images",
             "socket.io", "ws", "docs", "redoc", "openapi.json", "static", "assets", "favicon.ico", "index.html",
             "login", "logout", "admin", "dashboard", "robots.txt", "health", "metrics", "relay", "websites",
             "web", "docker", "spaces", "dist"}

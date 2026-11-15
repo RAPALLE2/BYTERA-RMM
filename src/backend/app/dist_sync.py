@@ -1,18 +1,18 @@
 # dist_sync.py (Core) - frueher Modul "dist" - vorhandene Agent-/Client-Pakete nach /dist spiegeln
 # --------------------------------------------------------------------------
-# Damit /dist/agent und /dist/client die tatsaechlich gebauten Pakete zeigen,
-# ohne die bestehenden Build-Ausgaben zu verschieben: aktuelle Pakete werden
-# (nur wenn neuer/fehlend) nach backend/dist/<agent|client> kopiert.
+# Mitgelieferte Client-Pakete (src/client/release, Teil des Codes) werden nach
+# storage/dist/client gespiegelt (nur wenn neuer/fehlend), damit /dist/client
+# sie zeigt. Eigene Builds und Uploads landen ohnehin direkt dort.
 from __future__ import annotations
 
 import shutil
 from pathlib import Path
 
-from app.paths import BACKEND_DIR, STORAGE_DIR
+from app.paths import BACKEND_DIR
 
 from app import dist_store as store
 
-CLIENT_SOURCES = [STORAGE_DIR / "client", BACKEND_DIR.parent / "client" / "release"]
+CLIENT_SOURCES = [BACKEND_DIR.parent / "client" / "release"]
 CLIENT_EXT = (".exe", ".msi", ".zip", ".deb", ".rpm", ".pkg.tar.xz", ".tar.gz", ".tgz", ".tar", ".apk")
 
 
@@ -40,7 +40,4 @@ def sync_packages() -> int:
     client_dst = store.DIST_DIR / "client"
     for src in CLIENT_SOURCES:
         n += _copy_new(src, client_dst)
-    # Agent-Pakete: falls der Agent-Build Dateien unter storage/agent ablegt.
-    agent_src = STORAGE_DIR / "agent"
-    n += _copy_new(agent_src, store.DIST_DIR / "agent")
     return n

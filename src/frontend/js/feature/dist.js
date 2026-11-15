@@ -1,6 +1,6 @@
 // dist.js (Core, frueher Modul "dist") - Verteilung verwalten (/dist)
 // ----------------------------------------------------
-// Ordner (enrollment/agent/client + eigene), je Ordner öffentlich/privat, Dateien
+// Ordner (enroll/agent/client + eigene), je Ordner öffentlich/privat, Dateien
 // hochladen/löschen, öffentliche Links kopieren. Alles unter rmm.url.de/dist.
 
 import { getToken } from "/js/app/api.js";

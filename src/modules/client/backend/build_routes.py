@@ -7,7 +7,7 @@
 #                 Moduls angelegt wird -> alle Formate.
 # Nativ:          gebaut wird direkt mit dem Backend-Python -> was mit den lokalen
 #                 Werkzeugen geht (Linux: deb/tar/tgz/pkg, Windows: zusaetzlich exe/zip/msi).
-# Ausgabe: backend/storage/client/ (Vorrang vor src/client/release, uebersteht Updates).
+# Ausgabe: backend/storage/dist/client/ (Vorrang vor src/client/release, uebersteht Updates).
 #
 #   GET  /api/client/build          Stand: laeuft?, Log, Ergebnis, Formate, Version, Bau-Umgebung
 #   POST /api/client/build          {mode: "replace" | "new", version?: "1.2.1"}
@@ -32,14 +32,14 @@ from pydantic import BaseModel
 
 from app import bgjobs, db
 from app.auth import get_current_user, require_perm
-from app.paths import STORAGE_DIR
+from app.paths import STORAGE_DIR, DIST_CLIENT_DIR
 
 from . import buildenv
 
 router = APIRouter(prefix="/api/client", tags=["client-build"])
 
 SCRIPT = buildenv.SCRIPT
-OUT_DIR = STORAGE_DIR / "client"
+OUT_DIR = DIST_CLIENT_DIR
 _lock = threading.Lock()
 _job: dict = {"running": False, "log": [], "started": None, "finished": None, "result": None,
               "user": "", "version": "", "proc": None, "container": None, "where": ""}

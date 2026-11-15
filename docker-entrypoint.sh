@@ -123,14 +123,14 @@ else
     say "Code:        $APP_DIR/main.py gefunden und lesbar"
 
     # --- 3. Schreibrechte fuer die Daten ----------------------------------
-    for d in "$APP_DIR" "$APP_DIR/data" "$APP_DIR/logs" "$APP_DIR/media" "$APP_DIR/media/recordings"; do
+    for d in "$APP_DIR" "$APP_DIR/data" "$APP_DIR/logs" "$APP_DIR/storage"; do
         [ -d "$d" ] || continue
         if [ -w "$d" ]; then
             say "Schreibbar:  $d"
         else
             warn "$d ist NICHT beschreibbar (uid=$(id -u)) - Datenbank, Uploads
        oder Aufzeichnungen koennen dort spaeter fehlschlagen.
-       Abhilfe auf dem Host:  chmod -R a+rwX src/backend/data src/backend/logs src/backend/media"
+       Abhilfe auf dem Host:  chmod -R a+rwX src/backend/data src/backend/logs src/backend/storage"
         fi
     done
 

@@ -82,6 +82,20 @@ def dist_index():
     return _render("BYTERA RMM · Downloads", rows)
 
 
+# Alte Adresse /dist/enrollment/... -> /dist/enroll/... (Ordner wurde umbenannt)
+@router.get("/dist/enrollment", include_in_schema=False)
+@router.get("/dist/enrollment/", include_in_schema=False)
+def _dist_enrollment_old():
+    from starlette.responses import RedirectResponse
+    return RedirectResponse("/dist/enroll/", status_code=308)
+
+
+@router.get("/dist/enrollment/{filename}", include_in_schema=False)
+def _dist_enrollment_old_file(filename: str):
+    from starlette.responses import RedirectResponse
+    return RedirectResponse(f"/dist/enroll/{filename}", status_code=308)
+
+
 @router.get("/dist/{folder}", include_in_schema=False)
 @router.get("/dist/{folder}/", include_in_schema=False)
 def dist_folder(folder: str):
@@ -121,8 +135,9 @@ def _alias(folder):
         return _Redirect(f"/dist/{folder}/{filename}", status_code=307)
     return idx, sub
 
-for _name in ("enrollment", "agent", "client"):
-    _idx, _sub = _alias(_name)
+# (Kein Alias "/enroll": die Adresse gehoert den Enrollment-Links /enroll/<token>.)
+for _name, _target in (("enrollment", "enroll"), ("agent", "agent"), ("client", "client")):
+    _idx, _sub = _alias(_target)
     router.add_api_route(f"/{_name}", _idx, methods=["GET"], include_in_schema=False)
     router.add_api_route(f"/{_name}/", _idx, methods=["GET"], include_in_schema=False)
     router.add_api_route(f"/{_name}/{{filename}}", _sub, methods=["GET"], include_in_schema=False)

@@ -10,7 +10,7 @@
 #   als Image speichern (commit). Das klappt mit jeder Docker-Version.
 #   Gebaut wird dann je Knopfdruck in einem Wegwerf-Container (ohne Netzwerk):
 #   Quellcode src/client + bisherige Pakete hineinkopieren -> build_installers.py
-#   -> Ergebnis zurueck nach backend/storage/client. Das RMM-Image bleibt klein.
+#   -> Ergebnis zurueck nach backend/storage/dist/client. Das RMM-Image bleibt klein.
 #   Modul aus -> Bau-Image wird wieder entfernt (enthaelt keine Daten).
 #
 # Ohne Docker (nativ):
@@ -453,7 +453,7 @@ def run_in_container(args: list[str], out_dir: Path, on_line, on_container) -> i
             return -1                    # Container wurde (per Stopp) entfernt
         if rc in (137, 143):             # SIGKILL/SIGTERM -> Stopp
             return -1
-        # Ergebnis holen: /out komplett, dann storage/client abgleichen
+        # Ergebnis holen: /out komplett, dann storage/dist/client abgleichen
         try:
             conn, resp = _raw("GET", f"/containers/{cid}/archive?path=/out", timeout=600, stream=True)
         except Exception as e:  # noqa: BLE001

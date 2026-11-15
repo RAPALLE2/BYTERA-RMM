@@ -35,13 +35,13 @@ from pydantic import BaseModel
 from app import db, modules
 from app.auth import get_current_user, require_perm, user_has_permission
 from app.config import JWT_EXPIRE_HOURS, JWT_SECRET
-from app.paths import STORAGE_DIR
+from app.paths import STORAGE_DIR, DIST_CLIENT_DIR
 
 from . import devices
 
 router = APIRouter(prefix="/api/client", tags=["client"])
 
-INSTALLER_DIR = STORAGE_DIR / "client"
+INSTALLER_DIR = DIST_CLIENT_DIR                # = storage/dist/client (rmm.url/dist/client)
 SCREEN_PORTS = {"rdp": 3389, "vnc": 5900}
 
 

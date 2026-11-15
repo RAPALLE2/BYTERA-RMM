@@ -3,7 +3,7 @@
 // Benutzt von den Websites (App "Webserver") UND vom Deployment-Server.
 //   renderFileManager(pane, { api: "/api/webserver/sites/<name>", publicBase: "/<name>" })
 //   api        Basis der Datei-Schnittstelle: GET {api}/files?path=, POST {api}/upload|mkdir|delete|move
-//   publicBase oeffentliche Adresse fuer "Link kopieren" (z.B. "/deployment")
+//   publicBase oeffentliche Adresse fuer "Link kopieren" (z.B. "/web/deploy")
 import { getToken } from "/js/app/api.js";
 import { esc, uiConfirm, uiPrompt } from "/js/app/utils.js";
 

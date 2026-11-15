@@ -353,7 +353,7 @@ def enable(key: str) -> dict:
 
         if key == "guacd":
             # Aufzeichnungen sollen im selben Ordner landen wie beim Backend.
-            host_rec = _host_path_for("/app/src/backend/media/recordings")
+            host_rec = _host_path_for("/app/src/backend/storage/recordings")
             if host_rec:
                 cfg["HostConfig"]["Binds"] = [f"{host_rec}:/recordings"]
         elif key == "db":

@@ -98,7 +98,7 @@ services:
     # Vorgaben), hier setzen und die Bind-Mounts entsprechend freigeben:
     #   user: "1000:1000"
     #   und auf dem Host:  chmod -R a+rX src
-    #                      chmod -R u+rwX,a+rwX src/backend/data src/backend/logs src/backend/media
+    #                      chmod -R u+rwX,a+rwX src/backend/data src/backend/logs src/backend/storage
     # Wichtig bei UNPRIVILEGIERTEM LXC (z.B. Proxmox): dort werden die UIDs der
     # Bind-Mounts verschoben (root wird zu 100000). Die Projektdateien muessen
     # dann fuer "andere" les- UND betretbar sein (a+rX), sonst findet Python
@@ -182,4 +182,4 @@ services:
     volumes:
       # Aufzeichnungen der Sitzungen landen im gleichen Ordner wie beim
       # nativen Betrieb, damit sie im Dashboard auftauchen.
-      - ./src/backend/media/recordings:/recordings
+      - ./src/backend/storage/recordings:/recordings

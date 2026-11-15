@@ -201,7 +201,7 @@ export function renderRelayExplorer(body, win) {
         // Nur bei Deployment und nur fuer Dateien: der oeffentliche Link.
         const pub = (section === "Deployment" && publicOn && !e.is_dir)
           ? `<a class="btn btn-sm" target="_blank"
-                rel="noopener" href="/deployment/${p.split("/").map(encodeURIComponent).join("/")}"
+                rel="noopener" href="/web/deploy/${p.split("/").map(encodeURIComponent).join("/")}"
                 title="${t("rx_public_link")}">🔗</a>` : "";
         return `
         <div class="tree-row" data-path="${esc(p)}" data-dir="${e.is_dir ? "1" : "0"}"

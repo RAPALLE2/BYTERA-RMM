@@ -105,14 +105,13 @@ COPY src /app/src
 RUN echo "docker" > /app/.docker-install \
     # Projektdateien ebenfalls fuer jede UID les- und betretbar machen.
     && chmod -R a+rX /app \
-    # Diese Ordner beschreibt das Backend im Betrieb (Datenbank, Aufzeichnungen,
-    # Uploads, Branding). Wird kein Volume eingehaengt, muessen sie auch fuer
-    # eine fremde UID beschreibbar sein.
-    && mkdir -p /app/src/backend/data /app/src/backend/logs /app/src/backend/media \
-                /app/src/backend/temp /app/src/files \
+    # Diese Ordner beschreibt das Backend im Betrieb: data/ (Datenbank,
+    # Einstellungen), logs/ und storage/ (ALLE Dateien: dist, web, docker,
+    # spaces, Aufzeichnungen, Anhaenge ...). Wird kein Volume eingehaengt,
+    # muessen sie auch fuer eine fremde UID beschreibbar sein.
+    && mkdir -p /app/src/backend/data /app/src/backend/logs /app/src/backend/storage \
     && chmod -R a+rwX /app/src/backend/data /app/src/backend/logs \
-                      /app/src/backend/media /app/src/backend/temp \
-                      /app/src/files /tmp
+                      /app/src/backend/storage /tmp
 
 # Start-Skript: schreibt einen Umgebungsbericht ins Log, prueft die
 # Voraussetzungen und startet erst dann main.py. Damit steht bei einem

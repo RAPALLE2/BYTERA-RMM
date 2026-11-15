@@ -58,8 +58,22 @@ DATA_DIRS = {
     "media_files": AUDIO_DIR,
     "branding": BRANDING_DIR,
     "module_data": MODULES_DATA_DIR,    # Daten der Module (Option "modules")
-    "storage": STORAGE_DIR,             # Spaces, Deployment, Client-Pakete (Option "storage")
-}
+    "storage": STORAGE_DIR,             # alle Dateien (Option "storage") - ohne recordings/audio,
+}                                       # die haben eigene Optionen (siehe _skip)
+
+
+def _skip(name: str, f: Path) -> bool:
+    """Aufzeichnungen und Audio liegen jetzt IN storage/, haben aber eigene
+    Optionen - beim Ordner "storage" deshalb auslassen (sonst doppelt)."""
+    if name != "storage":
+        return False
+    for sub in (RECORDINGS_DIR, AUDIO_DIR):
+        try:
+            f.relative_to(sub)
+            return True
+        except ValueError:
+            pass
+    return False
 # Einzelne Dateien (Option "modules"): aktivierte Module + Modul-Einstellungen
 DATA_FILES = {
     "modules_state.json": MODULES_STATE_FILE,
@@ -232,7 +246,7 @@ def build_export(target: Path, include_recordings: bool = True,
                 if not wanted.get(OPTION_OF[name]) or not path.is_dir():
                     continue
                 for f in sorted(path.rglob("*")):
-                    if f.is_file() and not f.name.endswith((".tmp", ".part")):
+                    if f.is_file() and not f.name.endswith((".tmp", ".part")) and not _skip(name, f):
                         zf.write(f, f"{name}/{f.relative_to(path)}")
             for arc, path in DATA_FILES.items():
                 if wanted.get(OPTION_OF[arc]) and path.is_file():

@@ -1,7 +1,8 @@
-# dist_store.py (Core) - frueher Modul "dist" - einheitliche Verteil-Ordner unter backend/dist
+# dist_store.py (Core) - frueher Modul "dist" - einheitliche Verteil-Ordner unter storage/dist
 # -----------------------------------------------------------------------
-# Auf der Platte: backend/dist/<ordner>/...   (ersetzt die alten Einzel-Systeme)
-#   enrollment/  frei hochgeladene Installer/Dateien fuer Clients (exe, msi, scripts ...)
+# Auf der Platte: src/backend/storage/dist/<ordner>/...
+#   enroll/      frei hochgeladene Installer/Dateien fuer Clients (exe, msi, scripts ...)
+#                (frueher "enrollment" - wird beim Start umbenannt, alte Links leiten um)
 #   agent/       Agent-Pakete
 #   client/      Client-App-Pakete
 #   ... weitere Ordner frei anlegbar
@@ -18,7 +19,7 @@ from app.paths import DIST_DIR  # storage/dist
 META = ".dist.json"
 # Diese Ordner gibt es immer (werden bei Bedarf angelegt).
 CORE_FOLDERS = {
-    "enrollment": "Enrollment (Installer & Dateien für Clients)",
+    "enroll": "Enrollment (Installer & Dateien für Clients)",
     "agent": "Agent-Pakete",
     "client": "Client-App-Pakete",
 }

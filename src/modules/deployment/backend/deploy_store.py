@@ -2,7 +2,7 @@
 # ------------------------------------
 # Der Deployment-Ordner (backend/storage/deployment) und seine Einstellungen.
 # Was hier liegt, ist bei eingeschalteter Freigabe OHNE Anmeldung unter
-# /deployment/<datei> abrufbar - genau dafuer ist der Ordner gedacht
+# /web/deploy/<datei> abrufbar - genau dafuer ist der Ordner gedacht
 # (Installer, Skripte, Logos per Link weitergeben).
 #
 # Die Einstellungen liegen wie frueher in der DB (deployment_html/_public/_title),

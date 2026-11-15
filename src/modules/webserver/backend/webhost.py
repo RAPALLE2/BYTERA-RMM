@@ -3,7 +3,7 @@
 # EINE Stelle fuer alles, was "einen Ordner als Webseite ausliefern" heisst.
 # Benutzt von:
 #   * den Websites des Moduls "webserver"   (rmm.url.de/<website>)
-#   * dem Modul "deployment"                (rmm.url.de/deployment) - requires: [webserver]
+#   * dem Modul "deployment"                (rmm.url.de/web/deploy) - requires: [webserver]
 #
 # Ordner-Funktionen (Pfade bleiben IMMER im jeweiligen Wurzelordner):
 #   resolve(root, sub) listdir(root, sub) write(root, sub, data) mkdir(root, sub)
@@ -128,7 +128,7 @@ def serve(root: Path, parts: list[str], base: str, title: str = "Website",
           custom_html: str = "", listing: bool = True):
     """Einen Pfad der Website ausliefern.
 
-    base        Adresse der Website ohne Schraegstrich am Ende, z.B. "/deployment" oder "/meine-seite"
+    base        Adresse der Website ohne Schraegstrich am Ende, z.B. "/web/deploy" oder "/meine-seite"
     custom_html eigene Startseite (nur fuer die Wurzel), hat Vorrang vor index.html
     listing     automatische Dateiliste fuer Ordner ohne index.html
     """

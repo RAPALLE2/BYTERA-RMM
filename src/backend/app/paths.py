@@ -15,12 +15,23 @@ Projektstruktur:
           lib/      eigene Bibliotheken
           data/     Datenbank, .env, version.txt, requirements.txt, repo.txt
           logs/     Logdateien
-          media/    images, recordings, audio, tickets
-          storage/  deployment, spaces (Relay/Explorer)
-          temp/     temporaere Dateien (z.B. dist = gebaute Installer)
+          storage/  ALLE Dateien (einziger Ablageort, siehe unten)
         frontend/   Webconsole (css, image, js/app, js/feature, js/lib, js/vendor)
         node/       Node-Module (werden an Agents ausgeliefert)
-        files/      Explorer / Teamspace (kommt spaeter)
+
+    storage/ (src/backend/storage) - der EINE Ort fuer alle Dateien:
+      dist/agent/     -> rmm.url/dist/agent    (Agent-Installer)
+      dist/client/    -> rmm.url/dist/client   (Client-App-Pakete, auch eigene Builds)
+      dist/enroll/    -> rmm.url/dist/enroll   (Enrollment-Dateien)
+      dist/<eigene>/  -> rmm.url/dist/<eigene>
+      web/deploy/     -> rmm.url/web/deploy    (Deployment-Seite)
+      web/<website>/  -> rmm.url/web/<website> (Websites des Webserver-Moduls)
+      docker/<projekt>/ -> rmm.url/docker/<projekt> (Docker-Projekte)
+      spaces/...      -> rmm.url/spaces/...    (nur mit Anmeldung)
+      recordings/  tickets/  audio/  temp-usb/   (nur ueber die App erreichbar)
+    Datenbank, .env, Einstellungen und Modul-Konfiguration bleiben in data/,
+    Logs in logs/. Alte Orte (media/, temp/, storage/deployment, ...) werden
+    beim Start automatisch nach storage/ verschoben (app/storage_layout.py).
 
 Alle anderen Module importieren ihre Pfade von hier, damit eine
 Strukturaenderung nur noch an EINER Stelle angepasst werden muss.
@@ -38,7 +49,7 @@ FRONTEND_DIR = SRC_DIR / "frontend"
 BRANDING_DIR = FRONTEND_DIR / "image"                  # Branding = frontend/image (Defaults UND Uploads)
 NODE_DIR = SRC_DIR / "node"                            # Node-Module (node_*.py)
 MODULES_DIR = SRC_DIR / "modules"                      # Optionale Module: modules/<id>/module.json + Unterordner backend/ frontend/ node/
-FILES_DIR = SRC_DIR / "files"                          # Explorer/Teamspace (spaeter)
+FILES_DIR = SRC_DIR / "files"                          # ALT/unbenutzt - nur noch fuer die Aufraeum-Liste
 
 # --- Backend-Unterordner ---------------------------------------------------
 APP_DIR = BACKEND_DIR / "app"
@@ -65,7 +76,7 @@ STORAGE_DIR = BACKEND_DIR / "storage"
 #   storage/spaces/...      Spaces (persoenlich/teams/public)
 #   storage/docker/<projekt>/  Docker-Projekte (compose) des Docker-Moduls
 WEB_DIR = STORAGE_DIR / "web"                          # alle Website-Ordner
-DEPLOYMENT_DIR = WEB_DIR / "deployment"                # Deployment-Seite (Website-Ordner)
+DEPLOYMENT_DIR = WEB_DIR / "deploy"                    # Deployment-Seite -> rmm.url/web/deploy
 SPACES_DIR = STORAGE_DIR / "spaces"
 DOCKER_PROJECTS_DIR = STORAGE_DIR / "docker"           # eigene Docker-Projekte je Name
 
@@ -73,14 +84,17 @@ LOGS_DIR = BACKEND_DIR / "logs"
 BACKEND_LOG_DIR = LOGS_DIR / "backend"                 # Diagnose-Logs, startup.log
 MODULE_CRASH_DIR = LOGS_DIR / "modules"                # Crashberichte je Modul
 
-MEDIA_DIR = BACKEND_DIR / "media"
-RECORDINGS_DIR = MEDIA_DIR / "recordings"              # Screen-/Terminal-Aufzeichnungen
-MEDIA_IMAGES_DIR = MEDIA_DIR / "images"                # reserviert (kein Branding!)
-AUDIO_DIR = MEDIA_DIR / "audio"                        # Medien-Bibliothek des Audio-Players
-TICKET_FILES_DIR = MEDIA_DIR / "tickets"               # Ticket-Anhaenge
+MEDIA_DIR = BACKEND_DIR / "media"                      # ALT - Inhalt wandert nach storage/
+RECORDINGS_DIR = STORAGE_DIR / "recordings"            # Screen-/Terminal-Aufzeichnungen
+MEDIA_IMAGES_DIR = STORAGE_DIR / "images"              # reserviert (kein Branding!), wird nicht angelegt
+AUDIO_DIR = STORAGE_DIR / "audio"                      # Medien-Bibliothek des Audio-Players
+TICKET_FILES_DIR = STORAGE_DIR / "tickets"             # Ticket-Anhaenge
 
-TEMP_DIR = BACKEND_DIR / "temp"
-DIST_DIR = STORAGE_DIR / "dist"                        # Verteilung (/dist): enrollment, agent, client, ...
+TEMP_DIR = BACKEND_DIR / "temp"                        # ALT/unbenutzt - nur noch fuer die Aufraeum-Liste
+DIST_DIR = STORAGE_DIR / "dist"                        # Verteilung (/dist): agent, client, enroll, ...
+DIST_AGENT_DIR = DIST_DIR / "agent"                    # gebaute Agent-Installer
+DIST_CLIENT_DIR = DIST_DIR / "client"                  # Client-App: hochgeladen + selbst gebaut
+DIST_ENROLL_DIR = DIST_DIR / "enroll"                  # Enrollment-Dateien
 TEMP_USB_DIR = STORAGE_DIR / "temp-usb"                # Digitaler USB-Stick je Benutzer/Gruppe (/storage/temp-usb/<id>)
 
 # --- Agent -----------------------------------------------------------------
