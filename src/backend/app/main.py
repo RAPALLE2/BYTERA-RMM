@@ -224,6 +224,11 @@ api.add_middleware(
     allow_headers=["*"],
 )
 
+# Own hostnames of modules (e.g. the browser proxy "bx-<id>.example.com").
+# Added last = outermost: those hosts never reach the dashboard app.
+from app.hostapps import HostDispatch as _HostDispatch
+api.add_middleware(_HostDispatch)
+
 def _mount(name, module) -> None:
     """Bindet einen Router ein und ueberlebt es, wenn er kaputt ist."""
     try:

@@ -2,14 +2,16 @@
   "schema": 1,
   "id": "browser",
   "name": "Web Browser",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Firefox-like browser that runs in the backend: a real Chromium loads the pages and the picture is streamed live into the dashboard. Images, JavaScript, logins, forms (POST), uploads and downloads work. Tabs, bookmarks toolbar and folders, history, find in page, zoom, home page and search engine. The session keeps running in the backend (closing or reloading the window loses nothing). Together with the VPN module, internal pages in the network of an agent open directly (Backend ↔ Agent link, no WireGuard needed on the server). Chromium is installed automatically when the module is enabled.",
   "author": "BYTERA",
   "category": "Werkzeuge",
   "icon": "🧭",
   "requires": [],
   "pip": [
-    "playwright"
+    "playwright",
+    "socksio",
+    "python-socks[asyncio]"
   ],
   "routers": [
     "browser_routes"
@@ -43,7 +45,16 @@
     "entry": "index.js",
     "export": "init"
   },
-  "settings": [],
+  "settings": [
+    {
+      "key": "proxy_host",
+      "type": "string",
+      "label": "Proxy hostname for pass-through mode",
+      "default": "",
+      "placeholder": "bx-*.example.com",
+      "help": "With this, the dashboard renders websites itself and the backend only passes the data through (sharp, no delay). Every proxied site gets its own hostname: '*' is replaced by an ID. A wildcard DNS record and a wildcard TLS certificate must point to the RMM (e.g. *.example.com - with 'bx-*.example.com' the free Cloudflare certificate covers it). Use the same domain as the dashboard. Empty = only the stream mode (Chromium in the backend)."
+    }
+  ],
   "entry": "module",
   "hooks": {
     "startup": "on_startup",

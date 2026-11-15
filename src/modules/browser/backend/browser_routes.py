@@ -35,7 +35,7 @@ from pydantic import BaseModel
 from app import db
 from app.auth import decode_access_token, get_current_user, user_has_permission, is_super_admin
 
-from . import install, netsel, store
+from . import install, netsel, proxy, store
 from . import session as _bs
 
 router = APIRouter(prefix="/api/browser", tags=["browser"])
@@ -61,12 +61,20 @@ async def status(user: dict = Depends(get_current_user)):
     import time
     ok, why = _bs.available()
     job = bgjobs.active("browser.install", "chromium")
+    if proxy.enabled():                 # pass-through works without Chromium; stream tabs install it on demand
+        return {"ready": True, "reason": "", "may_use": _perm(user), "proxy": True,
+                "proxy_origin_rx": proxy.host_regex_js(),
+                "stream": install.status()["status"] == "ready", "install": install.status(),
+                "install_job": job.id if job else None,
+                "may_install": is_super_admin(user) or user_has_permission(user, "manage_modules"),
+                "stats": _bs.MANAGER.stats() if is_super_admin(user) else None}
     # not ready -> install automatically (no button needed), at most every AUTO_RETRY
     if install.status()["status"] != "ready" and not job and time.time() - _auto_try["at"] > AUTO_RETRY:
         _auto_try["at"] = time.time()
         job = install.start_install_job(None)
         ok, why = False, "The browser engine is being installed …"
     return {"ready": ok and install.status()["status"] == "ready", "reason": why, "may_use": _perm(user),
+            "proxy": False, "stream": True,
             "install": install.status(), "install_job": job.id if job else None,
             "may_install": is_super_admin(user) or user_has_permission(user, "manage_modules"),
             "stats": _bs.MANAGER.stats() if is_super_admin(user) else None}
@@ -156,6 +164,7 @@ def clear_history(user: dict = Depends(get_current_user)):
 
 
 class SettingsBody(BaseModel):
+    engine: str | None = None
     homepage: str | None = None
     search: str | None = None
     restore: bool | None = None
@@ -165,7 +174,7 @@ class SettingsBody(BaseModel):
 @router.get("/settings")
 def get_settings(user: dict = Depends(get_current_user)):
     _need(user)
-    return {"settings": store.settings(user["id"]),
+    return {"settings": store.settings(user["id"]), "proxy": proxy.enabled(),
             "engines": [{"id": k, "name": v[0]} for k, v in store.SEARCH_ENGINES.items()]}
 
 
@@ -377,6 +386,9 @@ async def browser_ws(websocket: WebSocket):
         except Exception:
             pass
         return
+    origin = websocket.headers.get("origin") or ""
+    if origin.startswith(("http://", "https://")):
+        ub.parent = origin                          # proxy pages may only be framed by the dashboard
     ub.add_viewer(win, viewer)
     viewer.send_json(win.state())
 
@@ -487,3 +499,7 @@ async def _command(ub: _bs.UserBrowser, win: _bs.Win, viewer: Viewer, m: dict) -
         await ub.set_network(tab, str(m.get("network") or "direct"))
     elif cmd == "refresh-networks":
         win.emit_state()
+    elif cmd == "proxy-state":
+        ub.proxy_state(tab, m.get("state") or {})
+    elif cmd == "mode":
+        await ub.set_mode(tab, str(m.get("mode") or ""))

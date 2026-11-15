@@ -32,7 +32,7 @@ import secrets
 import time
 from pathlib import Path
 
-from . import install, netsel, store
+from . import install, netsel, proxy, store
 from .socks import SocksServer
 
 try:
@@ -132,10 +132,18 @@ def _task(coro):
 
 
 class Tab:
-    def __init__(self, tid: str, page, container: "Container", win: "Win"):
+    """mode "stream": Chromium page in the backend, picture streamed.
+    mode "proxy": no page here - the dashboard renders the site in an iframe and
+    the backend only passes the bytes through (proxy.py)."""
+
+    def __init__(self, tid: str, page, container: "Container | None", win: "Win",
+                 network: str = "direct", mode: str = "stream"):
         self.id = tid
         self.page = page
         self.container = container
+        self.network = container.network if container else network
+        self.mode = mode
+        self.nav_seq = 0                   # proxy: +1 = dashboard must load tab.url into the iframe
         self.win = win
         self.title = ""
         self.url = ""
@@ -158,10 +166,20 @@ class Tab:
         self.hovering = False
 
     def view(self) -> dict:
-        return {"id": self.id, "title": self.title or self._fallback_title(), "url": self.pending_url or self.url,
-                "favicon": self.favicon, "loading": self.loading, "canBack": self.can_back,
-                "canForward": self.can_fwd, "network": self.container.network, "zoom": self.zoom,
-                "crashed": self.crashed, "sleeping": bool(self.pending_url)}
+        v = {"id": self.id, "title": self.title or self._fallback_title(), "url": self.pending_url or self.url,
+             "favicon": self.favicon, "loading": self.loading, "canBack": self.can_back,
+             "canForward": self.can_fwd, "network": self.network, "zoom": self.zoom,
+             "crashed": self.crashed, "sleeping": bool(self.pending_url), "mode": self.mode}
+        if self.mode == "proxy":
+            v["navSeq"] = self.nav_seq
+            u = self.url
+            if u.startswith(("http://", "https://")) and not self.pending_url:
+                try:
+                    v["src"] = proxy.src_for(self.win.ub.user, u, self.network, self.win.ub.parent)
+                except Exception as e:
+                    v["src"] = ""
+                    v["srcError"] = str(e)
+        return v
 
     def _fallback_title(self) -> str:
         u = self.pending_url or self.url
@@ -180,6 +198,7 @@ class Container:
         self.socks: SocksServer | None = None
 
     async def start(self) -> None:
+        await MANAGER.ensure_browser()                  # Chromium only when a stream tab needs it
         self.socks = SocksServer(netsel.make_router(self.ub.user, self.network), self.network)
         port = await self.socks.start()
         kw = dict(viewport={"width": DEFAULT_VP[0], "height": DEFAULT_VP[1]}, ignore_https_errors=True,
@@ -263,6 +282,7 @@ class UserBrowser:
         self._save_handle = None
         self._ticker: asyncio.Task | None = None
         self._wlock = asyncio.Lock()
+        self.parent = ""                           # origin of the dashboard (frame-ancestors of proxy pages)
         self.closed = False
 
     # ---------------------------------------------------------------- helpers
@@ -325,6 +345,8 @@ class UserBrowser:
         self.wins.pop(win.id, None)
         for t in list(win.tabs):
             win.tabs.remove(t)
+            if t.page is None:
+                continue
             try:
                 await t.page.close(run_before_unload=False)
             except Exception:
@@ -344,7 +366,7 @@ class UserBrowser:
             if not netsel.valid(self.user, net):
                 net = "direct"
             await self.new_tab(w, t["url"], network=net, activate=(i == idx), lazy=(i != idx),
-                               title=t.get("title") or "")
+                               title=t.get("title") or "", mode=t.get("mode"))
 
     async def close(self) -> None:
         self.closed = True
@@ -374,7 +396,7 @@ class UserBrowser:
         tabs = []
         for t in w.tabs:
             url = t.pending_url or (t.intended if (t.url.startswith("chrome-error:") or t.error_shown) else t.url)
-            tabs.append({"url": url or NEWTAB, "title": t.title, "network": t.container.network})
+            tabs.append({"url": url or NEWTAB, "title": t.title, "network": t.network, "mode": t.mode})
         idx = next((i for i, t in enumerate(w.tabs) if t.id == w.active), 0)
         try:
             store.save_session(self.uid, tabs, idx)
@@ -391,13 +413,43 @@ class UserBrowser:
         self.containers[network] = c
         return c
 
+    def pick_mode(self, url: str | None, wanted: str | None = None) -> str:
+        """proxy (dashboard renders) or stream (backend renders) for a new tab."""
+        if wanted == "stream":
+            return "stream"
+        if not proxy.enabled():
+            return "stream"
+        if wanted == "proxy":
+            return "proxy"
+        if url and proxy.stream_only(url):
+            return "stream"
+        engine = store.settings(self.uid).get("engine") or "auto"
+        return "stream" if engine == "stream" else "proxy"
+
     async def new_tab(self, win: Win, url: str | None = None, network: str | None = None, activate: bool = True,
-                      index: int | None = None, lazy: bool = False, title: str = "") -> Tab:
+                      index: int | None = None, lazy: bool = False, title: str = "", mode: str | None = None) -> Tab:
         if len(self.all_tabs()) >= MAX_TABS:
             raise RuntimeError(f"At most {MAX_TABS} tabs are allowed")
         network = network or store.settings(self.uid).get("default_network") or "direct"
         if not netsel.valid(self.user, network):
             network = "direct"
+        url = url or NEWTAB
+        if self.pick_mode(url, mode) == "proxy":
+            self._seq += 1
+            tab = Tab(f"t{self._seq}{secrets.token_hex(2)}", None, None, win, network=network, mode="proxy")
+            if index is None or index < 0 or index > len(win.tabs):
+                win.tabs.append(tab)
+            else:
+                win.tabs.insert(index, tab)
+            if lazy:
+                tab.pending_url, tab.title = url, title
+            else:
+                self._proxy_nav(tab, url)
+            if activate:
+                await self.activate(tab)
+            else:
+                win.emit_state()
+            return tab
         c = await self.container(network)
         self._own_pending.append(win)
         try:
@@ -481,6 +533,9 @@ class UserBrowser:
     async def close_tab(self, tab: Tab | None) -> None:
         if not tab:
             return
+        if tab.page is None:
+            await self._on_closed(tab)
+            return
         try:
             await tab.page.close(run_before_unload=False)
         except Exception:
@@ -514,17 +569,68 @@ class UserBrowser:
 
     async def duplicate(self, tab: Tab | None) -> None:
         if tab:
-            await self.new_tab(tab.win, tab.pending_url or tab.intended or tab.url, network=tab.container.network,
-                               index=tab.win.tabs.index(tab) + 1)
+            await self.new_tab(tab.win, tab.pending_url or tab.intended or tab.url, network=tab.network,
+                               index=tab.win.tabs.index(tab) + 1, mode=tab.mode)
 
     async def set_network(self, tab: Tab | None, network: str) -> None:
         """Move a tab into another network (reloads it there)."""
-        if not tab or tab.container.network == network or not netsel.valid(self.user, network):
+        if not tab or tab.network == network or not netsel.valid(self.user, network):
             return
         w = tab.win
         url = tab.pending_url or tab.intended or tab.url
-        await self.new_tab(w, url, network=network, index=w.tabs.index(tab), activate=(w.active == tab.id))
+        await self.new_tab(w, url, network=network, index=w.tabs.index(tab), activate=(w.active == tab.id),
+                           mode=tab.mode)
         await self.close_tab(tab)
+
+    async def set_mode(self, tab: Tab | None, mode: str) -> None:
+        """Switch a tab between proxy (dashboard renders) and stream (backend renders)."""
+        if not tab or tab.mode == mode or mode not in ("proxy", "stream"):
+            return
+        if mode == "proxy" and not proxy.enabled():
+            raise RuntimeError("Pass-through mode is not set up (module setting “Proxy hostname”).")
+        w = tab.win
+        url = tab.pending_url or tab.intended or tab.url
+        await self.new_tab(w, url, network=tab.network, index=w.tabs.index(tab), activate=(w.active == tab.id),
+                           mode=mode)
+        await self.close_tab(tab)
+
+    # ---------------------------------------------------------------- proxy tabs
+    def _proxy_nav(self, tab: Tab, url: str) -> None:
+        tab.pending_url = None
+        if url == NEWTAB:
+            tab.url, tab.title, tab.favicon, tab.loading = NEWTAB, "", "", False
+        else:
+            tab.url = tab.intended = url
+            tab.loading = True
+            tab.title = ""
+            tab.favicon = ""
+        tab.nav_seq += 1
+
+    def proxy_state(self, tab: Tab | None, d: dict) -> None:
+        """Report of the page inside the dashboard iframe (inject.js)."""
+        if not tab or tab.mode != "proxy":
+            return
+        url = str(d.get("url") or "")
+        if url.startswith(("http://", "https://")):
+            if url != tab.url:
+                tab.url = tab.intended = url[:4000]
+        if "title" in d:
+            tab.title = str(d.get("title") or "")[:300]
+        if d.get("icon"):
+            tab.favicon = str(d["icon"])[:2000]
+        if "loading" in d:
+            was = tab.loading
+            tab.loading = bool(d["loading"])
+            if was and not tab.loading and tab.url.startswith(("http://", "https://")):
+                store.add_history(self.uid, tab.url, tab.title)
+        if "canBack" in d:
+            tab.can_back = bool(d["canBack"])
+        if "canForward" in d:
+            tab.can_fwd = bool(d["canForward"])
+        tab.win.emit_tab(tab)
+
+    def _proxy_cmd(self, tab: Tab, **cmd) -> None:
+        tab.win.emit({"t": "proxy-cmd", "tab": tab.id, **cmd})
 
     # ---------------------------------------------------------------- active tab + stream
     async def activate(self, tab: Tab | None) -> None:
@@ -537,14 +643,17 @@ class UserBrowser:
         w.active = tab.id
         if tab.pending_url:
             url, tab.pending_url = tab.pending_url, None
-            if url != NEWTAB:
+            if tab.mode == "proxy":
+                self._proxy_nav(tab, url)
+            elif url != NEWTAB:
                 _task(self.navigate(tab, url))
             else:
                 tab.url = NEWTAB
-        try:
-            await tab.page.bring_to_front()
-        except Exception:
-            pass
+        if tab.page is not None:
+            try:
+                await tab.page.bring_to_front()
+            except Exception:
+                pass
         if w.viewers:
             await self._start_stream(tab)
         w.emit_state()
@@ -608,7 +717,7 @@ class UserBrowser:
         await self.snapshot(tab, JPEG_SHARP)
 
     async def snapshot(self, tab: Tab | None, quality: int = JPEG_SHARP) -> None:
-        if not tab or tab.url == NEWTAB or tab.pending_url:
+        if not tab or tab.page is None or tab.url == NEWTAB or tab.pending_url:
             return
         try:
             if tab.cdp:                               # CDP directly: faster than page.screenshot
@@ -832,7 +941,15 @@ class UserBrowser:
     async def navigate(self, tab: Tab | None, raw: str) -> None:
         if not tab:
             return
-        url = self.resolve_url(raw, tab.container.network)
+        url = self.resolve_url(raw, tab.network)
+        if tab.mode == "proxy":
+            if url != NEWTAB and proxy.stream_only(url):
+                tab.pending_url, tab.url = url, url        # login pages that refuse proxies -> stream
+                await self.set_mode(tab, "stream")
+                return
+            self._proxy_nav(tab, url)
+            tab.win.emit_tab(tab)
+            return
         tab.pending_url = None
         if url == NEWTAB:
             tab.url, tab.title, tab.favicon, tab.loading = NEWTAB, "", "", False
@@ -864,7 +981,7 @@ class UserBrowser:
 
     async def _show_error(self, tab: Tab, url: str, msg: str, hint: str) -> None:
         """Own error page. Chromium is still building its own -> wait a moment and retry."""
-        html = _error_page(url, msg, hint, tab.container.network)
+        html = _error_page(url, msg, hint, tab.network)
         for _ in range(6):
             await asyncio.sleep(0.25)
             try:
@@ -878,6 +995,9 @@ class UserBrowser:
     async def history_go(self, tab: Tab | None, delta: int) -> None:
         if not tab:
             return
+        if tab.mode == "proxy":
+            self._proxy_cmd(tab, cmd="back" if delta < 0 else "forward")
+            return
         try:
             if delta < 0:
                 await tab.page.go_back(timeout=30000, wait_until="commit")
@@ -890,10 +1010,13 @@ class UserBrowser:
     async def reload(self, tab: Tab | None, hard: bool = False) -> None:
         if not tab:
             return
+        if tab.mode == "proxy":
+            self._proxy_cmd(tab, cmd="reload")
+            return
         if tab.crashed or tab.error_shown:
             url = tab.intended or tab.url
             if tab.crashed:
-                w, net, idx = tab.win, tab.container.network, tab.win.tabs.index(tab)
+                w, net, idx = tab.win, tab.network, tab.win.tabs.index(tab)
                 await self.new_tab(w, url, network=net, index=idx)
                 await self.close_tab(tab)
             else:
@@ -908,6 +1031,9 @@ class UserBrowser:
             pass
 
     async def stop(self, tab: Tab | None) -> None:
+        if tab and tab.mode == "proxy":
+            self._proxy_cmd(tab, cmd="stop")
+            return
         if tab and tab.cdp:
             try:
                 await tab.cdp.send("Page.stopLoading")
@@ -918,7 +1044,10 @@ class UserBrowser:
         if not tab:
             return
         tab.zoom = max(0.3, min(3.0, round(float(zoom), 2)))
-        await self._apply_zoom(tab)
+        if tab.mode == "proxy":
+            self._proxy_cmd(tab, cmd="zoom", zoom=tab.zoom)
+        else:
+            await self._apply_zoom(tab)
         tab.win.emit_tab(tab)
 
     async def _apply_zoom(self, tab: Tab) -> None:
@@ -928,7 +1057,7 @@ class UserBrowser:
             pass
 
     async def find(self, tab: Tab | None, text: str, backwards: bool = False) -> dict:
-        if not tab or not text:
+        if not tab or not text or tab.page is None:
             return {"found": False, "count": 0}
         try:
             found = await tab.page.evaluate("([q, b]) => window.find(q, false, b, true, false, false, false)",
@@ -941,7 +1070,7 @@ class UserBrowser:
     # ---------------------------------------------------------------- input
     async def input(self, tab: Tab | None, ev: dict) -> None:
         self.last_seen = time.time()
-        if not tab or tab.url == NEWTAB or tab.pending_url:
+        if not tab or tab.page is None or tab.url == NEWTAB or tab.pending_url:
             return
         p = tab.page
         w = tab.win
@@ -1056,7 +1185,7 @@ class UserBrowser:
         _task(look())
 
     async def element_at(self, tab: Tab | None, x: float, y: float) -> dict:
-        if not tab or tab.url == NEWTAB or tab.pending_url:
+        if not tab or tab.page is None or tab.url == NEWTAB or tab.pending_url:
             return {}
         try:
             return await tab.page.evaluate(JS_AT, [x, y]) or {}
@@ -1075,7 +1204,7 @@ class UserBrowser:
                 pass
 
     async def copy_selection(self, tab: Tab | None) -> None:
-        if tab:
+        if tab and tab.page is not None:
             try:
                 txt = await tab.page.evaluate(JS_SELECTION)
                 tab.win.emit({"t": "clipboard", "text": (txt or "")[:100000]})
@@ -1083,7 +1212,7 @@ class UserBrowser:
                 pass
 
     async def select_all(self, tab: Tab | None) -> None:
-        if tab:
+        if tab and tab.page is not None:
             try:
                 await tab.page.keyboard.press("Control+A")
             except Exception:
@@ -1091,7 +1220,7 @@ class UserBrowser:
 
     async def save_url(self, tab: Tab | None, url: str) -> None:
         """Save image/file (context menu): fetch it through the tab's context, store as a download."""
-        if not tab or not url.startswith(("http://", "https://")):
+        if not tab or tab.page is None or not url.startswith(("http://", "https://")):
             return
         did = secrets.token_hex(6)
         name = re.sub(r"[\\/:*?\"<>|\x00-\x1f]", "_", url.split("?")[0].rstrip("/").split("/")[-1] or "file")[:180]
@@ -1114,7 +1243,7 @@ class UserBrowser:
                     if not w.viewers:
                         continue
                     tab = self.tab(w.active)
-                    if not tab or tab.url == NEWTAB or tab.loading or tab.error_shown:
+                    if not tab or tab.page is None or tab.url == NEWTAB or tab.loading or tab.error_shown:
                         continue
                     try:
                         title = await tab.page.title()
@@ -1134,6 +1263,12 @@ class Manager:
         self.users: dict[str, UserBrowser] = {}
         self._lock = asyncio.Lock()
         self._reaper: asyncio.Task | None = None
+
+    async def ensure_browser(self) -> None:
+        ok, why = available()
+        if not ok:
+            raise RuntimeError(why)
+        await self._ensure_browser()
 
     async def _ensure_browser(self) -> None:
         if self.browser and self.browser.is_connected():
@@ -1160,15 +1295,16 @@ class Manager:
                 if not exe:
                     raise RuntimeError(f"Chromium does not start: {str(first).splitlines()[0][:300]}")
                 self.browser = await self._pw.chromium.launch(executable_path=exe, **launch)
-            self.users.clear()                        # old sessions belonged to a dead browser
+            for ub in self.users.values():            # contexts of a dead browser are gone
+                ub.containers.clear()
             if self._reaper is None or self._reaper.done():
                 self._reaper = asyncio.get_running_loop().create_task(self._reap())
 
     async def for_user(self, user: dict) -> UserBrowser:
-        ok, why = available()
-        if not ok:
-            raise RuntimeError(why)
-        await self._ensure_browser()
+        if not proxy.enabled():                         # stream only -> Chromium is needed right away
+            await self.ensure_browser()
+        if self._reaper is None or self._reaper.done():
+            self._reaper = asyncio.get_running_loop().create_task(self._reap())
         ub = self.users.get(user["id"])
         if ub and not ub.closed:
             ub.user = user
@@ -1194,6 +1330,7 @@ class Manager:
                         await c.save_state()
             try:
                 store.cleanup_downloads()
+                await proxy.reap_clients()
             except Exception:
                 pass
 
@@ -1209,6 +1346,7 @@ class Manager:
             pass
         self.browser = None
         self._pw = None
+        await proxy.close_all()
 
     def stats(self) -> dict:
         return {"users": len(self.users), "tabs": sum(len(u.all_tabs()) for u in self.users.values()),

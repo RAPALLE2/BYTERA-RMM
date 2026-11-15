@@ -1,10 +1,15 @@
-# module.py (Modul "browser") - Lebenszyklus des Server-Browsers.
-# Beim Start/Einschalten wird geprueft, ob Chromium startet; fehlt es (oder nach
-# einem Container-Neubau die Systembibliotheken), wird es automatisch als
-# Backend-Job installiert (live im Dashboard sichtbar).
+# module.py (module "browser") - life cycle of the server browser.
+#  * pass-through mode (proxy.py): the proxy hostnames are hooked into the core
+#    host dispatcher (app/hostapps.py) - the setting is read on every request,
+#    so changing "proxy_host" needs no restart.
+#  * stream mode: on start/enable it is checked whether Chromium starts; if not
+#    (or after a container rebuild the system libraries are missing) it is
+#    installed automatically as a backend job (live in the dashboard).
 import asyncio
 
-from . import install
+from app import hostapps
+
+from . import install, proxy
 from . import session as _bs
 
 
@@ -23,6 +28,7 @@ async def _ensure_chromium():
 
 
 async def on_startup(ctx):
+    hostapps.register("browser-proxy", proxy.match_host, proxy.app)
     asyncio.get_running_loop().create_task(_ensure_chromium())
 
 
@@ -31,6 +37,7 @@ async def on_enable(ctx):
 
 
 def on_disable(ctx):
+    hostapps.unregister("browser-proxy")
     try:
         asyncio.get_event_loop().create_task(_bs.MANAGER.shutdown())
     except Exception:

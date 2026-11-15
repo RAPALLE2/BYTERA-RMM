@@ -126,6 +126,9 @@ function injectCss() {
 .fxb-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;color:var(--fx-sub);text-align:center;padding:20px;z-index:3;background:var(--fx-bg)}
 .fxb-toast{position:absolute;right:12px;bottom:12px;z-index:50;background:var(--fx-field);border:1px solid var(--fx-line);border-radius:6px;box-shadow:0 6px 18px rgba(0,0,0,.2);padding:8px 12px;max-width:340px}
 .fxb.app .fxb-tabs,.fxb.app .fxb-marks{display:none}
+.fxb-view iframe.fxb-frame{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff;display:none}
+.fxb-view iframe.fxb-frame.on{display:block}
+.fxb-bar2{position:absolute;left:0;right:0;top:0;z-index:6;display:flex;gap:8px;align-items:center;padding:6px 10px;background:#fff8d6;color:#3d3200;border-bottom:1px solid #e5d58a;font-size:12px}
 `;
   document.head.appendChild(st);
 }
@@ -146,7 +149,7 @@ export async function renderLiveBrowser(body, win, opts = {}) {
     return;
   }
   if (!st.ready) { installScreen(root, st, () => renderLiveBrowser(body, win, opts)); return; }
-  body.__fxb = new FxBrowser(root, win, opts);
+  body.__fxb = new FxBrowser(root, win, { ...opts, status: st });
 }
 
 // Chromium missing -> installation as a backend job (live progress for everyone)
@@ -183,6 +186,7 @@ class FxBrowser {
     this.root = root;
     this.win = win;
     this.app = opts.app || null;
+    this.status = opts.status || {};
     this.tabs = [];
     this.active = null;
     this.networks = [];
@@ -194,6 +198,7 @@ class FxBrowser {
     this.frameTab = null;
     this.frameSeq = 0;
     this.drawnSeq = 0;
+    this.frames = new Map();               // proxy tabs: tab id -> {el, navSeq, origin, ready}
     this.closed = false;
     this.retry = 0;
     this.build();
@@ -271,6 +276,8 @@ class FxBrowser {
     this.ro.observe(this.el.view);
     this.onDocDown = (e) => { if (this.menuEl && !this.menuEl.contains(e.target)) this.closeMenu(); };
     document.addEventListener("mousedown", this.onDocDown, true);
+    this.onFrameMsg = (e) => this.frameMessage(e);
+    window.addEventListener("message", this.onFrameMsg);
   }
 
   destroy() {
@@ -278,7 +285,115 @@ class FxBrowser {
     try { this.ws?.close(); } catch { /* ignore */ }
     this.ro?.disconnect();
     document.removeEventListener("mousedown", this.onDocDown, true);
+    window.removeEventListener("message", this.onFrameMsg);
     clearTimeout(this.retryTimer);
+  }
+
+  // ------------------------------------------------------------ pass-through tabs (iframe)
+  // The page is rendered by THIS browser; the backend only passes the data on
+  // (own hostname per site, see proxy.py). One iframe per tab, so switching
+  // tabs keeps the page state like in Firefox.
+  syncFrames() {
+    const ids = new Set(this.tabs.filter((t) => t.mode === "proxy").map((t) => t.id));
+    for (const [id, f] of this.frames) if (!ids.has(id)) { f.el.remove(); this.frames.delete(id); }
+    for (const t of this.tabs) {
+      if (t.mode !== "proxy" || !t.src) continue;
+      let f = this.frames.get(t.id);
+      if (f && f.navSeq === t.navSeq) continue;
+      if (!f && t.id !== this.active) continue;               // load background tabs when first shown
+      if (!f) {
+        const el = document.createElement("iframe");
+        el.className = "fxb-frame";
+        el.setAttribute("allow", "clipboard-read; clipboard-write; fullscreen; camera; microphone; geolocation");
+        el.setAttribute("allowfullscreen", "");
+        f = { el, navSeq: -1, origin: "", ready: false };
+        el.addEventListener("load", () => this.frameLoaded(t.id));
+        this.el.view.insertBefore(el, this.el.status);
+        this.frames.set(t.id, f);
+      }
+      f.navSeq = t.navSeq;
+      f.ready = false;
+      try { f.origin = new URL(t.src).origin; } catch { f.origin = ""; }
+      f.el.src = t.src;
+    }
+    const act = this.tab;
+    for (const [id, f] of this.frames) f.el.classList.toggle("on", !!act && id === act.id && act.url !== NEWTAB);
+    const proxyActive = act?.mode === "proxy";
+    this.el.canvas.style.visibility = proxyActive ? "hidden" : "";
+    if (!proxyActive) this.root.querySelector(".fxb-bar2")?.remove();
+  }
+
+  frameOf(source) {
+    for (const [id, f] of this.frames) if (f.el.contentWindow === source) return [id, f];
+    return [null, null];
+  }
+
+  frameMessage(e) {
+    const d = e.data;
+    if (!d || d.bx !== 1) return;
+    const [id, f] = this.frameOf(e.source);
+    if (!id) return;
+    // the frame may have moved to the proxy hostname of another site - accept proxy hosts only
+    if (e.origin !== f.origin) {
+      if (!this.proxyRx) try { this.proxyRx = new RegExp(this.status?.proxy_origin_rx || "^$"); } catch { this.proxyRx = /^$/; }
+      if (!this.proxyRx.test(e.origin)) return;
+      f.origin = e.origin;
+    }
+    const t = this.tabs.find((x) => x.id === id);
+    switch (d.type) {
+      case "ready": f.ready = true; this.root.querySelector(`.fxb-bar2[data-tab="${id}"]`)?.remove(); break;
+      case "state": {
+        const st = { url: d.url, title: d.title, icon: d.icon, loading: d.loading, canBack: d.canBack, canForward: d.canForward };
+        Object.keys(st).forEach((k) => st[k] === undefined && delete st[k]);
+        if (t) {                                                // show at once, server confirms
+          if (st.url) t.url = st.url;
+          if (st.title !== undefined) t.title = st.title || t.title;
+          if (st.loading !== undefined) t.loading = st.loading;
+          if (st.canBack !== undefined) t.canBack = st.canBack;
+          if (st.canForward !== undefined) t.canForward = st.canForward;
+          if (st.icon) t.favicon = st.icon;
+          this.renderTabs();
+          if (id === this.active) this.renderChrome();
+        }
+        this.send({ cmd: "proxy-state", tab: id, state: st });
+        break;
+      }
+      case "open": if (d.url) this.send({ cmd: "new-tab", url: d.url, next: true }); break;
+      case "key": this.handleShortcut({ key: d.key, ctrlKey: d.ctrl, metaKey: d.meta, altKey: d.alt, shiftKey: d.shift, preventDefault() {}, stopPropagation() {} }); break;
+      case "find": this.el.findCount.textContent = this.el.findInput.value ? (d.found ? "" : "Phrase not found") : ""; break;
+      case "auth": f.navSeq = -1; this.send({ cmd: "refresh-networks" }); break;     // fresh link, same page
+      case "error": if (t && id === this.active) this.streamBar(t, "The page could not be loaded through the RMM."); break;
+    }
+  }
+
+  // no answer from the page script -> probably not a normal page (or it left the proxy)
+  frameLoaded(id) {
+    const f = this.frames.get(id);
+    if (!f) return;
+    clearTimeout(f.readyTimer);
+    f.readyTimer = setTimeout(() => {
+      const t = this.tabs.find((x) => x.id === id);
+      if (!f.ready && t && id === this.active && isWeb(t.url) && !/\.(pdf|png|jpe?g|gif|svg|webp|txt|json|xml|mp4|zip)(\?|$)/i.test(t.url))
+        this.streamBar(t, "This page may not work in pass-through mode.");
+    }, 6000);
+  }
+
+  streamBar(t, text) {
+    this.root.querySelector(".fxb-bar2")?.remove();
+    if (!this.status?.stream && !this.status?.may_install) return;
+    const bar = document.createElement("div");
+    bar.className = "fxb-bar2";
+    bar.dataset.tab = t.id;
+    bar.innerHTML = `<span>⚠️ ${esc(text)}</span><button class="btn btn-sm btn-primary" data-s>Open in stream mode</button>
+      <span style="flex:1"></span><button class="fxb-ib" data-x title="Close" style="width:22px;height:22px">✕</button>`;
+    bar.querySelector("[data-s]").onclick = () => { bar.remove(); this.send({ cmd: "mode", tab: t.id, mode: "stream" }); };
+    bar.querySelector("[data-x]").onclick = () => bar.remove();
+    this.el.view.appendChild(bar);
+  }
+
+  frameCmd(tabId, msg) {
+    const f = this.frames.get(tabId);
+    if (f?.el.contentWindow && f.origin) f.el.contentWindow.postMessage(msg, f.origin);
   }
 
   // ------------------------------------------------------------ connection
@@ -335,15 +450,20 @@ class FxBrowser {
       case "state":
         this.tabs = m.tabs; this.active = m.active; this.networks = m.networks || this.networks;
         this.showMsg("");
-        this.renderTabs(); this.renderChrome();
+        this.syncFrames(); this.renderTabs(); this.renderChrome();
         break;
       case "tab": {
         const i = this.tabs.findIndex((t) => t.id === m.tab.id);
         if (i >= 0) this.tabs[i] = m.tab;
+        this.syncFrames();
         this.renderTabs();
         if (m.tab.id === this.active) this.renderChrome();
         break;
       }
+      case "proxy-cmd":
+        if (m.cmd === "back" || m.cmd === "forward" || m.cmd === "reload" || m.cmd === "stop") this.frameCmd(m.tab, { bxcmd: m.cmd });
+        if (m.cmd === "zoom") this.frameCmd(m.tab, { bxcmd: "zoom", zoom: m.zoom });
+        break;
       case "hover":
         this.el.canvas.style.cursor = m.cursor || "default";
         this.el.status.textContent = m.link || "";
@@ -435,7 +555,8 @@ class FxBrowser {
     const net = this.netOf(t.network);
     const lock = t.url === NEWTAB ? "🔍" : /^https:/i.test(t.url) ? "🔒" : isWeb(t.url) ? "⚠️" : "ⓘ";
     e.ident.innerHTML = `${lock}${net.kind === "agent" ? ` <span class="dot" style="background:${esc(net.color)}"></span>${esc(net.name)}` : ""}`;
-    e.ident.title = `${/^https:/i.test(t.url) ? "Secure connection" : isWeb(t.url) ? "Connection is not secure" : ""}\nNetwork: ${net.name}${net.detail ? " – " + net.detail : ""}\nClick to change the network of this tab`;
+    e.ident.title = `${/^https:/i.test(t.url) ? "Secure connection" : isWeb(t.url) ? "Connection is not secure" : ""}\nNetwork: ${net.name}${net.detail ? " – " + net.detail : ""}\nMode: ${t.mode === "proxy" ? "pass-through (rendered here)" : "stream (rendered on the server)"}\nClick to change network or mode`;
+    if (t.mode === "stream" && this.status?.proxy) e.ident.insertAdjacentHTML("beforeend", ` <span title="Stream mode" style="font-size:11px">📺</span>`);
     const bm = this.bookmarks.items.find((b) => b.url === t.url);
     e.star.textContent = bm ? "★" : "☆";
     e.star.style.color = bm ? "var(--fx-acc)" : "";
@@ -447,7 +568,8 @@ class FxBrowser {
     if (t.crashed) this.showMsg(`<div style="font-size:36px">💥</div><div>This tab crashed.</div><button class="btn btn-primary" data-restore>Restore this tab</button>`);
     else if (this.el.msg.querySelector("[data-restore]")) this.showMsg("");
     this.el.msg.querySelector("[data-restore]")?.addEventListener("click", () => this.send({ cmd: "reload", tab: t.id }));
-    if (this.frameTab !== t.id && t.url !== NEWTAB) {
+    this.syncFrames();
+    if (t.mode !== "proxy" && this.frameTab !== t.id && t.url !== NEWTAB) {
       this.ctx2d.fillStyle = "#fff"; this.ctx2d.fillRect(0, 0, this.vp.w, this.vp.h);
     }
   }
@@ -461,7 +583,7 @@ class FxBrowser {
       case "fwd": this.send({ cmd: "forward", tab: t?.id }); break;
       case "reload": this.send({ cmd: t?.loading ? "stop" : "reload", tab: t?.id, hard: ev?.shiftKey }); break;
       case "home": this.send({ cmd: "home", tab: t?.id }); break;
-      case "ident": this.networkMenu(btn, (net) => this.send({ cmd: "network", tab: t?.id, network: net }), "Open this tab in", t?.network); break;
+      case "ident": this.identMenu(btn); break;
       case "star": this.starPopup(); break;
       case "downloads": this.library("downloads"); break;
       case "menu": this.mainMenu(btn); break;
@@ -713,6 +835,25 @@ class FxBrowser {
     this.openMenu(items, anchor);
   }
 
+  identMenu(btn) {
+    const t = this.tab;
+    if (!t) return;
+    this.send({ cmd: "refresh-networks" });
+    const items = [{ header: "Network of this tab" }, ...this.networks.map((n) => ({
+      icon: n.kind === "agent" ? `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${esc(n.color)}"></span>` : "🗄",
+      label: `${n.name}${n.kind === "agent" && !n.online ? " (agent offline)" : ""}${n.id === t.network ? "  ✓" : ""}`,
+      disabled: n.id === t.network, run: () => this.send({ cmd: "network", tab: t.id, network: n.id }),
+    }))];
+    if (this.status?.proxy) {
+      items.push("-", { header: "Display" },
+        { icon: "⚡", label: `Pass-through – rendered here${t.mode === "proxy" ? "  ✓" : ""}`, disabled: t.mode === "proxy",
+          run: () => this.send({ cmd: "mode", tab: t.id, mode: "proxy" }) },
+        { icon: "📺", label: `Stream – rendered on the server${t.mode === "stream" ? "  ✓" : ""}`, disabled: t.mode === "stream",
+          run: () => this.send({ cmd: "mode", tab: t.id, mode: "stream" }) });
+    }
+    this.openMenu(items, btn);
+  }
+
   tabMenu(id, e) {
     const t = this.tabs.find((x) => x.id === id);
     this.openMenu([
@@ -919,7 +1060,9 @@ class FxBrowser {
   bindFind() {
     const f = this.el.find, inp = this.el.findInput;
     let t = null;
-    const run = (back = false) => this.send({ cmd: "find", tab: this.active, text: inp.value, backwards: back });
+    const run = (back = false) => (this.tab?.mode === "proxy"
+      ? this.frameCmd(this.active, { bxcmd: "find", text: inp.value, back })
+      : this.send({ cmd: "find", tab: this.active, text: inp.value, backwards: back }));
     inp.addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => run(), 200); });
     inp.addEventListener("keydown", (e) => {
       e.stopPropagation();
@@ -1188,6 +1331,10 @@ class FxBrowser {
       <div style="display:grid;grid-template-columns:150px 1fr;gap:10px;align-items:center">
         <label>Home page</label><input type="text" data-home value="${s.homepage === NEWTAB ? "" : esc(s.homepage)}" placeholder="empty = New Tab page">
         <label>Search engine</label><select data-search>${d.engines.map((e) => `<option value="${esc(e.id)}" ${e.id === s.search ? "selected" : ""}>${esc(e.name)}</option>`).join("")}</select>
+        ${d.proxy ? `<label>Display</label><select data-engine>
+          <option value="auto" ${s.engine === "auto" ? "selected" : ""}>Automatic – pass-through, stream where needed</option>
+          <option value="proxy" ${s.engine === "proxy" ? "selected" : ""}>Always pass-through (rendered here)</option>
+          <option value="stream" ${s.engine === "stream" ? "selected" : ""}>Always stream (rendered on the server)</option></select>` : ""}
         <label>Default network</label><select data-net>${this.networks.map((n) => `<option value="${esc(n.id)}" ${n.id === s.default_network ? "selected" : ""}>${esc(n.name)}</option>`).join("")}</select>
         <label>Startup</label><label style="display:flex;gap:6px;align-items:center"><input type="checkbox" data-restore ${s.restore ? "checked" : ""}> Open previous tabs</label>
       </div>
@@ -1202,6 +1349,7 @@ class FxBrowser {
       try {
         const r = await bq("/settings", { method: "PUT", body: { homepage: ov.querySelector("[data-home]").value.trim() || NEWTAB,
           search: ov.querySelector("[data-search]").value, default_network: ov.querySelector("[data-net]").value,
+          engine: ov.querySelector("[data-engine]")?.value || undefined,
           restore: ov.querySelector("[data-restore]").checked } });
         this.settings = r.settings; close(); this.renderChrome();
       } catch (e) { this.toast(`⚠️ ${esc(e.message)}`); }

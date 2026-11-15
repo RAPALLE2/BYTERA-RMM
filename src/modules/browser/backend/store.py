@@ -37,7 +37,8 @@ SEARCH_ENGINES = {
     "ecosia": ("Ecosia", "https://www.ecosia.org/search?q={q}"),
 }
 DEFAULT_SETTINGS = {"homepage": "about:newtab", "search": "duckduckgo", "restore": True,
-                    "default_network": "direct"}
+                    "default_network": "direct", "engine": "auto"}
+ENGINES = ("auto", "proxy", "stream")
 
 
 def _udir(uid: str) -> Path:
@@ -74,6 +75,8 @@ def save_settings(uid: str, changes: dict) -> dict:
                 cur[k] = changes[k]
         if cur["search"] not in SEARCH_ENGINES:
             cur["search"] = "duckduckgo"
+        if cur.get("engine") not in ENGINES:
+            cur["engine"] = "auto"
         cur["homepage"] = str(cur["homepage"] or "about:newtab")[:2000]
         _write(_udir(uid) / "settings.json", cur)
         return cur
