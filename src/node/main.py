@@ -73,6 +73,191 @@ _python_modules: dict[str, object] = {}      # id -> geladenes node_module.py
 
 
 # =========================================================================
+# END-TO-END ENCRYPTION + TLS PINNING (same protocol as the agent, see backend
+# app/security.py). The agent hands over the server key and the TLS
+# fingerprint in node.json ("e2e_key", "tls_pin", "tls_port").
+# =========================================================================
+import contextvars
+import struct
+import threading
+
+try:
+    from cryptography.hazmat.primitives import hashes as _c_hashes, serialization as _c_ser
+    from cryptography.hazmat.primitives.asymmetric import ec as _c_ec
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM as _C_AESGCM
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF as _C_HKDF
+    _E2E_LIB = True
+except Exception:                                              # pragma: no cover
+    _E2E_LIB = False
+
+_E2E = {"ch": None, "tls_bad_until": 0.0}
+_e2e_inner = contextvars.ContextVar("e2e_inner", default=False)
+
+
+class _E2EChan:
+    def __init__(self, k_send, k_recv, p_send, p_recv):
+        self._s, self._r = _C_AESGCM(k_send), _C_AESGCM(k_recv)
+        self._ps, self._pr = p_send, p_recv
+        self._cs, self._hi, self._seen = 0, -1, set()
+        self._lock = threading.Lock()
+
+    def seal(self, data: bytes, aad: bytes = b"") -> bytes:
+        with self._lock:
+            n = self._ps + struct.pack(">Q", self._cs)
+            self._cs += 1
+        return n + self._s.encrypt(n, data, aad or None)
+
+    def open(self, blob: bytes) -> bytes:
+        if len(blob) < 28 or blob[:4] != self._pr:
+            raise ValueError("bad message")
+        ctr = struct.unpack(">Q", blob[4:12])[0]
+        with self._lock:
+            if ctr in self._seen or ctr <= self._hi - 4096:
+                raise ValueError("replayed message")
+            data = self._r.decrypt(blob[:12], blob[12:], None)
+            self._seen.add(ctr)
+            if ctr > self._hi:
+                self._hi = ctr
+                if len(self._seen) > 8192:
+                    self._seen = {c for c in self._seen if c > self._hi - 4096}
+        return data
+
+
+def _e2e_pack(event: str, args: list) -> bytes:
+    blobs = []
+
+    def walk(v):
+        if isinstance(v, (bytes, bytearray, memoryview)):
+            blobs.append(bytes(v))
+            return {"\u0000b": len(blobs) - 1}
+        if isinstance(v, dict):
+            return {k: walk(x) for k, x in v.items()}
+        if isinstance(v, (list, tuple)):
+            return [walk(x) for x in v]
+        return v
+    head = json.dumps({"e": event, "a": walk(list(args)), "b": [len(b) for b in blobs]},
+                      separators=(",", ":"), default=str).encode()
+    return struct.pack(">I", len(head)) + head + b"".join(blobs)
+
+
+def _e2e_unpack(data: bytes):
+    hl = struct.unpack(">I", data[:4])[0]
+    head = json.loads(data[4:4 + hl])
+    blobs, pos = [], 4 + hl
+    for n in head.get("b") or []:
+        blobs.append(data[pos:pos + n])
+        pos += n
+
+    def walk(v):
+        if isinstance(v, dict):
+            if len(v) == 1 and "\u0000b" in v:
+                return blobs[v["\u0000b"]]
+            return {k: walk(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [walk(x) for x in v]
+        return v
+    return str(head["e"]), walk(head.get("a") or [])
+
+
+def _e2e_auth(cfg: dict) -> "tuple[dict, _E2EChan]":
+    key = base64.b64decode(cfg["e2e_key"] + "=" * (-len(cfg["e2e_key"]) % 4))
+    kid = hashlib.sha256(key).hexdigest()[:16]
+    eph = _c_ec.generate_private_key(_c_ec.SECP256R1())
+    salt = os.urandom(16)
+    shared = eph.exchange(_c_ec.ECDH(), _c_ec.EllipticCurvePublicKey.from_encoded_point(_c_ec.SECP256R1(), key))
+    okm = _C_HKDF(algorithm=_c_hashes.SHA256(), length=64, salt=salt,
+                  info=b"bytera-e2e-v1|" + kid.encode()).derive(shared)
+    ch = _E2EChan(okm[:32], okm[32:], b"c2s\x00", b"s2c\x00")
+    box = ch.seal(json.dumps({"client_id": cfg["client_id"], "token": cfg["token"], "ts": time.time()}).encode(),
+                  aad=b"auth")
+    epk = eph.public_key().public_bytes(_c_ser.Encoding.X962, _c_ser.PublicFormat.UncompressedPoint)
+    return ({"e2e": {"v": 1, "kid": kid, "epk": base64.b64encode(epk).decode(),
+                     "n": base64.b64encode(salt).decode(), "t": base64.b64encode(box).decode()}}, ch)
+
+
+_raw_emit = sio.emit
+_raw_trigger = sio._trigger_event
+
+
+async def _e2e_emit(event, data=None, namespace=None, callback=None):
+    ch = _E2E["ch"]
+    if ch is not None and namespace == "/node" and event != "x":
+        args = [] if data is None else (list(data) if isinstance(data, tuple) else [data])
+        return await _raw_emit("x", ch.seal(_e2e_pack(event, args)), namespace=namespace, callback=callback)
+    return await _raw_emit(event, data, namespace=namespace, callback=callback)
+
+
+async def _e2e_trigger(event, namespace, *args):
+    if (_E2E["ch"] is not None and namespace == "/node" and not _e2e_inner.get()
+            and event not in ("connect", "disconnect", "connect_error", "x", "__disconnect_final")):
+        return None                                   # plain event on an encrypted connection: injected
+    return await _raw_trigger(event, namespace, *args)
+
+
+sio.emit = _e2e_emit
+sio._trigger_event = _e2e_trigger
+
+
+@sio.on("x", namespace="/node")
+async def _e2e_in(data):
+    ch = _E2E["ch"]
+    if ch is None or not isinstance(data, (bytes, bytearray)):
+        return None
+    try:
+        event, args = _e2e_unpack(ch.open(bytes(data)))
+    except Exception as exc:
+        log(f"encrypted message rejected: {exc}")
+        return None
+    tok = _e2e_inner.set(True)
+    try:
+        return await _raw_trigger(event, "/node", *args)
+    finally:
+        _e2e_inner.reset(tok)
+
+
+async def _connect_secure(cfg: dict) -> None:
+    from urllib.parse import urlparse
+    import aiohttp
+    plan = []
+    if cfg.get("e2e_key") and _E2E_LIB and cfg.get("tls_port") and cfg.get("tls_pin") \
+            and time.time() > _E2E["tls_bad_until"]:
+        u = urlparse(cfg["backend_url"])
+        if u.scheme == "http" and u.hostname:
+            plan.append((f"https://{u.hostname}:{int(cfg['tls_port'])}", "tls"))
+    plan.append((cfg["backend_url"], "plain"))
+    for url, kind in plan:
+        if cfg.get("e2e_key") and _E2E_LIB:
+            auth, ch = _e2e_auth(cfg)
+        else:
+            auth, ch = {"client_id": cfg["client_id"], "token": cfg["token"]}, None
+        _E2E["ch"] = ch
+        eio = sio.eio
+        if eio.http is not None and not eio.http.closed:
+            await eio.http.close()
+        eio.http, eio.external_http = None, False
+        if kind == "tls":
+            eio.http = aiohttp.ClientSession(connector=aiohttp.TCPConnector(
+                ssl=aiohttp.Fingerprint(bytes.fromhex(cfg["tls_pin"]))))
+        log(f"Verbinde zu {url} (Namespace /node, {'end-to-end encrypted' if ch else 'NOT encrypted'}"
+            f"{', pinned TLS' if kind == 'tls' else ''}) ...")
+        try:
+            await sio.connect(url, namespaces=["/node"], wait_timeout=30, auth=auth,
+                              transports=["websocket"] if kind == "tls" else None)
+            return
+        except Exception as exc:
+            _E2E["ch"] = None
+            if kind == "tls":
+                _E2E["tls_bad_until"] = time.time() + 3600
+                log(f"TLS port not usable ({exc}) - using {cfg['backend_url']}")
+                try:
+                    await sio.disconnect()
+                except Exception:
+                    pass
+                continue
+            raise
+
+
+# =========================================================================
 # Hilfen
 # =========================================================================
 
@@ -99,6 +284,7 @@ def load_config() -> dict:
     cfg["backend_url"] = os.getenv("NODE_BACKEND_URL") or cfg.get("backend_url") or ""
     cfg["client_id"] = os.getenv("NODE_CLIENT_ID") or cfg.get("client_id") or ""
     cfg["token"] = os.getenv("NODE_TOKEN") or cfg.get("token") or ""
+    cfg["e2e_key"] = os.getenv("NODE_E2E_KEY") or cfg.get("e2e_key") or ""
     return cfg
 
 
@@ -560,9 +746,7 @@ async def connection_loop(cfg: dict) -> None:
     backoff = 3.0
     while True:
         try:
-            log(f"Verbinde zu {cfg['backend_url']} (Namespace /node) ...")
-            await sio.connect(cfg["backend_url"], namespaces=["/node"], wait_timeout=30,
-                              auth={"client_id": cfg["client_id"], "token": cfg["token"]})
+            await _connect_secure(cfg)
             backoff = 3.0
             await sio.emit("node-hello", await _full_report(), namespace="/node")
             log("verbunden")
@@ -573,6 +757,7 @@ async def connection_loop(cfg: dict) -> None:
             if "unauthorized" in str(exc).lower():
                 log("Das Backend lehnt dieses Node-Token ab (Node wurde entfernt?). Neuer Versuch in 60 s.")
                 backoff = 60.0
+        _E2E["ch"] = None
         try:
             await sio.disconnect()
         except Exception:

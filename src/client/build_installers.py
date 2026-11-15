@@ -98,6 +98,11 @@ def _apk_ok() -> bool:
 
 
 # ------------------------------------------------------------ Windows-Werkzeuge (wie beim Agenten)
+def _ensure_crypto(py: str) -> None:
+    """'cryptography' for the end-to-end encryption (bundled into the .exe)."""
+    subprocess.run([py, "-m", "pip", "install", "--quiet", "cryptography>=41"], capture_output=True, text=True)
+
+
 def ensure_pyinstaller() -> None:
     """PyInstaller vorhanden? Sonst per pip nachziehen (nur Windows)."""
     try:
@@ -107,7 +112,8 @@ def ensure_pyinstaller() -> None:
         pass
     print("  PyInstaller fehlt - installiere per pip ...")
     for extra in ([], ["--user"]):
-        r = subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", *extra, "pyinstaller>=6.0,<7"],
+        r = subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", *extra, "pyinstaller>=6.0,<7",
+                            "cryptography>=41"],
                            capture_output=True, text=True)
         if r.returncode == 0:
             return
@@ -178,6 +184,7 @@ def build_exe(v: str, winpython: str | None) -> Path:
         shutil.copytree(DESKTOP, work, ignore=shutil.ignore_patterns("__pycache__"))
         if os.name == "nt":
             ensure_pyinstaller()
+            _ensure_crypto(sys.executable)
             run([sys.executable, *args], cwd=work)
         else:
             wine = _wine() or "/usr/lib/wine/wine64"
@@ -186,6 +193,9 @@ def build_exe(v: str, winpython: str | None) -> Path:
                 raise RuntimeError("Fuer die .exe unter Linux werden wine64 und ein Windows-Python mit PyInstaller "
                                    "gebraucht (--winpython). Alternativ auf Windows bauen.")
             env = dict(os.environ, WINEDEBUG="-all")
+            # end-to-end encryption needs 'cryptography' inside the .exe
+            subprocess.run([wine, py, "-m", "pip", "install", "--quiet", "cryptography>=41"], env=env,
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, timeout=900)
             # Wine braucht eine Pipe als Ausgabe (Datei-Umleitung -> "Invalid handle")
             p = subprocess.Popen([wine, py, *args], cwd=work, env=env, stdout=subprocess.PIPE,
                                  stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True)
@@ -509,6 +519,7 @@ Requires:       python3
 Requires:       (python3-tkinter or python3-tk)
 Recommends:     (chromium or google-chrome-stable or microsoft-edge-stable or firefox)
 Recommends:     libsecret
+Recommends:     python3-cryptography
 AutoReqProv:    no
 Obsoletes:      rapalle-client
 Provides:       rapalle-client
@@ -580,7 +591,7 @@ def build_deb(v: str) -> Path:
                f"Depends: python3 (>= 3.8), python3-tk\n"
                f"Replaces: rapalle-client\nConflicts: rapalle-client\nProvides: rapalle-client\n"
                f"Recommends: chromium | chromium-browser | google-chrome-stable | microsoft-edge-stable | firefox | firefox-esr, "
-               f"libglib2.0-bin, libsecret-tools\n"
+               f"libglib2.0-bin, libsecret-tools, python3-cryptography\n"
                f"Suggests: freerdp3-x11 | freerdp2-x11 | remmina, tigervnc-viewer\n"
                f"Installed-Size: {max(1, size // 1024)}\nMaintainer: BYTERA <support@rapalle.net>\n"
                f"Description: BYTERA RMM Client\n"

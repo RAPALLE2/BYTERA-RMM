@@ -34,6 +34,7 @@ import json
 import logging
 import os
 import platform
+import contextvars
 import random
 import re
 import shutil
@@ -549,6 +550,395 @@ asyncio.set_event_loop(_AGENT_LOOP)
 # -> Fehler "Already connected" und "Future attached to a different loop", weil
 # sich zwei Verbindungs-Lebenszyklen überlappen.
 sio = socketio.AsyncClient(reconnection=False)
+
+
+# ==========================================================================
+# END-TO-END ENCRYPTION + TLS PINNING  (counterpart: backend app/security.py)
+# --------------------------------------------------------------------------
+# * With the server's PUBLIC key (E2E_SERVER_KEY in .env - built into new
+#   installers, otherwise fetched once and then pinned) every message to and
+#   from the backend is encrypted with AES-256-GCM (P-256 ECDH + HKDF). The
+#   agent token is sent only encrypted. Works over plain http://, behind
+#   reverse proxies and Cloudflare - they only see ciphertext.
+# * If the backend offers its own TLS port (TLS_PORT/TLS_PIN), the agent uses it
+#   with certificate pinning; if that port is unreachable it falls back to
+#   BACKEND_URL (still end-to-end encrypted).
+# * Once a key is pinned, the agent NEVER falls back to unencrypted.
+# ==========================================================================
+try:
+    from cryptography.hazmat.primitives import hashes as _c_hashes, serialization as _c_ser
+    from cryptography.hazmat.primitives.asymmetric import ec as _c_ec
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM as _C_AESGCM
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF as _C_HKDF
+    _E2E_LIB = True
+except Exception as _e:                                       # pragma: no cover
+    _E2E_LIB = False
+    _E2E_LIB_ERR = f"{type(_e).__name__}: {_e}"
+
+_ENV_FILE = Path(__file__).resolve().parent / ".env"
+E2E_SERVER_KEY = (os.getenv("E2E_SERVER_KEY") or "").strip()
+TLS_PIN = (os.getenv("TLS_PIN") or "").strip().lower()
+try:
+    TLS_PORT = int(os.getenv("TLS_PORT") or 0)
+except ValueError:
+    TLS_PORT = 0
+_E2E = {"ch": None, "tls_bad_until": 0.0, "mode": "plain", "key_refused": 0}
+_e2e_inner = contextvars.ContextVar("e2e_inner", default=False)
+_E2E_INFO = b"bytera-e2e-v1|"
+_E2E_WINDOW = 4096
+
+
+def _env_store(values: dict) -> None:
+    """Set KEY=value lines in the agent .env (atomic)."""
+    try:
+        lines = _ENV_FILE.read_text(encoding="utf-8").splitlines() if _ENV_FILE.exists() else []
+        done = set()
+        for i, ln in enumerate(lines):
+            k = ln.split("=", 1)[0].strip()
+            if k in values:
+                lines[i] = f"{k}={values[k]}"
+                done.add(k)
+        lines += [f"{k}={v}" for k, v in values.items() if k not in done]
+        tmp = _ENV_FILE.with_suffix(".tmp")
+        tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        os.replace(tmp, _ENV_FILE)
+    except Exception as e:
+        _print(f"[e2e] could not write .env: {e}")
+
+
+def _e2e_kid(key_b64: str) -> str:
+    import base64 as _b64
+    import hashlib as _hl
+    return _hl.sha256(_b64.b64decode(key_b64 + "=" * (-len(key_b64) % 4))).hexdigest()[:16]
+
+
+class _E2EChan:
+    def __init__(self, k_send, k_recv, p_send, p_recv, first_send=0):
+        self._s, self._r = _C_AESGCM(k_send), _C_AESGCM(k_recv)
+        self._ps, self._pr = p_send, p_recv
+        self._cs, self._hi, self._seen = first_send, -1, set()
+        self._lock = threading.Lock()
+
+    def seal(self, data: bytes, aad: bytes = b"") -> bytes:
+        import struct as _st
+        with self._lock:
+            n = self._ps + _st.pack(">Q", self._cs)
+            self._cs += 1
+        return n + self._s.encrypt(n, data, aad or None)
+
+    def open(self, blob: bytes, aad: bytes = b"") -> bytes:
+        import struct as _st
+        if len(blob) < 28 or blob[:4] != self._pr:
+            raise ValueError("bad message")
+        ctr = _st.unpack(">Q", blob[4:12])[0]
+        with self._lock:
+            if ctr in self._seen or ctr <= self._hi - _E2E_WINDOW:
+                raise ValueError("replayed message")
+            data = self._r.decrypt(blob[:12], blob[12:], aad or None)
+            self._seen.add(ctr)
+            if ctr > self._hi:
+                self._hi = ctr
+                if len(self._seen) > 2 * _E2E_WINDOW:
+                    self._seen = {c for c in self._seen if c > self._hi - _E2E_WINDOW}
+        return data
+
+
+def _e2e_new_channel() -> "tuple[_E2EChan, bytes, bytes, str]":
+    """Fresh ephemeral key -> (channel, own public key, salt, kid)."""
+    import base64 as _b64
+    srv = _b64.b64decode(E2E_SERVER_KEY + "=" * (-len(E2E_SERVER_KEY) % 4))
+    kid = _e2e_kid(E2E_SERVER_KEY)
+    eph = _c_ec.generate_private_key(_c_ec.SECP256R1())
+    salt = os.urandom(16)
+    shared = eph.exchange(_c_ec.ECDH(), _c_ec.EllipticCurvePublicKey.from_encoded_point(_c_ec.SECP256R1(), srv))
+    okm = _C_HKDF(algorithm=_c_hashes.SHA256(), length=64, salt=salt, info=_E2E_INFO + kid.encode()).derive(shared)
+    ch = _E2EChan(okm[:32], okm[32:], b"c2s\x00", b"s2c\x00")
+    epk = eph.public_key().public_bytes(_c_ser.Encoding.X962, _c_ser.PublicFormat.UncompressedPoint)
+    return ch, epk, salt, kid
+
+
+def _e2e_pack(event: str, args: list) -> bytes:
+    import json as _js
+    import struct as _st
+    blobs = []
+
+    def walk(v):
+        if isinstance(v, (bytes, bytearray, memoryview)):
+            blobs.append(bytes(v))
+            return {"\u0000b": len(blobs) - 1}
+        if isinstance(v, dict):
+            return {k: walk(x) for k, x in v.items()}
+        if isinstance(v, (list, tuple)):
+            return [walk(x) for x in v]
+        return v
+    head = _js.dumps({"e": event, "a": walk(list(args)), "b": [len(b) for b in blobs]},
+                     separators=(",", ":"), default=str).encode()
+    return _st.pack(">I", len(head)) + head + b"".join(blobs)
+
+
+def _e2e_unpack(data: bytes):
+    import json as _js
+    import struct as _st
+    hl = _st.unpack(">I", data[:4])[0]
+    head = _js.loads(data[4:4 + hl])
+    blobs, pos = [], 4 + hl
+    for n in head.get("b") or []:
+        blobs.append(data[pos:pos + n])
+        pos += n
+
+    def walk(v):
+        if isinstance(v, dict):
+            if len(v) == 1 and "\u0000b" in v:
+                return blobs[v["\u0000b"]]
+            return {k: walk(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [walk(x) for x in v]
+        return v
+    return str(head["e"]), walk(head.get("a") or [])
+
+
+def _e2e_auth() -> "tuple[dict, _E2EChan]":
+    import base64 as _b64
+    import json as _js
+    ch, epk, salt, kid = _e2e_new_channel()
+    box = ch.seal(_js.dumps({"token": AGENT_TOKEN, "ts": time.time()}).encode(), aad=b"auth")
+    return ({"e2e": {"v": 1, "kid": kid, "epk": _b64.b64encode(epk).decode(),
+                     "n": _b64.b64encode(salt).decode(), "t": _b64.b64encode(box).decode()}}, ch)
+
+
+def _e2e_learn(info: dict, how: str) -> bool:
+    """Take over the server key (first contact) and TLS data. Returns True if the key is new."""
+    global E2E_SERVER_KEY, TLS_PIN, TLS_PORT
+    key = str(info.get("key") or "").strip()
+    new_key = bool(key) and not E2E_SERVER_KEY
+    vals = {}
+    if new_key:
+        E2E_SERVER_KEY = key
+        vals["E2E_SERVER_KEY"] = key
+        _print(f"[e2e] server key learned ({how}) - from now on everything is end-to-end encrypted "
+               f"(key id {_e2e_kid(key)})")
+    pin = str(info.get("tls_pin") or "").strip().lower()
+    try:
+        port = int(info.get("tls_port") or 0)
+    except ValueError:
+        port = 0
+    if pin and (not TLS_PIN or how == "encrypted channel"):
+        if pin != TLS_PIN:
+            TLS_PIN = pin
+            vals["TLS_PIN"] = pin
+    if port != TLS_PORT and (how == "encrypted channel" or not TLS_PORT):
+        TLS_PORT = port
+        vals["TLS_PORT"] = str(port)
+    if vals:
+        _env_store(vals)
+        _node_cfg_sync()
+    return new_key
+
+
+def _node_cfg_sync() -> None:
+    """An installed node gets the same pinned key / TLS data (used from its next start)."""
+    try:
+        f = NODE_DIR / "node.json"
+        if not f.is_file() or not _E2E_LIB:
+            return
+        import json as _js
+        cfg = _js.loads(f.read_text(encoding="utf-8"))
+        want = {"e2e_key": E2E_SERVER_KEY, "tls_pin": TLS_PIN, "tls_port": TLS_PORT}
+        if any(cfg.get(k) != v for k, v in want.items()):
+            cfg.update(want)
+            f.write_text(_js.dumps(cfg), encoding="utf-8")
+            _print("[e2e] node configuration updated (encryption active from the next node start)")
+    except Exception as e:
+        _print(f"[e2e] node configuration not updated: {e}")
+
+
+def _e2e_fetch_info() -> "dict | None":
+    """First contact without a built-in key: ask the backend for its PUBLIC key."""
+    import json as _js
+    import urllib.request
+    try:
+        with urllib.request.urlopen(BACKEND_URL.rstrip("/") + "/api/security/info", timeout=20) as r:
+            return _js.loads(r.read() or b"{}")
+    except Exception as e:
+        _print(f"[e2e] server key not available yet ({e}) - connecting without encryption for now")
+        return None
+
+
+def _e2e_ensure_lib() -> None:
+    """Older installations lack 'cryptography' - install it once in the background."""
+    if _E2E_LIB:
+        return
+
+    def run():
+        try:
+            _print(f"[e2e] 'cryptography' missing ({_E2E_LIB_ERR}) - installing it for encryption …")
+            r = subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "cryptography"],
+                               capture_output=True, text=True, timeout=900)
+            if r.returncode == 0:
+                _print("[e2e] 'cryptography' installed - encryption is active after the next agent restart")
+            else:
+                _print(f"[e2e] pip failed: {(r.stderr or r.stdout)[-300:]}")
+        except Exception as e:
+            _print(f"[e2e] pip failed: {e}")
+    threading.Thread(target=run, name="e2e-pip", daemon=True).start()
+
+
+# --- wrap emit / incoming events -----------------------------------------
+_raw_emit = sio.emit
+_raw_trigger = sio._trigger_event
+
+
+async def _e2e_emit(event, data=None, namespace=None, callback=None):
+    ch = _E2E["ch"]
+    if ch is not None and namespace == "/agent" and event != "x":
+        args = [] if data is None else (list(data) if isinstance(data, tuple) else [data])
+        return await _raw_emit("x", ch.seal(_e2e_pack(event, args)), namespace=namespace, callback=callback)
+    return await _raw_emit(event, data, namespace=namespace, callback=callback)
+
+
+async def _e2e_trigger(event, namespace, *args):
+    if (_E2E["ch"] is not None and namespace == "/agent" and not _e2e_inner.get()
+            and event not in ("connect", "disconnect", "connect_error", "x", "__disconnect_final")):
+        _print(f"[e2e] unencrypted event '{event}' dropped (injection?)")
+        return None
+    return await _raw_trigger(event, namespace, *args)
+
+
+sio.emit = _e2e_emit
+sio._trigger_event = _e2e_trigger
+
+
+@sio.on("x", namespace="/agent")
+async def _e2e_in(data):
+    ch = _E2E["ch"]
+    if ch is None or not isinstance(data, (bytes, bytearray)):
+        return None
+    try:
+        event, args = _e2e_unpack(ch.open(bytes(data)))
+    except Exception as e:
+        _print(f"[e2e] message rejected: {e}")
+        return None
+    tok = _e2e_inner.set(True)
+    try:
+        return await _raw_trigger(event, "/agent", *args)
+    finally:
+        _e2e_inner.reset(tok)
+
+
+@sio.on("e2e-offer", namespace="/agent")
+async def _on_e2e_offer(info):
+    """Plain connection + the server offers its key -> learn it and reconnect encrypted."""
+    if _E2E["ch"] is not None or not _E2E_LIB or E2E_SERVER_KEY:
+        return
+    if _e2e_learn(info or {}, "first contact"):
+        _print("[e2e] reconnecting encrypted …")
+        asyncio.get_running_loop().call_later(2, lambda: asyncio.ensure_future(sio.disconnect()))
+
+
+@sio.on("security", namespace="/agent")
+async def _on_security(info):
+    """Encrypted: TLS port + certificate fingerprint of the backend."""
+    old = (TLS_PORT, TLS_PIN)
+    _e2e_learn(info or {}, "encrypted channel")
+    if (TLS_PORT, TLS_PIN) != old and TLS_PORT and _E2E["mode"] == "e2e":
+        _print(f"[e2e] backend offers TLS on port {TLS_PORT} - used from the next connection")
+
+
+def _connect_plan() -> "list[tuple[str, str]]":
+    """[(url, 'tls'|'plain'), ...] - own TLS port first (pinned), then BACKEND_URL."""
+    from urllib.parse import urlparse
+    plan = []
+    if E2E_SERVER_KEY and _E2E_LIB and TLS_PORT and TLS_PIN and time.time() > _E2E["tls_bad_until"]:
+        u = urlparse(BACKEND_URL)
+        if u.scheme == "http" and u.hostname:
+            host = f"[{u.hostname}]" if ":" in u.hostname else u.hostname
+            plan.append((f"https://{host}:{TLS_PORT}", "tls"))
+    plan.append((BACKEND_URL, "plain"))
+    return plan
+
+
+async def _set_transport(kind: str) -> None:
+    """Pinned TLS session for the own TLS port, normal session otherwise."""
+    import aiohttp
+    eio = sio.eio
+    if eio.http is not None and not eio.http.closed:
+        try:
+            await eio.http.close()
+        except Exception:
+            pass
+    eio.http = None
+    eio.external_http = False
+    if kind == "tls":
+        eio.http = aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=aiohttp.Fingerprint(bytes.fromhex(TLS_PIN))))
+
+
+async def _sio_connect_secure() -> None:
+    """Connect: encrypted when possible, pinned TLS when possible, never silently weaker."""
+    if not E2E_SERVER_KEY and _E2E_LIB:
+        info = await asyncio.get_running_loop().run_in_executor(None, _e2e_fetch_info)
+        if info and info.get("key"):
+            _e2e_learn(info, "first contact")
+    last_err = None
+    for url, kind in _connect_plan():
+        if E2E_SERVER_KEY and _E2E_LIB:
+            auth, ch = _e2e_auth()
+            _E2E["ch"] = ch
+        else:
+            auth, ch = {"token": AGENT_TOKEN}, None
+            _E2E["ch"] = None
+        try:
+            await _set_transport(kind)
+            _print(f"[agent] connecting to {url} (namespace /agent, "
+                   f"{'end-to-end encrypted' if ch else 'NOT encrypted'}{', pinned TLS' if kind == 'tls' else ''})")
+            await sio.connect(url, auth=auth, namespaces=["/agent"], wait_timeout=30,
+                              transports=["websocket"] if kind == "tls" else None)
+            _E2E["mode"] = "e2e" if ch else "plain"
+            return
+        except Exception as e:
+            last_err = e
+            _E2E["ch"] = None
+            if "unknown server key" in repr(e):
+                _E2E["key_refused"] += 1
+                _print("[e2e] the backend has a DIFFERENT key than the one pinned here. For safety the agent "
+                       "does not accept it automatically. If the server was reinstalled, remove E2E_SERVER_KEY/"
+                       "TLS_PIN from the agent .env (or reinstall the agent).")
+            if kind == "tls":
+                _E2E["tls_bad_until"] = time.time() + 3600
+                _print(f"[e2e] TLS port not usable ({type(e).__name__}: unreachable or certificate fingerprint "
+                       f"does not match) - using {BACKEND_URL}, still end-to-end encrypted")
+                try:
+                    await sio.disconnect()
+                except Exception:
+                    pass
+                continue
+            raise
+    if last_err:
+        raise last_err
+
+
+def _backend_fetch(path: str, timeout: int = 120, limit: int = 64 * 1024 * 1024) -> bytes:
+    """GET a backend file with the agent token - end-to-end encrypted when possible."""
+    import base64 as _b64
+    import json as _js
+    import urllib.request
+    if E2E_SERVER_KEY and _E2E_LIB:
+        ch, epk, salt, kid = _e2e_new_channel()
+        req = {"m": "GET", "p": path, "h": {"X-Agent-Token": AGENT_TOKEN}, "ts": time.time()}
+        body = b"BXE1" + bytes.fromhex(kid) + epk + salt + ch.seal(_js.dumps(req).encode(), aad=b"req")
+        r = urllib.request.Request(BACKEND_URL.rstrip("/") + "/api/e2e", data=body, method="POST",
+                                   headers={"Content-Type": "application/octet-stream"})
+        with urllib.request.urlopen(r, timeout=timeout) as resp:
+            out = _js.loads(ch.open(resp.read(), aad=b"resp"))
+        if int(out.get("s") or 0) != 200:
+            raise RuntimeError(f"HTTP {out.get('s')}")
+        data = _b64.b64decode(out.get("b") or "")
+    else:
+        r = urllib.request.Request(BACKEND_URL.rstrip("/") + path, headers={"X-Agent-Token": AGENT_TOKEN})
+        with urllib.request.urlopen(r, timeout=timeout) as resp:
+            data = resp.read(limit + 1)
+    if len(data) > limit:
+        raise RuntimeError("download unexpectedly large")
+    return data
 
 # Wird gesetzt, sobald das Backend unsere Anmeldung BESTÄTIGT hat
 # ('register-ack'). Solange es nicht gesetzt ist, schweigt der Agent -
@@ -2360,13 +2750,7 @@ def _node_mode() -> str:
 
 
 def _node_download(path: str) -> bytes:
-    import urllib.request
-    req = urllib.request.Request(BACKEND_URL.rstrip("/") + path, headers={"X-Agent-Token": AGENT_TOKEN})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        data = r.read(25 * 1024 * 1024 + 1)
-    if len(data) > 25 * 1024 * 1024:
-        raise RuntimeError("Node-Paket ist unerwartet gross")
-    return data
+    return _backend_fetch(path, timeout=120, limit=25 * 1024 * 1024)
 
 
 def _node_extract(data: bytes) -> None:
@@ -2478,7 +2862,9 @@ def _node_do_install(payload: dict) -> str:
         _node_service_remove()                         # alte Version sauber beenden
     _node_extract(data)
     cfg = {"backend_url": BACKEND_URL, "client_id": str(payload.get("client_id") or DEVICE_ID),
-           "token": str(payload.get("token") or "")}
+           "token": str(payload.get("token") or ""),
+           # encryption: the node uses the same pinned server key / TLS fingerprint as the agent
+           "e2e_key": E2E_SERVER_KEY if _E2E_LIB else "", "tls_pin": TLS_PIN, "tls_port": TLS_PORT}
     cfg_file = NODE_DIR / "node.json"
     cfg_file.write_text(json.dumps(cfg), encoding="utf-8")
     try:
@@ -6458,11 +6844,12 @@ def _vdisplay_install(url: str, sha256: str = "") -> dict:
         # Relative Server-Adresse gegen die eigene Server-URL aufloesen und den
         # Download mit dem Agent-Token absichern (die Datei liegt auf dem RMM).
         full = url if "://" in url else (BACKEND_URL.rstrip("/") + "/" + url.lstrip("/"))
-        headers = {"X-Agent-Token": AGENT_TOKEN} if full.startswith(BACKEND_URL.rstrip("/")) else {}
         _print(f"[vdisplay] lade Treiberpaket: {full}")
-        req = urllib.request.Request(full, headers=headers)
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            blob = resp.read()
+        if full.startswith(BACKEND_URL.rstrip("/") + "/"):   # own server: token, encrypted
+            blob = _backend_fetch("/" + full[len(BACKEND_URL.rstrip("/")):].lstrip("/"), timeout=180)
+        else:
+            with urllib.request.urlopen(urllib.request.Request(full), timeout=120) as resp:
+                blob = resp.read()
         if sha256 and hashlib.sha256(blob).hexdigest().lower() != sha256.lower():
             return {"ok": False, "error": "Pruefsumme des Treiberpakets stimmt nicht - Abbruch."}
         zpath.write_bytes(blob)
@@ -8069,6 +8456,8 @@ async def main():
     # Diagnose einhaengen, BEVOR irgendetwas anderes startet - alles was
     # danach schiefgeht, soll bereits im Puffer landen.
     _diag_install()
+    _e2e_ensure_lib()                       # encryption library (older installations)
+    _node_cfg_sync()                        # installed node: same pinned key
     # Reste der Installation unter altem Namen (RAPALLE.net RMM) wegraeumen
     threading.Thread(target=_legacy_rebrand_cleanup, name="legacy-cleanup", daemon=True).start()
 
@@ -8118,9 +8507,7 @@ async def main():
                     await sio.disconnect()
                 except Exception:
                     pass
-            _print(f"[agent] Verbinde zu {BACKEND_URL} (Namespace /agent)...")
-            await sio.connect(BACKEND_URL, auth={"token": AGENT_TOKEN},
-                              namespaces=["/agent"], wait_timeout=30)
+            await _sio_connect_secure()
             backoff = 3.0    # Verbindung stand -> Backoff zurücksetzen
             attempts = 0
             # Blockiert, solange die Verbindung steht - mit Wachhund: Steht die
@@ -8151,6 +8538,7 @@ async def main():
                 _print(f"[agent] {_at('log_conn_failed', url=BACKEND_URL, err=repr(e))}")
         finally:
             _REGISTERED.clear()
+            _E2E["ch"] = None
 
         # Immer sauber trennen, bevor der nächste Versuch startet.
         try:

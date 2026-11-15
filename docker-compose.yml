@@ -32,6 +32,8 @@ services:
     environment:
       # Installationsart - wird in der Oberfläche angezeigt. Nicht ändern.
       RMM_INSTALL_KIND: docker
+      # Own TLS port (encrypted endpoint for agents/clients), 0 = off
+      RMM_TLS_PORT: ${RMM_TLS_PORT:-4443}
       # Im Container immer 0.0.0.0, sonst ist das Dashboard von außen nicht
       # erreichbar. NICHT auf eine LAN-IP setzen.
       HOST: 0.0.0.0
@@ -55,6 +57,9 @@ services:
       # links = Port auf dem Host (im Browser), rechts = Port im Container.
       # Beide über RMM_PORT steuerbar; nach Änderung "docker compose up -d".
       - "${RMM_PORT:-4000}:${RMM_PORT:-4000}"
+      # Own encrypted endpoint for agents/nodes/clients (self-signed, pinned by the
+      # devices). Not published = devices stay on the port above, still end-to-end encrypted.
+      - "${RMM_TLS_PORT:-4443}:${RMM_TLS_PORT:-4443}"
       # Modul "VPN (WireGuard)" mit dem BACKEND als Host: UDP-Ports der Tunnel
       # (je Tunnel einer, ab 51820 aufsteigend). Fuer mehrere gleichzeitige Tunnel
       # den Bereich vergroessern, z.B. "51820-51829:51820-51829/udp".

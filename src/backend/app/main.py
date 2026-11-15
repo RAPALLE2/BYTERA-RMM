@@ -276,6 +276,10 @@ _mount("diag_routes", diag_routes)
 _mount("dist_routes", dist_routes)         # Verteilung /dist (Core)
 # Hintergrund-Jobs (Scans, Erkennungen ...): laufen im Backend, nicht in der
 # Browser-Sitzung - Neuladen/andere Benutzer sehen denselben Stand (app/bgjobs.py)
+# Encryption towards agents/clients (info, status, end-to-end REST envelope)
+security_routes = _import_router("security_routes")
+if security_routes is not None:
+    _mount("security_routes", security_routes)
 bgjobs_routes = _import_router("bgjobs_routes")
 if bgjobs_routes is not None:
     _mount("bgjobs_routes", bgjobs_routes)
@@ -566,6 +570,13 @@ async def _uptime_monitor_engine():
 
 @api.on_event("startup")
 async def _start_background_tasks():
+    # Encryption: server key + own TLS port (app/security.py, app/tls_listener.py)
+    try:
+        from app import security as _sec, tls_listener as _tls
+        _sec.server_key()
+        _asyncio.get_running_loop().create_task(_tls.run(socket_app))
+    except Exception as _e:
+        print(f"[security] start: {_e}")
     try:                                   # Arbeitsspeicher klein halten (app/memtrim.py)
         from app import memtrim as _memtrim
         _memtrim.start(_asyncio.get_running_loop())

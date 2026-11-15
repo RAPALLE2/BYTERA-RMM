@@ -149,6 +149,15 @@ public class MainActivity extends Activity {
 
             @Override
             public void onReceivedSslError(WebView v, SslErrorHandler h, SslError e) {
+                // the backend's own (self-signed) certificate: accepted by its pinned fingerprint
+                String pin = secPin();
+                if (!pin.isEmpty()) {
+                    try {
+                        android.os.Bundle b = android.net.http.SslCertificate.saveState(e.getCertificate());
+                        byte[] der = b == null ? null : b.getByteArray("x509-certificate");
+                        if (der != null && E2E.sha256Hex(der).equals(pin)) { h.proceed(); return; }
+                    } catch (Exception ignored) { }
+                }
                 if (prefs.getBoolean("insecure", false)) h.proceed(); else h.cancel();
             }
         });
@@ -682,11 +691,121 @@ public class MainActivity extends Activity {
         return m.isEmpty() ? "Android-Gerät" : Character.toUpperCase(m.charAt(0)) + m.substring(1);
     }
 
+    // ---------------------------------------------------------------- encryption (E2E.java)
+    // The server's PUBLIC key and TLS fingerprint are learned on first contact and pinned.
+    String secKey() { return prefs.getString("sec_key|" + prefs.getString("server", ""), ""); }
+    String secPin() { return prefs.getString("sec_pin|" + prefs.getString("server", ""), ""); }
+
+    void learnSecurity(String server) {
+        if (!prefs.getString("sec_key|" + server, "").isEmpty()) return;
+        try {
+            HttpURLConnection c = (HttpURLConnection) new URL(server + "/api/security/info").openConnection();
+            secureTls(c);
+            c.setConnectTimeout(10000);
+            c.setReadTimeout(10000);
+            if (c.getResponseCode() != 200) return;
+            JSONObject o = new JSONObject(new String(readAll(c.getInputStream()), "UTF-8"));
+            String k = o.optString("key", "");
+            if (!k.isEmpty()) prefs.edit().putString("sec_key|" + server, k)
+                    .putString("sec_pin|" + server, o.optString("tls_pin", "")).apply();
+        } catch (Exception ignored) { }
+    }
+
+    /** https: normal CA check OR the pinned fingerprint of the backend's own certificate. */
+    void secureTls(HttpURLConnection conn) throws Exception {
+        if (!(conn instanceof HttpsURLConnection)) return;
+        HttpsURLConnection c = (HttpsURLConnection) conn;
+        final String pin = secPin();
+        if (pin.isEmpty()) {
+            if (prefs.getBoolean("insecure", false)) trustAll(c);
+            return;
+        }
+        javax.net.ssl.TrustManagerFactory tmf = javax.net.ssl.TrustManagerFactory.getInstance(
+                javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm());
+        tmf.init((java.security.KeyStore) null);
+        final X509TrustManager system = (X509TrustManager) tmf.getTrustManagers()[0];
+        TrustManager[] tm = new TrustManager[]{ new X509TrustManager() {
+            public void checkClientTrusted(X509Certificate[] a, String b) throws java.security.cert.CertificateException {
+                system.checkClientTrusted(a, b);
+            }
+            public void checkServerTrusted(X509Certificate[] a, String b) throws java.security.cert.CertificateException {
+                try { if (a.length > 0 && E2E.sha256Hex(a[0].getEncoded()).equals(pin)) return; }
+                catch (Exception ignored) { }
+                system.checkServerTrusted(a, b);
+            }
+            public X509Certificate[] getAcceptedIssuers() { return system.getAcceptedIssuers(); }
+        }};
+        SSLContext ctx = SSLContext.getInstance("TLS");
+        ctx.init(null, tm, new java.security.SecureRandom());
+        c.setSSLSocketFactory(ctx.getSocketFactory());
+        final HostnameVerifier dflt = HttpsURLConnection.getDefaultHostnameVerifier();
+        c.setHostnameVerifier(new HostnameVerifier() { public boolean verify(String h, SSLSession s) {
+            try {
+                java.security.cert.Certificate[] chain = s.getPeerCertificates();
+                if (chain.length > 0 && E2E.sha256Hex(chain[0].getEncoded()).equals(pin)) return true;
+            } catch (Exception ignored) { }
+            return dflt.verify(h, s);
+        }});
+    }
+
+    static byte[] readAll(InputStream in) throws Exception {
+        ByteArrayOutputStream bo = new ByteArrayOutputStream();
+        if (in == null) return new byte[0];
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+        in.close();
+        return bo.toByteArray();
+    }
+
+    /** One API call inside the encrypted envelope (POST /api/e2e). */
+    String httpE2E(String server, String key, String method, String path, String body, boolean auth) throws Exception {
+        JSONObject h = new JSONObject();
+        h.put("Accept", "application/json");
+        if (auth && !session.isEmpty()) h.put("Authorization", "Bearer " + session);
+        if (body != null) h.put("Content-Type", "application/json");
+        JSONObject req = new JSONObject();
+        req.put("m", method);
+        req.put("p", path);
+        req.put("h", h);
+        req.put("ts", System.currentTimeMillis() / 1000.0);
+        if (body != null) req.put("b", android.util.Base64.encodeToString(body.getBytes("UTF-8"), android.util.Base64.NO_WRAP));
+        E2E env = new E2E(android.util.Base64.decode(key, android.util.Base64.DEFAULT));
+        HttpURLConnection c = (HttpURLConnection) new URL(server + "/api/e2e").openConnection();
+        secureTls(c);
+        c.setRequestMethod("POST");
+        c.setConnectTimeout(15000);
+        c.setReadTimeout(30000);
+        c.setDoOutput(true);
+        c.setRequestProperty("Content-Type", "application/octet-stream");
+        c.setRequestProperty("User-Agent", "ByteraClient-Android/" + VERSION);
+        OutputStream os = c.getOutputStream();
+        os.write(env.request(req.toString().getBytes("UTF-8")));
+        os.close();
+        int code = c.getResponseCode();
+        if (code == 409) throw new HttpError("Der Server zeigt einen ANDEREN Schlüssel als gespeichert - möglicher Angriff. "
+                + "Wurde der Server neu installiert: Server in der App entfernen und neu hinzufügen.", 409);
+        if (code == 404) throw new HttpError("Der Server nimmt keine verschlüsselten Anfragen mehr an - möglicher Angriff.", 404);
+        if (code >= 400) throw new HttpError("Verschlüsselte Anfrage fehlgeschlagen (HTTP " + code + ")", code);
+        JSONObject out = new JSONObject(new String(env.response(readAll(c.getInputStream())), "UTF-8"));
+        int status = out.optInt("s", 0);
+        String text = new String(android.util.Base64.decode(out.optString("b", ""), android.util.Base64.DEFAULT), "UTF-8");
+        if (status >= 400) {
+            String detail = "HTTP " + status;
+            try { detail = new JSONObject(text).optString("detail", detail); } catch (Exception ignored) { }
+            throw new HttpError(detail, status);
+        }
+        return text.isEmpty() ? "null" : text;
+    }
+
     String http(String method, String path, String body, boolean auth) throws Exception {
         String server = prefs.getString("server", "");
         if (server.isEmpty()) throw new HttpError("Bitte die Server-Adresse eingeben", 0);
+        learnSecurity(server);
+        String key = secKey();
+        if (!key.isEmpty()) return httpE2E(server, key, method, path, body, auth);
         HttpURLConnection c = (HttpURLConnection) new URL(server + path).openConnection();
-        if (c instanceof HttpsURLConnection && prefs.getBoolean("insecure", false)) trustAll((HttpsURLConnection) c);
+        secureTls(c);
         c.setRequestMethod(method);
         c.setConnectTimeout(15000);
         c.setReadTimeout(30000);

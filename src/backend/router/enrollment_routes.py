@@ -361,6 +361,13 @@ def _build_agent_zip_bytes(backend_url: str, enrollment_token: str = "") -> io.B
         # koennen dasselbe Geraet ansehen. de|en, Voreinstellung de.
         f"AGENT_LANG=de\n"
     )
+    # End-to-end encryption from the very first connection: the server's PUBLIC
+    # key and the fingerprint of its TLS certificate are pinned in the agent.
+    try:
+        from app import security as _sec
+        env_content += _sec.env_lines()
+    except Exception as _e:
+        print(f"[enroll] security keys not embedded: {_e}")
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         for file_path in AGENT_SOURCE_DIR.rglob("*"):

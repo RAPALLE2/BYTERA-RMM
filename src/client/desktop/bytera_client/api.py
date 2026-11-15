@@ -14,8 +14,13 @@ import urllib.parse
 import urllib.request
 
 from . import __version__
+from . import e2e as _e2e
 
 TIMEOUT = 20
+
+
+class _Fallback(Exception):
+    """Backend without the encrypted envelope (old version): use plain requests."""
 
 
 class ApiError(Exception):
@@ -38,10 +43,78 @@ def normalize_server(url: str) -> str:
 
 
 class Api:
-    def __init__(self, server: str, token: str = "", verify_tls: bool = True):
+    def __init__(self, server: str, token: str = "", verify_tls: bool = True, store=None):
         self.server = normalize_server(server)
         self.token = token
         self.verify_tls = verify_tls
+        self.store = store                 # remembers the server key / TLS fingerprint (pinning)
+        self._sec: dict | None = None
+
+    # ------------------------------------------------------------- encryption (e2e.py)
+    def security(self) -> dict:
+        """Pinned server key + TLS fingerprint; learned on first contact."""
+        if self._sec is not None:
+            return self._sec
+        cache = dict((self.store.get("security") or {}) if self.store else {})
+        sec = cache.get(self.server) or {}
+        if not sec.get("key"):
+            info = _e2e.fetch_info(self.server, ctx=self._ctx())
+            if info and info.get("key"):
+                sec = {"key": info["key"], "pin": info.get("tls_pin") or "", "learned": int(__import__("time").time())}
+                if self.store:
+                    cache[self.server] = sec
+                    try:
+                        self.store.set(security=cache)
+                    except Exception:
+                        pass
+        self._sec = sec
+        return sec
+
+    def encrypted(self) -> bool:
+        return bool(_e2e.AVAILABLE and self.security().get("key"))
+
+    def _open(self, req, timeout=TIMEOUT):
+        """https with normal checks; the backend's own certificate is accepted by its pinned fingerprint."""
+        try:
+            return urllib.request.urlopen(req, timeout=timeout, context=self._ctx())
+        except (ssl.SSLCertVerificationError, urllib.error.URLError) as e:
+            cert_err = isinstance(e, ssl.SSLCertVerificationError) or \
+                isinstance(getattr(e, "reason", None), ssl.SSLCertVerificationError)
+            pin = (self._sec or {}).get("pin")
+            if cert_err and pin:
+                return _e2e.pinned_opener(pin).open(req, timeout=timeout)
+            raise
+
+    def _request_e2e(self, method: str, path: str, headers: dict, data: bytes | None):
+        env = _e2e.Envelope(self.security()["key"])
+        inner = {k: v for k, v in headers.items() if k.lower() not in ("user-agent",)}
+        req = urllib.request.Request(self.server + "/api/e2e", data=env.request_body(method, path, inner, data),
+                                     method="POST", headers={"Content-Type": "application/octet-stream",
+                                                             "User-Agent": headers.get("User-Agent", "")})
+        try:
+            with self._open(req) as r:
+                out = env.open_response(r.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 409:
+                raise ApiError("The server presents a DIFFERENT encryption key than the one remembered by this app. "
+                               "This can be an attack. If the server was reinstalled, remove and add the server "
+                               "again in the connection settings.", 409) from None
+            if e.code == 404:
+                # a server that once offered encryption never drops it - refuse instead of
+                # silently falling back to unencrypted requests (downgrade attack)
+                raise ApiError("The server does not accept encrypted requests anymore. This can be an attack; "
+                               "if the server was downgraded or reinstalled, remove and add it again.", 404) from None
+            raise ApiError(f"Encrypted request failed (HTTP {e.code})", e.code) from None
+        status = int(out.get("s") or 0)
+        raw = out["body"]
+        if status >= 400:
+            detail = ""
+            try:
+                detail = (json.loads(raw or b"{}") or {}).get("detail") or ""
+            except Exception:
+                pass
+            raise ApiError(str(detail or f"HTTP {status}"), status)
+        return json.loads(raw) if raw else None
 
     # ------------------------------------------------------------- Basis
     def _ctx(self):
@@ -59,9 +132,22 @@ class Api:
             headers["Content-Type"] = "application/json"
         if auth and self.token:
             headers["Authorization"] = "Bearer " + self.token
+        try:
+            if self.encrypted():
+                return self._request_e2e(method, path, headers, data)
+        except _Fallback:
+            pass
+        except ssl.SSLCertVerificationError:
+            raise ApiError("Das Zertifikat des Servers ist nicht vertrauenswürdig "
+                           "(selbst signiert?). In den Verbindungs-Einstellungen lässt sich die Prüfung abschalten.") from None
+        except (urllib.error.URLError, socket.timeout, OSError) as e:
+            if isinstance(e, ApiError):
+                raise
+            reason = getattr(e, "reason", e)
+            raise ApiError(f"Server nicht erreichbar: {reason}") from None
         req = urllib.request.Request(self.server + path, data=data, method=method, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT, context=self._ctx()) as r:
+            with self._open(req) as r:
                 raw = r.read()
                 return json.loads(raw) if raw else None
         except urllib.error.HTTPError as e:

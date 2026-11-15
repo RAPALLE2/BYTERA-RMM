@@ -17,7 +17,7 @@ import { t } from "../app/i18n.js";
 import { isAdmin, hasGlobalPerm } from "../app/state.js";
 import { renderSource } from "./source.js";
 import { registerCleanup } from "../app/windowmanager.js";
-import { getModuleApi } from "../app/modules.js";
+import { getModuleApi, moduleRequest } from "../app/modules.js";
 import { fillStyleSelect } from "../app/styles.js";
 
 export function renderSettings(body, win) {
@@ -42,12 +42,14 @@ export function renderSettings(body, win) {
       users: admin || hasGlobalPerm("create_users"),
       branding: admin || hasGlobalPerm("manage_branding"),
       source: admin || hasGlobalPerm("see_source"),
+      security: admin,
     };
-    const order = ["general", "users", "branding", "source"];
+    const order = ["general", "users", "branding", "security", "source"];
     const allowed = order.filter((k) => canTab[k]);
     if (!allowed.includes(activeTab)) activeTab = allowed[0] || "general";
     const tabLabel = { general: t("tab_general"), users: t("tab_users"),
       branding: "Branding",
+      security: "Security",
       source: "Source" };
     body.innerHTML = `
       <div style="display:flex;flex-direction:column;height:100%">
@@ -64,6 +66,7 @@ export function renderSettings(body, win) {
     if (activeTab === "general") renderGeneralTab(content);
     else if (activeTab === "users") renderUsersTab(content);
     else if (activeTab === "branding") renderBrandingTab(content);
+    else if (activeTab === "security") renderSecurityTab(content);
     else if (activeTab === "source") {
       // Source bringt keine eigenen Innenabstaende mit -> sonst klebt alles am Fensterrand
       const wrap = document.createElement("div");
@@ -71,6 +74,64 @@ export function renderSettings(body, win) {
       content.appendChild(wrap);
       sourceCleanup = renderSource(wrap);
     }
+  }
+
+  // ---------------- SECURITY (encryption towards agents, nodes, client apps) ----------------
+  async function renderSecurityTab(root) {
+    root.innerHTML = `<div class="settings-section"><p style="color:var(--subtext);font-size:13px">Loading …</p></div>`;
+    let d;
+    try { d = await moduleRequest("/api/security/status"); }
+    catch (e) { root.innerHTML = `<div class="settings-section"><div style="color:var(--danger)">${esc(e.message)}</div></div>`; return; }
+    const s = d.summary;
+    const lock = (a) => !a.online ? `<span style="color:var(--subtext)">offline</span>`
+      : a.e2e ? `<span style="color:#3ecf8e">🔒 end-to-end${a.tls ? " + TLS" : ""}</span>`
+      : `<span style="color:#f5a524">🔓 not encrypted${a.tls ? " (TLS only)" : ""}</span>`;
+    root.innerHTML = `
+      <div class="settings-section">
+        <h3>🔐 Encryption</h3>
+        <p style="color:var(--subtext);font-size:13px;max-width:760px;line-height:1.5">
+          Agents, nodes and the client apps talk to the backend <b>end-to-end encrypted</b> (P-256 + AES-256-GCM) –
+          also over plain http://, behind reverse proxies or Cloudflare: those only see ciphertext, including the agent token.
+          In addition the backend offers its own <b>TLS port</b> with a self-signed certificate that the devices pin.
+          New installers contain the keys; existing agents take them over automatically after the update.</p>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin:12px 0">
+          ${[["Online", s.online, ""], ["End-to-end", s.e2e, "#3ecf8e"], ["+ TLS", s.tls, "#3ecf8e"], ["Not encrypted", s.plain, s.plain ? "#f5a524" : ""]].map(([l, v, c]) =>
+            `<div class="panel" style="padding:10px 14px;min-width:120px"><div style="font-size:22px;font-weight:600;${c ? `color:${c}` : ""}">${v}</div><div style="font-size:12px;color:var(--subtext)">${l}</div></div>`).join("")}
+        </div>
+        <label style="display:flex;gap:8px;align-items:flex-start;max-width:760px;margin:6px 0 14px">
+          <input type="checkbox" id="sec-require" ${d.require_e2e ? "checked" : ""} style="margin-top:3px">
+          <span><b>Block unencrypted agents and nodes</b><br><span style="font-size:12px;color:var(--subtext)">Turn on once every device shows 🔒 –
+          old agents without the update can then no longer connect.${s.plain ? ` <b style="color:#f5a524">${s.plain} device(s) are still unencrypted.</b>` : ""}</span></span>
+        </label>
+        <table style="font-size:13px;border-collapse:collapse;margin-bottom:14px">
+          <tr><td style="padding:3px 14px 3px 0;color:var(--subtext)">Server key ID</td><td><code>${esc(d.info.kid)}</code></td></tr>
+          <tr><td style="padding:3px 14px 3px 0;color:var(--subtext)">TLS port</td><td>${d.tls.active ? `<b>${d.info.tls_port}</b> active` : `<span style="color:#f5a524">not active</span> ${esc(d.tls.error || "")}`}
+            <span style="color:var(--subtext);font-size:12px"> · environment variable RMM_TLS_PORT; Docker: publish the port (docker-compose.yml)</span></td></tr>
+          <tr><td style="padding:3px 14px 3px 0;color:var(--subtext);vertical-align:top">TLS fingerprint</td><td><code style="font-size:11px;word-break:break-all">${esc(d.info.tls_pin)}</code></td></tr>
+        </table>
+        <input id="sec-q" type="search" placeholder="Filter devices …" style="max-width:320px;margin-bottom:8px">
+        <table class="data-table" style="width:100%;font-size:13px"><thead><tr><th style="text-align:left">Device</th><th style="text-align:left">Connection</th><th style="text-align:left">Agent version</th></tr></thead>
+          <tbody id="sec-rows"></tbody></table>
+      </div>`;
+    const rows = root.querySelector("#sec-rows");
+    const drawRows = () => {
+      const q = root.querySelector("#sec-q").value.trim().toLowerCase();
+      rows.innerHTML = d.agents.filter((a) => !q || a.hostname.toLowerCase().includes(q)).map((a) =>
+        `<tr><td>${esc(a.hostname)}</td><td>${lock(a)}</td><td>${esc(a.agent_version || "–")}</td></tr>`).join("")
+        || `<tr><td colspan="3" style="color:var(--subtext)">No devices.</td></tr>`;
+    };
+    root.querySelector("#sec-q").addEventListener("input", drawRows);
+    drawRows();
+    root.querySelector("#sec-require").addEventListener("change", async (e) => {
+      const on = e.target.checked;
+      if (on && s.plain && !(await uiConfirm("Block unencrypted devices?", {
+        description: `${s.plain} online device(s) are not encrypted yet and will be disconnected.`, okText: "Block", danger: true }))) {
+        e.target.checked = false; return;
+      }
+      try { await moduleRequest("/api/security/settings", { method: "PUT", body: JSON.stringify({ require_e2e: on }) });
+            window.notify?.(on ? "Unencrypted devices are blocked" : "Unencrypted devices are allowed", "success"); }
+      catch (err) { window.notify?.(err.message, "error"); e.target.checked = !on; }
+    });
   }
 
   // ---------------- BRANDING (Logos per Upload ersetzen) ----------------

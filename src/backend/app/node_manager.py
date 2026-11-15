@@ -256,12 +256,17 @@ async def _agent_result(sid, payload):
 
 @sio.on("connect", namespace=NS)
 async def _node_connect(sid, environ, auth):
-    auth = auth or {}
+    from app import sockets as _sk, security as _sec
+    auth = _sk.e2e_accept(sid, environ, auth)          # encrypted handshake (token inside) or plain
     cid, token = str(auth.get("client_id") or ""), str(auth.get("token") or "")
     rec = await db.call(db.node_get, cid) if cid else None
     if (not rec or rec["state"] == "removing" or not token
             or not hmac.compare_digest(rec["token_hash"], _hash(token))):
+        _sk.e2e_forget(sid)
         raise socketio.exceptions.ConnectionRefusedError("unauthorized")
+    if not auth.get("_e2e") and _sec.require_e2e():
+        _sk.e2e_forget(sid)
+        raise socketio.exceptions.ConnectionRefusedError("encryption required: update the node")
     old = _sid_by_client.get(cid)
     if old and old != sid:                       # alte Verbindung ablösen
         try:
@@ -278,6 +283,11 @@ async def _node_connect(sid, environ, auth):
 
 @sio.on("disconnect", namespace=NS)
 async def _node_disconnect(sid):
+    try:
+        from app import sockets as _sk
+        _sk.e2e_forget(sid)
+    except Exception:
+        pass
     cid = _client_by_sid.pop(sid, None)
     if not cid:
         return

@@ -89,7 +89,7 @@ class Launcher:
                 return self.fail("Die Client-App ist noch nicht angemeldet. Bitte zuerst die App öffnen und anmelden.")
             if normalize_server(server_link) != normalize_server(server):
                 return self.fail(f"Der Link gehört zu einem anderen Server ({server_link}).\nEingerichtet ist {server}.")
-            self.api = Api(server, verify_tls=not self.store.get("insecure", False))
+            self.api = Api(server, verify_tls=not self.store.get("insecure", False), store=self.store)
             self.api.session(token)
             p = self.api.redeem(ticket)
             proto = p["protocol"]
@@ -226,7 +226,7 @@ def handle_deeplink(url: str) -> bool:
             except Exception:
                 pass
             return True
-        api = Api(server, verify_tls=not store.get("insecure", False))
+        api = Api(server, verify_tls=not store.get("insecure", False), store=store)
         api.session(token)
         dash = api.dashboard_url()                       # .../#client-token=...
         base, _, frag = dash.partition("#")

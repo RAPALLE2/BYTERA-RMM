@@ -109,6 +109,115 @@ sio = socketio.AsyncServer(
 
 
 # ======================================================================
+# END-TO-END ENCRYPTION of the agent connection (app/security.py)
+# ======================================================================
+# Agents with the server key connect with an encrypted handshake (token inside).
+# After that EVERY event in both directions travels as event "x" with one
+# encrypted binary argument; plain events from such an agent are dropped (a
+# man in the middle on plain http could otherwise inject commands). Handlers
+# stay unchanged: incoming "x" is decrypted and dispatched to the normal
+# handler, outgoing sio.emit(..., namespace="/agent") is encrypted per agent.
+import contextvars as _ctxvars
+from app import security as _sec
+
+E2E_NS = ("/agent", "/node")       # namespaces of devices (agents, nodes)
+_e2e: dict = {}                    # sid -> security.Channel
+_sid_sec: dict = {}                # sid -> {"e2e": bool, "tls": bool}
+_e2e_inner = _ctxvars.ContextVar("e2e_inner", default=False)
+_raw_emit = sio.emit
+_raw_trigger = sio._trigger_event
+
+
+def _emit_args(data) -> list:
+    if data is None:
+        return []
+    return list(data) if isinstance(data, tuple) else [data]
+
+
+async def _emit(event, data=None, to=None, room=None, skip_sid=None, namespace=None,
+                callback=None, ignore_queue=False):
+    if namespace not in E2E_NS or event == "x" or not _e2e:
+        return await _raw_emit(event, data, to=to, room=room, skip_sid=skip_sid, namespace=namespace,
+                               callback=callback, ignore_queue=ignore_queue)
+    target = to if to is not None else room
+    if target is not None and target in _e2e:                       # one encrypted agent
+        blob = _e2e[target].seal(_sec.pack(event, _emit_args(data)))
+        return await _raw_emit("x", blob, to=target, namespace=namespace, callback=callback,
+                               ignore_queue=ignore_queue)
+    if target is not None and target in _sid_sec:                   # one plain agent
+        return await _raw_emit(event, data, to=target, namespace=namespace, callback=callback,
+                               ignore_queue=ignore_queue)
+    # room / broadcast: every member gets its own (encrypted or plain) copy
+    skip = set(skip_sid if isinstance(skip_sid, (list, tuple, set)) else [skip_sid] if skip_sid else [])
+    try:
+        members = [m[0] if isinstance(m, tuple) else m for m in sio.manager.get_participants(namespace, target)]
+    except Exception:
+        members = []
+    for sid in members:
+        if sid in skip:
+            continue
+        ch = _e2e.get(sid)
+        if ch:
+            await _raw_emit("x", ch.seal(_sec.pack(event, _emit_args(data))), to=sid, namespace=namespace)
+        else:
+            await _raw_emit(event, data, to=sid, namespace=namespace)
+
+
+async def _trigger(event, namespace, *args):
+    if (namespace in E2E_NS and event not in ("connect", "disconnect", "x") and args
+            and args[0] in _e2e and not _e2e_inner.get()):
+        print(f"[e2e] plain event '{event}' from encrypted agent dropped (injection?)")
+        return None
+    return await _raw_trigger(event, namespace, *args)
+
+
+sio.emit = _emit
+sio._trigger_event = _trigger
+
+
+def e2e_accept(sid: str, environ: dict, auth) -> dict:
+    """Connect of a device: returns the (decrypted) auth dict. Encrypted handshake ->
+    the channel is registered for this sid. Raises ConnectionRefusedError."""
+    auth = auth if isinstance(auth, dict) else {}
+    e2e = auth.get("e2e")
+    if not e2e:
+        _sid_sec[sid] = {"e2e": False, "tls": _conn_tls(environ or {})}
+        return auth
+    try:
+        if str(e2e.get("kid")) != _sec.key_id():
+            raise socketio.exceptions.ConnectionRefusedError("e2e: unknown server key")
+        channel = _sec.server_channel(_sec.b64d(e2e["epk"]), _sec.b64d(e2e["n"]), str(e2e["kid"]))
+        inner = _json.loads(channel.open(_sec.b64d(e2e["t"]), aad=b"auth"))
+        if abs(time.time() - float(inner.get("ts") or 0)) > _sec.MAX_SKEW:
+            raise socketio.exceptions.ConnectionRefusedError("e2e: clock difference too large")
+    except socketio.exceptions.ConnectionRefusedError:
+        raise
+    except Exception:
+        raise socketio.exceptions.ConnectionRefusedError("e2e: handshake failed")
+    _e2e[sid] = channel
+    _sid_sec[sid] = {"e2e": True, "tls": _conn_tls(environ or {})}
+    inner["_e2e"] = True
+    return inner
+
+
+def e2e_forget(sid: str) -> None:
+    _e2e.pop(sid, None)
+    _sid_sec.pop(sid, None)
+
+
+def security_of(client_id: str) -> dict | None:
+    """{"e2e": bool, "tls": bool} of an ONLINE agent, else None."""
+    sid = state.client_id_to_sid.get(client_id) if "state" in globals() else None
+    return _sid_sec.get(sid) if sid else None
+
+
+def _conn_tls(environ: dict) -> bool:
+    scope = environ.get("asgi.scope") or {}
+    return (scope.get("scheme") in ("https", "wss")
+            or str(environ.get("HTTP_X_FORWARDED_PROTO", "")).lower().startswith("https"))
+
+
+# ======================================================================
 # ALLE Socket-Handler zentral absichern
 # ======================================================================
 # In dieser Datei haengen rund 50 Ereignis-Behandlungen. Wirft eine davon
@@ -353,6 +462,35 @@ def verify_handlers() -> dict:
     else:
         print(f"[sockets] {checked} Ereignis-Handler geprueft - Signaturen in Ordnung.")
     return {"checked": checked, "problems": problems}
+
+
+async def _e2e_dispatch(namespace: str, sid, data):
+    """Encrypted event of a device -> decrypt -> the normal handler (its return value is the ack)."""
+    ch = _e2e.get(sid)
+    if ch is None or not isinstance(data, (bytes, bytearray)):
+        return None
+    try:
+        event, args = _sec.unpack(ch.open(bytes(data)))
+    except Exception as e:
+        print(f"[e2e] message from {sid} rejected: {e}")
+        return None
+    if event in ("connect", "disconnect", "x"):
+        return None
+    tok = _e2e_inner.set(True)
+    try:
+        return await _raw_trigger(event, namespace, sid, *args)
+    finally:
+        _e2e_inner.reset(tok)
+
+
+@sio.on("x", namespace="/agent")
+async def _e2e_in(sid, data):
+    return await _e2e_dispatch("/agent", sid, data)
+
+
+@sio.on("x", namespace="/node")
+async def _e2e_in_node(sid, data):
+    return await _e2e_dispatch("/node", sid, data)
 
 
 class ConnectionState:
@@ -1023,8 +1161,14 @@ async def connect(sid, environ, auth):
     ("busy") - der Agent wartet dann selbst und probiert es erneut. Das ist
     deutlich billiger, als hunderte halboffene Verbindungen zu halten.
     """
-    token = (auth or {}).get("token")
+    inner = e2e_accept(sid, environ, auth)
+    token = inner.get("token")
+    if not inner.get("_e2e") and token == AGENT_TOKEN and _sec.require_e2e():
+        e2e_forget(sid)
+        raise socketio.exceptions.ConnectionRefusedError(
+            "encryption required: update the agent (unencrypted agents are blocked on this server)")
     if token != AGENT_TOKEN:
+        e2e_forget(sid)
         raise socketio.exceptions.ConnectionRefusedError("Ungültiges Agent-Token")
 
     if not await _admission_acquire(sid):
@@ -1077,6 +1221,11 @@ async def on_register(sid, payload):
             if not ok:
                 ack["reason"] = reason
             await sio.emit("register-ack", ack, to=sid, namespace="/agent")
+            if ok:
+                # encrypted agents: TLS port + fingerprint (to upgrade the transport);
+                # plain agents: the server key, so an updated agent switches to e2e
+                await sio.emit("security" if sid in _e2e else "e2e-offer", _sec.public_info(),
+                               to=sid, namespace="/agent")
         except Exception:
             pass
         _admission_release(sid)
@@ -1749,6 +1898,7 @@ async def disconnect(sid):
     # sich der Agent angemeldet hat, dürfen die Wartenden nicht bis zum
     # Watchdog-Timeout blockiert bleiben.
     _admission_release(sid)
+    e2e_forget(sid)
     client_id = state.sid_to_client_id.pop(sid, None)
     if client_id:
         state.client_id_to_sid.pop(client_id, None)

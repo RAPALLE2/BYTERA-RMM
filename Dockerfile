@@ -122,7 +122,7 @@ RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
 
 WORKDIR /app/src/backend
 
-EXPOSE 4000
+EXPOSE 4000 4443
 
 # Healthcheck: fragt die Login-Seite ab. Container gilt als "unhealthy",
 # wenn das Backend nicht mehr antwortet.

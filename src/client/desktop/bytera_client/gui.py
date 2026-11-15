@@ -217,7 +217,7 @@ class ClientApp:
         server, token = self.store.get("server"), self.store.load_token()
         if not (server and token):
             return self.show_login()
-        api = Api(server, verify_tls=not self.store.get("insecure", False))
+        api = Api(server, verify_tls=not self.store.get("insecure", False), store=self.store)
 
         def done(res, err):
             if err is None:
@@ -279,7 +279,7 @@ class ClientApp:
 
     def load_realms(self):
         try:
-            api = Api(self.v["server"].get(), verify_tls=not self.v_insecure.get())
+            api = Api(self.v["server"].get(), verify_tls=not self.v_insecure.get(), store=self.store)
         except ApiError:
             return
 
@@ -292,7 +292,7 @@ class ClientApp:
 
     def do_login(self):
         try:
-            api = Api(self.v["server"].get(), verify_tls=not self.v_insecure.get())
+            api = Api(self.v["server"].get(), verify_tls=not self.v_insecure.get(), store=self.store)
         except ApiError as e:
             self.lbl_status.config(text=f"Fehler: {e}")
             return
