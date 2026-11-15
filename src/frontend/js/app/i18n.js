@@ -74,17 +74,17 @@ export async function loadLocale(codeOrLocale) {
 export async function initLanguages(active) {
   await loadAvailableLanguages();
   const want = active || currentLang;
-  await loadLocale("de");                       // Fallback-Sprache immer verfuegbar
-  if (shortOf(want) !== "de") await loadLocale(want);
+  await loadLocale("en");                       // Fallback-Sprache (Englisch) immer verfuegbar
+  if (shortOf(want) !== "en") await loadLocale(want);
   setLanguage(want);
   return currentLang;
 }
 
-let currentLang = shortOf(localStorage.getItem("rmm_lang") || "de");
+let currentLang = shortOf(localStorage.getItem("rmm_lang") || "en");
 
 export function setLanguage(lang) {
   // Akzeptiert Kurzcode ("de") ODER volle Locale ("de_DE").
-  currentLang = shortOf(lang) || "de";
+  currentLang = shortOf(lang) || "en";
   localStorage.setItem("rmm_lang", currentLang);
   if (_localeOfCode[currentLang]) localStorage.setItem("rmm_locale", _localeOfCode[currentLang]);
 }
@@ -97,10 +97,10 @@ export function getLocale() {
   return _localeOfCode[currentLang] || localStorage.getItem("rmm_locale") || currentLang;
 }
 
-// Übersetzt einen Schlüssel. Fällt auf Deutsch zurück, dann auf den Schlüssel
+// Übersetzt einen Schlüssel. Fällt auf Englisch (dann Deutsch) zurück, dann auf den Schlüssel
 // selbst, falls eine Übersetzung fehlt (so sieht man sofort, was noch fehlt).
 export function t(key, vars) {
-  let text = translations[currentLang]?.[key] ?? translations.de?.[key] ?? key;
+  let text = translations[currentLang]?.[key] ?? translations.en?.[key] ?? translations.de?.[key] ?? key;
   // Platzhalter der Form {name} füllen. Ohne das müsste jede Meldung mit
   // Zahlen oder Namen per String-Verkettung gebaut werden - und genau dabei
   // bleibt erfahrungsgemäß die Hälfte unübersetzt.

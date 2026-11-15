@@ -210,9 +210,27 @@ async def on_agent_online(client_id: str) -> None:
     if rec["state"] == "removing":
         await send_to_agent(client_id, "node-remove", {"client_id": client_id})
     elif client_id not in _sid_by_client:
-        # Soll laufen, tut es aber nicht (oder ist veraltet): Agent stellt das sicher.
-        await send_to_agent(client_id, "node-ensure", {
-            "path": "/api/nodes/package", "hash": package_hash(), "version": node_version()})
+        # Soll laufen, ist aber (noch) nicht verbunden. NICHT sofort eingreifen:
+        # Nach einem Backend-Neustart verbindet sich der Agent meist Sekunden VOR
+        # der Node. Ein sofortiges node-ensure liess den Agenten dann auf dem
+        # Host (z.B. PVE) die Node bzw. ihren Dienst anfassen, obwohl sie gleich
+        # von selbst wiederkam. Erst warten, dann nur eingreifen, wenn sie
+        # wirklich fehlt.
+        asyncio.create_task(_ensure_later(client_id))
+
+
+_BOOT = time.time()
+
+
+async def _ensure_later(client_id: str) -> None:
+    await asyncio.sleep(90 if time.time() - _BOOT < 180 else 30)
+    if client_id in _sid_by_client:
+        return                                            # Node ist von selbst zurueck
+    rec = await db.call(db.node_get, client_id)
+    if not rec or rec["state"] == "removing" or not state.is_online(client_id):
+        return
+    await send_to_agent(client_id, "node-ensure", {
+        "path": "/api/nodes/package", "hash": package_hash(), "version": node_version()})
 
 
 @sio.on("node-agent-result", namespace="/agent")

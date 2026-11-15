@@ -341,17 +341,43 @@ async def restart_backend(user: dict = Depends(get_current_user)):
     import sys as _sys
     import asyncio as _asyncio
 
+    # Im Docker-Container mit eingebundenem docker.sock: den EIGENEN Container
+    # ueber die Docker-API neu starten (sauber inkl. Entrypoint). Dieser Weg
+    # betrifft ausschliesslich diesen einen Container - niemals Agenten, Nodes
+    # oder Proxmox. Ohne Docker/Socket: wie bisher den Prozess neu ausfuehren.
+    self_id = None
+    if os.getenv("RMM_INSTALL_KIND", "").lower() == "docker":
+        try:
+            from app import docker_services as _ds
+            info = await _asyncio.to_thread(_ds._self_container)
+            if info and info.get("Id"):
+                self_id = info["Id"]
+        except Exception as e:
+            print(f"[admin] Eigener Container nicht ermittelbar ({e}) - Neustart des Prozesses.")
+
     async def _do_restart():
         await _asyncio.sleep(1.0)
+        if self_id:
+            print(f"[admin] Backend restart: restarting own Docker container {self_id[:12]} ...")
+            try:
+                from app import docker_services as _ds
+                # Der Daemon beendet uns waehrenddessen - Fehler/Timeout hier sind normal.
+                await _asyncio.to_thread(_ds._api, "POST", f"/containers/{self_id}/restart?t=15", None, 5)
+            except Exception:
+                pass
+            await _asyncio.sleep(25)          # noch am Leben? Dann Fallback unten
+            print("[admin] Container restart did not happen - restarting the process instead.")
         try:
             os.execv(_sys.executable, [_sys.executable] + _sys.argv)
         except Exception:
             # Falls re-exec scheitert: hart beenden, damit ein Prozess-Manager
-            # (systemd Restart=always) uns neu startet.
+            # (systemd Restart=always / Docker restart policy) uns neu startet.
             os._exit(0)
 
     _asyncio.create_task(_do_restart())
-    return {"ok": True, "message": "Backend startet in ca. 1 Sekunde neu…"}
+    return {"ok": True, "mode": "container" if self_id else "process",
+            "message": ("Restarting the backend container…" if self_id
+                        else "Backend restarts in about 1 second…")}
 
 
 @router.post("/stop")

@@ -696,19 +696,28 @@ export function renderInventory(body, win) {
   }
 
   // ---------------- CSV-Export ----------------
+  // CSV export is always ENGLISH (column names + values), comma-separated,
+  // ISO dates, dot as decimal separator - independent of the UI language.
+  const CSV_TYPE = {
+    laptop: "Laptop", pc: "PC", monitor: "Monitor", phone: "Smartphone", tablet: "Tablet",
+    printer: "Printer", network: "Network", server: "Server", peripheral: "Peripheral",
+    headset: "Headset", camera: "Camera", tv: "TV/Display", furniture: "Furniture",
+    vehicle: "Vehicle", key: "Key", license: "License", other: "Other",
+  };
+  const CSV_STATUS = { in_use: "In use", storage: "In storage", repair: "In repair", retired: "Retired" };
   function exportCsv() {
     const q = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const head = ["Name", "Typ", "Inventar-Nr.", "Hersteller", "Modell", "Seriennummer", "Status",
-      "Besitzer", "Büro", "Abteilung", "Lager", "Regal", "Kaufdatum", "Kosten", "Garantie bis", "Lieferant", "Notizen"];
+    const head = ["Name", "Type", "Asset tag", "Manufacturer", "Model", "Serial number", "Status",
+      "Owner", "Office", "Department", "Warehouse", "Shelf", "Purchase date", "Cost (EUR)", "Warranty until", "Supplier", "Notes"];
     const rows = visibleItems().map((i) => [
-      i.name, cat(i.category)[1], i.asset_tag, i.manufacturer, i.model, i.serial, STATUS[i.status]?.[1] || i.status,
+      i.name, CSV_TYPE[i.category] || i.category, i.asset_tag, i.manufacturer, i.model, i.serial, CSV_STATUS[i.status] || i.status,
       i.status === "in_use" ? i.owner_name : "",
       i.status === "in_use" ? placeById(i.office_id)?.name || "" : "", i.status === "in_use" ? placeById(i.department_id)?.name || "" : "",
       whById(i.warehouse_id)?.name || "", shelfById(i.shelf_id)?.name || "",
-      i.purchase_date, i.cost != null ? String(i.cost).replace(".", ",") : "", i.warranty_until, i.supplier, i.notes,
-    ].map(q).join(";"));
-    downloadText(`inventar-${new Date().toISOString().slice(0, 10)}.csv`,
-      "﻿" + [head.map(q).join(";"), ...rows].join("\r\n"), "text/csv");
+      i.purchase_date, i.cost != null ? Number(i.cost).toFixed(2) : "", i.warranty_until, i.supplier, i.notes,
+    ].map(q).join(","));
+    downloadText(`inventory-${new Date().toISOString().slice(0, 10)}.csv`,
+      "\ufeff" + [head.map(q).join(","), ...rows].join("\r\n"), "text/csv");
   }
 
   // ---------------- Verdrahtung ----------------

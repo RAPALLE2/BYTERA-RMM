@@ -514,7 +514,7 @@ def init_db() -> None:
             display_name TEXT NOT NULL,
             role TEXT NOT NULL DEFAULT 'admin',   -- 'admin' oder 'viewer' (Vorbereitung für spätere feinere Rechte)
             must_change_pw INTEGER NOT NULL DEFAULT 0,  -- 1 = muss beim nächsten Login neues Passwort setzen
-            language TEXT NOT NULL DEFAULT 'de',   -- Sprach-Präferenz: 'de' oder 'en'
+            language TEXT NOT NULL DEFAULT 'en',   -- Sprach-Präferenz: 'en' (Standard) oder 'de'
             theme TEXT NOT NULL DEFAULT 'dark',    -- 'dark' oder 'light'
             created_at INTEGER NOT NULL
         );
@@ -1371,6 +1371,16 @@ def init_db() -> None:
     # Standard-Skripte (Agent-Update, App-Updates) einmalig einspielen.
     _seed_default_scripts()
 
+    # Einmalig: Englisch wird die Standardsprache (Server-Texte, Skripte,
+    # Oberflaeche). Bestehende Konten werden umgestellt; wer Deutsch will,
+    # waehlt es danach im Profil (bzw. server_language fuer Server-Texte).
+    if not get_setting("lang_default_en_done"):
+        set_setting("server_language", "en")
+        _conn.execute("UPDATE users SET language = 'en' WHERE language = 'de' OR language = '' OR language IS NULL")
+        set_setting("lang_default_en_done", "1")
+        _conn.commit()
+        print("[db] Standardsprache auf Englisch umgestellt (einmalig).")
+
 
 # ------------------------------------------------------------------
 # STANDARD-GRUPPEN
@@ -1993,14 +2003,24 @@ def node_delete(client_id: str) -> None:
     _conn.commit()
 
 
+def _default_user_language() -> str:
+    """Sprache fuer neue Konten = Server-Sprache (Standard: Englisch)."""
+    try:
+        from .i18n import server_lang
+        return server_lang()
+    except Exception:
+        return "en"
+
+
 def create_user(username: str, password_hash: str, display_name: str, role: str, must_change_pw: bool, email: str | None = None) -> dict:
     user_id = _new_id()
     _conn.execute(
         """
-        INSERT INTO users (id, username, password_hash, display_name, role, must_change_pw, created_at, email)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO users (id, username, password_hash, display_name, role, must_change_pw, created_at, email, language)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (user_id, username, password_hash, display_name, role, int(must_change_pw), _now_ms(), (email or "").strip() or None),
+        (user_id, username, password_hash, display_name, role, int(must_change_pw), _now_ms(),
+         (email or "").strip() or None, _default_user_language()),
     )
     _conn.commit()
     # Standard-Gruppen sofort zuweisen, damit ein frisches Konto nicht ohne

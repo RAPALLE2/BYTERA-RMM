@@ -317,7 +317,7 @@ def find_python() -> str | None:
 
 def install_python() -> str | None:
     """Python still nachinstallieren - erst winget, dann offizieller Installer."""
-    say("Python nicht gefunden - installiere es automatisch ...")
+    say("Python not found - installing it automatically ...")
     if shutil.which("winget"):
         run(["winget", "install", "-e", "--id", "Python.Python.3.12", "--silent",
              "--accept-package-agreements", "--accept-source-agreements"], timeout=1800)
@@ -375,7 +375,7 @@ def register_task(pythonw: Path):
     Benutzersitzung (agent.py --screen-helper, siehe session_bridge.py) -
     das geht ausschliesslich aus einem SYSTEM-Prozess heraus.
     """
-    say("Richte Autostart als Dienst ein (SYSTEM, beim Systemstart) ...")
+    say("Setting up autostart as a service (SYSTEM, at system start) ...")
     ps = f"""
 $Action = New-ScheduledTaskAction -Execute "{pythonw}" -Argument '"{INSTALL_DIR}\\agent.py"' -WorkingDirectory "{INSTALL_DIR}"
 $TrigBoot  = New-ScheduledTaskTrigger -AtStartup
@@ -416,7 +416,7 @@ def main() -> int:
         # PyInstaller wird zwar mit --uac-admin gebaut (Windows fragt dann von
         # selbst), aber falls das Manifest fehlt oder umgangen wurde: hier per
         # ShellExecute "runas" neu starten und alle Parameter weiterreichen.
-        say("Starte mit Administratorrechten neu (UAC-Abfrage) ...")
+        say("Restarting with administrator rights (UAC prompt) ...")
         try:
             import ctypes
             params = " ".join(f'"{a}"' if " " in a else a for a in argv)
@@ -480,7 +480,7 @@ def main() -> int:
         say("Python konnte nicht installiert werden - bitte manuell nachholen.")
         return 1
 
-    say("Installiere Python-Abhaengigkeiten (kann 1-2 Minuten dauern) ...")
+    say("Installing Python dependencies (may take 1-2 minutes) ...")
     venv = INSTALL_DIR / "venv"
     run([py, "-m", "venv", str(venv)], timeout=900)
     pip = venv / "Scripts" / "pip.exe"
@@ -496,7 +496,7 @@ def main() -> int:
     remove_legacy()
 
     say("")
-    say("=== FERTIG ===")
+    say("=== DONE ===")
     say("Der Agent laeuft als Dienst unter SYSTEM und startet beim Booten -")
     say("auch wenn sich niemand anmeldet.")
     say(f"Log-Datei bei Problemen: {INSTALL_DIR}\\agent.log")
@@ -592,7 +592,7 @@ if ($Uninstall) {{
     }}
     Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue
     Remove-Legacy
-    Write-Host "Agent entfernt."
+    Write-Host "Agent removed."
     exit 0
 }}
 
@@ -603,7 +603,7 @@ if ($Uninstall) {{
 $id = [Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
         [Security.Principal.WindowsBuiltInRole]::Administrator)) {{
-    Write-Host "Starte mit Administratorrechten neu (UAC-Abfrage) ..." -ForegroundColor Yellow
+    Write-Host "Restarting with administrator rights (UAC prompt) ..." -ForegroundColor Yellow
     $relaunch = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"")
     if ($BackendUrl) {{ $relaunch += @("-BackendUrl", "`"$BackendUrl`"") }}
     if ($Token)      {{ $relaunch += @("-Token", "`"$Token`"") }}
@@ -612,14 +612,14 @@ if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
         $p = Start-Process -FilePath "powershell.exe" -ArgumentList $relaunch -Verb RunAs -PassThru -Wait
         exit $p.ExitCode
     }} catch {{
-        Write-Host "Rechteerhoehung abgelehnt oder fehlgeschlagen." -ForegroundColor Red
+        Write-Host "Elevation denied or failed." -ForegroundColor Red
         exit 1
     }}
 }}
 
 if (-not $BackendUrl) {{ $BackendUrl = $env:RMM_BACKEND_URL }}
 if (-not $BackendUrl) {{ $BackendUrl = Read-Host "Adresse des RMM-Servers (z.B. https://rmm.firma.de)" }}
-if (-not $BackendUrl) {{ Write-Host "Keine Backend-Adresse angegeben." -ForegroundColor Red; exit 1 }}
+if (-not $BackendUrl) {{ Write-Host "No backend address given." -ForegroundColor Red; exit 1 }}
 if ($BackendUrl -notmatch "^https?://") {{ $BackendUrl = "https://$BackendUrl" }}
 $BackendUrl = $BackendUrl.TrimEnd("/")
 if (-not $Token) {{ $Token = $env:RMM_ENROLLMENT_TOKEN }}
@@ -627,7 +627,7 @@ if (-not $Token) {{ $Token = $env:RMM_ENROLLMENT_TOKEN }}
 # --- 1. Python sicherstellen ---------------------------------------------
 $python = (Get-Command python -ErrorAction SilentlyContinue).Source
 if (-not $python) {{
-    Write-Host "Python nicht gefunden - installiere es automatisch ..." -ForegroundColor Yellow
+    Write-Host "Python not found - installing it automatically ..." -ForegroundColor Yellow
     if (Get-Command winget -ErrorAction SilentlyContinue) {{
         winget install -e --id Python.Python.3.12 --silent --accept-package-agreements --accept-source-agreements
     }} else {{
@@ -638,7 +638,7 @@ if (-not $python) {{
     $env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")
     $python = (Get-Command python -ErrorAction SilentlyContinue).Source
 }}
-if (-not $python) {{ Write-Host "Python fehlt weiterhin - bitte manuell installieren." -ForegroundColor Red; exit 1 }}
+if (-not $python) {{ Write-Host "Python is still missing - please install it manually." -ForegroundColor Red; exit 1 }}
 
 # --- 2. Dateien kopieren (vorhandene .env behalten!) ----------------------
 Stop-Agent
@@ -661,16 +661,16 @@ foreach ($line in (Get-Content "$InstallDir\\.env")) {{
 Set-Content "$InstallDir\\.env" ($envLines -join "`n")
 
 # --- 3. Abhaengigkeiten ---------------------------------------------------
-Write-Host "Installiere Python-Abhaengigkeiten (kann 1-2 Minuten dauern) ..."
+Write-Host "Installing Python dependencies (may take 1-2 minutes) ..."
 & $python -m venv "$InstallDir\\venv"
 & "$InstallDir\\venv\\Scripts\\python.exe" -m pip install --upgrade pip --quiet
 & "$InstallDir\\venv\\Scripts\\pip.exe" install -r "$InstallDir\\requirements.txt" --quiet
-if ($LASTEXITCODE -ne 0) {{ Write-Host "FEHLER bei der Paket-Installation." -ForegroundColor Red; exit 1 }}
+if ($LASTEXITCODE -ne 0) {{ Write-Host "ERROR during package installation." -ForegroundColor Red; exit 1 }}
 
 # --- 4. Autostart als Dienst (SYSTEM, beim Systemstart) -------------------
 # So laeuft der Agent auch ohne Anmeldung (Server). Die Bildschirmaufnahme
 # startet bei Bedarf einen Helfer in der aktiven Benutzersitzung.
-Write-Host "Richte Autostart als Dienst ein (SYSTEM, beim Systemstart) ..."
+Write-Host "Setting up autostart as a service (SYSTEM, at system start) ..."
 $Action    = New-ScheduledTaskAction -Execute "$InstallDir\\venv\\Scripts\\pythonw.exe" -Argument "`"$InstallDir\\agent.py`"" -WorkingDirectory $InstallDir
 $TrigBoot  = New-ScheduledTaskTrigger -AtStartup
 $TrigWatch = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
@@ -682,9 +682,9 @@ Start-ScheduledTask -TaskName $TaskName
 Remove-Legacy
 
 Write-Host ""
-Write-Host "=== FERTIG ===" -ForegroundColor Green
-Write-Host "Der Agent laeuft als Dienst unter SYSTEM und startet beim Booten."
-Write-Host "Log-Datei bei Problemen: $InstallDir\\agent.log"
+Write-Host "=== DONE ===" -ForegroundColor Green
+Write-Host "The agent runs as a service under SYSTEM and starts at boot."
+Write-Host "Log file for troubleshooting: $InstallDir\\agent.log"
 '''
 
 
@@ -714,7 +714,7 @@ $ErrorActionPreference = "Stop"
 $id = [Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
         [Security.Principal.WindowsBuiltInRole]::Administrator)) {{
-    Write-Host "Starte mit Administratorrechten neu (UAC-Abfrage) ..." -ForegroundColor Yellow
+    Write-Host "Restarting with administrator rights (UAC prompt) ..." -ForegroundColor Yellow
     $relaunch = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"")
     if ($BackendUrl) {{ $relaunch += @("-BackendUrl", "`"$BackendUrl`"") }}
     if ($Token)      {{ $relaunch += @("-Token", "`"$Token`"") }}
@@ -723,7 +723,7 @@ if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
         $p = Start-Process -FilePath "powershell.exe" -ArgumentList $relaunch -Verb RunAs -PassThru -Wait
         exit $p.ExitCode
     }} catch {{
-        Write-Host "Rechteerhoehung abgelehnt oder fehlgeschlagen." -ForegroundColor Red
+        Write-Host "Elevation denied or failed." -ForegroundColor Red
         exit 1
     }}
 }}
@@ -972,8 +972,8 @@ if [ -z "$URL" ] && [ -t 0 ]; then
   read -r -p "Adresse des RMM-Servers (z.B. https://rmm.firma.de): " URL
 fi
 if [ -z "$URL" ]; then
-  echo "Keine Backend-Adresse gesetzt. Nachtraeglich in $INSTALL_DIR/.env eintragen"
-  echo "und dann: systemctl restart bytera-agent"
+  echo "No backend address set. Add it later in $INSTALL_DIR/.env"
+  echo "and then run: systemctl restart bytera-agent"
 else
   sed -i "s|^BACKEND_URL=.*|BACKEND_URL=${{URL%/}}|" "$INSTALL_DIR/.env" 2>/dev/null || true
 fi
@@ -1002,7 +1002,7 @@ fi
 # --- Umbenennung: Altinstallation (RAPALLE.net RMM) uebernehmen -----------
 LEGACY_DIR="/opt/rapalle-rmm-agent"
 if [ -d "$LEGACY_DIR" ] || [ -f /etc/systemd/system/rapalle-agent.service ]; then
-  echo "Altinstallation (RAPALLE.net RMM) gefunden - uebernehme Zuordnung und entferne sie ..."
+  echo "Legacy install (RAPALLE.net RMM) found - taking over its identity and removing it ..."
   systemctl disable --now rapalle-agent 2>/dev/null || true
   systemctl disable --now rapalle-node 2>/dev/null || true
   pkill -f "$LEGACY_DIR/" 2>/dev/null || true
@@ -1052,7 +1052,7 @@ UNIT
 
 systemctl daemon-reload
 systemctl enable --now bytera-agent
-echo "Fertig - Status: systemctl status bytera-agent"
+echo "Done - status: systemctl status bytera-agent"
 '''
 
 
@@ -1216,20 +1216,20 @@ INSTALL_DIR="{LINUX_INSTALL_DIR}"
 # Leben, sonst waeren sie nach dem sudo-Wechsel weg.
 if [ "$(id -u)" != "0" ]; then
   if command -v sudo >/dev/null 2>&1; then
-    echo "Starte mit Rootrechten neu (sudo) ..."
+    echo "Restarting with root privileges (sudo) ..."
     exec sudo -E "$0" "$@"
   fi
-  echo "Bitte als root ausfuehren (sudo ist nicht installiert)."; exit 1
+  echo "Please run as root (sudo is not installed)."; exit 1
 fi
 
 if [ "$1" = "--uninstall" ]; then
 {LINUX_REMOVE.replace("#!/bin/bash", "").rstrip()}
   rm -rf "$INSTALL_DIR"
-  echo "Agent entfernt."
+  echo "Agent removed."
   exit 0
 fi
 
-echo "Entpacke Agent nach $INSTALL_DIR ..."
+echo "Unpacking agent to $INSTALL_DIR ..."
 mkdir -p "$INSTALL_DIR"
 # Vorhandene .env (Geraete-Zuordnung!) sichern.
 KEEP=""
@@ -1285,7 +1285,7 @@ def build_tgz(out: Path, backend_url: str, token: str) -> Path:
             # Rootrechte: notfalls per sudo neu starten (-E haelt RMM_*-Variablen).
             'if [ "$(id -u)" != "0" ]; then\n'
             '  if command -v sudo >/dev/null 2>&1; then exec sudo -E "$0" "$@"; fi\n'
-            '  echo "Bitte als root ausfuehren (sudo fehlt)."; exit 1\n'
+            '  echo "Please run as root (sudo is missing)."; exit 1\n'
             'fi\n'
             'HERE="$(cd "$(dirname "$0")" && pwd)"\n'
             f'INSTALL_DIR="{LINUX_INSTALL_DIR}"\n'
@@ -1306,9 +1306,9 @@ def build_tgz(out: Path, backend_url: str, token: str) -> Path:
                 '# Rootrechte: notfalls per sudo neu starten.\n'
                 'if [ "$(id -u)" != "0" ]; then\n'
                 '  if command -v sudo >/dev/null 2>&1; then exec sudo -E "$0" "$@"; fi\n'
-                '  echo "Bitte als root ausfuehren (sudo fehlt)."; exit 1\n'
+                '  echo "Please run as root (sudo is missing)."; exit 1\n'
                 'fi\n',
-            ).replace("exit 0", f'rm -rf {LINUX_INSTALL_DIR}\necho "Agent entfernt."\nexit 0'),
+            ).replace("exit 0", f'rm -rf {LINUX_INSTALL_DIR}\necho "Agent removed."\nexit 0'),
             encoding="utf-8",
         )
         os.chmod(install, 0o755)

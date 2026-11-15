@@ -32,9 +32,12 @@ from __future__ import annotations
 import os
 
 # Unterstuetzte Sprachen. Bei Erweiterung: LANGS ergaenzen und in TEXTS einen
-# weiteren Block anlegen - fehlende Schluessel fallen automatisch auf DE zurueck.
+# weiteren Block anlegen - fehlende Schluessel fallen automatisch auf EN zurueck.
+# Standard ist Englisch (Server-Texte, Skripte, neue Benutzer); Deutsch ist
+# eine Uebersetzung, die pro Benutzer bzw. per Einstellung server_language
+# gewaehlt werden kann.
 LANGS = ("de", "en")
-DEFAULT_LANG = "de"
+DEFAULT_LANG = "en"
 
 
 def _norm(lang: str | None) -> str:
@@ -50,7 +53,7 @@ def server_lang() -> str:
     Sprache fuer Server-Logs und alles ohne Benutzerbezug.
 
     Reihenfolge: Einstellung `server_language` aus der Datenbank, sonst die
-    Umgebungsvariable RMM_LANG, sonst Deutsch. Der Import von db erfolgt
+    Umgebungsvariable RMM_LANG, sonst Englisch. Der Import von db erfolgt
     absichtlich INNERHALB der Funktion: i18n wird sehr frueh importiert
     (auch von db selbst), ein Import auf Modulebene wuerde einen Zirkel
     erzeugen.

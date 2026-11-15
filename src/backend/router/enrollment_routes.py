@@ -289,17 +289,17 @@ def enrollment_landing_page(token: str, request: Request):
                 f'{p["icon"]} {p["label"]} ({p["size"] // 1024} KB)</a><br>'
                 f'<code>{hint}</code></p>'
             )
-        packages_block = ("<h3>Option C — Fertiges Installationspaket</h3>"
+        packages_block = ("<h3>Option C — Ready-made installer package</h3>"
                           + "".join(rows))
     else:
         packages_block = ""
 
     html = f"""
     <!DOCTYPE html>
-    <html lang="de">
+    <html lang="en">
     <head>
       <meta charset="UTF-8">
-      <title>BYTERA RMM — Agent-Installation</title>
+      <title>BYTERA RMM — Agent installation</title>
       <style>
         body {{ font-family: system-ui, sans-serif; background: #0c1420; color: #dbe4f0;
                 max-width: 720px; margin: 40px auto; padding: 0 20px; line-height: 1.5; }}
@@ -313,31 +313,31 @@ def enrollment_landing_page(token: str, request: Request):
       </style>
     </head>
     <body>
-      <h1>BYTERA RMM — Agent installieren</h1>
-      <p>Dieser Link installiert den Überwachungs-Agenten auf diesem Rechner
-         und verbindet ihn automatisch mit deinem RMM-Dashboard.</p>
+      <h1>BYTERA RMM — Install the agent</h1>
+      <p>This link installs the monitoring agent on this computer
+         and connects it to your RMM dashboard automatically.</p>
 
-      <h3>Option A — Direkt herunterladen</h3>
-      <a class="btn" id="dl" href="/enroll/{token}/agent.zip">Agent herunterladen (.zip)</a>
-      <p class="note">Danach: entpacken, Anleitung in der beiliegenden README.txt befolgen.</p>
+      <h3>Option A — Download directly</h3>
+      <a class="btn" id="dl" href="/enroll/{token}/agent.zip">Download agent (.zip)</a>
+      <p class="note">Then: unpack it and follow the included README.txt.</p>
 
-      <h3>Option B — Ein-Zeiler (Linux)</h3>
+      <h3>Option B — One-liner (Linux)</h3>
       <pre>curl -sSL {backend_url}/enroll/{token}/install.sh | bash</pre>
 
-      <h3>Option B — Ein-Zeiler (Windows PowerShell, als Administrator)</h3>
+      <h3>Option B — One-liner (Windows PowerShell, as administrator)</h3>
       <pre>iwr {backend_url}/enroll/{token}/install.ps1 -UseBasicParsing | iex</pre>
 
       {packages_block}
 
-      <p class="note">Dieser Link ist einmalig gültig und läuft nach der ersten
-         erfolgreichen Verbindung des Agenten automatisch ab.</p>
+      <p class="note">This link is single-use and expires automatically after the
+         agent has connected successfully for the first time.</p>
 
       <script>
         // Nach Klick auf den Download-Button kurz Bescheid geben,
         // dass die Seite jetzt geschlossen werden kann.
         document.getElementById('dl').addEventListener('click', function () {{
           setTimeout(function () {{
-            document.body.innerHTML = '<h1>Fertig!</h1><p>Der Download wurde gestartet. Du kannst dieses Fenster jetzt schließen.</p>';
+            document.body.innerHTML = '<h1>Done!</h1><p>The download has started. You can close this window now.</p>';
             try {{ window.close(); }} catch (e) {{}}
           }}, 800);
         }});
@@ -382,7 +382,7 @@ def _build_agent_zip_bytes(backend_url: str, enrollment_token: str = "") -> io.B
                 break
         zf.writestr(
             "agent/README.txt",
-            "1. BACKEND_URL in .env auf die echte Adresse deines Servers anpassen\n"
+            "1. Set BACKEND_URL in .env to the real address of your server\n"
             "2. pip install -r requirements.txt\n"
             "3. python agent.py\n",
         )
@@ -424,13 +424,13 @@ INSTALL_DIR="/opt/bytera-rmm-agent"
 # selbst mit sudo neu ("-E" haelt RMM_*-Variablen am Leben).
 if [ "$(id -u)" != "0" ]; then
   if [ -f "$0" ] && command -v sudo >/dev/null 2>&1; then
-    echo "Starte mit Rootrechten neu (sudo) ..."
+    echo "Restarting with root privileges (sudo) ..."
     exec sudo -E "$0" "$@"
   fi
   if ! command -v sudo >/dev/null 2>&1; then
-    echo "Bitte als root ausfuehren (sudo ist nicht installiert)."; exit 1
+    echo "Please run as root (sudo is not installed)."; exit 1
   fi
-  echo "Hinweis: Aufruf ohne Rootrechte - die einzelnen Schritte nutzen sudo."
+  echo "Note: started without root - the individual steps use sudo."
 fi
 
 # --- Systemvoraussetzungen automatisch installieren -----------------------
@@ -461,12 +461,12 @@ ensure_pkgs() {{
   elif command -v apk >/dev/null 2>&1; then
     sudo apk add --no-cache python3 py3-pip unzip curl || true
   else
-    echo "WARNUNG: Kein bekannter Paketmanager gefunden - stelle sicher, dass python3-venv, pip, unzip und curl installiert sind."
+    echo "WARNING: no known package manager found - make sure python3-venv, pip, unzip and curl are installed."
   fi
 }}
 ensure_pkgs
 
-echo "Lade Agent herunter..."
+echo "Downloading agent..."
 sudo mkdir -p "$INSTALL_DIR"
 
 # --- Umbenennung: Altinstallation (RAPALLE.net RMM) uebernehmen -----------
@@ -475,7 +475,7 @@ sudo mkdir -p "$INSTALL_DIR"
 # Dashboard KEIN neuer Client wird.
 LEGACY_DIR="/opt/rapalle-rmm-agent"
 if [ -d "$LEGACY_DIR" ] || [ -f /etc/systemd/system/rapalle-agent.service ]; then
-  echo "Altinstallation (RAPALLE.net RMM) gefunden - ziehe nach $INSTALL_DIR um..."
+  echo "Legacy install (RAPALLE.net RMM) found - migrating to $INSTALL_DIR..."
   sudo systemctl disable --now rapalle-agent 2>/dev/null || true
   sudo systemctl disable --now rapalle-node 2>/dev/null || true
   sudo pkill -f "$LEGACY_DIR/" 2>/dev/null || true
@@ -498,7 +498,7 @@ sudo cp -r /tmp/bytera-agent-extract/agent/. "$INSTALL_DIR/"
 # kennt die Backend-Adresse ja schon, weil er sie gerade aufgerufen hat)
 sudo sed -i "s#BACKEND_URL=.*#BACKEND_URL={backend_url}#" "$INSTALL_DIR/.env"
 
-echo "Installiere Python-Abhängigkeiten..."
+echo "Installing Python dependencies..."
 cd "$INSTALL_DIR"
 # venv anlegen; falls das trotz Paketinstallation scheitert, ohne venv direkt
 # ins System installieren (--break-system-packages für PEP-668-Distributionen).
@@ -507,13 +507,13 @@ if sudo python3 -m venv venv; then
   sudo ./venv/bin/pip install --quiet -r requirements.txt
   PYEXEC="$INSTALL_DIR/venv/bin/python"
 else
-  echo "venv nicht verfügbar - installiere Abhängigkeiten systemweit..."
+  echo "venv not available - installing dependencies system-wide..."
   sudo python3 -m pip install --quiet --break-system-packages -r requirements.txt \
     || sudo python3 -m pip install --quiet -r requirements.txt
   PYEXEC="$(command -v python3)"
 fi
 
-echo "Richte Autostart-Dienst ein..."
+echo "Setting up the autostart service..."
 sudo tee /etc/systemd/system/bytera-agent.service > /dev/null <<EOF
 [Unit]
 Description=BYTERA RMM Agent
@@ -541,17 +541,17 @@ sudo systemctl enable --now bytera-agent
 FAIL=0
 
 echo ""
-echo "--- Pruefe Installation ---"
+echo "--- Checking installation ---"
 
 # 1. Ist die Backend-Adresse von DIESEM Geraet aus ueberhaupt erreichbar?
 #    Das faengt den haeufigsten Fall ab: eine BACKEND_URL mit internem Port,
 #    die hinter einem Reverse-Proxy/Cloudflare von aussen nicht existiert.
 if curl -fsS --max-time 15 "{backend_url}/api/agent/version" >/dev/null 2>&1; then
-  echo "[OK]     Backend erreichbar: {backend_url}"
+  echo "[OK]     Backend reachable: {backend_url}"
 else
-  echo "[FEHLER] Backend NICHT erreichbar: {backend_url}"
-  echo "         Der Agent kann sich so nicht anmelden."
-  echo "         Pruefe im Dashboard unter Einstellungen die 'Server-URL'."
+  echo "[ERROR]  Backend NOT reachable: {backend_url}"
+  echo "         The agent cannot register like this."
+  echo "         Check the 'Server URL' in the dashboard settings."
   FAIL=1
 fi
 
@@ -559,30 +559,30 @@ fi
 #    (fehlende Abhaengigkeit, falsches Token) zeigt sich genau hier.
 sleep 6
 if sudo systemctl is-active --quiet bytera-agent; then
-  echo "[OK]     Dienst bytera-agent laeuft"
+  echo "[OK]     Service bytera-agent is running"
 else
-  echo "[FEHLER] Dienst bytera-agent laeuft NICHT (mehr)"
+  echo "[ERROR]  Service bytera-agent is NOT running (anymore)"
   FAIL=1
 fi
 
 # 3. Was sagt der Agent selbst? Seine letzten Zeilen sind aussagekraeftiger
 #    als jede Vermutung des Installers.
 if sudo journalctl -u bytera-agent -n 15 --no-pager 2>/dev/null | grep -qiE "Ungueltiges Agent-Token|Ungültiges Agent-Token|Invalid.*token"; then
-  echo "[FEHLER] Das Backend lehnt das AGENT_TOKEN ab."
+  echo "[ERROR]  The backend rejects the AGENT_TOKEN."
   FAIL=1
 fi
 
 echo ""
 if [ "$FAIL" = "0" ]; then
-  echo "Fertig! Der Agent laeuft und verbindet sich mit {backend_url}"
-  echo "Er sollte binnen einer Minute im Dashboard erscheinen."
+  echo "Done! The agent is running and connecting to {backend_url}"
+  echo "It should appear in the dashboard within a minute."
 else
-  echo "INSTALLATION UNVOLLSTAENDIG - der Agent wird NICHT im Dashboard erscheinen."
-  echo "Letzte Meldungen des Agenten:"
+  echo "INSTALLATION INCOMPLETE - the agent will NOT appear in the dashboard."
+  echo "Last agent messages:"
   sudo journalctl -u bytera-agent -n 25 --no-pager 2>/dev/null || \
     sudo tail -n 25 "$INSTALL_DIR/agent.log" 2>/dev/null || true
 fi
-echo "Status jederzeit pruefen mit: sudo systemctl status bytera-agent"
+echo "Check status any time with: sudo systemctl status bytera-agent"
 exit $FAIL
 """
     return PlainTextResponse(script, media_type="text/x-sh")
@@ -610,7 +610,7 @@ $InstallDir = "C:\\Program Files\\ByteraRmmAgent"
 $id = [Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
         [Security.Principal.WindowsBuiltInRole]::Administrator)) {{
-    Write-Host "Starte mit Administratorrechten neu (UAC-Abfrage) ..." -ForegroundColor Yellow
+    Write-Host "Restarting with administrator rights (UAC prompt) ..." -ForegroundColor Yellow
     $cmd = "iwr '{backend_url}/enroll/{token}/install.ps1' -UseBasicParsing | iex"
     $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
     try {{
@@ -618,7 +618,7 @@ if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
              -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $enc)
         exit $p.ExitCode
     }} catch {{
-        Write-Host "Rechteerhoehung abgelehnt - bitte PowerShell als Administrator oeffnen." -ForegroundColor Red
+        Write-Host "Elevation denied - please open PowerShell as administrator." -ForegroundColor Red
         exit 1
     }}
 }}
@@ -626,7 +626,7 @@ if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
 # --- 1. Pruefen ob Python vorhanden ist, sonst automatisch installieren ---
 $python = Get-Command python -ErrorAction SilentlyContinue
 if (-not $python) {{
-    Write-Host "Python nicht gefunden - installiere es automatisch..." -ForegroundColor Yellow
+    Write-Host "Python not found - installing it automatically..." -ForegroundColor Yellow
     try {{
         # Bevorzugt ueber winget (auf aktuellen Windows-Versionen vorhanden)
         if (Get-Command winget -ErrorAction SilentlyContinue) {{
@@ -640,9 +640,9 @@ if (-not $python) {{
         # PATH der aktuellen Sitzung aktualisieren
         $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
     }} catch {{
-        Write-Host "Automatische Python-Installation fehlgeschlagen." -ForegroundColor Red
-        Write-Host "Bitte Python manuell installieren: https://www.python.org/downloads/" -ForegroundColor Red
-        Write-Host "(Beim Installieren 'Add Python to PATH' anhaken!) Danach dieses Skript erneut ausfuehren."
+        Write-Host "Automatic Python installation failed." -ForegroundColor Red
+        Write-Host "Please install Python manually: https://www.python.org/downloads/" -ForegroundColor Red
+        Write-Host "(Tick 'Add Python to PATH' during setup!) Then run this script again."
         exit 1
     }}
 }}
@@ -656,7 +656,7 @@ New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 $LegacyDir = "C:\\Program Files\\RapalleRmmAgent"
 $LegacyFound = (Test-Path $LegacyDir) -or [bool](Get-ScheduledTask -TaskName "RapalleRmmAgent" -ErrorAction SilentlyContinue)
 if ($LegacyFound) {{
-    Write-Host "Altinstallation (RAPALLE.net RMM) gefunden - ziehe nach $InstallDir um..."
+    Write-Host "Legacy install (RAPALLE.net RMM) found - migrating to $InstallDir..."
     foreach ($t in @("RapalleRmmAgent", "RapalleNode")) {{
         try {{ Stop-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue }} catch {{}}
         try {{ Unregister-ScheduledTask -TaskName $t -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
@@ -670,7 +670,7 @@ if ($LegacyFound) {{
         Copy-Item "$LegacyDir\\.device-id" "$InstallDir\\.device-id" -Force
     }}
 }}
-Write-Host "Lade Agent herunter..."
+Write-Host "Downloading agent..."
 Invoke-WebRequest -Uri "{backend_url}/enroll/{token}/agent.zip" -OutFile "$env:TEMP\\bytera-agent.zip"
 if (Test-Path "$env:TEMP\\bytera-agent-extract") {{ Remove-Item -Recurse -Force "$env:TEMP\\bytera-agent-extract" }}
 Expand-Archive -Path "$env:TEMP\\bytera-agent.zip" -DestinationPath "$env:TEMP\\bytera-agent-extract" -Force
@@ -679,7 +679,7 @@ Expand-Archive -Path "$env:TEMP\\bytera-agent.zip" -DestinationPath "$env:TEMP\\
 # WICHTIG: Sonst laeuft nach dem Update weiter die ALTE agent.py im Speicher
 # (neue Funktionen wie das interaktive Terminal fehlen dann). Erst Task
 # anhalten, dann alle pythonw/python-Prozesse killen, die agent.py ausfuehren.
-Write-Host "Stoppe evtl. laufenden Agenten..."
+Write-Host "Stopping a running agent (if any)..."
 try {{ Stop-ScheduledTask -TaskName "ByteraRmmAgent" -ErrorAction SilentlyContinue }} catch {{}}
 try {{
     Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" |
@@ -694,12 +694,12 @@ Copy-Item -Path "$env:TEMP\\bytera-agent-extract\\agent\\*" -Destination $Instal
 (Get-Content "$InstallDir\\.env") -replace 'BACKEND_URL=.*', 'BACKEND_URL={backend_url}' | Set-Content "$InstallDir\\.env"
 
 # --- 3. Python-Abhaengigkeiten installieren ---
-Write-Host "Installiere Python-Abhaengigkeiten (kann 1-2 Minuten dauern)..."
+Write-Host "Installing Python dependencies (may take 1-2 minutes)..."
 python -m venv "$InstallDir\\venv"
 & "$InstallDir\\venv\\Scripts\\python.exe" -m pip install --upgrade pip --quiet
 & "$InstallDir\\venv\\Scripts\\pip.exe" install -r "$InstallDir\\requirements.txt"
 if ($LASTEXITCODE -ne 0) {{
-    Write-Host "FEHLER bei der Paket-Installation! Der Agent kann so nicht starten." -ForegroundColor Red
+    Write-Host "ERROR during package installation! The agent cannot start like this." -ForegroundColor Red
     exit 1
 }}
 
@@ -716,7 +716,7 @@ if ($LASTEXITCODE -ne 0) {{
 # SYSTEM darf das (WTSQueryUserToken) - der Dienst-Betrieb ist also sogar
 # Voraussetzung dafuer.
 # pythonw.exe = Python OHNE Konsolenfenster -> laeuft unsichtbar im Hintergrund.
-Write-Host "Richte Autostart als Dienst ein (SYSTEM, startet beim Booten)..."
+Write-Host "Setting up autostart as a service (SYSTEM, starts at boot)..."
 $Action = New-ScheduledTaskAction -Execute "$InstallDir\\venv\\Scripts\\pythonw.exe" -Argument "`"$InstallDir\\agent.py`"" -WorkingDirectory $InstallDir
 # Zwei Trigger: beim Systemstart + alle 5 Minuten als Wiederanlauf-Netz.
 # MultipleInstances=IgnoreNew verhindert dabei doppelte Agenten.
@@ -733,24 +733,24 @@ Start-ScheduledTask -TaskName "ByteraRmmAgent"
 Start-Sleep -Seconds 3
 $chk = Get-ScheduledTask -TaskName "ByteraRmmAgent" -ErrorAction SilentlyContinue
 if ($chk -and $chk.Principal.UserId -notmatch "SYSTEM") {{
-    Write-Host "WARNUNG: Autostart laeuft nicht als SYSTEM - der Agent startet dann nur nach Anmeldung." -ForegroundColor Yellow
+    Write-Host "WARNING: autostart is not running as SYSTEM - the agent will only start after a user logs on." -ForegroundColor Yellow
 }}
 
 # --- 6. Elevated Wartungs-Tasks (Update/Uninstall als SYSTEM, per Event) ---
 # Rueckfallebene: der Agent laeuft zwar bereits als SYSTEM, aber diese Tasks
 # erlauben Update/Uninstall auch dann, wenn der Agent-Prozess selbst gerade
 # nicht mehr laeuft oder (Altinstallation) nur in einer Benutzersitzung haengt.
-Write-Host "Richte elevated Wartungs-Tasks (Update/Uninstall) ein..."
-try {{ iwr "{backend_url}/agent-dist/elevate.ps1" -UseBasicParsing | iex }} catch {{ Write-Host "  (Wartungs-Tasks konnten nicht eingerichtet werden: $_)" }}
+Write-Host "Setting up elevated maintenance tasks (update/uninstall)..."
+try {{ iwr "{backend_url}/agent-dist/elevate.ps1" -UseBasicParsing | iex }} catch {{ Write-Host "  (maintenance tasks could not be set up: $_)" }}
 
 Write-Host ""
-Write-Host "=== FERTIG! ===" -ForegroundColor Green
-Write-Host "Der Agent laeuft jetzt als Dienst unter SYSTEM und startet beim Booten -"
-Write-Host "auch wenn sich NIEMAND anmeldet (Server)."
-Write-Host "Du kannst dieses Fenster schliessen - der Agent laeuft weiter."
-Write-Host "Der Client sollte in wenigen Sekunden im Dashboard erscheinen."
+Write-Host "=== DONE! ===" -ForegroundColor Green
+Write-Host "The agent now runs as a service under SYSTEM and starts at boot -"
+Write-Host "even if NOBODY logs on (servers)."
+Write-Host "You can close this window - the agent keeps running."
+Write-Host "The client should appear in the dashboard within a few seconds."
 Write-Host ""
-Write-Host "(Log-Datei bei Problemen: $InstallDir\\agent.log)"
+Write-Host "(Log file for troubleshooting: $InstallDir\\agent.log)"
 
 # --- Umbenennung: Reste der Altinstallation (RAPALLE.net RMM) entfernen ----
 # Bewusst ganz am Ende: das alte Wartungs-Task kann genau dieses Skript
@@ -1296,19 +1296,19 @@ def agent_elevate_ps1(request: Request):
     template = r'''$ErrorActionPreference = "Continue"
 $Backend = "__BACKEND__"
 
-Write-Host "ByteraRMM: richte elevated Update/Uninstall (SYSTEM, per Event ausgeloest) ein..."
+Write-Host "ByteraRMM: setting up elevated update/uninstall (SYSTEM, event-triggered)..."
 
 # Event-Quelle anlegen (idempotent). Der Agent schreibt spaeter Events dieser
 # Quelle; die SYSTEM-Tasks werden dadurch getriggert.
 try {
     if (-not [System.Diagnostics.EventLog]::SourceExists("ByteraRMM")) {
         New-EventLog -LogName Application -Source "ByteraRMM" -ErrorAction Stop
-        Write-Host "  Event-Quelle 'ByteraRMM' angelegt."
+        Write-Host "  Event source 'ByteraRMM' created."
     } else {
-        Write-Host "  Event-Quelle 'ByteraRMM' vorhanden."
+        Write-Host "  Event source 'ByteraRMM' exists."
     }
 } catch {
-    Write-Host "  WARNUNG: Event-Quelle konnte nicht angelegt werden: $_"
+    Write-Host "  WARNING: event source could not be created: $_"
 }
 
 function Register-RmmSystemTask($name, $eventId, $scriptName) {
@@ -1366,7 +1366,7 @@ function Register-RmmSystemTask($name, $eventId, $scriptName) {
         Write-Host "  -> Task '$name' (EventID $eventId) OK."
         return $true
     } else {
-        Write-Host "  -> Task '$name' FEHLER: $out"
+        Write-Host "  -> Task '$name' ERROR: $out"
         return $false
     }
 }
@@ -1376,11 +1376,11 @@ $ok2 = Register-RmmSystemTask "ByteraRmmUninstall" 811 "uninstall.ps1"
 
 Write-Host ""
 if ($ok1 -and $ok2) {
-    Write-Host "FERTIG. Dashboard-Update/-Uninstall funktionieren jetzt auch bei NICHT-Admin-Agent." -ForegroundColor Green
+    Write-Host "DONE. Dashboard update/uninstall now also work for a NON-admin agent." -ForegroundColor Green
 } else {
-    Write-Host "ACHTUNG: Mindestens ein Task konnte nicht angelegt werden. Bitte dieses Fenster ALS ADMINISTRATOR ausfuehren." -ForegroundColor Yellow
+    Write-Host "ATTENTION: at least one task could not be created. Please run this window AS ADMINISTRATOR." -ForegroundColor Yellow
 }
-Write-Host "Pruefen mit:  schtasks /query /tn ByteraRmmUninstall"
+Write-Host "Check with:  schtasks /query /tn ByteraRmmUninstall"
 '''
     script = template.replace("__BACKEND__", backend_url)
     return PlainTextResponse(script, media_type="text/plain")
@@ -1406,7 +1406,7 @@ def agent_uninstall_sh(request: Request, lang: str = ""):
 # Prozesse killen -> Programmordner loeschen (mit Wiederholung).
 INSTALL_DIR="/opt/bytera-rmm-agent"
 
-echo "1) Stoppe und entferne Agent-Dienst..."
+echo "1) Stopping and removing the agent service..."
 sudo systemctl stop bytera-agent 2>/dev/null || true
 sudo systemctl disable bytera-agent 2>/dev/null || true
 sudo systemctl kill bytera-agent 2>/dev/null || true
@@ -1423,7 +1423,7 @@ sudo systemctl daemon-reload 2>/dev/null || true
 sudo pkill -9 -f "$LEGACY_DIR" 2>/dev/null || true
 sudo rm -rf "$LEGACY_DIR" 2>/dev/null || true
 
-echo "2) Beende Agent-Prozesse..."
+echo "2) Ending agent processes..."
 # Mehrere Muster, damit der Prozess sicher getroffen wird (venv-Pfad, agent.py,
 # Installationsordner). Zwei Runden, dann Kontrolle.
 for i in 1 2 3; do
@@ -1434,7 +1434,7 @@ for i in 1 2 3; do
   if ! pgrep -f "$INSTALL_DIR/agent.py" >/dev/null 2>&1; then break; fi
 done
 
-echo "3) Loesche alle Agent-Daten..."
+echo "3) Deleting all agent data..."
 # Bis zu 5 Versuche, falls eine Datei noch kurz gehalten wird.
 for i in 1 2 3 4 5; do
   sudo rm -rf "$INSTALL_DIR" 2>/dev/null || true
@@ -1443,9 +1443,9 @@ for i in 1 2 3 4 5; do
 done
 
 if [ -e "$INSTALL_DIR" ]; then
-  echo "WARNUNG: $INSTALL_DIR konnte nicht vollstaendig entfernt werden."
+  echo "WARNING: $INSTALL_DIR could not be removed completely."
 else
-  echo "Agent deinstalliert - alle Daten entfernt."
+  echo "Agent uninstalled - all data removed."
 fi
 """
     return PlainTextResponse(script, media_type="text/x-sh")
@@ -1474,17 +1474,17 @@ $InstallDir = "C:\\Program Files\\ByteraRmmAgent"
 $id = [Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
         [Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Host "Starte mit Administratorrechten neu (UAC-Abfrage) ..."
+    Write-Host "Restarting with administrator rights (UAC prompt) ..."
     if ($PSCommandPath) {
         $p = Start-Process -FilePath "powershell.exe" -Verb RunAs -PassThru -Wait `
              -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"")
         exit $p.ExitCode
     }
-    Write-Host "Bitte PowerShell als Administrator oeffnen." -ForegroundColor Red
+    Write-Host "Please open PowerShell as administrator." -ForegroundColor Red
     exit 1
 }
 
-Write-Host "1) Stoppe und entferne Agent-Autostart..."
+Write-Host "1) Stopping and removing the agent autostart..."
 schtasks /end /tn "ByteraRmmAgent" 2>$null | Out-Null
 schtasks /delete /tn "ByteraRmmAgent" /f 2>$null | Out-Null
 Unregister-ScheduledTask -TaskName "ByteraRmmAgent" -Confirm:$false
@@ -1499,7 +1499,7 @@ Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.
 Start-Sleep -Seconds 1
 Remove-Item -LiteralPath $LegacyDir -Recurse -Force -ErrorAction SilentlyContinue
 
-Write-Host "2) Beende Agent-Prozesse..."
+Write-Host "2) Ending agent processes..."
 for ($i = 0; $i -lt 4; $i++) {
     $ids = @()
     $ids += (Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path -like "$InstallDir*" }).Id
@@ -1517,7 +1517,7 @@ for ($i = 0; $i -lt 4; $i++) {
 }
 Start-Sleep -Seconds 2
 
-Write-Host "3) Loesche alle Agent-Daten..."
+Write-Host "3) Deleting all agent data..."
 for ($i = 0; $i -lt 6; $i++) {
     if (-not (Test-Path $InstallDir)) { break }
     # Schreibschutz/Attribute entfernen, dann mit zwei Methoden loeschen.
@@ -1536,9 +1536,9 @@ schtasks /delete /tn "RapalleRmmUpdate" /f 2>$null | Out-Null
 try { Remove-EventLog -Source "RapalleRMM" -ErrorAction SilentlyContinue } catch {}
 
 if (Test-Path $InstallDir) {
-    Write-Host "WARNUNG: $InstallDir konnte nicht vollstaendig entfernt werden (Datei evtl. noch gesperrt). Nach einem Neustart erneut versuchen."
+    Write-Host "WARNING: $InstallDir could not be removed completely (a file may still be locked). Try again after a reboot."
 } else {
-    Write-Host "Agent deinstalliert - alle Daten entfernt."
+    Write-Host "Agent uninstalled - all data removed."
 }
 """
     return PlainTextResponse(script, media_type="text/plain")
