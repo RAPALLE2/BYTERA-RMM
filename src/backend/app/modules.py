@@ -948,6 +948,15 @@ def init(api, sio) -> None:
     MODULES_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _styles_used() -> bool:
+    from app import db
+    if (db.get_setting("default_design", "futuristic") or "futuristic") != "futuristic":
+        return True
+    row = db._conn.execute(
+        "SELECT 1 FROM users WHERE design IS NOT NULL AND design != '' AND design != 'futuristic' LIMIT 1").fetchone()
+    return bool(row)
+
+
 def _adopt_former_core_features() -> None:
     """
     Funktionen, die frueher fest im Core (oder in einem anderen Modul) steckten
@@ -988,6 +997,9 @@ def _adopt_former_core_features() -> None:
         # Deployment steckte frueher im Relay-Modul: aktivieren, wenn das Relay
         # an ist und die Seite freigeschaltet war oder im Ordner etwas liegt.
         "deployment": _deployment_used,
+        # Classic/Classic Hard steckten frueher im Core: aktivieren, wenn ein
+        # Benutzer oder der Standard der Installation einen davon nutzt.
+        "styles": _styles_used,
     }
     for mid, used in checks.items():
         if mid in en or mid not in _registry:

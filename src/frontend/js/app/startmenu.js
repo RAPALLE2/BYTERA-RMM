@@ -388,7 +388,7 @@ function render() {
 }
 
 // -------------------------------------------------------------
-// Schnittstelle fuer das klassische Design (classic.js): Die linke Navigation
+// Schnittstelle fuer das Modul "styles" (engine/classic.js): Die linke Navigation
 // zeigt GENAU die Apps und Ordner dieses Menues - gleiche Anordnung, gleiche
 // Rechte (isAllowed). Aenderungen am Menue melden sich ueber onMenuChange().
 // -------------------------------------------------------------

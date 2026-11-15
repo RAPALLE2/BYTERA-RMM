@@ -11,6 +11,7 @@ import { applyTheme, applyAccent, ACCENT_PALETTES } from "../app/theme.js";
 import { setLanguage, applyStaticTranslations } from "../app/i18n_apply.js";
 import { renderSidebar } from "../app/sidebar.js";
 import { renderMainContent } from "../app/panel.js";
+import { fillStyleSelect } from "../app/styles.js";
 import { getDashEdit, setDashEdit, scheduleSave, getRestorePrefs, setRestorePrefs } from "../app/persist.js";
 import { t, availableLanguages, loadAvailableLanguages, loadLocale, getLanguage } from "../app/i18n.js";
 import { condenseHints } from "../app/help.js";
@@ -60,16 +61,10 @@ export function renderProfile(body, win) {
       </div>
       <div class="form-row">
         <label>Oberfläche</label>
-        <select id="pr-design">
-          <option value="" ${!u.design_choice ? "selected" : ""}>Standard der Installation (${({ standard: "Classic", classic_hard: "Classic Hard" })[u.default_design] || "Futuristisch"})</option>
-          <option value="standard" ${u.design_choice === "standard" ? "selected" : ""}>Classic – Navigation links, Apps als Tabs, Dashboard (schlicht)</option>
-          <option value="classic_hard" ${u.design_choice === "classic_hard" ? "selected" : ""}>Classic Hard – wie Proxmox: Baum + Kategorien, ohne Widgets</option>
-          <option value="futuristic" ${u.design_choice === "futuristic" ? "selected" : ""}>Futuristisch – Desktop mit Fenstern</option>
-        </select>
+        <select id="pr-design"><option value="${esc(u.design_choice || "")}">…</option></select>
         <div style="font-size:11px;color:var(--subtext);margin-top:3px">
-          Classic: schlicht und farbarm, feste Navigation links, Apps als Tabs, Dashboard bleibt.
-          Classic Hard: wie die Proxmox-Oberfläche – Baum links, rechts Kategorien, keine Widgets.
-          Ein Wechsel lädt die Oberfläche neu.
+          Futuristisch ist der Standard. Weitere Styles (Classic, Classic Hard, eigene) kommen
+          aus dem Modul „Styles“. Ein Wechsel lädt die Oberfläche neu.
         </div>
       </div>
       <div class="form-row">
@@ -213,6 +208,8 @@ export function renderProfile(body, win) {
       <div id="pr-2fa" style="max-width:560px">${t("loading")}</div>
     </div>
   `;
+  fillStyleSelect(body.querySelector("#pr-design"),
+    { current: u.design_choice || "", withDefault: true, defaultId: u.default_design || "futuristic" });
 
   render2fa(body.querySelector("#pr-2fa"));
   if (clientApi) clientApi.renderProfileSection(body.querySelector("#pr-client")).catch?.(() => {});

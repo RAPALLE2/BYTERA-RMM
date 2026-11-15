@@ -123,7 +123,7 @@
   function hardReload() {
     var p = api("/api/frontend/health").catch(function () { return { files: [] }; }).then(function (h) {
       var files = (h && h.files) || [];
-      files = files.concat(["/index.html", "/js/boot.js", "/css/style.css", "/css/ui.css", "/css/mobile.css", "/css/classic.css"]);
+      files = files.concat(["/index.html", "/js/boot.js", "/css/style.css", "/css/ui.css", "/css/mobile.css"]);
       // Jede Datei einmal frisch vom Server holen -> ersetzt alte Fassungen im Browser-Cache
       var jobs = files.map(function (u) { return fetch(u, { cache: "reload" }).catch(function () {}); });
       return Promise.all(jobs);

@@ -25,6 +25,7 @@ Alle Funktionen hier sind bewusst einfach gehalten (SQL direkt, kein ORM),
 damit man als Python-Einsteiger genau sieht, was passiert.
 """
 
+import re
 import sqlite3
 import json
 import time
@@ -2058,22 +2059,46 @@ def set_user_totp(user_id: str, secret: str | None = None,
     _conn.commit()
 
 
-# futuristic = Desktop mit Fenstern | standard = Classic (Navigation + Apps +
-# Dashboard, schlicht) | classic_hard = wie Proxmox (Baum + Kategorien, keine Widgets)
-DESIGNS = ("futuristic", "standard", "classic_hard")
+# Oberflaechen-Styles: Der Core kennt nur "futuristic" (Desktop mit Fenstern).
+# Weitere Styles (Classic = "standard", Classic Hard = "classic_hard", eigene)
+# kommen aus dem Modul "styles" (src/modules/styles/frontend/styles/*/style.json).
+CORE_DESIGN = "futuristic"
+_DESIGN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,40}$")
+
+
+def available_designs() -> list[str]:
+    """Aktuell waehlbare Styles: Core-Standard + die des Moduls "styles" (wenn aktiv)."""
+    out = [CORE_DESIGN]
+    try:
+        from app import modules as _modules
+        reg = _modules.use("styles", "registry")
+        if reg:
+            out += [i for i in reg.ids() if i != CORE_DESIGN]
+    except Exception:
+        pass
+    return out
+
+
+def valid_design_id(design: str | None) -> bool:
+    """Speicherbar ist jede gueltig geschriebene ID - auch wenn der Style gerade
+    nicht verfuegbar ist (Modul aus): die Wahl bleibt erhalten und greift wieder,
+    sobald er zurueck ist."""
+    return bool(design) and bool(_DESIGN_ID_RE.match(design))
 
 
 def effective_design(user) -> str:
-    """Design, das fuer den Benutzer gilt: eigene Wahl, sonst Standard der Installation."""
+    """Style, der fuer den Benutzer gilt: eigene Wahl, sonst Standard der
+    Installation - jeweils nur, wenn verfuegbar; sonst Futuristisch."""
     own = ""
     try:
         own = (user["design"] if "design" in user.keys() else "") or ""
     except Exception:
         own = ""
-    if own in DESIGNS:
+    avail = available_designs()
+    if own in avail:
         return own
-    d = get_setting("default_design", "futuristic") or "futuristic"
-    return d if d in DESIGNS else "futuristic"
+    d = get_setting("default_design", CORE_DESIGN) or CORE_DESIGN
+    return d if d in avail else CORE_DESIGN
 
 
 def update_user_profile(user_id: str, display_name: str | None = None, language: str | None = None, theme: str | None = None, accent: str | None = None, email: str | None = None, design: str | None = None) -> None:
@@ -2095,7 +2120,7 @@ def update_user_profile(user_id: str, display_name: str | None = None, language:
     )
     if design is not None:
         _conn.execute("UPDATE users SET design = ? WHERE id = ?",
-                      (design if design in DESIGNS else "", user_id))
+                      (design if valid_design_id(design) else "", user_id))
     _conn.commit()
 
 

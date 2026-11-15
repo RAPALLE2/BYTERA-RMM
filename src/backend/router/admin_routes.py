@@ -588,8 +588,8 @@ def update_settings(body: SettingsBody, user: dict = Depends(get_current_user)):
         require_perm(user, "admin_settings")
     if any(k not in ADMIN_SETTING_KEYS for k in changed):
         require_perm(user, "manage_settings")
-    if "default_design" in changed and changed["default_design"] not in db.DESIGNS:
-        raise HTTPException(400, "Unbekanntes Design (erlaubt: " + ", ".join(db.DESIGNS) + ")")
+    if "default_design" in changed and changed["default_design"] not in db.available_designs():
+        raise HTTPException(400, "Unbekannter Style (verfuegbar: " + ", ".join(db.available_designs()) + ")")
     # server_url darf bewusst auf "" gesetzt werden (= wieder automatisch).
     for key, value in changed.items():
         db.set_setting(key, value)

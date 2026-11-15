@@ -18,6 +18,7 @@ import { isAdmin, hasGlobalPerm } from "../app/state.js";
 import { renderSource } from "./source.js";
 import { registerCleanup } from "../app/windowmanager.js";
 import { getModuleApi } from "../app/modules.js";
+import { fillStyleSelect } from "../app/styles.js";
 
 export function renderSettings(body, win) {
   // Direkt auf einem bestimmten Reiter oeffnen (z.B. angehefteter Favorit
@@ -310,11 +311,7 @@ export function renderSettings(body, win) {
         <h3 style="margin-top:24px">Oberfläche</h3>
         <div class="form-row">
           <label>Standard-Oberfläche für neue Benutzer</label>
-          <select id="ge-default-design">
-            <option value="futuristic" ${(s.default_design || "futuristic") === "futuristic" ? "selected" : ""}>Futuristisch – Desktop mit Fenstern</option>
-            <option value="standard" ${s.default_design === "standard" ? "selected" : ""}>Classic – Navigation links, Apps als Tabs, Dashboard (schlicht)</option>
-            <option value="classic_hard" ${s.default_design === "classic_hard" ? "selected" : ""}>Classic Hard – wie Proxmox: Baum + Kategorien, ohne Widgets</option>
-          </select>
+          <select id="ge-default-design" data-current="${esc(s.default_design || "futuristic")}"><option value="${esc(s.default_design || "futuristic")}">…</option></select>
           <p style="color:var(--subtext);font-size:12px;margin:4px 0 0">
             Gilt für alle, die im Profil „Standard der Installation“ eingestellt haben (neue Benutzer).
             Jeder Benutzer kann im Profil selbst umstellen.
@@ -383,6 +380,8 @@ export function renderSettings(body, win) {
       });
     }
 
+    fillStyleSelect(root.querySelector("#ge-default-design"),
+      { current: root.querySelector("#ge-default-design")?.dataset.current || "futuristic" });
     root.querySelector("#ge-save").addEventListener("click", async () => {
       const err = root.querySelector("#ge-error");
       err.classList.add("hidden");

@@ -13,7 +13,7 @@ import { hasAnyClientPerm, hasGlobalPerm, isAdmin } from "./state.js";
 import { api, saveToken, clearToken } from "./api.js";
 import { dashboardSocket } from "./socket.js";
 import { applyTheme, applyAccent } from "./theme.js";
-import { applyDesign, initClassic } from "./classic.js";
+import { applyBaseStyle, runMetricsHooks } from "./styles.js";
 import { setLanguage, getLanguage, applyStaticTranslations } from "./i18n_apply.js";
 
 import { renderSidebar, setOnSelect, getExpandedIds, setExpandedIds, setOnTreeStateChanged, initFavorites, initSidebarNav } from "./sidebar.js";
@@ -43,7 +43,6 @@ import { handleAction as _clientHandleAction } from "./panel.js";
 import { selectClientExternal as _selectClientExternal } from "./sidebar.js";
 import { renderNotifyCenter, attachUnreadDot } from "./notifycenter.js";
 import { updateClientLayouts } from "./dashlayout.js";
-import { updateClassicView } from "./classicview.js";
 import { initStartMenu, refreshStartMenu, setStartMenuUser, unlockCatalogPruning } from "./startmenu.js";
 import { t, initLanguages, loadLocale } from "./i18n.js";
 
@@ -266,8 +265,9 @@ async function startSession(user) {
   state.user = user;
   applyTheme(user.theme);
   applyAccent(user.accent || "teal");
-  // Oberflaechen-Design: "standard" (klassisch) oder "futuristic" (Desktop)
-  applyDesign(user.design || "futuristic");
+  // Oberflaechen-Style: Der Core kennt nur "futuristic". Andere Styles setzt
+  // das Modul "styles" nach dem Laden der Module (bis dahin Futuristisch).
+  applyBaseStyle("futuristic");
   try { await loadLocale(user.language || "de"); } catch { /* Puffer/Fallback */ }
   setLanguage(user.language || "de");
   applyStaticTranslations();
@@ -317,9 +317,6 @@ async function startSession(user) {
   // das Laden ganz aus, laeuft die Shell trotzdem - nur die Modul-Apps fehlen.
   try { await loadModules(); } catch (e) { console.error("[modules] laden:", e); }
   unlockCatalogPruning();     // jetzt kennt der Katalog auch die Modul-Apps
-  // Klassisches Design: Navigation links + Tabs aufbauen, BEVOR die Fenster
-  // wiederhergestellt werden (sie landen dann direkt als Tabs).
-  try { initClassic(); } catch (e) { console.error("[classic]", e); }
   onModulesChanged(() => { try { applyAppVisibility(); } catch {} });
 
   const saved = loadState();
@@ -980,7 +977,7 @@ function initLiveUpdates() {
     try {
       touched = updateClientLayouts(id);
     } catch { touched = 0; }
-    try { touched += updateClassicView(id); } catch {}
+    try { touched += runMetricsHooks(id); } catch {}   // Styles (Modul "styles")
     // Fallback nur für Ansichten, die (noch) kein Layout-Host-Update können.
     const sel = state.selection;
     if (!touched && sel && (

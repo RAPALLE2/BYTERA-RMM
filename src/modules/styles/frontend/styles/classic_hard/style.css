@@ -1,0 +1,4 @@
+/* styles/classic_hard/style.css (Modul "styles")
+   Classic Hard nutzt das Aussehen von Classic (../classic/style.css) und die
+   Proxmox-Ansicht der Engine. Eigene Anpassungen nur fuer Classic Hard hier
+   eintragen - sie greifen mit body[data-style="classic_hard"]. */

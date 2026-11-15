@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "id": "styles",
+  "name": "Styles",
+  "version": "1.0.0",
+  "description": "Weitere Oberflächen neben dem Standard „Futuristisch“: Classic (schlicht, Navigation links, Apps als Tabs) und Classic Hard (wie Proxmox: Baum + Kategorien, ohne Widgets). Eigene Styles lassen sich einfach als Ordner hinzufügen (siehe README.md). Jeder Benutzer wählt seinen Style im Profil.",
+  "author": "BYTERA",
+  "category": "Oberfläche",
+  "icon": "🎨",
+  "requires": [],
+  "pip": [],
+  "entry": "module",
+  "routers": [
+    "styles_routes"
+  ],
+  "init": {
+    "entry": "styles.js",
+    "export": "init"
+  },
+  "hooks": {
+    "startup": "on_startup"
+  }
+}

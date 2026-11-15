@@ -1,5 +1,5 @@
-// classicview.js (Core)
-// ---------------------
+// engine/classicview.js (Modul "styles")
+// ----------------------------------------
 // Inhalt des Tabs "Übersicht" im klassischen Design - aufgebaut wie Proxmox:
 //
 //   Seitenleiste (Baum)      | Kopfzeile: gewähltes Objekt + Status
@@ -18,16 +18,16 @@
 // (panel.js, clientmetrics.js) - nur fest angeordnet. Live-Werte werden über
 // updateClassicView() aus app.js (client:metrics) aufgefrischt.
 
-import { state, findClient, isAdmin, hasGlobalPerm, hasClientPerm } from "./state.js";
-import { esc, formatBytes, formatUptime } from "./utils.js";
-import { t, osIcon, osLabel } from "./i18n.js";
+import { state, findClient, isAdmin, hasGlobalPerm, hasClientPerm } from "/js/app/state.js";
+import { esc, formatBytes, formatUptime } from "/js/app/utils.js";
+import { t, osIcon, osLabel } from "/js/app/i18n.js";
 import {
   renderStatusPart, renderActionsPart, renderWebsitesPart, renderOverviewSub,
   renderChildrenPart, renderPatchesPart, childClientsOf,
-} from "./panel.js";
-import { renderClientMetric, clientPresetById, presetAvailable } from "./clientmetrics.js";
-import { warrantyInfo } from "./dashwidgets.js";
-import { api } from "./api.js";
+} from "/js/app/panel.js";
+import { renderClientMetric, clientPresetById, presetAvailable } from "/js/app/clientmetrics.js";
+import { warrantyInfo } from "/js/app/dashwidgets.js";
+import { api } from "/js/app/api.js";
 
 const CAT_KEY = "rmm_clview_cat";
 let catByType = (() => { try { return JSON.parse(localStorage.getItem(CAT_KEY) || "{}"); } catch { return {}; } })();
@@ -399,7 +399,7 @@ async function jobsList(box) {
   const b = section(box, "Aufgaben (Backend-Jobs)");
   b.innerHTML = `<div class="clv-empty">Wird geladen …</div>`;
   let mod;
-  try { mod = await import("./bgjobs.js"); } catch (e) { b.innerHTML = `<div class="clv-empty">${esc(e.message)}</div>`; return; }
+  try { mod = await import("/js/app/bgjobs.js"); } catch (e) { b.innerHTML = `<div class="clv-empty">${esc(e.message)}</div>`; return; }
   const { listJobs, jobStatusText, cancelJob } = mod;
   const draw = async () => {
     let jobs = [];
@@ -419,7 +419,7 @@ async function jobsList(box) {
   let tmr = null;
   const onUpd = () => { clearTimeout(tmr); tmr = setTimeout(draw, 500); };
   try {
-    const { dashboardSocket } = await import("./socket.js");
+    const { dashboardSocket } = await import("/js/app/socket.js");
     dashboardSocket.on("bgjob:update", onUpd);
     jobsStop = () => { clearTimeout(tmr); try { dashboardSocket.off("bgjob:update", onUpd); } catch {} };
   } catch { /* ohne Socket: statisch */ }
@@ -433,10 +433,10 @@ function rerenderMain() {
 
 async function goTo(type, id) {
   if (type === "client") {
-    try { const m = await import("./sidebar.js"); m.selectClientExternal(id); return; } catch { /* Fallback */ }
+    try { const m = await import("/js/app/sidebar.js"); m.selectClientExternal(id); return; } catch { /* Fallback */ }
   }
   state.selection = { type, id };
-  try { const m = await import("./sidebar.js"); m.renderSidebar(); } catch {}
+  try { const m = await import("/js/app/sidebar.js"); m.renderSidebar(); } catch {}
   rerenderMain();
 }
 

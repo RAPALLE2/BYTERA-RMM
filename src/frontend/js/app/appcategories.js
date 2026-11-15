@@ -4,7 +4,7 @@
 //   * Futuristisch: Standardordner im Startmenü (startmenu.js legt sie beim
 //     ersten Start bzw. einmalig für bestehende Layouts an; eigene Ordner der
 //     Benutzer bleiben unberührt)
-//   * Standard (klassisch): gruppierte App-Navigation links (classic.js)
+//   * Classic Hard (Modul "styles"): gruppierte App-Navigation links
 //
 // Module können die Kategorie einer App selbst festlegen: in module.json
 // unter "apps": [{ "id": "...", "category": "netzwerk" }]. Ohne Angabe gilt

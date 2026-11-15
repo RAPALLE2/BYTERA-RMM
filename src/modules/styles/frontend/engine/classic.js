@@ -1,35 +1,32 @@
-// classic.js (Core)
-// -----------------
-// Design "Standard" (klassisch, wie Proxmox / Tactical RMM / NinjaOne):
+// engine/classic.js (Modul "styles")
+// -----------------------------------
+// Layout-Engine "classic" fuer Styles (siehe ../../README.md):
 //
-//   * Aussehen: body.design-standard (flach, kompakt, neutrale Farben) - css/classic.css
-//   * Bedienung: body.cl-layout
-//       - feste Navigation links, darunter Favoriten + Geraete-Baum
-//   Zwei Auspraegungen (Design-Wert):
-//     "standard"     = Classic: Navigation = Ordner/Apps des Startmenues,
-//                      Tab "Uebersicht" = normales Dashboard (Widgets), farbarm
-//     "classic_hard" = wie Proxmox (body.cl-hard): Navigation = feste
-//                      Kategorien (appcategories.js), Baum-Wurzel "Rechenzentrum",
-//                      Tab "Uebersicht" = Kategorie-Spalte + feste Ansicht des
-//                      gewaehlten Objekts statt Widgets (classicview.js)
-//       - Inhalte als TABS im Hauptbereich statt schwebender Fenster:
-//         erster Tab "Uebersicht" (Dashboard / ausgewaehlter Client), dann je
-//         offenes Fenster ein Tab (Klick = anzeigen, x / Mittelklick = schliessen)
-//       - die Taskleiste wird zur schmalen Statusleiste (Aufgaben, Uhr)
+//   style.json  "layout": "classic"       -> Classic: Navigation links = Ordner/Apps
+//                                            des Startmenues, Tab "Uebersicht" = Dashboard
+//               "layout": "classic-hard"  -> wie Proxmox (body.cl-hard): Navigation =
+//                                            feste Kategorien (appcategories.js), Baum-Wurzel
+//                                            "Rechenzentrum", Tab "Uebersicht" = Kategorie-
+//                                            Spalte + feste Ansicht statt Widgets (classicview.js)
+//
+//   * Inhalte als TABS im Hauptbereich statt schwebender Fenster:
+//     erster Tab "Uebersicht", dann je offenes Fenster ein Tab
+//     (Klick = anzeigen, x / Mittelklick = schliessen)
+//   * die Taskleiste wird zur schmalen Statusleiste (Aufgaben, Uhr)
 //
 // Technisch bleibt der Fenster-Manager unveraendert: Jedes "Fenster" fuellt
 // den Inhaltsbereich, sichtbar ist nur der aktive Tab. Darum funktionieren alle
-// Apps und Module ohne Anpassung, und ein Wechsel zurueck zu "Futuristisch"
-// stellt die gewohnten Fenster wieder her.
+// Apps und Module ohne Anpassung. Eingehaengt wird ueber die Style-Hooks des
+// Cores (/js/app/styles.js) - der Core selbst kennt dieses Layout nicht.
 //
-// Die Bedienung wird nur auf breiten Bildschirmen umgebaut; auf dem Handy gilt
-// weiter die mobile Ansicht (mit klassischem Aussehen).
+// Nur auf breiten Bildschirmen; auf dem Handy gilt weiter die mobile Ansicht
+// (mit dem Aussehen des Styles).
 
-import { state } from "./state.js";
-import { focusWindow, closeWindow, windowLink } from "./windowmanager.js";
-import { getCatalogApps, getMenuModel, openMenuApp, onMenuChange, catalogEntry } from "./startmenu.js";
-import { groupApps } from "./appcategories.js";
-import { esc } from "./utils.js";
+import { state } from "/js/app/state.js";
+import { focusWindow, closeWindow, windowLink } from "/js/app/windowmanager.js";
+import { getCatalogApps, getMenuModel, openMenuApp, onMenuChange, catalogEntry } from "/js/app/startmenu.js";
+import { groupApps } from "/js/app/appcategories.js";
+import { esc } from "/js/app/utils.js";
 
 let active = "overview";      // "overview" oder Fenster-Key
 let lastTop = null;           // zuletzt fokussiertes Fenster (Erkennung "neu geoeffnet/fokussiert")
@@ -39,20 +36,29 @@ const NAV_KEY = () => `rmm_clnav:${state.user?.username || "default"}`;
 export const isClassicLayout = () => enabled;
 const isHard = () => document.body.classList.contains("cl-hard");
 
-/** Design anwenden ("futuristic" | "standard" = Classic | "classic_hard"). Nur die Klasse - der Umbau
- *  der Bedienung passiert einmalig in initClassic() (ein Wechsel laedt neu). */
-export function applyDesign(design) {
-  document.body.classList.toggle("design-standard", design === "standard");
-  const classic = design === "standard" || design === "classic_hard";
-  document.body.classList.toggle("design-standard", classic);
-  document.body.classList.toggle("design-futuristic", !classic);
-  // Classic Hard: Proxmox-Aufbau (Kategorien-Navigation + classicview.js statt Dashboard)
-  document.body.classList.toggle("cl-hard", design === "classic_hard");
+/** Layout starten (vom Style-Modul nach dem Login, vor dem Wiederherstellen der Fenster).
+ *  hard = Proxmox-Aufbau (Kategorien + classicview.js statt Dashboard). */
+export async function start({ hard = false } = {}) {
+  document.body.classList.toggle("cl-hard", !!hard);
+  const hooks = await import("/js/app/styles.js");
+  hooks.onWindowsChanged(renderClassicTabs);
+  if (hard) {
+    const cv = await import("./classicview.js");
+    hooks.setMainContentRenderer((el) => {
+      if (!document.body.classList.contains("cl-layout")) return false;   // Handy: normales Dashboard
+      cv.renderClassicView(el);
+      return true;
+    });
+    hooks.onMetrics((id) => cv.updateClassicView(id));
+  }
+  initClassic();
+  // Uebersicht mit dem neuen Aufbau zeichnen
+  try { (await import("/js/app/panel.js")).renderMainContent(); } catch {}
 }
 
-/** Klassische Bedienung aufbauen (nach dem Login, vor dem Wiederherstellen der Fenster). */
+/** Klassische Bedienung aufbauen. */
 export function initClassic() {
-  if (enabled || !document.body.classList.contains("design-standard")) return;
+  if (enabled) return;
   if (new URLSearchParams(location.search).get("solo")) return;   // Einzelfenster-Modus
   if (window.matchMedia("(max-width: 900px)").matches) return;     // Handy: mobile Ansicht
   const mainArea = document.querySelector(".main-area");
