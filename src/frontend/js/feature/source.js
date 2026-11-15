@@ -292,6 +292,18 @@ async function renderExplorer(panel) {
       zipStatus.textContent = t("src_extracted", { n: res.count, where });
       window.notify?.(t("src_extracted_from", { n: res.count, name: f.name, where }) + (res.skipped?.length ? ` (${t("src_skipped", { n: res.skipped.length })})` : ""), "success", 8000);
       loadDir(curDir);   // Ansicht aktualisieren
+      if (res.modules_reloaded?.length)
+        window.notify?.(`Module code reloaded: ${res.modules_reloaded.join(", ")}`, "success", 6000);
+      for (const [mid, err] of Object.entries(res.module_errors || {}))
+        window.notify?.(`Module ${mid} failed to reload: ${err}`, "error", 15000);
+      if (res.restart_required && await uiConfirm("Server files were changed", {
+            description: "The new backend code only becomes active after a restart. Restart the backend now? (takes a few seconds)",
+            okText: "Restart now" })) {
+        try { await api.restartBackend(); window.notify?.("Backend is restarting …", "info", 6000); }
+        catch (e) { window.notify?.(e.message, "error", 8000); }
+      } else if (res.restart_required) {
+        window.notify?.("Server files changed – restart the backend (Source code → Restart) to activate them.", "warning", 15000);
+      }
     } catch (e) {
       zipStatus.textContent = "";
       window.notify?.(t("src_zip_fail", { err: e.message }), "error", 10000);

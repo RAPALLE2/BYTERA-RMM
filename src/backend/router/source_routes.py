@@ -397,6 +397,7 @@ async def upload_zip(path: str = Form(""), file: UploadFile = File(...),
         except ValueError:
             extracted.append(str(target))
 
+    code = await _activate_code_changes(extracted)
     db.add_audit_entry(user["username"], "source.zip_extracted",
                        target=("(root)" if dest == PROJECT_ROOT else str(dest.relative_to(PROJECT_ROOT))),
                        details=f"{len(extracted)} Dateien aus {file.filename}")
@@ -407,7 +408,46 @@ async def upload_zip(path: str = Form(""), file: UploadFile = File(...),
         "count": len(extracted),
         "skipped": skipped,
         "project_update": dest == PROJECT_ROOT,
+        # Python code is only read at start: changed modules are reloaded right away,
+        # changed core files need a backend restart (the dashboard offers it).
+        "modules_reloaded": code["reloaded"],
+        "module_errors": code["errors"],
+        "restart_required": code["restart"],
+        "agent_changed": code["agent"],
     }
+
+
+async def _activate_code_changes(extracted: list[str]) -> dict:
+    """Makes freshly extracted server code effective (hotfix ZIP)."""
+    from app import modules as _modules
+    from app.paths import MODULES_DIR, SRC_DIR
+    out = {"reloaded": [], "errors": {}, "restart": False, "agent": False}
+    mids = set()
+    backend_dir = (SRC_DIR / "backend").resolve()
+    mod_dir = MODULES_DIR.resolve()
+    agent_dir = (SRC_DIR / "agent").resolve()
+    for rel in extracted:
+        p = Path(rel)
+        p = (p if p.is_absolute() else PROJECT_ROOT / p).resolve()
+        if mod_dir in p.parents:
+            parts = p.relative_to(mod_dir).parts
+            if len(parts) >= 2 and (parts[1] == "backend" or parts[1] == "module.json"):
+                mids.add(parts[0])
+        elif backend_dir in p.parents and p.suffix == ".py":
+            out["restart"] = True
+        elif agent_dir in p.parents:
+            out["agent"] = True
+    if out["restart"]:
+        return out                      # the restart loads the modules fresh anyway
+    for mid in sorted(mids):
+        if mid not in getattr(_modules, "_loaded", {}):
+            continue                    # not active -> new code is used when it is enabled
+        try:
+            await _modules.reload(mid)
+            out["reloaded"].append(mid)
+        except Exception as exc:        # module crashed on reload -> report, keep the rest running
+            out["errors"][mid] = str(exc)
+    return out
 
 
 class SqlBody(BaseModel):

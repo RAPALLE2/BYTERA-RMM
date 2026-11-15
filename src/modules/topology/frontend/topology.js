@@ -58,6 +58,7 @@ export function renderTopology(body, win) {
   let currentFlow = "";                 // flow for new lines
   let view = { x: 40, y: 40, z: 1 };
   let saveTimer = null;
+  let staleBackend = false;             // backend still runs the old module code
 
   function emptyOvr() {
     return { pos: {}, meta: {}, hidden: [], custom_nodes: [], lines: [], edge_props: {},
@@ -104,6 +105,11 @@ export function renderTopology(body, win) {
         <select id="tp-bg" title="Background (only for you)"></select>
         <button class="btn" id="tp-snap" title="Snap to grid (only for you)">▦ Snap</button>
       </div>
+      <div id="tp-stale" style="display:none;margin:2px 8px 4px;padding:8px 10px;border-radius:6px;font-size:12.5px;
+        background:rgba(248,113,113,.14);border:1px solid var(--danger,#f87171);color:var(--text)">
+        ⚠️ <b>The backend still runs an older version of the topology module.</b> New fields (IP, OS, agent, lines,
+        colours, flows, boxes, line styles) would be thrown away when saving, so <b>saving is paused</b>.
+        Restart the backend (Settings → Source code → Restart backend) and reload this window.</div>
       <div style="padding:2px 10px 4px;font-size:12px;color:var(--subtext);display:flex;gap:10px;align-items:center">
         <span id="tp-text">Loading map …</span><span id="tp-saved" style="color:var(--ok,#34d399);display:none">✓ saved</span>
       </div>
@@ -156,6 +162,9 @@ export function renderTopology(body, win) {
       const r = await moduleRequest(`/api/topology/map?source=${encodeURIComponent(want)}`);
       if (want !== source) return;
       mapData = r.map;
+      // an old backend (Python not reloaded after an update) knows neither "agents" nor "lines"
+      staleBackend = !("agents" in r) || !Array.isArray(r.overrides?.lines);
+      $("#tp-stale").style.display = staleBackend ? "" : "none";
       ovr = { ...emptyOvr(), ...(r.overrides || {}) };
       agentsById = r.agents || {};
       $("#tp-style").value = ovr.line_style || "default";
@@ -182,6 +191,7 @@ export function renderTopology(body, win) {
   }
 
   function saveOvr() {
+    if (staleBackend) { $("#tp-stale").style.display = ""; setText("Not saved – the backend must be restarted first (see the red note).", true); return; }
     clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
       try {
@@ -595,7 +605,7 @@ export function renderTopology(body, win) {
     if (n.ip && n.ip !== name) { txt(n.ip, y, 10.5, "var(--subtext, #94a3b8)", "400", true); y += 13; }
     if (n.os) { txt(n.os.length > 24 ? n.os.slice(0, 23) + "…" : n.os, y, 10, "var(--subtext, #94a3b8)"); y += 13; }
     drawNote(g, n, y);
-    g.addEventListener("contextmenu", (ev) => { ev.preventDefault(); openNodeDialog(n, true); });
+    g.addEventListener("contextmenu", (ev) => { ev.preventDefault(); openNodeDialog(n, !edit); });
     g.addEventListener("mouseenter", (ev) => { if (!dragging) showTip(n, ev); });
     g.addEventListener("mousemove", moveTip);
     g.addEventListener("mouseleave", hideTip);
