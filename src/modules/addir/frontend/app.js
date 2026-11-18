@@ -1,12 +1,14 @@
 // app.js (Modul "addir") - Active Directory verwalten
 // ----------------------------------------------------
-// Reiter: Verbindungen | Durchsuchen (User/Gruppen/OUs/Computer) | Massen-Import.
+// Reiter: Verbindungen | Durchsuchen (User/Gruppen/OUs/Computer) | Massen-Import |
+// DNS | Gruppenrichtlinien (gpodns.js).
 // Aktionen über Dialoge: User anlegen/bearbeiten/verschieben/PW/sperren/entsperren/
 // Ablauf/löschen; Gruppe anlegen + Mitglieder; OU anlegen; verschieben per Ziel-OU.
 
 import { getToken } from "/js/app/api.js";
 import { withBackground, resolveJob } from "/js/app/bgjobs.js";
 import { esc, uiConfirm } from "/js/app/utils.js";
+import { drawDns, drawGpo } from "./gpodns.js";
 
 async function aq(path, opts = {}) {
   const headers = { Authorization: "Bearer " + (getToken() || "") };
@@ -48,6 +50,9 @@ export function renderAd(body) {
     { id: "user", icon: "👤", label: "Benutzer", count: () => counts.users },
     { id: "group", icon: "👥", label: "Gruppen", count: () => counts.groups },
     { id: "ou", icon: "🗂️", label: "Organisationseinheiten", count: () => counts.ous },
+    { sep: "Infrastruktur" },
+    { id: "dns", icon: "🌐", label: "DNS" },
+    { id: "gpo", icon: "📜", label: "Gruppenrichtlinien" },
     { sep: "Administration" },
     { id: "conn", icon: "🔌", label: "Verbindungen" },
     { id: "bulk", icon: "⬆️", label: "Massen-Import" },
@@ -71,6 +76,8 @@ export function renderAd(body) {
   const draw = async () => {
     if (view === "conn") return drawConns(pane, loadConns, afterConnChange);
     if (view === "bulk") { if (!ensureConn()) return; TREE.length ? drawBulk(pane) : loadTree().then(() => drawBulk(pane)); return; }
+    if (view === "dns") { if (!ensureConn()) return; return drawDns(pane, CONN); }
+    if (view === "gpo") { if (!ensureConn()) return; return drawGpo(pane, CONN); }
     if (view === "overview") { if (!ensureConn()) return; return drawDashboard(pane, () => select("overview")); }
     // computer/user/group/ou -> Browse mit fester Art
     if (!ensureConn()) return;

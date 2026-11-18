@@ -2,18 +2,20 @@
   "schema": 1,
   "id": "addir",
   "name": "Active Directory",
-  "version": "1.0.0",
-  "description": "Active Directory per LDAP verwalten: mehrere AD-Verbindungen, Benutzer anlegen/verschieben/bearbeiten, Passwörter setzen und zurücksetzen, aktivieren/sperren/entsperren, Ablaufdatum, Gruppen anlegen/verschieben/zuweisen, OUs anlegen/verschieben sowie Massen-Import per CSV. Verbundene ADs lassen sich im Modul „SSO“ direkt als Anmeldequelle wählen.",
+  "version": "1.1.0",
+  "description": "Active Directory per LDAP verwalten: mehrere AD-Verbindungen, Benutzer anlegen/verschieben/bearbeiten, Passwörter setzen und zurücksetzen, aktivieren/sperren/entsperren, Ablaufdatum, Gruppen anlegen/verschieben/zuweisen, OUs anlegen/verschieben sowie Massen-Import per CSV. Verbundene ADs lassen sich im Modul „SSO“ direkt als Anmeldequelle wählen. Neu: DNS-Einträge der AD-integrierten Zonen bearbeiten (A, AAAA, CNAME, MX, TXT, SRV, NS, PTR) und Gruppenrichtlinien verwalten (anlegen, löschen, umbenennen, verknüpfen, Reihenfolge, erzwingen, Vererbung blockieren, Sicherheitsfilterung) sowie bearbeiten: ALLE Administrativen Vorlagen werden dynamisch aus den ADMX/ADML-Dateien der Domäne geladen, dazu eigene Registry-Werte und Sicherheitseinstellungen. Agentenlos per LDAP + SYSVOL - oder über eine BYTERA-Node auf dem Domänencontroller.",
   "author": "BYTERA",
   "category": "System",
   "icon": "🗂️",
   "requires": [],
   "pip": [
-    "ldap3>=2.9.0"
+    "ldap3>=2.9.0",
+    "smbprotocol"
   ],
   "entry": "module",
   "routers": [
-    "ad_routes"
+    "ad_routes",
+    "gpodns_routes"
   ],
   "hooks": {
     "startup": "on_startup"
@@ -30,5 +32,16 @@
       "w": 1180,
       "h": 760
     }
-  ]
+  ],
+  "node": {
+    "kind": "python",
+    "requires_docker": false,
+    "autostart": false,
+    "actions": [
+      "up",
+      "down",
+      "restart",
+      "status"
+    ]
+  }
 }
