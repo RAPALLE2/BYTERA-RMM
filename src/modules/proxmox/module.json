@@ -2,7 +2,7 @@
   "schema": 1,
   "id": "proxmox",
   "name": "Proxmox VE",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Verbindet einen Agenten mit einer Proxmox-VE-Instanz (mehrere Agenten = mehrere Instanzen): eigenes Proxmox-Dashboard mit VMs, LXC-Containern, Storage, Benutzern, Nodes und Aufgaben; Gäste starten/stoppen, Snapshots, Backups, Konfiguration, Konsole und API-Explorer. Adresse lokal, eigene oder über das RMM-Relay (Tunnel durch den Agenten); Anmeldung per API-Token oder Benutzer + Passwort. Eigene Rechte pro Agent plus „Standard-Proxmox“.",
   "author": "BYTERA",
   "category": "Virtualisierung",
@@ -12,7 +12,8 @@
   "routers": [
     "match_routes",
     "proxmox_routes",
-    "console_routes"
+    "console_routes",
+    "manage_routes"
   ],
   "entry": "module",
   "hooks": {

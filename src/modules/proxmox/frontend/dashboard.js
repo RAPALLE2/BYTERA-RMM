@@ -9,6 +9,7 @@ import { esc, uiConfirm, uiPrompt } from "/js/app/utils.js";
 import { bar, dot, fmtBytes, fmtUptime, pct, preq, STATUS } from "./common.js";
 import { openConnectionDialog, showHelp } from "./connect.js";
 import { openSuggestDialog } from "./suggest.js";
+import * as M from "./manage.js";
 
 export function renderProxmox(body, win) {
   const cid = win?.props?.clientId;
@@ -173,10 +174,12 @@ async function renderDashboard(root, cid, initialGuest = null) {
         tr.querySelectorAll("[data-a]").forEach((b) => b.addEventListener("click", () => guestAction(g, b.dataset.a, () => drawGuests(type))));
       });
     };
-    pane.innerHTML = `<div style="display:flex;gap:8px;margin-bottom:8px">
-        <input type="text" data-q placeholder="Suchen (ID, Name, Node, Tag) …" value="${esc(search)}" style="flex:1;max-width:340px"></div>
+    pane.innerHTML = `<div style="display:flex;gap:8px;margin-bottom:8px;align-items:center">
+        <input type="text" data-q placeholder="Suchen (ID, Name, Node, Tag) …" value="${esc(search)}" style="flex:1;max-width:340px">
+        ${P.pve_config ? `<button class="btn-primary btn-sm" data-create>＋ ${type === "qemu" ? "VM" : "Container"}</button>` : ""}</div>
       <div data-list></div>`;
     pane.querySelector("[data-q]").addEventListener("input", (e) => { search = e.target.value; render(); });
+    pane.querySelector("[data-create]")?.addEventListener("click", () => M.createDialog(C, type, () => drawGuests(type)));
     render();
   }
 
@@ -211,6 +214,7 @@ async function renderDashboard(root, cid, initialGuest = null) {
         <span style="color:var(--subtext)">${g.type === "qemu" ? "VM" : "LXC"} ${g.vmid} · ${esc(g.node)} · ${(STATUS[st.status] || {}).t || esc(st.status)}</span>
         <span style="flex:1"></span>
         ${acts.map((a) => `<button class="btn btn-sm ${["stop", "reset"].includes(a) ? "btn-danger" : a === "start" ? "btn-primary" : ""}" data-act="${a}">${ACTION_TEXT[a]}</button>`).join("")}
+        ${P.pve_config ? `<button class="btn btn-sm" data-manage>⚙ Verwalten</button>` : ""}
         ${P.pve_console ? `<span data-console-slot></span>` : ""}
       </div>
       <div class="tab-bar" style="margin-bottom:10px">${subs.map(([k, l]) => `<button class="tab-btn ${k === sub ? "active" : ""}" data-sub="${k}">${l}</button>`).join("")}</div>
@@ -218,6 +222,7 @@ async function renderDashboard(root, cid, initialGuest = null) {
     pane.querySelector("[data-back]").addEventListener("click", () => drawGuests(g.type));
     pane.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => guestAction(g, b.dataset.act, () => drawGuest(g, sub))));
     pane.querySelectorAll("[data-sub]").forEach((b) => b.addEventListener("click", () => drawGuest(g, b.dataset.sub)));
+    pane.querySelector("[data-manage]")?.addEventListener("click", () => M.guestMenu(C, g, () => drawGuests(g.type)));
     const sp = pane.querySelector("[data-sub-pane]");
     window.dispatchEvent(new CustomEvent("rmm-pve-guest", { detail: { slot: pane.querySelector("[data-console-slot]"), cid, guest: g, running } }));
 
@@ -314,19 +319,25 @@ async function renderDashboard(root, cid, initialGuest = null) {
     let r;
     try { r = await preq(`/${C}/storage`); } catch (e) { pane.innerHTML = err(e); return; }
     pane.innerHTML = `<table class="data-table" style="width:100%"><thead><tr><th style="text-align:left">Storage</th><th>Node</th><th>Typ</th><th style="text-align:left">Inhalt</th><th style="width:180px">Belegt</th></tr></thead>
-      <tbody>${r.storage.map((s) => `<tr data-s="${esc(s.storage)}" data-n="${esc(s.node)}" style="cursor:pointer"><td>${dot(s.status === "available" ? "running" : "stopped")} <b>${esc(s.storage)}</b></td>
+      <tbody>${r.storage.map((s) => `<tr data-s="${esc(s.storage)}" data-n="${esc(s.node)}" data-ct="${esc(s.content || "")}" style="cursor:pointer"><td>${dot(s.status === "available" ? "running" : "stopped")} <b>${esc(s.storage)}</b></td>
         <td>${esc(s.node)}</td><td>${esc(s.plugintype || "")}</td><td style="font-size:11.5px">${esc(s.content || "")}</td>
         <td><div style="font-size:11px;color:var(--subtext)">${fmtBytes(s.disk)} / ${fmtBytes(s.maxdisk)}</div>${bar(pct(s.disk, s.maxdisk))}</td></tr>`).join("")}</tbody></table>
       <div data-content style="margin-top:12px"></div>`;
+    const canStore = ov.perms.pve_storage;
     pane.querySelectorAll("[data-s]").forEach((tr) => tr.addEventListener("click", async () => {
       const box = pane.querySelector("[data-content]");
+      const node = tr.dataset.n, store = tr.dataset.s, ct = tr.dataset.ct;
+      const reload = () => tr.dispatchEvent(new Event("click"));
       box.innerHTML = "Lade …";
       try {
-        const c = await preq(`/${C}/storage/${encodeURIComponent(tr.dataset.n)}/${encodeURIComponent(tr.dataset.s)}/content`);
-        box.innerHTML = `<h4 style="margin:0 0 6px">Inhalt von ${esc(tr.dataset.s)} (${esc(tr.dataset.n)})</h4>
-          ${c.content.length ? `<table class="data-table" style="width:100%"><thead><tr><th style="text-align:left">Volume</th><th>Art</th><th>Größe</th><th>Gast</th></tr></thead>
-          <tbody>${c.content.map((x) => `<tr><td style="word-break:break-all"><code>${esc(x.volid)}</code></td><td>${esc(x.content || "")}</td><td>${fmtBytes(x.size)}</td><td>${esc(String(x.vmid || ""))}</td></tr>`).join("")}</tbody></table>`
+        const c = await preq(`/${C}/storage/${encodeURIComponent(node)}/${encodeURIComponent(store)}/content`);
+        const actions = canStore ? M.storageActions(C, node, store, ct, reload) : { html: "", wire: () => {} };
+        box.innerHTML = `<h4 style="margin:0 0 6px">Inhalt von ${esc(store)} (${esc(node)})</h4>${actions.html}
+          ${c.content.length ? `<table class="data-table" style="width:100%"><thead><tr><th style="text-align:left">Volume</th><th>Art</th><th>Größe</th><th>Gast</th>${canStore ? "<th></th>" : ""}</tr></thead>
+          <tbody>${c.content.map((x) => `<tr><td style="word-break:break-all"><code>${esc(x.volid)}</code></td><td>${esc(x.content || "")}</td><td>${fmtBytes(x.size)}</td><td>${esc(String(x.vmid || ""))}</td>${canStore ? `<td style="text-align:right"><button class="btn-tool" data-del="${esc(x.volid)}" title="Löschen">🗑</button></td>` : ""}</tr>`).join("")}</tbody></table>`
           : `<div style="color:var(--subtext)">Leer.</div>`}`;
+        actions.wire(box);
+        box.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", () => M.deleteVolume(C, node, store, b.dataset.del, reload)));
       } catch (e) { box.innerHTML = err(e); }
     }));
   }
