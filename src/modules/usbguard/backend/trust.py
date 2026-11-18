@@ -1,14 +1,14 @@
 """
-trust.py (Modul "usbguard") - vertrauenswuerdige USB-Geraete.
+trust.py (module "usbguard") - trusted USB devices.
 
-1) Geraete-IDs (VID:PID, optional Seriennummer) - z.B. YubiKeys oder andere
-   Schluessel-Geraete ohne Dateisystem. Werden sofort zugelassen.
-2) Signierte Schluesseldateien ".bytera-usbkey" fuer Speichersticks. Das
-   Backend signiert mit einem eigenen Ed25519-Schluessel (privater Teil
-   bleibt hier, Agents bekommen nur den oeffentlichen). Jede Datei ist an
-   VID, PID und Seriennummer EINES Sticks gebunden und einzeln widerrufbar.
+1) Device IDs (VID:PID, optional serial) - e.g. YubiKeys or other key
+   devices without a file system. Allowed immediately.
+2) Signed key files ".bytera-usbkey" for storage sticks. The backend signs
+   with its own Ed25519 key (the private part stays here, agents only get the
+   public one). Each file is bound to the VID, PID and serial of ONE stick and
+   is individually revocable.
 
-Ablage: data/modules/usbguard/{trust.json, signing_key.pem}
+Storage: data/modules/usbguard/{trust.json, signing_key.pem}
 """
 
 from __future__ import annotations
@@ -72,7 +72,7 @@ def public_key_b64() -> str:
 
 
 def agent_payload() -> dict:
-    """Was die Agents fuer die Pruefung brauchen."""
+    """What the agents need for verification."""
     d = _load()
     return {"trust": [{"vid": i["vid"], "pid": i.get("pid", ""), "serial": i.get("serial", "")}
                       for i in d["ids"]],
@@ -87,12 +87,12 @@ def list_all() -> dict:
 def _hex4(v: str) -> str:
     v = (v or "").strip().lower()
     if len(v) != 4 or any(c not in "0123456789abcdef" for c in v):
-        raise ValueError("VID/PID müssen 4-stellige Hex-Werte sein (z.B. 1050)")
+        raise ValueError("VID/PID must be 4-digit hex values (e.g. 1050)")
     return v
 
 
 def add_id(label: str, vid: str, pid: str = "", serial: str = "", by: str = "") -> dict:
-    entry = {"id": secrets.token_hex(6), "label": (label or "").strip()[:80] or "Gerät",
+    entry = {"id": secrets.token_hex(6), "label": (label or "").strip()[:80] or "Device",
              "vid": _hex4(vid), "pid": _hex4(pid) if pid else "",
              "serial": (serial or "").strip()[:128], "by": by,
              "created": int(time.time() * 1000)}
@@ -109,7 +109,7 @@ def remove_id(entry_id: str) -> None:
 
 
 def issue_key(label: str, vid: str, pid: str, serial: str, by: str = "") -> tuple[dict, bytes]:
-    """Erzeugt eine signierte Schluesseldatei (Inhalt als Bytes) fuer EINEN Stick."""
+    """Generate a signed key file (content as bytes) for ONE stick."""
     serial = (serial or "").strip()
     if not serial:
         raise ValueError("Der Stick braucht eine eindeutige Seriennummer - ohne sie "

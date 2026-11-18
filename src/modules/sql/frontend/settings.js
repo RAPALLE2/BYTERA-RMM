@@ -1,22 +1,23 @@
-// settings.js (Modul "sql")
+// settings.js (module "sql")
 // -------------------------
-// Datenbank des RMM verwalten (frueher Einstellungen -> Allgemein -> Datenbank).
-// Wird an zwei Stellen gezeigt:
-//   * Modul-App -> SQL-Datenbank -> Einstellungen   (renderSettings)
-//   * eigene App "Datenbank" im Startmenue          (renderDatabaseApp)
+// Manage the RMM database (formerly Settings -> General -> Database).
+// Shown in two places:
+//   * module app -> SQL Database -> Settings   (renderSettings)
+//   * own app "Database" in the start menu     (renderDatabaseApp)
 //
-// Register:
-//   Lokale Datei   SQLite im Backend (backend/data/data.sqlite) - Standard
-//   Extern         MySQL/MariaDB, PostgreSQL oder SQLite-Datei auf einer Freigabe
-//   Docker         MariaDB-Nachbarcontainer - NUR wenn das Backend im Container laeuft
-//   Sicherungen    Backup erstellen (backend/data/backup) und zurueckspielen
+// Tabs:
+//   Local file   SQLite in the backend (backend/data/data.sqlite) - default
+//   External     MySQL/MariaDB, PostgreSQL or a SQLite file on a share
+//   Docker       MariaDB neighbour container - ONLY when the backend runs in a container
+//   Backups      create a backup (backend/data/backup) and restore it
 //
-// Beim Deaktivieren des Moduls wird eine externe DB automatisch in die lokale
-// Datei zurueckkopiert (Backend: module.py -> on_disable).
+// When the module is disabled, an external DB is automatically copied back into the
+// local file (backend: module.py -> on_disable).
 
 import { api } from "/js/app/api.js";
 import { esc, uiConfirm } from "/js/app/utils.js";
 import { t } from "/js/app/i18n.js";
+import { icon, dot } from "./icons.js";
 
 export function renderDatabaseApp(body) {
   body.innerHTML = `<div style="padding:16px;height:100%;overflow:auto;box-sizing:border-box"></div>`;
@@ -59,21 +60,21 @@ export async function renderSettings(root) {
     return isExt() && d.host && c.host === d.host;
   };
 
-  // ------------------------------------------------------------ Status + Register
+  // ------------------------------------------------------------ status + tabs
   function drawStatus() {
     const c = info?.config || {};
-    let label, icon;
-    if (dockerActive()) { icon = "🐳"; label = `Docker-Container (${esc(c.host)})`; }
-    else if (isExt()) { icon = "🌐"; label = `Extern · ${esc(c.type || "")} · ${esc(c.type === "sqlite" ? c.database : c.host)}`; }
-    else { icon = "💾"; label = "Lokale Datei (SQLite)"; }
-    $("#sq-status").innerHTML = `<span style="font-size:18px">${icon}</span>
+    let glyph, label;
+    if (dockerActive()) { glyph = icon("docker", 18); label = `Docker container (${esc(c.host)})`; }
+    else if (isExt()) { glyph = icon("globe", 18); label = `External · ${esc(c.type || "")} · ${esc(c.type === "sqlite" ? c.database : c.host)}`; }
+    else { glyph = icon("save", 18); label = "Local file (SQLite)"; }
+    $("#sq-status").innerHTML = `<span style="display:inline-flex">${glyph}</span>
       <span>${t("set_db_current_mode")}: <b>${label}</b></span>`;
   }
 
   function drawTabs() {
-    const tabs = [["local", "💾 Lokale Datei"], ["external", "🌐 Externe Datenbank"]];
-    if (docker?.is_docker) tabs.push(["docker", "🐳 Docker-Container"]);
-    tabs.push(["backups", "🗂️ Sicherungen"]);
+    const tabs = [["local", `${icon("save", 14)} Local file`], ["external", `${icon("globe", 14)} External database`]];
+    if (docker?.is_docker) tabs.push(["docker", `${icon("docker", 14)} Docker container`]);
+    tabs.push(["backups", `${icon("files", 14)} Backups`]);
     if (!tabs.some(([k]) => k === tab)) tab = "local";
     $("#sq-tabs").innerHTML = tabs.map(([k, l]) =>
       `<button class="tab-btn${k === tab ? " active" : ""}" data-tab="${k}">${l}</button>`).join("");
@@ -90,24 +91,24 @@ export async function renderSettings(root) {
 
   const hint = (html) => `<p style="color:var(--subtext);font-size:13px;line-height:1.5;margin:0 0 12px">${html}</p>`;
 
-  // ------------------------------------------------------------ Lokal
+  // ------------------------------------------------------------ local
   function drawLocal() {
     $("#sq-body").innerHTML = `
-      ${hint("Standard: Alle Daten liegen in der SQLite-Datei <code>backend/data/data.sqlite</code>. "
-        + "Diese Datei ist auch im externen Modus die Arbeitskopie des Backends.")}
+      ${hint("Default: all data lives in the SQLite file <code>backend/data/data.sqlite</code>. "
+        + "This file is also the backend's working copy in external mode.")}
       ${isExt()
-        ? `${hint("Gerade ist eine externe Datenbank aktiv. Beim Zurückschalten wird ihr kompletter Stand in die lokale Datei kopiert; vorher wird automatisch eine Sicherung angelegt. Das Backend startet danach neu.")}
+        ? `${hint("An external database is currently active. When switching back, its complete state is copied into the local file; a backup is created automatically beforehand. The backend restarts afterwards.")}
            <button class="btn-primary" id="sq-to-local">→ ${t("set_db_back_to_local")}</button>`
-        : `<div style="display:flex;gap:8px;align-items:center"><button class="btn" disabled>✓ ${t("set_db_local_active")}</button></div>`}`;
+        : `<div style="display:flex;gap:8px;align-items:center"><button class="btn" disabled>${icon("check", 14)} ${t("set_db_local_active")}</button></div>`}`;
     $("#sq-to-local")?.addEventListener("click", () => doSwitch("local", { ...(info?.config || {}), password: "" }));
   }
 
-  // ------------------------------------------------------------ Extern
+  // ------------------------------------------------------------ external
   function drawExternal() {
     const c = info?.config || {};
     $("#sq-body").innerHTML = `
-      ${hint("MySQL/MariaDB, PostgreSQL oder eine SQLite-Datei z. B. auf einer Netzwerkfreigabe. "
-        + "Beim Umschalten werden alle lokalen Daten dorthin kopiert; das Backend gleicht danach laufend ab.")}
+      ${hint("MySQL/MariaDB, PostgreSQL or a SQLite file, e.g. on a network share. "
+        + "When switching, all local data is copied there; the backend then syncs continuously.")}
       <div class="form-row"><label>${t("set_db_type")}</label>
         <select id="sq-type">
           <option value="mysql">MySQL / MariaDB</option>
@@ -128,7 +129,7 @@ export async function renderSettings(root) {
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
         <button class="btn" id="sq-test">${t("set_test_conn")}</button>
         ${isExt() && !dockerActive()
-          ? `<button class="btn" disabled>✓ ${t("set_db_external_active")}</button>`
+          ? `<button class="btn" disabled>${icon("check", 14)} ${t("set_db_external_active")}</button>`
           : `<button class="btn-primary" id="sq-to-ext">→ ${t("set_db_to_external")}</button>`}
       </div>`;
     const typeSel = $("#sq-type");
@@ -141,7 +142,7 @@ export async function renderSettings(root) {
       const file = typeSel.value === "sqlite";
       $("#sq-hostrow").style.display = file ? "none" : "flex";
       $("#sq-userrow").style.display = file ? "none" : "flex";
-      $("#sq-dblabel").textContent = file ? "Dateipfad (z. B. /mnt/share/rmm.sqlite)" : t("set_db_name");
+      $("#sq-dblabel").textContent = file ? "File path (e.g. /mnt/share/rmm.sqlite)" : t("set_db_name");
       const port = $("#sq-port");
       if (!file && (!port.value || port.value === "0")) port.value = typeSel.value === "postgres" ? "5432" : "3306";
     };
@@ -156,12 +157,12 @@ export async function renderSettings(root) {
     $("#sq-to-ext")?.addEventListener("click", () => doSwitch("external", cfg()));
   }
 
-  // ------------------------------------------------------------ Docker
+  // ------------------------------------------------------------ docker
   function drawDocker() {
     const box = $("#sq-body");
     if (!docker?.socket) {
-      box.innerHTML = `<div style="border:1px solid var(--warn);border-radius:8px;padding:10px;font-size:13px">
-        ⚠ ${t("set_docker_no_socket")}</div>`;
+      box.innerHTML = `<div style="border:1px solid var(--warn);border-radius:8px;padding:10px;font-size:13px;display:flex;gap:8px;align-items:center">
+        ${icon("warn", 16)} ${t("set_docker_no_socket")}</div>`;
       return;
     }
     const sv = docker.service || {};
@@ -169,23 +170,23 @@ export async function renderSettings(root) {
     const cr = docker.credentials || {};
     const state = on ? t("set_dk_running") : (sv.state === "absent" ? t("set_dk_absent") : (sv.state || "?"));
     box.innerHTML = `
-      ${hint("Das Backend läuft im Container und kann eine MariaDB als Nachbar-Container starten. "
-        + "Zugangsdaten werden beim ersten Start erzeugt und hier hinterlegt. Das Daten-Volume bleibt beim Abschalten erhalten.")}
+      ${hint("The backend runs in a container and can start a MariaDB as a neighbour container. "
+        + "Credentials are generated on first start and stored here. The data volume is kept when shutting down.")}
       <div style="display:flex;gap:10px;align-items:center;padding:10px 12px;border:1px solid var(--border);border-radius:8px">
-        <span style="font-size:16px">${on ? "🟢" : "⚪"}</span>
+        <span style="display:inline-flex">${on ? dot("var(--online,#16a34a)", 14) : dot("var(--subtext,#9ca3af)", 14)}</span>
         <div style="flex:1;min-width:0">
           <div>${esc(sv.label || "MariaDB")}</div>
           <div style="font-size:11.5px;color:var(--subtext)">${esc(sv.image || "")} · ${esc(state)}</div>
         </div>
-        <button class="btn${on ? " btn-warn" : ""}" id="sq-dk-toggle" ${dockerActive() && on ? "disabled title=\"Wird gerade als Datenbank benutzt\"" : ""}>
+        <button class="btn${on ? " btn-warn" : ""}" id="sq-dk-toggle" ${dockerActive() && on ? "disabled title=\"Currently in use as the database\"" : ""}>
           ${on ? t("set_dk_off") : t("set_dk_on")}</button>
       </div>
       ${cr.host ? `<div style="font-size:12px;color:var(--subtext);margin:10px 0">
-          Host <code>${esc(cr.host)}:${esc(cr.port)}</code> · Datenbank <code>${esc(cr.database)}</code> · Benutzer <code>${esc(cr.user)}</code></div>` : ""}
+          Host <code>${esc(cr.host)}:${esc(cr.port)}</code> · database <code>${esc(cr.database)}</code> · user <code>${esc(cr.user)}</code></div>` : ""}
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
         ${dockerActive()
-          ? `<button class="btn" disabled>✓ Docker-Datenbank aktiv</button>`
-          : `<button class="btn-primary" id="sq-dk-use" ${on && cr.host ? "" : "disabled title=\"Erst den Container starten\""}>→ Docker-Datenbank verwenden</button>`}
+          ? `<button class="btn" disabled>${icon("check", 14)} Docker database active</button>`
+          : `<button class="btn-primary" id="sq-dk-use" ${on && cr.host ? "" : "disabled title=\"Start the container first\""}>→ Use Docker database</button>`}
       </div>`;
     $("#sq-dk-toggle")?.addEventListener("click", async (e) => {
       const btn = e.currentTarget;
@@ -202,15 +203,15 @@ export async function renderSettings(root) {
     $("#sq-dk-use")?.addEventListener("click", () => doSwitch("external", { ...cr }));
   }
 
-  // ------------------------------------------------------------ Sicherungen
+  // ------------------------------------------------------------ backups
   async function drawBackups() {
     $("#sq-body").innerHTML = `
-      ${hint("Eine Sicherung enthält immer den <b>kompletten</b> Stand (auch im externen Modus, weil die lokale "
-        + "Datei die Arbeitskopie ist). Ablage: <code>backend/data/backup</code>. Vor jedem Umschalten wird "
-        + "automatisch eine Sicherung angelegt; es werden die letzten 5 aufbewahrt.")}
+      ${hint("A backup always contains the <b>complete</b> state (even in external mode, because the local "
+        + "file is the working copy). Location: <code>backend/data/backup</code>. Before every switch a "
+        + "backup is created automatically; the last 5 are kept.")}
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
-        <button class="btn-primary" id="sq-backup">💾 Datenbank-Backup erstellen</button>
-        <button class="btn btn-icon" id="sq-bk-refresh" title="${t("exp_refresh")}">⟳</button>
+        <button class="btn-primary" id="sq-backup">${icon("save", 14)} Create database backup</button>
+        <button class="btn btn-icon" id="sq-bk-refresh" title="${t("exp_refresh")}">${icon("refresh", 15)}</button>
       </div>
       <div id="sq-bk-list" style="font-size:12.5px;color:var(--subtext)">${t("loading")}</div>`;
     $("#sq-bk-refresh").addEventListener("click", loadBackups);
@@ -253,7 +254,7 @@ export async function renderSettings(root) {
     }
   }
 
-  // ------------------------------------------------------------ Aktionen
+  // ------------------------------------------------------------ actions
   async function testConn(cfg) {
     clearErr();
     try {
@@ -314,7 +315,7 @@ export async function renderSettings(root) {
         window.notify?.(p.restored ? t("set_db_failed_restored") : t("set_db_failed_unchanged"), "error", 14000);
       }
     } catch (e) {
-      // Beim Neustart bricht die Verbindung kurz ab - erst nach mehreren Fehlversuchen aufgeben.
+      // On restart the connection drops briefly - give up only after several failed attempts.
       pgMisses++;
       $("#sq-pg-log").textContent += `\n(${t("set_db_poll_failed")}: ${e.message})`;
       if (pgMisses >= 5) {
@@ -333,7 +334,7 @@ export async function renderSettings(root) {
     pollProgress();
   }
 
-  // ------------------------------------------------------------ Laden
+  // ------------------------------------------------------------ loading
   async function reload() {
     try {
       [info, docker] = await Promise.all([
@@ -347,8 +348,8 @@ export async function renderSettings(root) {
     if (dockerActive() && tab === "local") tab = "docker";
     else if (isExt() && tab === "local") tab = "external";
     drawStatus(); drawTabs(); drawBody();
-    // Laeuft gerade ein Wechsel (z.B. Fenster neu geoeffnet), Fortschritt weiter zeigen.
-    try { const p = await api.databaseProgress(); if (p.running) startPolling(); } catch { /* egal */ }
+    // A switch is in progress (e.g. window reopened) - keep showing the progress.
+    try { const p = await api.databaseProgress(); if (p.running) startPolling(); } catch { /* ignore */ }
   }
 
   await reload();

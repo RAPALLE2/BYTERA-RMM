@@ -1,11 +1,10 @@
 """
-software_routes.py (Modul "software") - Pakete verwalten und ausrollen.
+software_routes.py (module "software") - manage and roll out packages.
 
-Dateien liegen unter storage/software/<paket>/<datei> (nicht oeffentlich) und werden den
-Agents ueber ihren authentifizierten Backend-Kanal ausgeliefert. Rollout an
-mehrere Clients laeuft als Hintergrund-Job: online = sofort installieren,
-offline = Eintrag in der Offline-Warteschlange (laeuft beim naechsten
-Online-Gehen, siehe app/sockets.py).
+Files live under storage/software/<package>/<file> (not public) and are delivered to the
+agents over their authenticated backend channel. Rollout to multiple clients runs as a
+background job: online = install immediately, offline = an entry in the offline queue
+(runs at the next online check-in, see app/sockets.py).
 """
 
 from __future__ import annotations
@@ -107,7 +106,7 @@ async def upload_file(pid: str, file: UploadFile = File(...),
         raise HTTPException(404, "Paket nicht gefunden")
     name = NAME_RE.sub("_", (file.filename or "datei").rsplit("/", 1)[-1])[:120]
     if not name:
-        raise HTTPException(400, "Ungültiger Dateiname")
+        raise HTTPException(400, "Invalid file name")
     target_dir = FILES_DIR / pid
     target_dir.mkdir(parents=True, exist_ok=True)
     size = 0
@@ -120,7 +119,7 @@ async def upload_file(pid: str, file: UploadFile = File(...),
             if size > 4 * 1024 * 1024 * 1024:
                 fh.close()
                 (target_dir / name).unlink(missing_ok=True)
-                raise HTTPException(413, "Datei zu groß (max. 4 GB)")
+                raise HTTPException(413, "File too large (max. 4 GB)")
             fh.write(chunk)
     pkg["files"] = [f for f in pkg.get("files", []) if f["name"] != name]
     pkg["files"].append({"name": name, "size": size})
@@ -145,7 +144,7 @@ def delete_file(pid: str, name: str, user: dict = Depends(get_current_user)):
 class DeployBody(BaseModel):
     package_id: str
     clients: list[str]
-    queue_offline: bool = True     # Offline-Clients in die Warteschlange legen
+    queue_offline: bool = True     # Put offline clients into the queue
 
 
 @router.post("/deploy")
@@ -157,7 +156,7 @@ async def deploy(body: DeployBody, background: bool = False,
         raise HTTPException(404, "Paket nicht gefunden")
     clients = list(dict.fromkeys(body.clients or []))
     if not clients:
-        raise HTTPException(400, "Keine Clients ausgewählt")
+        raise HTTPException(400, "No clients selected")
 
     async def work(job):
         from app.sockets import state
@@ -166,43 +165,43 @@ async def deploy(body: DeployBody, background: bool = False,
             client = await db.call(db.get_client, cid)
             label = (client or {}).get("short_name") or (client or {}).get("hostname") or cid
             if client is None:
-                results.append({"client": label, "status": "failed", "info": "unbekannt"})
-                job.log(f"❌ {label}: Client unbekannt")
+                results.append({"client": label, "status": "failed", "info": "unknown"})
+                job.log(f"{label}: client unknown")
                 continue
             if state.is_online(cid):
-                job.log(f"▶ {label}: installiere {pkg['name']} …")
+                job.log(f"{label}: installing {pkg['name']} …")
                 job.detail = f"{label}: {pkg['name']}"
                 res = await rollout.install(cid, body.package_id)
                 if res.get("ok"):
                     results.append({"client": label, "status": "done", "info": ""})
-                    job.log(f"✅ {label}: fertig")
+                    job.log(f"{label}: done")
                 else:
                     results.append({"client": label, "status": "failed",
                                     "info": str(res.get("error") or "")})
-                    job.log(f"❌ {label}: {res.get('error')} "
+                    job.log(f"{label}: {res.get('error')} "
                             f"{str(res.get('output') or '')[:300]}")
             elif body.queue_offline:
                 await db.call(db.queue_add, cid, "software",
                               f"Software installieren: {pkg['name']}",
                               {"package_id": body.package_id}, user.get("username"))
                 results.append({"client": label, "status": "queued", "info": ""})
-                job.log(f"⏳ {label}: offline - in Warteschlange gelegt "
-                        "(installiert beim nächsten Online-Gehen)")
+                job.log(f"{label}: offline - queued "
+                        "(installs at the next online check-in)")
             else:
                 results.append({"client": label, "status": "skipped", "info": "offline"})
-                job.log(f"⤼ {label}: offline - übersprungen")
+                job.log(f"{label}: offline - skipped")
         db.add_audit_entry(user.get("username"), "software.deploy", None,
-                           f"{pkg['name']} -> {len(clients)} Clients")
+                           f"{pkg['name']} -> {len(clients)} clients")
         return {"results": results}
 
     return await bgjobs.run("software", f"deploy-{body.package_id}",
-                            title=f"Rollout: {pkg['name']} ({len(clients)} Clients)",
+                            title=f"Rollout: {pkg['name']} ({len(clients)} clients)",
                             user=user, work=work, background=background)
 
 
 @router.get("/agent-file/{pid}/{name}")
 def agent_file(pid: str, name: str, x_agent_token: str | None = Header(default=None)):
-    """Installationsdatei fuer den AGENTEN (nicht oeffentlich, nur mit Agent-Token)."""
+    """Installation file for the AGENT (not public, only with an agent token)."""
     if not x_agent_token or not hmac.compare_digest(x_agent_token, AGENT_TOKEN):
         raise HTTPException(403, "Agent-Token fehlt oder ist falsch")
     safe = NAME_RE.sub("_", name)[:120]

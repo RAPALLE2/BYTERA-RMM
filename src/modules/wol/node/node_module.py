@@ -1,15 +1,15 @@
-# node_module.py (Node-Teil von Modul "wol")
+# node_module.py (node part of module "wol")
 # ------------------------------------------
-# Sendet Wake-on-LAN-Pakete IM NETZ DIESER NODE. Befehl "wol"
+# Sends Wake-on-LAN packets IN THIS NODE'S NETWORK. Command "wol"
 # {macs:[...], broadcasts:[...], port:int} -> {sent, errors, ok_count}.
-# Frueher fest in node/main.py, seit Node 0.2.0 ein nachladbares Node-Modul.
+# Formerly hard-wired in node/main.py, a loadable node module since node 0.2.0.
 import socket
 
 
 def _magic_packet(mac: str) -> bytes:
     hexmac = mac.replace(":", "").replace("-", "").replace(".", "").strip()
     if len(hexmac) != 12:
-        raise ValueError(f"Ungueltige MAC: {mac}")
+        raise ValueError(f"Invalid MAC: {mac}")
     return b"\xff" * 6 + bytes.fromhex(hexmac) * 16
 
 

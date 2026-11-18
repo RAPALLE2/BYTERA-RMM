@@ -1,11 +1,11 @@
 {
   "schema": 1,
   "id": "usbguard",
-  "name": "USB-Steuerung",
+  "name": "USB Control",
   "version": "1.1.0",
-  "description": "USB-Steuerung und -Wächter: Ein-/Ausstecken auf Clients wird gemeldet; im Blockier-Modus werden neue Geräte erst nach Freigabe im Dashboard ans Betriebssystem durchgereicht (Linux: Kernel-USB-Autorisierung - das Gerät wird gar nicht erst aktiviert; Windows: das Gerät wird unmittelbar nach dem Erkennen per pnputil deaktiviert, kurze Erkennungslücke technisch bedingt), mit Timeout und automatischer Entscheidung. Vertrauenswürdige Geräte werden automatisch zugelassen: per Geräte-ID (VID:PID, optional Seriennummer - z.B. YubiKeys) oder bei Speichersticks per signierter, an die Seriennummer gebundener Schlüsseldatei (.bytera-usbkey, Ed25519, einzeln widerrufbar). Im Wartungsmodus (Core) werden alle USB-Geräte zugelassen und es gibt keine Alarme.",
+  "description": "USB control and guard: plug/unplug events on clients are reported; in block mode new devices are only passed to the operating system after approval in the dashboard (Linux: kernel USB authorization - the device is never activated in the first place; Windows: the device is disabled via pnputil immediately after detection, a short detection gap is technically unavoidable), with a timeout and an automatic decision. Trusted devices are allowed automatically: by device ID (VID:PID, optional serial - e.g. YubiKeys) or, for storage sticks, via a signed key file bound to the serial (.bytera-usbkey, Ed25519, individually revocable). In maintenance mode (core) all USB devices are allowed and there are no alarms.",
   "author": "BYTERA",
-  "category": "Sicherheit",
+  "category": "sicherheit",
   "icon": "🔌",
   "requires": [],
   "pip": [],
@@ -24,21 +24,21 @@
     {
       "key": "enabled",
       "type": "bool",
-      "label": "USB-Überwachung aktiv",
+      "label": "USB monitoring active",
       "default": false,
-      "help": "Agents melden Ein-/Ausstecken von USB-Geräten (Meldung im Dashboard + Glocke)."
+      "help": "Agents report plug/unplug of USB devices (notification in the dashboard + bell)."
     },
     {
       "key": "block_new",
       "type": "bool",
-      "label": "Neue Geräte blockieren, bis jemand erlaubt",
+      "label": "Block new devices until someone allows them",
       "default": false,
-      "help": "Linux: Gerät bleibt vom Kernel unautorisiert (keine Treiber, keine Daten), bis im Dashboard erlaubt wird. Windows: Gerät wird sofort nach dem Erkennen deaktiviert (kurze Lücke technisch bedingt)."
+      "help": "Linux: the device stays unauthorized by the kernel (no drivers, no data) until allowed in the dashboard. Windows: the device is disabled immediately after detection (a short gap is technically unavoidable)."
     },
     {
       "key": "timeout_s",
       "type": "number",
-      "label": "Timeout für die Nachfrage (Sekunden)",
+      "label": "Timeout for the prompt (seconds)",
       "default": 60,
       "min": 5,
       "max": 3600
@@ -46,16 +46,16 @@
     {
       "key": "timeout_action",
       "type": "select",
-      "label": "Nach Timeout automatisch",
+      "label": "After timeout automatically",
       "default": "deny",
       "options": [
         {
           "value": "deny",
-          "label": "Blockieren"
+          "label": "Block"
         },
         {
           "value": "allow",
-          "label": "Erlauben"
+          "label": "Allow"
         }
       ]
     }
@@ -63,9 +63,9 @@
   "apps": [
     {
       "id": "usbguard",
-      "label": "USB-Steuerung",
+      "label": "USB Control",
       "icon": "🔌",
-      "title": "USB-Steuerung",
+      "title": "USB Control",
       "entry": "usbguard.js",
       "export": "renderUsbguard",
       "w": 820,

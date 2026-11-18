@@ -1,14 +1,14 @@
 """
-guard.py (Modul "usbguard") - Vermittlung zwischen Agent und Dashboard.
+guard.py (module "usbguard") - mediation between agent and dashboard.
 
-Agent -> Backend:  "usb-config-get"  (Konfiguration abholen, beim Verbinden)
+Agent -> backend:  "usb-config-get"  (fetch configuration, on connect)
                    "usb-event"       {action: add|remove, dev, name, blocked}
-Backend -> Agent:  "usb-config"      {enabled, block_new}
+Backend -> agent:  "usb-config"      {enabled, block_new}
                    "usb-decide"      {dev, allow}
-Backend -> Dash:   "usb:event"       (Meldung) / "usb:ask" (Erlauben/Blockieren)
+Backend -> dash:   "usb:event"       (notification) / "usb:ask" (allow/block)
 
-Timeout: Entscheidet nach timeout_s automatisch (timeout_action allow|deny)
-und informiert die Dashboards, dass die Frage erledigt ist.
+Timeout: decides automatically after timeout_s (timeout_action allow|deny)
+and informs the dashboards that the question is resolved.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ def _cfg():
 
 
 async def decide(client_id: str, dev: str, allow: bool, by: str) -> bool:
-    """Entscheidung (Dashboard oder Timeout) an den Agenten geben."""
+    """Send the decision (dashboard or timeout) to the agent."""
     from app import db
     from app.sockets import send_to_agent, sio
     key = f"{client_id}|{dev}"
@@ -86,13 +86,13 @@ def register(ctx) -> None:
             "serial": str(data.get("serial") or "")[:128], "storage": bool(data.get("storage")),
             "action": "add" if data.get("action") == "add" else "remove",
             "dev": str(data.get("dev") or "?")[:200],
-            "name": str(data.get("name") or "USB-Gerät")[:200],
+            "name": str(data.get("name") or "USB device")[:200],
             "blocked": bool(data.get("blocked")),
             "ts": int(time.time() * 1000),
             "timeout_s": cfg["timeout_s"], "timeout_action": cfg["timeout_action"],
         }
-        why = {"id": " (vertrauenswürdige Geräte-ID)", "maintenance": " (Wartungsmodus)"}.get(
-            trusted, f" (Schlüsseldatei: {trusted[4:]})" if trusted.startswith("key:") else "")
+        why = {"id": " (trusted device ID)", "maintenance": " (maintenance mode)"}.get(
+            trusted, f" (key file: {trusted[4:]})" if trusted.startswith("key:") else "")
         db.add_audit_entry("system", "usbguard.event", client_id,
                            f"{ev['name']} {'eingesteckt' if ev['action'] == 'add' else 'ausgesteckt'}"
                            + (" (blockiert, wartet auf Freigabe)" if ev["blocked"] else why))

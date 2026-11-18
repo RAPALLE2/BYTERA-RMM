@@ -1,16 +1,16 @@
-// init.js (Modul "software") - Panel-Aktion "Software installieren" am Client.
+// init.js (module "software") - panel action "Install software" on the client.
 import { registerClientAction } from "/js/app/modules.js";
 import { openWindow } from "/js/app/windowmanager.js";
 
 export function init() {
   registerClientAction("software", {
-    label: () => "📦 Software",
+    label: () => "Software",
     onClick: (client) => {
       openWindow({
         singleton: true,
         key: "software",
         appId: "software",
-        title: "📦 Software-Rollout",
+        title: "Software Rollout",
         props: { preselect: client?.id },
         w: 880, h: 620,
       });

@@ -1,13 +1,13 @@
-# store.py (Modul "wol") - Wake-on-LAN-Angaben je Client
+# store.py (module "wol") - Wake-on-LAN details per client
 # ------------------------------------------------------
 # data/modules/wol/data.json: { "clients": { <client_id>: {
-#   macs: [..],          manuell gepflegte MACs (zusaetzlich zu den automatisch erkannten)
-#   broadcast: "",       optionale Broadcast-Adresse (sonst 255.255.255.255 bzw. aus der IP)
-#   port: 9,             Ziel-Port (9 Standard)
-#   via: "auto"|"backend"|"<node_client_id>",   bevorzugter Absender
-#   enabled: true        WOL fuer diesen PC erlauben (Geraet muss WOL im BIOS/NIC koennen)
+#   macs: [..],          manually maintained MACs (in addition to the auto-detected ones)
+#   broadcast: "",       optional broadcast address (otherwise 255.255.255.255 or from the IP)
+#   port: 9,             target port (9 default)
+#   via: "auto"|"backend"|"<node_client_id>",   preferred sender
+#   enabled: true        allow WOL for this PC (the device must support WOL in BIOS/NIC)
 # }}}
-# Automatisch erkannte MACs/IPs kommen aus den Live-Messwerten des Agenten.
+# Auto-detected MACs/IPs come from the agent's live metrics.
 from __future__ import annotations
 
 import json

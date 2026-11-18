@@ -1,5 +1,5 @@
 """
-usbguard_routes.py (Modul "usbguard") - Entscheidungen und Vertrauensliste.
+usbguard_routes.py (module "usbguard") - decisions and trust list.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ router = APIRouter(prefix="/api/usbguard", tags=["usbguard"])
 
 def _admin(user: dict) -> None:
     if not is_super_admin(user):
-        raise HTTPException(403, "Nur Admins dürfen die USB-Vertrauensliste ändern")
+        raise HTTPException(403, "Only admins may change the USB trust list")
 
 
 class DecideBody(BaseModel):
@@ -29,7 +29,7 @@ class DecideBody(BaseModel):
 
 @router.post("/decide")
 async def usb_decide(body: DecideBody, user: dict = Depends(get_current_user)):
-    # Freigeben/Blockieren ist ein Eingriff am Gerät -> gleiches Recht wie Terminal.
+    # Allowing/blocking is an action on the device -> same permission as terminal.
     require_perm(user, "use_terminal", body.client_id)
     ok = await guard.decide(body.client_id, body.dev, body.allow, user.get("username"))
     if not ok:
@@ -81,7 +81,7 @@ class KeyBody(BaseModel):
 
 @router.post("/trust/keys")
 def trust_issue_key(body: KeyBody, user: dict = Depends(get_current_user)):
-    """Signierte Schlüsseldatei für EINEN Stick erzeugen und als Download liefern."""
+    """Generate a signed key file for ONE stick and deliver it as a download."""
     _admin(user)
     try:
         meta, content = trust.issue_key(body.label, body.vid, body.pid, body.serial,

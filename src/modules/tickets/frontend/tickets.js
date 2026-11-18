@@ -1,27 +1,28 @@
 // apps/tickets.js
 // ---------------
-// Ticket-System: Liste + Detail. Funktionen (je nach Recht):
-//   ticket_read    - Tickets sehen (nur Admins/Ersteller/Zugewiesene, Server filtert)
-//   ticket_create  - neue Tickets anlegen
-//   ticket_edit    - Titel/Beschreibung/Priorität/Fälligkeit/Clients ändern
-//   ticket_comment - kommentieren + Dateien/Screenshots anhängen
-//   ticket_assign  - Benutzer/Gruppen zuweisen
-//   ticket_resolve - Status ändern / als gelöst markieren
-//   ticket_delete  - Tickets löschen
+// Ticket system: list + detail. Functions (depending on permission):
+//   ticket_read    - view tickets (only admins/creators/assignees, the server filters)
+//   ticket_create  - create new tickets
+//   ticket_edit    - change title/description/priority/due date/clients
+//   ticket_comment - comment + attach files/screenshots
+//   ticket_assign  - assign users/groups
+//   ticket_resolve - change status / mark as resolved
+//   ticket_delete  - delete tickets
 import { api } from "/js/app/api.js";
 import { state, isAdmin, hasGlobalPerm } from "/js/app/state.js";
 import { esc, uiConfirm } from "/js/app/utils.js";
 import { subjectPickerHtml, readSubjectPicker, initSubjectPicker, splitGroups } from "/js/app/subjectpicker.js";
 import { RMM_TARGET, RMM_LABEL, targetLabel } from "/js/app/tickettarget.js";
-// t() unter Alias: in dieser Datei ist "t" bereits als lokaler
-// Variablenname belegt (Tenant/Target/Trigger/Token o.ä.).
+// t() under an alias: in this file "t" is already used as a local
+// variable name (tenant/target/trigger/token etc.).
 import { t as tr } from "/js/app/i18n.js";
 import { condenseHints } from "/js/app/help.js";
 import { getModuleApi, moduleRequest } from "/js/app/modules.js";
+import { icon } from "./icons.js";
 
-// --- Bilder in Tickets (Modul "spaces") ---------------------------------
-// Ein Bild steht als [[space-img:<token>|<name>]] im Text. Die Datei liegt im
-// Space des Absenders (Ordner "Ticket-Anhänge"); geladen wird sie mit Anmeldung.
+// --- Images in tickets (module "spaces") ---------------------------------
+// An image is stored as [[space-img:<token>|<name>]] in the text. The file lives in
+// the sender's space (folder "Ticket attachments"); it is loaded with authentication.
 const IMG_RE = /\[\[space-img:([A-Za-z0-9_-]+)\|([^\]]*)\]\]/g;
 const imgCache = new Map();
 const spaces = () => getModuleApi("spaces");
@@ -34,24 +35,24 @@ async function loadImages(root) {
     img.addEventListener("click", () => sp?.openShareLink(tok));
     img.addEventListener("error", () => {
       if (!img.src) return;
-      img.replaceWith(Object.assign(document.createElement("span"), { textContent: `🖼️ ${img.alt || "Bild"} (nicht darstellbar)` }));
+      img.replaceWith(Object.assign(document.createElement("span"), { textContent: `[${img.alt || "image"} (cannot be displayed)]` }));
     }, { once: true });
     if (imgCache.has(tok)) { img.src = imgCache.get(tok); continue; }
     try {
-      if (!sp) throw new Error("Spaces aus");
+      if (!sp) throw new Error("Spaces off");
       const u = await sp.blobUrl(`/api/spaces/s/${tok}/download?inline=1`);
       imgCache.set(tok, u); img.src = u;
     } catch {
-      img.replaceWith(Object.assign(document.createElement("span"), { textContent: `🖼️ ${img.alt || "Bild"} (nicht verfügbar)` }));
+      img.replaceWith(Object.assign(document.createElement("span"), { textContent: `[${img.alt || "image"} (not available)]` }));
     }
   }
 }
 
-// Farben sind fest, die Bezeichnungen werden ERST BEIM ZUGRIFF uebersetzt.
-// Wichtig: Diese Tabellen werden beim Laden des Moduls ausgewertet - zu diesem
-// Zeitpunkt steht die Sprache noch nicht fest. Ein direktes tr(...) hier
-// (wie es bei "resolved" schon stand) friert den Text auf die Sprache zum
-// Ladezeitpunkt ein und ignoriert einen spaeteren Sprachwechsel.
+// Colors are fixed, the labels are translated ONLY ON ACCESS.
+// Important: these tables are evaluated when the module loads - at that point
+// the language is not yet fixed. A direct tr(...) here (as it used to be for
+// "resolved") would freeze the text to the language at load time and ignore a
+// later language switch.
 const STATUS_COLOR = {
   open: "#4da6ff", in_progress: "#ffd166", resolved: "#3ecf8e", closed: "#8892a6",
 };
@@ -74,40 +75,40 @@ const prioOf = (k) => ({
   color: PRIO_COLOR[k] || PRIO_COLOR.normal,
 });
 
-const fmtDate = (ms) => ms ? new Date(ms).toLocaleString("de-DE",
+const fmtDate = (ms) => ms ? new Date(ms).toLocaleString(undefined,
   { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "–";
-const fmtDay = (ms) => ms ? new Date(ms).toLocaleDateString("de-DE") : "–";
+const fmtDay = (ms) => ms ? new Date(ms).toLocaleDateString(undefined) : "–";
 
-// Sichtbarkeit von Kommentaren - identisch zu den Client-Notizen.
+// Visibility of comments - identical to the client notes.
 const COMMENT_VIS = {
-  all: { icon: "🌍", label: "für alle" },
-  private: { icon: "🔒", label: "nur für mich" },
-  custom: { icon: "👥", label: "für bestimmte" },
+  all: { icon: icon("globe", 13), key: "tk_vis_all" },
+  private: { icon: icon("lock", 13), key: "tk_vis_private" },
+  custom: { icon: icon("users", 13), key: "tk_vis_custom" },
 };
 
 export function renderTickets(body, win) {
-  // Erklaertexte dieser Seite in "?"-Symbole umwandeln - einmal direkt nach
-  // dem Zeichnen und einmal verzoegert fuer nachgeladene Bereiche.
+  // Turn the explanatory texts on this page into "?" symbols - once right after
+  // drawing and once delayed for lazily loaded areas.
   setTimeout(() => condenseHints(body), 0);
   setTimeout(() => condenseHints(body), 400);
 
   const may = (p) => isAdmin() || hasGlobalPerm(p);
   let tickets = [];
   let subjects = { users: [], groups: [] };
-  let ticketUsers = { users: [], groups: [] };   // Auswahl für "für bestimmte"
-  // Anzeigename einer Freigabe ({type,id} oder alte reine Benutzer-ID)
+  let ticketUsers = { users: [], groups: [] };   // choices for "specific users"
+  // display name of a share ({type,id} or old plain user ID)
   const shareName = (item) => {
     const type = typeof item === "string" ? "user" : (item.type || "user");
     const id = typeof item === "string" ? item : item.id;
     if (type === "group") {
       const g = (ticketUsers.groups || []).find((x) => x.id === id);
-      return g ? `👥 ${g.name}` : "👥 ?";
+      return g ? `${icon("users", 12)} ${g.name}` : `${icon("users", 12)} ?`;
     }
     const u = (ticketUsers.users || []).find((x) => x.id === id);
     return u ? u.username : id;
   };
   let currentId = null;
-  let statusFilter = "active";   // 'active' | 'all' | einzelner Status
+  let statusFilter = "active";   // 'active' | 'all' | a single status
 
   body.innerHTML = `
     <div style="display:flex;height:100%;background:var(--panel);position:relative">
@@ -122,8 +123,8 @@ export function renderTickets(body, win) {
             <option value="closed">${tr("tk_s_closed")}</option>
           </select>
           <span style="flex:1"></span>
-          ${isAdmin() ? `<button class="btn" id="tk-portal" title="Öffentliches Ticket-Portal (/web/tickets) einrichten">🌐</button>` : ""}
-          ${may("ticket_create") ? `<button class="btn-primary" id="tk-new">＋ Ticket</button>` : ""}
+          ${isAdmin() ? `<button class="btn" id="tk-portal" title="Set up the public ticket portal (/web/tickets)">${icon("globe", 15)}</button>` : ""}
+          ${may("ticket_create") ? `<button class="btn-primary" id="tk-new">+ Ticket</button>` : ""}
         </div>
         <div id="tk-list" style="flex:1;overflow:auto"></div>
       </div>
@@ -140,7 +141,7 @@ export function renderTickets(body, win) {
   });
   body.querySelector("#tk-new")?.addEventListener("click", () => openEditor(null));
 
-  // --- Ticket-Portal (Admin): /web/tickets einrichten ---
+  // --- Ticket portal (admin): set up /web/tickets ---
   body.querySelector("#tk-portal")?.addEventListener("click", async () => {
     let cfg;
     try { cfg = await moduleRequest("/api/tickets/portal/admin-config"); }
@@ -148,18 +149,18 @@ export function renderTickets(body, win) {
     editorEl.style.display = "flex";
     editorEl.innerHTML = `
       <div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px;width:460px;max-height:90%;overflow:auto">
-        <h3 style="margin:0 0 10px">🌐 Ticket-Portal</h3>
+        <h3 style="margin:0 0 10px;display:flex;align-items:center;gap:7px">${icon("globe", 18)} Ticket portal</h3>
         <p style="font-size:12px;color:var(--subtext);margin:0 0 10px">
-          Öffentliche Seite unter <code>${esc(window.location.origin)}/web/tickets</code>, auf der
-          (je nach Einstellung mit oder ohne Anmeldung) Tickets erstellt werden können.
-          Mit Anmeldung sehen Benutzer dort auch ihre eigenen und zugewiesenen Tickets und
-          können sie bearbeiten. Neue Portal-Tickets gehen an die Support-Gruppe.
-          ${cfg.webserver_on ? "" : `<b style="color:var(--warn)">⚠ Das Modul „Webserver“ ist nicht aktiv - die Portal-Seite ist erst erreichbar, wenn es aktiviert wird.</b>`}
+          Public page at <code>${esc(window.location.origin)}/web/tickets</code> where
+          (with or without login, depending on the setting) tickets can be created.
+          When logged in, users also see their own and assigned tickets there and can
+          edit them. New portal tickets go to the support group.
+          ${cfg.webserver_on ? "" : `<b style="color:var(--warn)">The "Webserver" module is not active - the portal page becomes reachable only once it is enabled.</b>`}
         </p>
-        <div class="form-row"><label><input type="checkbox" id="tp-on" ${cfg.enabled ? "checked" : ""}/> Portal aktivieren</label></div>
-        <div class="form-row"><label><input type="checkbox" id="tp-login" ${cfg.require_login ? "checked" : ""}/> Anmeldung erforderlich (RMM-Konto)</label></div>
-        <div class="form-row"><label>Titel</label><input id="tp-title" value="${esc(cfg.title || "")}"/></div>
-        <div class="form-row"><label>Begrüßungstext</label><textarea id="tp-intro" rows="3" style="width:100%">${esc(cfg.intro || "")}</textarea></div>
+        <div class="form-row"><label><input type="checkbox" id="tp-on" ${cfg.enabled ? "checked" : ""}/> Enable portal</label></div>
+        <div class="form-row"><label><input type="checkbox" id="tp-login" ${cfg.require_login ? "checked" : ""}/> Login required (RMM account)</label></div>
+        <div class="form-row"><label>Title</label><input id="tp-title" value="${esc(cfg.title || "")}"/></div>
+        <div class="form-row"><label>Welcome text</label><textarea id="tp-intro" rows="3" style="width:100%">${esc(cfg.intro || "")}</textarea></div>
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
           <button class="btn" id="tp-cancel">${tr("cancel")}</button>
           <button class="btn-primary" id="tp-save">${tr("save")}</button>
@@ -178,7 +179,7 @@ export function renderTickets(body, win) {
           }),
         });
         editorEl.style.display = "none";
-        window.notify?.("Portal-Einstellungen gespeichert", "success");
+        window.notify?.("Portal settings saved", "success");
       } catch (e) { window.notify?.(e.message, "error"); }
     });
   });
@@ -186,18 +187,18 @@ export function renderTickets(body, win) {
   const subjectLabel = (a) => {
     const list = a.subject_type === "user" ? subjects.users : subjects.groups;
     const hit = list.find((s) => s.id === a.subject_id);
-    return (a.subject_type === "group" ? "👥 " : "👤 ") + (hit ? hit.label : a.subject_id);
+    return (a.subject_type === "group" ? icon("users", 12) + " " : icon("user", 12) + " ") + (hit ? hit.label : a.subject_id);
   };
-  // Kennt sowohl Clients als auch das Haupt-RMM als Ziel.
+  // Knows both clients and the main RMM as a target.
   const clientLabel = (cid) => targetLabel(cid);
 
-  // ---------------- Liste ----------------
+  // ---------------- list ----------------
   function drawList() {
     let rows = tickets;
     if (statusFilter === "active") rows = rows.filter((t) => t.status === "open" || t.status === "in_progress");
     else if (statusFilter !== "all") rows = rows.filter((t) => t.status === statusFilter);
     if (!rows.length) {
-      listEl.innerHTML = `<div style="padding:14px;color:var(--subtext);font-size:12px">Keine Tickets in dieser Ansicht.</div>`;
+      listEl.innerHTML = `<div style="padding:14px;color:var(--subtext);font-size:12px">${tr("tk_none_in_view")}</div>`;
       return;
     }
     listEl.innerHTML = rows.map((t) => {
@@ -214,8 +215,8 @@ export function renderTickets(body, win) {
         <div style="display:flex;gap:8px;font-size:11px;color:var(--subtext);margin-top:2px;align-items:center">
           <span style="color:${st.color}">● ${st.label}</span>
           <span>${fmtDay(t.created_at)}</span>
-          ${overdue ? `<span style="color:#ff4d6d">⏰ ${tr("tk_overdue")}</span>` : t.due_date ? `<span>⏰ ${fmtDay(t.due_date)}</span>` : ""}
-          ${t.assignees?.length ? `<span>👥 ${t.assignees.length}</span>` : ""}
+          ${overdue ? `<span style="color:#ff4d6d">${icon("clock", 12)} ${tr("tk_overdue")}</span>` : t.due_date ? `<span>${icon("clock", 12)} ${fmtDay(t.due_date)}</span>` : ""}
+          ${t.assignees?.length ? `<span>${icon("users", 12)} ${t.assignees.length}</span>` : ""}
         </div>
       </div>`;
     }).join("");
@@ -226,7 +227,7 @@ export function renderTickets(body, win) {
   async function selectTicket(id) {
     currentId = id;
     drawList();
-    detailEl.innerHTML = `<div style="padding:16px;color:var(--subtext)">Lade…</div>`;
+    detailEl.innerHTML = `<div style="padding:16px;color:var(--subtext)">${tr("loading")}</div>`;
     try {
       const t = await api.ticket(id);
       drawDetail(t);
@@ -235,7 +236,7 @@ export function renderTickets(body, win) {
     }
   }
 
-  // ---------------- Detail ----------------
+  // ---------------- detail ----------------
   function drawDetail(t) {
     const st = statusOf(t.status);
     const pr = prioOf(t.priority);
@@ -243,8 +244,8 @@ export function renderTickets(body, win) {
       <div style="padding:16px 18px">
         <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
           <h2 style="margin:0;flex:1;min-width:200px">${esc(t.title)}</h2>
-          ${may("ticket_edit") ? `<button class="btn" id="tkd-edit">✏️ Bearbeiten</button>` : ""}
-          ${may("ticket_delete") ? `<button class="btn btn-danger" id="tkd-del">🗑 ${tr("delete")}</button>` : ""}
+          ${may("ticket_edit") ? `<button class="btn" id="tkd-edit">${icon("edit", 14)} ${tr("edit")}</button>` : ""}
+          ${may("ticket_delete") ? `<button class="btn btn-danger" id="tkd-del">${icon("trash", 14)} ${tr("delete")}</button>` : ""}
         </div>
         <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--subtext);margin:8px 0 12px">
           <span style="color:${st.color}">● ${st.label}</span>
@@ -258,13 +259,13 @@ export function renderTickets(body, win) {
         ${may("ticket_resolve") ? `
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
           ${t.status !== "in_progress" && t.status !== "resolved" && t.status !== "closed"
-            ? `<button class="btn" data-status="in_progress">▶ ${tr("tk_s_progress")}</button>` : ""}
+            ? `<button class="btn" data-status="in_progress">${tr("tk_s_progress")}</button>` : ""}
           ${t.status !== "resolved" && t.status !== "closed"
-            ? `<button class="btn-primary" data-status="resolved">✓ ${tr("tk_mark_resolved")}</button>` : ""}
+            ? `<button class="btn-primary" data-status="resolved">${icon("check", 14)} ${tr("tk_mark_resolved")}</button>` : ""}
           ${t.status === "resolved"
             ? `<button class="btn" data-status="closed">${tr("close")}</button>` : ""}
           ${(t.status === "resolved" || t.status === "closed")
-            ? `<button class="btn" data-status="open">↩ ${tr("tk_reopen")}</button>` : ""}
+            ? `<button class="btn" data-status="open">${tr("tk_reopen")}</button>` : ""}
         </div>` : ""}
 
         <h3 style="margin:0 0 6px">${tr("tk_description")}</h3>
@@ -288,13 +289,13 @@ export function renderTickets(body, win) {
         </div>
 
         <h3 style="margin:16px 0 6px">${tr("tk_attachments")}
-          ${may("ticket_comment") ? `<button class="btn btn-sm" id="tkd-upload" style="margin-left:6px">📎 ${tr("tk_upload")}</button>
+          ${may("ticket_comment") ? `<button class="btn btn-sm" id="tkd-upload" style="margin-left:6px">${icon("paperclip", 13)} ${tr("tk_upload")}</button>
             <input type="file" id="tkd-file" hidden />` : ""}
         </h3>
         <div id="tkd-files" style="display:flex;gap:10px;flex-wrap:wrap"></div>
 
         <h3 style="margin:16px 0 6px">${tr("tk_comments")} (${t.comments.length})
-          <button class="btn btn-sm" id="tkd-activity" style="margin-left:6px">🕓 ${tr("tk_history")}</button>
+          <button class="btn btn-sm" id="tkd-activity" style="margin-left:6px">${icon("clock", 13)} ${tr("tk_history")}</button>
         </h3>
         <div id="tkd-activity-box" style="display:none;margin-bottom:10px"></div>
         <div style="display:flex;flex-direction:column;gap:8px">
@@ -306,9 +307,9 @@ export function renderTickets(body, win) {
             <div style="background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:13px">
               <div style="font-size:11px;color:var(--subtext);margin-bottom:3px;display:flex;justify-content:space-between;gap:8px">
                 <span><b>${esc(c.author)}</b> · ${fmtDate(c.created_at)}
-                  · <span title="Sichtbarkeit">${v.icon} ${esc(v.label)}${shared}</span></span>
+                  · <span title="${tr("tk_visibility")}">${v.icon} ${esc(tr(v.key))}${shared}</span></span>
                 ${c.can_edit ? `<button class="btn btn-danger btn-sm" data-cdel="${esc(c.id)}"
->🗑</button>` : ""}
+>${icon("trash", 13)}</button>` : ""}
               </div>
               <div style="white-space:pre-wrap;word-break:break-word">${c.hidden
                 ? `<i style="color:var(--subtext)">${tr("tk_private_comment")}</i>`
@@ -318,16 +319,16 @@ export function renderTickets(body, win) {
         ${may("ticket_comment") ? `
         <div style="display:flex;flex-direction:column;gap:6px;margin-top:10px">
           <div style="display:flex;gap:8px">
-            <textarea id="tkd-comment" rows="2" placeholder="Kommentar schreiben…"
+            <textarea id="tkd-comment" rows="2" placeholder="${tr("tk_write_comment")}"
               style="flex:1;resize:none"></textarea>
-            ${spaces() ? `<button class="btn btn-icon" id="tkd-img" title="Bild anhängen (wird in deinem Space gespeichert)" style="align-self:stretch;height:auto">🖼️</button>
+            ${spaces() ? `<button class="btn btn-icon" id="tkd-img" title="${tr("tk_attach_image")}" style="align-self:stretch;height:auto">${icon("image", 15)}</button>
             <input type="file" id="tkd-imgfile" accept="image/*" multiple style="display:none">` : ""}
-            <button class="btn-primary" id="tkd-comment-send">Senden</button>
+            <button class="btn-primary" id="tkd-comment-send">${tr("tk_send")}</button>
           </div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <select id="tkd-comment-vis" style="max-width:230px">
               ${Object.entries(COMMENT_VIS).map(([k, o]) =>
-                `<option value="${k}">${o.icon} Sichtbar ${o.label}</option>`).join("")}
+                `<option value="${k}">${tr(o.key)}</option>`).join("")}
             </select>
             <div id="tkd-comment-users" style="display:none;flex:1;min-width:220px">
               ${subjectPickerHtml(ticketUsers, [], { name: "tkd-subj" })}
@@ -353,14 +354,14 @@ export function renderTickets(body, win) {
       } catch (e) { window.notify?.(e.message, "error"); }
     });
     detailEl.querySelector("#tkd-assign")?.addEventListener("click", () => openAssign(t));
-    // Kommentar-Sichtbarkeit: Benutzerauswahl nur bei "für bestimmte" zeigen
+    // Comment visibility: show the user picker only for "specific users"
     const visSel = detailEl.querySelector("#tkd-comment-vis");
     const usersBox = detailEl.querySelector("#tkd-comment-users");
     visSel?.addEventListener("change", () => {
       usersBox.style.display = visSel.value === "custom" ? "" : "none";
     });
     initSubjectPicker(usersBox);
-    // Bilder: hochladen und als Markierung ins Kommentarfeld setzen
+    // Images: upload and insert a marker into the comment field
     const commentTa = detailEl.querySelector("#tkd-comment");
     async function attachImages(files) {
       const sp = spaces();
@@ -371,7 +372,7 @@ export function renderTickets(body, win) {
           const a = await sp.uploadAttachment(f, "tickets");
           const name = (a.name || "Bild").replace(/[\]|]/g, "_");
           commentTa.value = (commentTa.value ? commentTa.value.replace(/\s*$/, "\n") : "") + `[[space-img:${a.token}|${name}]]\n`;
-        } catch (e) { window.notify?.("Bild nicht angehängt: " + e.message, "error"); }
+        } catch (e) { window.notify?.(tr("tk_image_not_attached") + ": " + e.message, "error"); }
       }
       commentTa.focus();
     }
@@ -401,14 +402,14 @@ export function renderTickets(body, win) {
         catch (e) { window.notify?.(e.message, "error"); }
       }));
 
-    // Aktivitätsprotokoll des Tickets
+    // Activity log of the ticket
     const actBtn = detailEl.querySelector("#tkd-activity");
     const actBox = detailEl.querySelector("#tkd-activity-box");
     actBtn?.addEventListener("click", async () => {
       const open = actBox.style.display === "none";
       actBox.style.display = open ? "" : "none";
       if (!open) return;
-      actBox.innerHTML = `<div style="color:var(--subtext);font-size:12px">Lade Verlauf…</div>`;
+      actBox.innerHTML = `<div style="color:var(--subtext);font-size:12px">${tr("loading")}</div>`;
       try {
         const log = await api.getTicketActivity(t.id);
         actBox.innerHTML = log.length ? `
@@ -432,10 +433,10 @@ export function renderTickets(body, win) {
       const f = fileInput.files[0];
       if (!f) return;
       try { drawDetail(await api.uploadTicketFile(t.id, f)); }
-      catch (e) { window.notify?.(`Upload fehlgeschlagen: ${e.message}`, "error"); }
+      catch (e) { window.notify?.(`${tr("tk_upload_failed")}: ${e.message}`, "error"); }
     });
 
-    // ---- Anhänge rendern (Bilder mit Vorschau, Rest als Download-Kachel) ----
+    // ---- Render attachments (images with preview, rest as a download tile) ----
     const filesEl = detailEl.querySelector("#tkd-files");
     if (!t.files.length) {
       filesEl.innerHTML = `<span style="color:var(--subtext);font-size:12px">${tr("tk_no_files")}</span>`;
@@ -445,12 +446,12 @@ export function renderTickets(body, win) {
         card.style.cssText = "background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:8px;font-size:11px;max-width:160px";
         const isImg = (f.mime || "").startsWith("image/");
         card.innerHTML = `
-          ${isImg ? `<div data-preview style="width:140px;height:90px;background:#0a1420;border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--subtext);cursor:pointer">Lade…</div>` : `<div style="font-size:26px;text-align:center">📄</div>`}
+          ${isImg ? `<div data-preview style="width:140px;height:90px;background:#0a1420;border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--subtext);cursor:pointer">${tr("loading")}</div>` : `<div style="text-align:center;padding:4px 0">${icon("file", 26)}</div>`}
           <div style="margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(f.filename)}">${esc(f.filename)}</div>
           <div style="color:var(--subtext)">${(f.size / 1024).toFixed(0)} KB · ${esc(f.uploaded_by)}</div>
           <div style="display:flex;gap:4px;margin-top:4px">
-            <button class="btn btn-sm" data-dl>⬇</button>
-            ${may("ticket_edit") ? `<button class="btn btn-sm btn-danger" data-rm>🗑</button>` : ""}
+            <button class="btn btn-sm" data-dl>${icon("download", 14)}</button>
+            ${may("ticket_edit") ? `<button class="btn btn-sm btn-danger" data-rm>${icon("trash", 14)}</button>` : ""}
           </div>`;
         filesEl.appendChild(card);
         // Bild-Vorschau mit Auth-Header (Blob-URL).
@@ -477,11 +478,11 @@ export function renderTickets(body, win) {
     }
   }
 
-  // ---------------- Zuweisen-Dialog ----------------
+  // ---------------- assign dialog ----------------
   function openAssign(t) {
     const isChecked = (type, id) => t.assignees.some((a) => a.subject_type === type && a.subject_id === id);
-    // Unverwaltete AD-Gruppen in einen eigenen Ordner, damit die Liste
-    // bei vielen importierten Verzeichnis-Gruppen übersichtlich bleibt.
+    // Unmanaged AD groups go into their own folder so the list stays tidy
+    // when many directory groups have been imported.
     const { managed: managedGroups, unmanaged: unmanagedGroups } = splitGroups(subjects.groups || []);
     const groupRow = (arr) => arr.map((g) => `
       <label style="display:flex;gap:6px;align-items:center;cursor:pointer">
@@ -501,7 +502,7 @@ export function renderTickets(body, win) {
             <details style="margin-top:8px;border:1px dashed var(--border);border-radius:7px;padding:4px 7px"
                      ${unmanagedGroups.some((g) => isChecked("group", g.id)) ? "open" : ""}>
               <summary style="cursor:pointer;color:var(--subtext);list-style:none">
-                📂 ${tr("tk_unmanaged_groups")} (${unmanagedGroups.length})</summary>
+                ${icon("folder", 13)} ${tr("tk_unmanaged_groups")} (${unmanagedGroups.length})</summary>
               <div style="margin-top:4px">${groupRow(unmanagedGroups)}</div>
             </details>` : ""}
         </div>
@@ -523,7 +524,7 @@ export function renderTickets(body, win) {
     });
   }
 
-  // ---------------- Erstellen/Bearbeiten-Dialog ----------------
+  // ---------------- create/edit dialog ----------------
   function openEditor(existing) {
     const isEdit = !!existing;
     const cliChecked = (cid) => existing?.clients?.includes(cid);
@@ -544,18 +545,18 @@ export function renderTickets(body, win) {
           <input id="tke-due" type="date" value="${existing?.due_date ? new Date(existing.due_date).toISOString().slice(0, 10) : ""}" /></div>
         <div class="form-row"><label>${tr("tk_concerns")}</label></div>
         <div style="border:1px solid var(--border);border-radius:8px;padding:8px;max-height:170px;overflow:auto;font-size:12px">
-          <!-- Das RMM selbst als Ziel: fuer alles, was nicht an einem
-               einzelnen Geraet haengt (Dashboard, Rechte, Server). -->
+          <!-- The RMM itself as a target: for everything that is not tied to a
+               single device (dashboard, permissions, server). -->
           <label style="display:flex;gap:6px;align-items:center;cursor:pointer">
             <input type="checkbox" data-cid="${esc(RMM_TARGET)}" ${cliChecked(RMM_TARGET) ? "checked" : ""}/>
-            🏢 ${esc(RMM_LABEL)}</label>
+            ${icon("building", 14)} ${esc(RMM_LABEL)}</label>
           <div style="font-weight:700;margin:8px 0 4px;color:var(--subtext)">${tr("tk_clients")}</div>
           ${state.clients.map((c) => `<label style="display:flex;gap:6px;align-items:center;cursor:pointer">
-            <input type="checkbox" data-cid="${esc(c.id)}" ${cliChecked(c.id) ? "checked" : ""}/> 🖥️ ${esc(c.hostname)}</label>`).join("")
-          || `<div style="color:var(--subtext)">Keine Clients sichtbar</div>`}
+            <input type="checkbox" data-cid="${esc(c.id)}" ${cliChecked(c.id) ? "checked" : ""}/> ${icon("computer", 14)} ${esc(c.hostname)}</label>`).join("")
+          || `<div style="color:var(--subtext)">${tr("tk_no_clients_visible")}</div>`}
         </div>
         ${may("ticket_assign") ? `
-        <div class="form-row" style="margin-top:10px"><label>Zuweisen an</label></div>
+        <div class="form-row" style="margin-top:10px"><label>${tr("tk_assign_to")}</label></div>
         <div id="tke-assign" style="border:1px solid var(--border);border-radius:8px;padding:8px;max-height:150px;overflow:auto;font-size:12px">
           <div style="font-weight:700;margin-bottom:4px">${tr("tab_users")}</div>
           ${subjects.users.map((u) => `<label style="display:flex;gap:6px;align-items:center;cursor:pointer">
@@ -563,8 +564,8 @@ export function renderTickets(body, win) {
               ${existing?.assignees?.some((a) => a.subject_type === "user" && a.subject_id === u.id) ? "checked" : ""}/> ${esc(u.label)}</label>`).join("")}
           <div style="font-weight:700;margin:8px 0 4px">${tr("pm_groups")}</div>
           ${(() => {
-            // Unverwaltete (AD-)Gruppen liegen in einem eingeklappten Ordner -
-            // sonst gehen die eigenen Gruppen in einer langen AD-Liste unter.
+            // Unmanaged (AD) groups live in a collapsed folder -
+            // otherwise the own groups get lost in a long AD list.
             const isOn = (g) => existing?.assignees?.some(
               (a) => a.subject_type === "group" && a.subject_id === g.id);
             const rows = (arr) => arr.map((g) => `
@@ -577,7 +578,7 @@ export function renderTickets(body, win) {
               out += `
                 <details style="margin-top:6px" ${unmanaged.some(isOn) ? "open" : ""}>
                   <summary style="cursor:pointer;color:var(--subtext)">
-                    📁 Unverwaltete AD-Gruppen (${unmanaged.length})
+                    ${icon("folder", 13)} ${tr("tk_unmanaged_groups")} (${unmanaged.length})
                   </summary>
                   <div style="margin-top:4px">${rows(unmanaged)}</div>
                 </details>`;
@@ -619,7 +620,7 @@ export function renderTickets(body, win) {
     });
   }
 
-  // ---------------- Laden ----------------
+  // ---------------- loading ----------------
   async function load(selectFirst = true) {
     try {
       const [rows, subj, tusers] = await Promise.all([

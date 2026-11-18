@@ -1,23 +1,22 @@
 """
 routers/tickets_routes.py
 -------------------------
-Ticket-System mit Zuweisungen, Status, Fälligkeit, Client-Verknüpfung,
-Kommentaren und Datei-Anhängen (Screenshots etc.).
+Ticket system with assignments, status, due date, client links,
+comments and file attachments (screenshots etc.).
 
-Sichtbarkeit einzelner Tickets: NUR Admins, der Ersteller, direkt zugewiesene
-Benutzer und Mitglieder zugewiesener Gruppen sehen ein Ticket. Zusätzlich
-gelten die globalen Rechte:
-  ticket_read     -> Ticket-App/Liste sehen (Basis für alle anderen)
-  ticket_create   -> Tickets erstellen
-  ticket_edit     -> Titel/Beschreibung/Priorität/Fälligkeit/Clients ändern
-  ticket_comment  -> kommentieren
-  ticket_assign   -> Benutzer/Gruppen zuweisen
-  ticket_resolve  -> als gelöst markieren / wieder öffnen / Status ändern
-  ticket_delete   -> Tickets löschen
+Visibility of individual tickets: ONLY admins, the creator, directly assigned
+users and members of assigned groups see a ticket. In addition the global
+permissions apply:
+  ticket_read     -> see the ticket app/list (base for all others)
+  ticket_create   -> create tickets
+  ticket_edit     -> change title/description/priority/due date/clients
+  ticket_comment  -> comment
+  ticket_assign   -> assign users/groups
+  ticket_resolve  -> mark as resolved / reopen / change status
+  ticket_delete   -> delete tickets
 
-Datei-Anhänge werden als ROHER Request-Body hochgeladen (kein multipart,
-gleiches Muster wie Branding/Recordings) und unter backend/ticket_files/
-abgelegt.
+File attachments are uploaded as a RAW request body (no multipart,
+same pattern as branding/recordings) and stored under backend/ticket_files/.
 """
 
 import pathlib
@@ -33,7 +32,7 @@ from app.auth import get_current_user, is_super_admin, require_perm, user_has_pe
 
 router = APIRouter(prefix="/api/tickets", tags=["tickets"])
 
-# Ablage der Anhänge: backend/ticket_files/<ticket_id>/<file_id>
+# Attachment storage: backend/ticket_files/<ticket_id>/<file_id>
 from app.paths import TICKET_FILES_DIR as FILES_DIR
 MAX_FILE_BYTES = 25 * 1024 * 1024   # 25 MB pro Anhang
 
@@ -87,15 +86,15 @@ def _get_visible_ticket(user: dict, ticket_id: str) -> dict:
         raise HTTPException(404, "Ticket nicht gefunden")
     t = dict(row)
     if not _user_may_see(user, t):
-        raise HTTPException(403, "Kein Zugriff auf dieses Ticket")
+        raise HTTPException(403, "No access to this ticket")
     return t
 
 
 def _visible_comments(ticket_id: str, user: dict | None) -> list[dict]:
-    """Kommentare nach Sichtbarkeit filtern:
-       'all' -> alle, 'private' -> nur Verfasser, 'custom' -> Verfasser +
-       freigegebene Benutzer. Admins sehen fremde private Kommentare nur als
-       Platzhalter (löschbar, aber ohne Inhalt)."""
+    """Filter comments by visibility:
+       'all' -> everyone, 'private' -> author only, 'custom' -> author +
+       shared users. Admins see others' private comments only as a
+       placeholder (deletable, but without content)."""
     rows = [dict(r) for r in _conn().execute(
         "SELECT * FROM ticket_comments WHERE ticket_id = ? ORDER BY created_at",
         (ticket_id,)).fetchall()]
@@ -155,7 +154,7 @@ def get_ticket(ticket_id: str, user: dict = Depends(get_current_user)):
 
 
 # ------------------------------------------------------------------
-# Erstellen / Bearbeiten / Löschen
+# Create / edit / delete
 # ------------------------------------------------------------------
 
 class AssigneeEntry(BaseModel):
@@ -203,7 +202,7 @@ def create_ticket(body: TicketBody, user: dict = Depends(get_current_user)):
     if not body.title.strip():
         raise HTTPException(400, "Titel fehlt")
     if body.priority not in VALID_PRIO:
-        raise HTTPException(400, "Ungültige Priorität")
+        raise HTTPException(400, "Invalid priority")
     tid = uuid.uuid4().hex
     now = _now()
     _conn().execute(
@@ -238,7 +237,7 @@ def update_ticket(ticket_id: str, body: TicketBody,
     if not body.title.strip():
         raise HTTPException(400, "Titel fehlt")
     if body.priority not in VALID_PRIO:
-        raise HTTPException(400, "Ungültige Priorität")
+        raise HTTPException(400, "Invalid priority")
     _conn().execute(
         "UPDATE tickets SET title=?, description=?, priority=?, due_date=?, updated_at=? WHERE id=?",
         (body.title.strip(), body.description, body.priority, body.due_date, _now(), ticket_id))
@@ -248,18 +247,18 @@ def update_ticket(ticket_id: str, body: TicketBody,
         _save_assignees(ticket_id, body.assignees)
     db.add_audit_entry(user["username"], "ticket.updated", target=ticket_id,
                        details=t["title"])
-    # Was genau sich geändert hat, für das Protokoll festhalten.
+    # Record exactly what changed, for the log.
     changes = []
     if body.title.strip() != t["title"]:
-        changes.append(f"Titel: „{t['title']}“ → „{body.title.strip()}“")
+        changes.append(f"Title: \"{t['title']}\" → \"{body.title.strip()}\"")
     if body.priority != t["priority"]:
-        changes.append(f"Priorität: {t['priority']} → {body.priority}")
+        changes.append(f"Priority: {t['priority']} → {body.priority}")
     if (body.description or "") != (t["description"] or ""):
-        changes.append("Beschreibung geändert")
+        changes.append("Description changed")
     if body.due_date != t["due_date"]:
-        changes.append("Fälligkeit geändert")
+        changes.append("Due date changed")
     vis.log("ticket", ticket_id, user, "ticket.updated",
-            "; ".join(changes) or "keine inhaltlichen Änderungen")
+            "; ".join(changes) or "no content changes")
     return _full(_get_visible_ticket(user, ticket_id), user)
 
 
@@ -268,14 +267,14 @@ def delete_ticket(ticket_id: str, user: dict = Depends(get_current_user)):
     require_perm(user, "ticket_delete")
     t = _get_visible_ticket(user, ticket_id)
     c = _conn()
-    # Freigaben der Kommentare mit aufräumen
+    # Clean up comment shares as well
     c.execute("DELETE FROM ticket_comment_shares WHERE comment_id IN"
               " (SELECT id FROM ticket_comments WHERE ticket_id = ?)", (ticket_id,))
     for table in ("ticket_assignees", "ticket_clients", "ticket_comments", "ticket_files"):
         c.execute(f"DELETE FROM {table} WHERE ticket_id = ?", (ticket_id,))
     c.execute("DELETE FROM tickets WHERE id = ?", (ticket_id,))
     c.commit()
-    # Anhänge von der Platte löschen (best effort).
+    # Delete attachments from disk (best effort).
     import shutil
     shutil.rmtree(FILES_DIR / ticket_id, ignore_errors=True)
     db.add_audit_entry(user["username"], "ticket.deleted", target=ticket_id,
@@ -316,7 +315,7 @@ def set_status(ticket_id: str, body: StatusBody,
     require_perm(user, "ticket_resolve")
     t = _get_visible_ticket(user, ticket_id)
     if body.status not in VALID_STATUS:
-        raise HTTPException(400, "Ungültiger Status")
+        raise HTTPException(400, "Invalid status")
     resolved_at, resolved_by = t["resolved_at"], t["resolved_by"]
     if body.status == "resolved" and t["status"] != "resolved":
         resolved_at, resolved_by = _now(), user["username"]
@@ -336,13 +335,13 @@ def set_status(ticket_id: str, body: StatusBody,
 class CommentBody(BaseModel):
     text: str
     visibility: str = "all"            # all | private | custom
-    # Einträge: {"type": "user"|"group", "id": "..."} - reine IDs = Benutzer.
+    # Entries: {"type": "user"|"group", "id": "..."} - plain IDs = users.
     shared_with: list = []
 
 
 def _vis_label(v: str) -> str:
-    return {"all": "für alle", "private": "nur für mich",
-            "custom": "für bestimmte Benutzer"}.get(v, v)
+    return {"all": "everyone", "private": "only me",
+            "custom": "specific users"}.get(v, v)
 
 
 @router.post("/{ticket_id}/comments")
@@ -380,7 +379,7 @@ def delete_comment(ticket_id: str, comment_id: str,
         raise HTTPException(404, "Kommentar nicht gefunden")
     c = dict(row)
     if not vis.may_modify(user, c):
-        raise HTTPException(403, "Nur der Verfasser darf diesen Kommentar löschen")
+        raise HTTPException(403, "Only the author may delete this comment")
     _conn().execute("DELETE FROM ticket_comment_shares WHERE comment_id = ?", (comment_id,))
     _conn().execute("DELETE FROM ticket_comments WHERE id = ?", (comment_id,))
     _conn().commit()
@@ -391,7 +390,7 @@ def delete_comment(ticket_id: str, comment_id: str,
 
 
 # ------------------------------------------------------------------
-# Aktivitätsprotokoll des Tickets
+# Activity log of the ticket
 # ------------------------------------------------------------------
 
 @router.get("/{ticket_id}/activity")
@@ -406,8 +405,8 @@ def ticket_activity(ticket_id: str, user: dict = Depends(get_current_user)):
 
 @router.get("/meta/users")
 def ticket_users(user: dict = Depends(get_current_user)):
-    """Auswahlliste für die Kommentar-Sichtbarkeit 'für bestimmte':
-    Benutzer UND Gruppen (unverwaltete AD-Gruppen sind markiert)."""
+    """Selection list for the comment visibility 'specific users':
+    users AND groups (unmanaged AD groups are marked)."""
     require_perm(user, "ticket_read")
     return {
         "users": [{"id": u["id"], "username": u["username"]}
@@ -420,7 +419,7 @@ def ticket_users(user: dict = Depends(get_current_user)):
 
 
 # ------------------------------------------------------------------
-# Datei-Anhänge (Screenshots etc.) - Upload als roher Body (kein multipart).
+# File attachments (screenshots etc.) - upload as a raw body (no multipart).
 # ------------------------------------------------------------------
 
 @router.post("/{ticket_id}/files")
@@ -432,8 +431,8 @@ async def upload_file(ticket_id: str, request: Request, filename: str = "datei",
     if not data:
         raise HTTPException(400, "Leerer Upload")
     if len(data) > MAX_FILE_BYTES:
-        raise HTTPException(413, "Datei zu groß (max. 25 MB)")
-    # Dateinamen entschärfen (nur Basename, keine Pfade).
+        raise HTTPException(413, "File too large (max. 25 MB)")
+    # Sanitize the file name (basename only, no paths).
     safe_name = pathlib.Path(filename).name or "datei"
     fid = uuid.uuid4().hex
     target_dir = FILES_DIR / ticket_id
@@ -489,7 +488,7 @@ def delete_file(ticket_id: str, file_id: str,
     return _full(_get_visible_ticket(user, ticket_id), user)
 
 
-# Auswahl-Listen für den Zuweisungs-Dialog.
+# Selection lists for the assignment dialog.
 @router.get("/meta/support-group")
 def support_group(user: dict = Depends(get_current_user)):
     """Die Support-Standardgruppe - fuer den Dialog bei fehlenden Rechten.

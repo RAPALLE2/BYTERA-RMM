@@ -1,14 +1,13 @@
-# module.py (Modul "sql")
+# module.py (module "sql")
 # -----------------------
-# Beim Deaktivieren darf keine externe Datenbank aktiv bleiben, denn ohne das
-# Modul gibt es keine Oberflaeche mehr, um sie zu verwalten. Deshalb wird die
-# komplette externe Datenbank in die lokale SQLite-Datei kopiert, der Modus auf
-# "lokal" gestellt und das Backend neu gestartet. Lief die Datenbank im
-# Docker-Container, wird dieser angehalten (Container + Volume bleiben).
+# When the module is disabled, no external database may stay active, because without
+# the module there is no UI left to manage it. Therefore the complete external database
+# is copied into the local SQLite file, the mode is set to "local" and the backend is
+# restarted. If the database ran in a Docker container, that container is stopped
+# (container + volume are kept).
 #
-# Geht der Rueckkopie etwas schief, bleibt der externe Modus bestehen - der
-# Core (app/dbsync.py) gleicht weiter ab, es gehen also keine Daten verloren.
-# Das Modul kann dann wieder aktiviert werden, um es erneut zu versuchen.
+# If the copy-back fails, external mode stays in place - the core (app/dbsync.py)
+# keeps syncing, so no data is lost. The module can then be re-enabled to try again.
 
 import asyncio
 
@@ -20,28 +19,28 @@ from . import sqlcore
 async def on_disable(ctx):
     cfg = dbsync.load_config()
     if cfg.get("mode", "local") != "external":
-        ctx.log("Datenbank ist lokal - nichts zu tun.")
+        ctx.log("Database is local - nothing to do.")
         return
     if dbsync.JOB.get("running"):
-        ctx.log("Es läuft bereits ein Datenbank-Wechsel - Rückkopie übersprungen.")
-        raise RuntimeError("Datenbank-Wechsel läuft bereits; externe DB bleibt aktiv.")
+        ctx.log("A database switch is already running - copy-back skipped.")
+        raise RuntimeError("A database switch is already running; external DB stays active.")
 
-    ctx.log(f"Externe Datenbank ({cfg.get('type')}) wird in die lokale Datei kopiert …")
+    ctx.log(f"External database ({cfg.get('type')}) is being copied into the local file …")
     use_docker = sqlcore.docker_db_in_use(cfg)
     dbsync.job_reset("backup")
     loop = asyncio.get_running_loop()
     ok = await loop.run_in_executor(
         None, lambda: sqlcore.run_switch(dict(cfg), "local", "system:module-sql", restart=False))
     if not ok:
-        raise RuntimeError("Rückkopie in die lokale Datei fehlgeschlagen: "
-                           + str(dbsync.JOB.get("detail") or "unbekannter Fehler")
-                           + " - externe Datenbank bleibt aktiv.")
-    ctx.log("Rückkopie erledigt: " + str(dbsync.JOB.get("detail") or ""))
+        raise RuntimeError("Copy-back into the local file failed: "
+                           + str(dbsync.JOB.get("detail") or "unknown error")
+                           + " - external database stays active.")
+    ctx.log("Copy-back done: " + str(dbsync.JOB.get("detail") or ""))
     if use_docker:
         try:
             await loop.run_in_executor(None, sqlcore.stop_docker_db)
-            ctx.log("Docker-Datenbank-Container angehalten (Daten bleiben erhalten).")
+            ctx.log("Docker database container stopped (data is kept).")
         except Exception as exc:
-            ctx.log(f"Docker-Container konnte nicht angehalten werden: {exc}")
-    ctx.log("Backend startet neu …")
+            ctx.log(f"Docker container could not be stopped: {exc}")
+    ctx.log("Backend restarting …")
     sqlcore.restart_soon(5.0)

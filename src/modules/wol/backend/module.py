@@ -1,4 +1,4 @@
-# module.py (Modul "wol") - Wake-on-LAN
-# Keine Hintergrundaufgabe noetig. MACs werden aus den Live-Messwerten gelesen.
+# module.py (module "wol") - Wake-on-LAN
+# No background task needed. MACs are read from the live metrics.
 def on_startup(ctx):
-    ctx.log("Wake-on-LAN bereit")
+    ctx.log("Wake-on-LAN ready")

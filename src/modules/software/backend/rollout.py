@@ -1,10 +1,9 @@
 """
-rollout.py (Modul "software") - die eigentliche Installations-Engine.
+rollout.py (module "software") - the actual installation engine.
 
-install(client_id, package_id) schickt dem Agenten das Paket (Dateipfade zum
-Herunterladen + Kommando) und wartet auf das Ergebnis. Wird sowohl vom
-Deploy-Endpoint (Online-Clients) als auch von der Offline-Warteschlange des
-Cores benutzt (app/sockets.py, kind "software").
+install(client_id, package_id) sends the package to the agent (file paths to
+download + command) and waits for the result. Used both by the deploy endpoint
+(online clients) and by the core's offline queue (app/sockets.py, kind "software").
 """
 
 from __future__ import annotations
@@ -20,7 +19,7 @@ from app.paths import MODULES_DATA_DIR, STORAGE_DIR
 
 DIR = MODULES_DATA_DIR / "software"
 PKG_FILE = DIR / "packages.json"
-FILES_DIR = STORAGE_DIR / "software"   # nicht oeffentlich - Agents laden per Agent-Token
+FILES_DIR = STORAGE_DIR / "software"   # not public - agents download with an agent token
 _lock = threading.RLock()
 
 _pending: dict[str, asyncio.Future] = {}
@@ -44,7 +43,7 @@ def save_packages(data: dict) -> None:
 
 
 def register_handlers() -> None:
-    """Ergebnis-Event der Agents einmalig am Socket-Server anmelden."""
+    """Register the agents' result event once on the socket server."""
     global _registered
     if _registered:
         return
@@ -67,7 +66,7 @@ def command_for(pkg: dict, platform: str) -> str:
 
 
 async def install(client_id: str, package_id: str, timeout: float = 1800.0) -> dict:
-    """Paket auf EINEM (online) Client installieren und auf das Ergebnis warten."""
+    """Install the package on ONE (online) client and wait for the result."""
     from app import db
     from app.sockets import send_to_agent
 
@@ -99,7 +98,7 @@ async def install(client_id: str, package_id: str, timeout: float = 1800.0) -> d
         res = await asyncio.wait_for(fut, timeout=timeout)
     except asyncio.TimeoutError:
         _pending.pop(request_id, None)
-        return {"ok": False, "error": f"Zeitüberschreitung nach {int(timeout)} s"}
+        return {"ok": False, "error": f"Timeout after {int(timeout)} s"}
     code = int(res.get("code") if res.get("code") is not None else 1)
     return {"ok": code == 0, "code": code, "output": res.get("output") or "",
             "error": None if code == 0 else f"Exit-Code {code}"}

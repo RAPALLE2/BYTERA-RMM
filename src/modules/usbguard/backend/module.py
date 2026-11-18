@@ -1,4 +1,4 @@
-# module.py (Modul "usbguard") - USB-Steuerung
+# module.py (module "usbguard") - USB control
 import asyncio
 import json
 
@@ -8,8 +8,8 @@ def on_startup(ctx):
     guard.register(ctx)
 
     async def settings_watch():
-        # Kein Hook fuer Einstellungsaenderungen vorhanden: alle 15 s vergleichen
-        # und bei Aenderung die Konfiguration an alle verbundenen Agents verteilen.
+        # No hook for settings changes available: compare every 15 s
+        # and on a change distribute the configuration to all connected agents.
         last = None
         while True:
             await asyncio.sleep(15)

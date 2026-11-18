@@ -1,19 +1,19 @@
-# sql_routes.py (Modul "sql")
+# sql_routes.py (module "sql")
 # ---------------------------
-# Datenbank verwalten (frueher Core: router/database_routes.py). Die URLs sind
-# unveraendert geblieben, damit api.js und bestehende Skripte weiter passen.
+# Manage the database (formerly core: router/database_routes.py). The URLs are
+# unchanged so api.js and existing scripts keep working.
 #
-# Recht: "admin_settings" (Admin-Einstellungen: IP/Port, Server-Update, DB …).
+# Permission: "admin_settings" (admin settings: IP/port, server update, DB …).
 #
-#   GET  /api/admin/database/info            Modus + Konfiguration (ohne Passwort)
-#   POST /api/admin/database/test            Verbindung testen
-#   POST /api/admin/database/switch          Modus wechseln (Daten kopieren, Neustart)
-#   GET  /api/admin/database/progress        Fortschritt des Wechsels
-#   GET  /api/admin/database/backups         Sicherungen in backend/data/backup
-#   POST /api/admin/database/backup          Sicherung jetzt erstellen
-#   POST /api/admin/database/restore-backup  Sicherung zurueckspielen (Neustart)
-#   GET  /api/admin/database/docker          Docker-Datenbank: Zustand + Zugangsdaten
-#                                            (nur sinnvoll, wenn das Backend im Container laeuft)
+#   GET  /api/admin/database/info            mode + configuration (without password)
+#   POST /api/admin/database/test            test the connection
+#   POST /api/admin/database/switch          switch mode (copy data, restart)
+#   GET  /api/admin/database/progress        progress of the switch
+#   GET  /api/admin/database/backups         backups in backend/data/backup
+#   POST /api/admin/database/backup          create a backup now
+#   POST /api/admin/database/restore-backup  restore a backup (restart)
+#   GET  /api/admin/database/docker          Docker database: state + credentials
+#                                            (only useful when the backend runs in a container)
 
 import asyncio
 
@@ -50,8 +50,8 @@ class BackupBody(BaseModel):
 
 
 def _merge_config(body: DbConfigBody) -> dict:
-    """Uebergebene Felder mit der gespeicherten Config zusammenfuehren
-    (leeres Passwort = altes Passwort behalten)."""
+    """Merge the supplied fields with the stored config
+    (empty password = keep the old password)."""
     cfg = dbsync.load_config()
     cfg.update({
         "type": body.type, "host": body.host, "port": body.port,
@@ -68,8 +68,8 @@ def database_info(user: dict = Depends(get_current_user)):
     return {"config": dbsync.public_config()}
 
 
-# Alle Datenbank-Aufgaben laufen als BACKEND-JOB (app/bgjobs.py): Neuladen
-# bricht nichts ab, Fortschritt/Log stehen in der Aufgaben-Anzeige.
+# All database tasks run as a BACKEND JOB (app/bgjobs.py): a reload
+# does not abort anything, progress/log are shown in the task view.
 _PERM = "admin_settings"
 
 
@@ -79,7 +79,7 @@ async def database_test(body: DbConfigBody, background: bool = False, user: dict
     cfg = _merge_config(body)
 
     async def work(job):
-        job.update(phase="test", detail=f"Verbindung zu {cfg.get('host') or cfg.get('type')} wird geprüft")
+        job.update(phase="test", detail=f"Testing connection to {cfg.get('host') or cfg.get('type')}")
         try:
             await asyncio.to_thread(dbsync.test_connection, cfg)
         except Exception as e:
@@ -93,11 +93,11 @@ async def database_test(body: DbConfigBody, background: bool = False, user: dict
 async def database_switch(body: SwitchBody, background: bool = False, user: dict = Depends(get_current_user)):
     _perm(user)
     if body.mode not in ("local", "external"):
-        raise HTTPException(400, "Ungültiger Modus (local|external)")
+        raise HTTPException(400, "Invalid mode (local|external)")
     if dbsync.JOB.get("running"):
-        raise HTTPException(409, "Es läuft bereits ein Datenbank-Wechsel")
+        raise HTTPException(409, "A database switch is already running")
     cfg = _merge_config(body)
-    # Vorab pruefen, solange noch nichts angefasst wurde.
+    # Check beforehand, while nothing has been touched yet.
     loop = asyncio.get_running_loop()
     try:
         await loop.run_in_executor(None, dbsync.test_connection, cfg)
@@ -121,18 +121,18 @@ async def database_switch(body: SwitchBody, background: bool = False, user: dict
                 last = lines[-1]
             tot = J.get("total") or 0
             job.update(phase=J.get("phase") or "", pct=(J.get("done", 0) / tot * 100) if tot else None,
-                       detail=f"{J.get('phase', '')} · {J.get('table', '')} · {J.get('done', 0)}/{tot} Tabellen · {J.get('rows', 0)} Zeilen")
+                       detail=f"{J.get('phase', '')} · {J.get('table', '')} · {J.get('done', 0)}/{tot} tables · {J.get('rows', 0)} rows")
             if not J.get("running"):
                 break
             await asyncio.sleep(1.0)
         if J.get("ok") is False:
-            raise RuntimeError(J.get("detail") or "Datenbank-Wechsel fehlgeschlagen")
+            raise RuntimeError(J.get("detail") or "Database switch failed")
         job.update(phase="restart", detail=J.get("detail") or "fertig")
         return {"ok": True, "detail": J.get("detail"), "errors": J.get("errors")}
-    job, _ = bgjobs.start("sql.switch", "db", title=f"Datenbank wechseln ({body.mode})", user=user,
+    job, _ = bgjobs.start("sql.switch", "db", title=f"Switch database ({body.mode})", user=user,
                           runner=mirror, perm=_PERM)
     out = {"ok": True, "started": True, "job_id": job.id,
-           "detail": "Wechsel läuft - Fortschritt siehe /progress"}
+           "detail": "Switch running - see /progress for progress"}
     return {**job.public(), **out, "job": True} if background else out
 
 
@@ -150,49 +150,49 @@ def database_backups(user: dict = Depends(get_current_user)):
 
 @router.post("/backup")
 async def database_backup(background: bool = False, user: dict = Depends(get_current_user)):
-    """Sicherung der kompletten Datenbank nach backend/data/backup.
+    """Back up the complete database to backend/data/backup.
 
-    Die lokale SQLite ist immer die Arbeitskopie - auch im externen Modus -,
-    deshalb enthaelt die Sicherung in jedem Modus den vollstaendigen Stand.
+    The local SQLite is always the working copy - even in external mode -,
+    so the backup contains the full state in every mode.
     """
     _perm(user)
 
     async def work(job):
-        job.update(phase="backup", detail="Datenbank wird gesichert")
+        job.update(phase="backup", detail="Backing up the database")
         try:
-            path = await asyncio.to_thread(dbsync.backup_local, "manuell")
+            path = await asyncio.to_thread(dbsync.backup_local, "manual")
         except Exception as e:
-            raise HTTPException(500, f"Sicherung fehlgeschlagen: {e}")
+            raise HTTPException(500, f"Backup failed: {e}")
         db.add_audit_entry(user["username"], "database.backup", details=path)
         return {"ok": True, "path": path}
-    return await bgjobs.run("sql.backup", "db", title="Datenbank sichern", user=user, work=work,
+    return await bgjobs.run("sql.backup", "db", title="Back up database", user=user, work=work,
                             background=background, perm=_PERM)
 
 
 @router.post("/restore-backup")
 async def database_restore_backup(body: BackupBody, background: bool = False, user: dict = Depends(get_current_user)):
-    """Eine Sicherung zurueckspielen. Das Backend startet danach neu."""
+    """Restore a backup. The backend restarts afterwards."""
     _perm(user)
     known = {b["path"] for b in dbsync.list_backups()}
     if body.path not in known:
-        raise HTTPException(400, "Unbekannte Sicherung")
+        raise HTTPException(400, "Unknown backup")
     async def work(job):
-        job.update(phase="restore", detail="Sicherung wird zurückgespielt")
+        job.update(phase="restore", detail="Restoring the backup")
         try:
             await asyncio.to_thread(dbsync.restore_local_backup, body.path)
         except Exception as e:
-            raise HTTPException(500, f"Wiederherstellung fehlgeschlagen: {e}")
+            raise HTTPException(500, f"Restore failed: {e}")
         db.add_audit_entry(user["username"], "database.restored", details=body.path)
-        job.update(phase="restart", detail="Zurückgespielt - Backend startet neu")
+        job.update(phase="restart", detail="Restored - backend restarting")
         sqlcore.restart_soon()
-        return {"ok": True, "restart": "Backend startet in wenigen Sekunden neu"}
-    return await bgjobs.run("sql.restore", "db", title="Datenbank-Sicherung zurückspielen", user=user, work=work,
+        return {"ok": True, "restart": "Backend restarts in a few seconds"}
+    return await bgjobs.run("sql.restore", "db", title="Restore database backup", user=user, work=work,
                             background=background, perm=_PERM)
 
 
 @router.get("/docker")
 def database_docker(user: dict = Depends(get_current_user)):
-    """Zustand des Docker-Datenbank-Containers. is_docker=false -> Bereich ausblenden."""
+    """State of the Docker database container. is_docker=false -> hide the section."""
     _perm(user)
     from app import docker_services
     st = docker_services.status()

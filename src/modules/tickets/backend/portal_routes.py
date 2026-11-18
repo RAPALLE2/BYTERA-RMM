@@ -1,22 +1,22 @@
 """
-portal_routes.py (Modul "tickets") - oeffentliches Ticket-Portal
+portal_routes.py (module "tickets") - public ticket portal
 ----------------------------------------------------------------
-Ein kleines Support-Portal unter rmm.url/web/tickets (die Adresse liegt im
-Namensraum des Webserver-Moduls - das Portal erscheint nur, wenn das Modul
-"webserver" aktiv ist). Einstellbar in der Ticket-App (nur Admin):
+A small support portal at rmm.url/web/tickets (the address lives in the
+namespace of the webserver module - the portal only appears when the
+"webserver" module is active). Configurable in the ticket app (admin only):
 
-  * Portal an/aus
-  * MIT oder OHNE Anmeldung:
-      - ohne Anmeldung: jeder kann ueber das Formular ein Ticket erstellen
-        (Name/E-Mail als Kontakt, IP-Ratenbegrenzung gegen Spam)
-      - mit Anmeldung: Ticket erstellen UND die eigenen/zugewiesenen Tickets
-        sehen, kommentieren und (als zugewiesener Bearbeiter) den Status
-        aendern - Login mit dem normalen RMM-Konto
-  * Titel/Begruessung des Portals
+  * portal on/off
+  * WITH or WITHOUT login:
+      - without login: anyone can create a ticket via the form
+        (name/email as contact, IP rate limiting against spam)
+      - with login: create a ticket AND view, comment on and (as the assigned
+        handler) change the status of your own/assigned tickets - login with
+        the normal RMM account
+  * portal title/greeting
 
-Neue Portal-Tickets werden automatisch der Support-Gruppe zugewiesen (falls
-vorhanden), damit sie bei jemandem landen. Private Kommentare bleiben im
-Portal IMMER unsichtbar - es zeigt nur Kommentare mit Sichtbarkeit 'all'.
+New portal tickets are automatically assigned to the support group (if one
+exists) so they land with someone. Private comments ALWAYS stay invisible in
+the portal - it only shows comments with visibility 'all'.
 """
 
 from __future__ import annotations
@@ -175,27 +175,27 @@ def portal_create(body: PortalCreate, request: Request,
                   user: dict | None = Depends(_optional_user)):
     cfg = _cfg()
     if not cfg["enabled"]:
-        raise HTTPException(404, "Das Ticket-Portal ist nicht aktiviert")
+        raise HTTPException(404, "The ticket portal is not enabled")
     if cfg["require_login"] and user is None:
-        raise HTTPException(401, "Bitte zuerst anmelden")
+        raise HTTPException(401, "Please sign in first")
     title = (body.title or "").strip()
     if not title:
-        raise HTTPException(400, "Bitte einen Betreff angeben")
+        raise HTTPException(400, "Please provide a subject")
     prio = body.priority if body.priority in VALID_PRIO else "normal"
     desc = (body.text or "").strip()[:20000]
 
     if user is None:
         ip = (request.client.host if request and request.client else "") or "?"
         if not _rate_ok(ip):
-            raise HTTPException(429, "Zu viele Anfragen - bitte später erneut versuchen")
-        name = (body.name or "").strip()[:80] or "Portal-Gast"
+            raise HTTPException(429, "Too many requests - please try again later")
+        name = (body.name or "").strip()[:80] or "Portal guest"
         email = (body.email or "").strip()[:160]
         created_by = f"portal:{name}"
-        desc = (f"[Über das Ticket-Portal erstellt]\n"
-                f"Name: {name}\nE-Mail: {email or '-'}\nIP: {ip}\n\n{desc}")
+        desc = (f"[Created via the ticket portal]\n"
+                f"Name: {name}\nEmail: {email or '-'}\nIP: {ip}\n\n{desc}")
     else:
         created_by = user["username"]
-        desc = "[Über das Ticket-Portal erstellt]\n\n" + desc
+        desc = "[Created via the ticket portal]\n\n" + desc
 
     tid = uuid.uuid4().hex
     now = _now()
@@ -207,8 +207,8 @@ def portal_create(body: PortalCreate, request: Request,
     _assign_support(tid)
     db.add_audit_entry(created_by, "ticket.portal.created", target=tid, details=title[:200])
     return {"ok": True, "id": tid,
-            "message": "Ticket erstellt. " + ("Du findest es unter „Meine Tickets“." if user
-                                              else "Wir melden uns über die angegebene Adresse.")}
+            "message": "Ticket created. " + ("You can find it under \"My tickets\"." if user
+                                              else "We will get back to you via the address you provided.")}
 
 
 def _portal_ticket_out(t: dict, user: dict) -> dict:
@@ -222,7 +222,7 @@ def _portal_ticket_out(t: dict, user: dict) -> dict:
 def portal_mine(user: dict = Depends(get_current_user)):
     cfg = _cfg()
     if not cfg["enabled"]:
-        raise HTTPException(404, "Das Ticket-Portal ist nicht aktiviert")
+        raise HTTPException(404, "The ticket portal is not enabled")
     rows = [dict(r) for r in _conn().execute(
         "SELECT * FROM tickets ORDER BY updated_at DESC").fetchall()]
     return [_portal_ticket_out(t, user) for t in rows if _portal_may(user, t)]
@@ -231,17 +231,17 @@ def portal_mine(user: dict = Depends(get_current_user)):
 def _portal_get(user: dict, ticket_id: str) -> dict:
     row = _conn().execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
     if not row:
-        raise HTTPException(404, "Ticket nicht gefunden")
+        raise HTTPException(404, "Ticket not found")
     t = dict(row)
     if not (_portal_may(user, t) or is_super_admin(user)):
-        raise HTTPException(403, "Kein Zugriff auf dieses Ticket")
+        raise HTTPException(403, "No access to this ticket")
     return t
 
 
 @router.get("/api/tickets/portal/ticket/{ticket_id}")
 def portal_ticket(ticket_id: str, user: dict = Depends(get_current_user)):
     t = _portal_get(user, ticket_id)
-    # Nur OEFFENTLICHE Kommentare (visibility 'all') - interne bleiben intern.
+    # Only PUBLIC comments (visibility 'all') - internal ones stay internal.
     comments = [dict(r) for r in _conn().execute(
         "SELECT id, author, text, created_at FROM ticket_comments "
         "WHERE ticket_id = ? AND visibility = 'all' ORDER BY created_at",
@@ -262,7 +262,7 @@ def portal_comment(ticket_id: str, body: PortalComment,
     t = _portal_get(user, ticket_id)
     text = (body.text or "").strip()
     if not text:
-        raise HTTPException(400, "Leerer Kommentar")
+        raise HTTPException(400, "Empty comment")
     cid = uuid.uuid4().hex
     _conn().execute(
         "INSERT INTO ticket_comments (id, ticket_id, author, author_id, text, created_at, visibility) "
@@ -282,11 +282,11 @@ class PortalStatus(BaseModel):
 def portal_status(ticket_id: str, body: PortalStatus,
                   user: dict = Depends(get_current_user)):
     t = _portal_get(user, ticket_id)
-    # Status aendern darf im Portal nur, wem das Ticket ZUGEWIESEN ist.
+    # In the portal, only someone the ticket is ASSIGNED to may change the status.
     if not (_is_assigned(user, ticket_id) or is_super_admin(user)):
-        raise HTTPException(403, "Status ändern dürfen nur zugewiesene Bearbeiter")
+        raise HTTPException(403, "Only assigned handlers may change the status")
     if body.status not in ("open", "in_progress", "resolved"):
-        raise HTTPException(400, "Ungültiger Status")
+        raise HTTPException(400, "Invalid status")
     now = _now()
     if body.status == "resolved":
         _conn().execute("UPDATE tickets SET status = ?, resolved_at = ?, resolved_by = ?, "
@@ -301,7 +301,7 @@ def portal_status(ticket_id: str, body: PortalStatus,
 
 
 # ------------------------------------------------------------------
-# Die Portal-SEITE: rmm.url/web/tickets (braucht das Webserver-Modul)
+# The portal PAGE: rmm.url/web/tickets (needs the webserver module)
 # ------------------------------------------------------------------
 
 @router.get("/web/tickets", include_in_schema=False)
@@ -313,19 +313,19 @@ def portal_redirect():
 def portal_page():
     from app import modules
     if not modules.is_enabled("webserver"):
-        return HTMLResponse("<h3>Das Ticket-Portal benötigt das aktivierte Modul „Webserver“.</h3>",
+        return HTMLResponse("<h3>The ticket portal needs the \"Webserver\" module to be enabled.</h3>",
                             status_code=404)
     cfg = _cfg()
     if not cfg["enabled"]:
-        return HTMLResponse("<h3>Das Ticket-Portal ist derzeit nicht aktiviert.</h3>", status_code=404)
+        return HTMLResponse("<h3>The ticket portal is currently not enabled.</h3>", status_code=404)
     return HTMLResponse(_PORTAL_HTML)
 
 
-# Eine einzige, in sich geschlossene Seite (kein Dashboard-Code, kein CDN).
+# A single, self-contained page (no dashboard code, no CDN).
 _PORTAL_HTML = r"""<!doctype html>
-<html lang="de"><head>
+<html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Support-Portal</title>
+<title>Support portal</title>
 <style>
 :root{--bg:#0f1318;--panel:#161c26;--panel2:#1d2635;--border:#2a3650;--text:#e6e9f0;--sub:#8b96ab;--accent:#4e8cff;--ok:#34d399;--warn:#fbbf24;--danger:#f87171}
 *{box-sizing:border-box}body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--text)}
@@ -343,13 +343,14 @@ button.ghost{background:transparent;border:1px solid var(--border);color:var(--t
 .comment{background:var(--panel2);border-radius:8px;padding:8px 10px;margin:6px 0;font-size:14px}
 .meta{font-size:11px;color:var(--sub)} a{color:var(--accent)}
 .row{display:flex;gap:8px;flex-wrap:wrap} .row>*{flex:1}
-</style></head><body><div class="wrap" id="app">Lade …</div>
+</style></head><body><div class="wrap" id="app">Loading …</div>
 <script>
 "use strict";
 const $=s=>document.querySelector(s);
 let CFG=null, TOKEN=sessionStorage.getItem("portal-token")||null, USER=sessionStorage.getItem("portal-user")||null;
+const CHK_SVG='<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M4 12.5l5 5 11-11"/></svg>';
 const esc=t=>String(t??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const STATUS={open:"Offen",in_progress:"In Arbeit",resolved:"Gelöst",closed:"Geschlossen"};
+const STATUS={open:"Open",in_progress:"In progress",resolved:"Resolved",closed:"Closed"};
 async function api(path,opts={}){
   const h={"Content-Type":"application/json",...(opts.headers||{})};
   if(TOKEN)h.Authorization="Bearer "+TOKEN;
@@ -358,21 +359,21 @@ async function api(path,opts={}){
   if(!r.ok)throw new Error((d&&d.detail)||("HTTP "+r.status));
   return d;
 }
-const fmt=ms=>ms?new Date(ms).toLocaleString("de-DE"):"";
+const fmt=ms=>ms?new Date(ms).toLocaleString():"";
 function header(){
-  return `<h1>🎫 ${esc(CFG.title)}</h1><div class="sub">${esc(CFG.intro||"")}</div>`+
-    (USER?`<div class="sub">Angemeldet als <b>${esc(USER)}</b> ·
-      <a href="#" onclick="logout();return false">Abmelden</a></div>`:"");
+  return `<h1>${esc(CFG.title)}</h1><div class="sub">${esc(CFG.intro||"")}</div>`+
+    (USER?`<div class="sub">Signed in as <b>${esc(USER)}</b> ·
+      <a href="#" onclick="logout();return false">Sign out</a></div>`:"");
 }
 window.logout=()=>{TOKEN=USER=null;sessionStorage.clear();render();};
 function createForm(){
-  return `<div class="card"><b>Neues Ticket</b>
-    ${USER?"":`<div class="row"><input id="p-name" placeholder="Dein Name"><input id="p-email" placeholder="E-Mail für Rückfragen"></div>`}
-    <input id="p-title" placeholder="Betreff">
-    <textarea id="p-text" placeholder="Beschreibung des Anliegens …"></textarea>
-    <select id="p-prio"><option value="low">Niedrig</option><option value="normal" selected>Normal</option>
-      <option value="high">Hoch</option><option value="critical">Kritisch</option></select>
-    <button onclick="createTicket()">Ticket absenden</button>
+  return `<div class="card"><b>New ticket</b>
+    ${USER?"":`<div class="row"><input id="p-name" placeholder="Your name"><input id="p-email" placeholder="Email for follow-up"></div>`}
+    <input id="p-title" placeholder="Subject">
+    <textarea id="p-text" placeholder="Describe your request …"></textarea>
+    <select id="p-prio"><option value="low">Low</option><option value="normal" selected>Normal</option>
+      <option value="high">High</option><option value="critical">Critical</option></select>
+    <button onclick="createTicket()">Submit ticket</button>
     <div id="p-msg"></div></div>`;
 }
 window.createTicket=async()=>{
@@ -381,17 +382,17 @@ window.createTicket=async()=>{
     const res=await api("/api/tickets/portal/create",{method:"POST",body:JSON.stringify({
       title:$("#p-title").value,text:$("#p-text").value,priority:$("#p-prio").value,
       name:$("#p-name")?.value||"",email:$("#p-email")?.value||""})});
-    m.innerHTML=`<div class="okmsg">✅ ${esc(res.message)}</div>`;
+    m.innerHTML=`<div class="okmsg">${CHK_SVG} ${esc(res.message)}</div>`;
     $("#p-title").value="";$("#p-text").value="";
     if(USER)loadMine();
   }catch(e){m.innerHTML=`<div class="err">${esc(e.message)}</div>`;}
 };
 function loginForm(){
-  return `<div class="card"><b>Anmelden</b>
-    <input id="l-user" placeholder="Benutzername">
-    <input id="l-pass" type="password" placeholder="Passwort">
-    <input id="l-code" placeholder="2FA-Code (falls aktiv)">
-    <button onclick="doLogin()">Anmelden</button><div id="l-msg"></div></div>`;
+  return `<div class="card"><b>Sign in</b>
+    <input id="l-user" placeholder="Username">
+    <input id="l-pass" type="password" placeholder="Password">
+    <input id="l-code" placeholder="2FA code (if enabled)">
+    <button onclick="doLogin()">Sign in</button><div id="l-msg"></div></div>`;
 }
 window.doLogin=async()=>{
   const m=$("#l-msg");m.innerHTML="";
@@ -407,12 +408,12 @@ async function loadMine(){
   const box=$("#mine");if(!box)return;
   try{
     const list=await api("/api/tickets/portal/mine");
-    box.innerHTML=`<b>Meine Tickets</b>`+(list.length?list.map(t=>`
+    box.innerHTML=`<b>My tickets</b>`+(list.length?list.map(t=>`
       <div class="ticket" onclick="openTicket('${t.id}')">
         <span class="badge s-${t.status}">${STATUS[t.status]||t.status}</span>
-        <span style="flex:1">${esc(t.title)}${t.assigned_to_me?' <span class="badge">dir zugewiesen</span>':""}</span>
+        <span style="flex:1">${esc(t.title)}${t.assigned_to_me?' <span class="badge">assigned to you</span>':""}</span>
         <span class="meta">${fmt(t.updated_at)}</span></div>`).join("")
-      :`<div class="meta" style="padding:8px 0">Noch keine Tickets.</div>`);
+      :`<div class="meta" style="padding:8px 0">No tickets yet.</div>`);
   }catch(e){box.innerHTML=`<div class="err">${esc(e.message)}</div>`;}
 }
 window.openTicket=async(id)=>{
@@ -420,19 +421,19 @@ window.openTicket=async(id)=>{
     const t=await api("/api/tickets/portal/ticket/"+id);
     $("#app").innerHTML=header()+`
       <div class="card">
-        <a href="#" onclick="render();return false">← Zurück</a>
+        <a href="#" onclick="render();return false">← Back</a>
         <h1 style="font-size:18px">${esc(t.title)}</h1>
         <div class="meta">Status: <span class="s-${t.status}">${STATUS[t.status]||t.status}</span>
-          · Priorität: ${esc(t.priority)} · erstellt ${fmt(t.created_at)} von ${esc(t.created_by)}</div>
+          · Priority: ${esc(t.priority)} · created ${fmt(t.created_at)} by ${esc(t.created_by)}</div>
         ${t.assigned_to_me?`<div style="margin:10px 0" class="row">
-          <button class="ghost" onclick="setStatus('${t.id}','in_progress')">▶ In Arbeit</button>
-          <button class="ghost" onclick="setStatus('${t.id}','resolved')">✅ Gelöst</button>
-          <button class="ghost" onclick="setStatus('${t.id}','open')">↩ Wieder öffnen</button></div>`:""}
+          <button class="ghost" onclick="setStatus('${t.id}','in_progress')">In progress</button>
+          <button class="ghost" onclick="setStatus('${t.id}','resolved')">${CHK_SVG} Resolved</button>
+          <button class="ghost" onclick="setStatus('${t.id}','open')">↩ Reopen</button></div>`:""}
         <pre style="white-space:pre-wrap;font-family:inherit;font-size:14px">${esc(t.description)}</pre>
-        <b>Kommentare</b>
-        ${t.comments.map(c=>`<div class="comment"><div class="meta">${esc(c.author)} · ${fmt(c.created_at)}</div>${esc(c.text)}</div>`).join("")||'<div class="meta">Noch keine.</div>'}
-        <textarea id="c-text" placeholder="Antwort schreiben …"></textarea>
-        <button onclick="addComment('${t.id}')">Antworten</button><div id="c-msg"></div>
+        <b>Comments</b>
+        ${t.comments.map(c=>`<div class="comment"><div class="meta">${esc(c.author)} · ${fmt(c.created_at)}</div>${esc(c.text)}</div>`).join("")||'<div class="meta">None yet.</div>'}
+        <textarea id="c-text" placeholder="Write a reply …"></textarea>
+        <button onclick="addComment('${t.id}')">Reply</button><div id="c-msg"></div>
       </div>`;
   }catch(e){alert(e.message);}
 };
@@ -444,13 +445,13 @@ window.addComment=async(id)=>{
 };
 async function render(){
   if(CFG.require_login&&!TOKEN){$("#app").innerHTML=header()+loginForm();return;}
-  $("#app").innerHTML=header()+createForm()+(TOKEN?`<div class="card" id="mine">Lade …</div>`:"");
+  $("#app").innerHTML=header()+createForm()+(TOKEN?`<div class="card" id="mine">Loading …</div>`:"");
   if(TOKEN)loadMine();
 }
 (async()=>{
   try{CFG=await api("/api/tickets/portal/config");}
   catch(e){$("#app").innerHTML=`<div class="err">${esc(e.message)}</div>`;return;}
-  if(!CFG.enabled){$("#app").innerHTML="<h3>Das Portal ist derzeit nicht aktiviert.</h3>";return;}
+  if(!CFG.enabled){$("#app").innerHTML="<h3>The portal is currently not enabled.</h3>";return;}
   document.title=CFG.title;
   render();
 })();

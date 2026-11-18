@@ -1,11 +1,11 @@
 {
   "schema": 1,
   "id": "sql",
-  "name": "SQL-Datenbank",
+  "name": "SQL Database",
   "version": "1.0.0",
-  "description": "Verwaltet die Datenbank des RMM: lokale SQLite-Datei, externe Datenbank (MySQL/MariaDB, PostgreSQL, SQLite-Datei auf einer Freigabe) und - wenn das Backend im Docker-Container laeuft - einen MariaDB-Container. Dazu Sicherungen in backend/data/backup. Beim Deaktivieren wird eine externe Datenbank automatisch in die lokale Datei zurueckkopiert.",
+  "description": "Manages the RMM database: local SQLite file, external database (MySQL/MariaDB, PostgreSQL, SQLite file on a share) and - when the backend runs in a Docker container - a MariaDB container. Plus backups in backend/data/backup. When disabled, an external database is automatically copied back into the local file.",
   "author": "BYTERA",
-  "category": "System",
+  "category": "infrastruktur",
   "icon": "🗄️",
   "requires": [],
   "pip": [],
@@ -19,9 +19,9 @@
   "apps": [
     {
       "id": "sql-database",
-      "label": "Datenbank",
+      "label": "Database",
       "icon": "🗄️",
-      "title": "Datenbank",
+      "title": "Database",
       "entry": "settings.js",
       "export": "renderDatabaseApp",
       "w": 760,

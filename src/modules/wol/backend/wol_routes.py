@@ -1,8 +1,8 @@
-# wol_routes.py (Modul "wol") - Wake-on-LAN
-#   GET  /api/wol/{cid}            Status: MACs (erkannt+manuell), Konfig, verfuegbare Absender
-#   PUT  /api/wol/{cid}            Konfig {macs?,broadcast?,port?,via?,enabled?}
-#   POST /api/wol/{cid}/wake       PC wecken {via?}  (Recht c_power auf dem Client)
-# Recht: c_power je Client (wie Herunterfahren/Neustarten).
+# wol_routes.py (module "wol") - Wake-on-LAN
+#   GET  /api/wol/{cid}            status: MACs (detected+manual), config, available senders
+#   PUT  /api/wol/{cid}            config {macs?,broadcast?,port?,via?,enabled?}
+#   POST /api/wol/{cid}/wake       wake the PC {via?}  (c_power permission on the client)
+# Permission: c_power per client (like shutdown/restart).
 from __future__ import annotations
 
 import asyncio
@@ -42,7 +42,7 @@ def status(cid: str, user: dict = Depends(get_current_user)):
     cfg = store.get(cid)
     auto = wake.known_macs(cid)
     manual = cfg["macs"]
-    # verfuegbare Absender: Backend + online-Nodes
+    # available senders: backend + online nodes
     try:
         from app.node_manager import node_choices
         nodes = node_choices("wol", user)        # installed=False -> Modul erst nachladen
@@ -66,7 +66,7 @@ def set_cfg(cid: str, body: CfgBody, user: dict = Depends(get_current_user)):
     if body.macs is not None:
         for m in body.macs:
             if m and not store.valid_mac(m):
-                raise HTTPException(400, f"Ungültige MAC: {m}")
+                raise HTTPException(400, f"Invalid MAC: {m}")
     cfg = store.set_config(cid, macs=body.macs, broadcast=(body.broadcast or "").strip() or None if body.broadcast is not None else None,
                            port=body.port, via=body.via, enabled=body.enabled)
     return {"ok": True, "config": cfg}

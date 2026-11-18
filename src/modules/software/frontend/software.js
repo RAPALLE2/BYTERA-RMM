@@ -1,8 +1,8 @@
-// software.js (Modul "software") - Pakete verwalten + Multi-Client-Rollout
+// software.js (module "software") - manage packages + multi-client rollout
 // -------------------------------------------------------------------------
-// Links: Pakete (Installationsdateien + Kommando je Plattform).
-// Rechts: Rollout - Clients anhaken (Suche, Tags), online = sofort,
-// offline = Offline-Warteschlange (laeuft beim naechsten Online-Gehen).
+// Left: packages (installation files + command per platform).
+// Right: rollout - tick clients (search, tags), online = immediately,
+// offline = offline queue (runs at the next online check-in).
 
 import { moduleRequest } from "/js/app/modules.js";
 import { getToken } from "/js/app/api.js";
@@ -10,6 +10,7 @@ import { BACKEND_URL } from "/js/app/config.js";
 import { state } from "/js/app/state.js";
 import { esc, uiConfirm } from "/js/app/utils.js";
 import { displayName, osIcon, clientTags } from "/js/app/deviceicons.js";
+import { icon } from "./icons.js";
 
 export function renderSoftware(body, win) {
   let packages = [];
@@ -20,25 +21,25 @@ export function renderSoftware(body, win) {
     <div style="display:flex;height:100%;background:var(--panel);min-width:0">
       <div style="flex:1.1;min-width:0;display:flex;flex-direction:column;border-right:1px solid var(--border)">
         <div style="padding:10px 14px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center">
-          <b>📦 Pakete</b><span style="flex:1"></span>
-          <button class="btn-primary" id="sw-new">＋ Paket</button>
+          <b>${icon("package", 15)} Packages</b><span style="flex:1"></span>
+          <button class="btn-primary" id="sw-new">+ Package</button>
         </div>
         <div id="sw-list" style="flex:1;overflow:auto;padding:8px 14px"></div>
       </div>
       <div style="flex:1;min-width:300px;display:flex;flex-direction:column">
-        <div style="padding:10px 14px;border-bottom:1px solid var(--border)"><b>🚚 Rollout</b>
+        <div style="padding:10px 14px;border-bottom:1px solid var(--border)"><b>${icon("truck", 15)} Rollout</b>
           <span id="sw-selpkg" style="font-size:12px;color:var(--subtext)"></span></div>
         <div style="padding:8px 14px;display:flex;gap:6px">
-          <input id="sw-filter" placeholder="Filter (Name, Tag, OS)…" style="flex:1">
-          <button class="btn btn-sm" id="sw-all">Alle</button>
-          <button class="btn btn-sm" id="sw-none">Keine</button>
+          <input id="sw-filter" placeholder="Filter (name, tag, OS)…" style="flex:1">
+          <button class="btn btn-sm" id="sw-all">All</button>
+          <button class="btn btn-sm" id="sw-none">None</button>
         </div>
         <div id="sw-clients" style="flex:1;overflow:auto;padding:0 14px"></div>
         <div style="padding:10px 14px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center">
           <label style="font-size:12px;color:var(--subtext);display:flex;gap:4px;align-items:center">
-            <input type="checkbox" id="sw-queue" checked> Offline-Clients vormerken</label>
+            <input type="checkbox" id="sw-queue" checked> Queue offline clients</label>
           <span style="flex:1"></span>
-          <button class="btn-primary" id="sw-deploy" disabled>🚚 Ausrollen</button>
+          <button class="btn-primary" id="sw-deploy" disabled>${icon("truck", 14)} Roll out</button>
         </div>
         <div id="sw-log" class="hidden" style="max-height:170px;overflow:auto;border-top:1px solid var(--border);
              padding:8px 14px;font-family:monospace;font-size:11.5px;white-space:pre-wrap"></div>
@@ -47,28 +48,28 @@ export function renderSoftware(body, win) {
 
   const $ = (s) => body.querySelector(s);
 
-  // ---------------- Pakete ----------------
+  // ---------------- packages ----------------
   function fmtSize(n) { return n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`; }
 
   function drawPackages() {
     const box = $("#sw-list");
     if (!packages.length) {
       box.innerHTML = `<div style="color:var(--subtext);font-size:13px;padding:8px 0">
-        Noch keine Pakete. „＋ Paket“ anlegen, Installationsdatei hochladen, Kommando
-        angeben (oder leer lassen für Silent-Automatik bei MSI/EXE/DEB/RPM).</div>`;
+        No packages yet. Create one with "+ Package", upload an installation file, provide a
+        command (or leave it empty for silent automatic install of MSI/EXE/DEB/RPM).</div>`;
       return;
     }
     box.innerHTML = packages.map((p) => `
       <div class="panel" style="padding:8px 10px;margin-bottom:6px;border:1px solid ${selPkg === p.id ? "var(--accent)" : "var(--border)"}">
         <div style="display:flex;gap:8px;align-items:center;cursor:pointer" data-sel="${esc(p.id)}">
-          <b style="flex:1">📦 ${esc(p.name)}</b>
-          <button class="btn btn-sm" data-edit="${esc(p.id)}">✏️</button>
-          <button class="action-btn btn-danger" data-del="${esc(p.id)}">✕</button>
+          <b style="flex:1">${icon("package", 14)} ${esc(p.name)}</b>
+          <button class="btn btn-sm" data-edit="${esc(p.id)}">${icon("edit", 13)}</button>
+          <button class="action-btn btn-danger" data-del="${esc(p.id)}">${icon("close", 13)}</button>
         </div>
         <div style="font-size:11.5px;color:var(--subtext);margin-top:3px">
-          ${(p.files || []).map((f) => `<span style="margin-right:8px">📄 ${esc(f.name)} (${fmtSize(f.size || 0)})
-            <a href="#" data-fdel="${esc(p.id)}|${esc(f.name)}" title="Datei entfernen">✕</a></span>`).join("") || "keine Dateien"}
-          <label style="margin-left:4px;cursor:pointer;color:var(--accent)">⬆ Datei…
+          ${(p.files || []).map((f) => `<span style="margin-right:8px">${icon("file", 12)} ${esc(f.name)} (${fmtSize(f.size || 0)})
+            <a href="#" data-fdel="${esc(p.id)}|${esc(f.name)}" title="Remove file">${icon("close", 11)}</a></span>`).join("") || "no files"}
+          <label style="margin-left:4px;cursor:pointer;color:var(--accent)">${icon("upload", 13)} File…
             <input type="file" data-fup="${esc(p.id)}" style="display:none"></label>
         </div>
         ${p.note ? `<div style="font-size:11px;color:var(--subtext)">${esc(p.note)}</div>` : ""}
@@ -82,7 +83,7 @@ export function renderSoftware(body, win) {
       drawPackages();
     }));
     box.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", async () => {
-      if (!(await uiConfirm("Paket samt Dateien löschen?", { danger: true }))) return;
+      if (!(await uiConfirm("Delete the package including its files?", { danger: true }))) return;
       await moduleRequest(`/api/software/packages/${b.dataset.del}`, { method: "DELETE", noJob: true });
       if (selPkg === b.dataset.del) { selPkg = null; $("#sw-deploy").disabled = true; }
       load();
@@ -94,15 +95,15 @@ export function renderSoftware(body, win) {
       if (!f) return;
       const fd = new FormData();
       fd.append("file", f);
-      window.notify?.(`Lade ${f.name} hoch …`, "info");
+      window.notify?.(`Uploading ${f.name} …`, "info");
       try {
-        // Direkter fetch: Multipart-Upload darf KEINEN JSON-Content-Type tragen.
+        // Direct fetch: a multipart upload must NOT carry a JSON content type.
         const res = await fetch(`${BACKEND_URL}/api/software/packages/${inp.dataset.fup}/files`, {
           method: "POST", body: fd,
           headers: { Authorization: `Bearer ${getToken()}` },
         });
         if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.detail || `HTTP ${res.status}`);
-        window.notify?.("Datei hochgeladen", "success");
+        window.notify?.("File uploaded", "success");
         load();
       } catch (e) { window.notify?.(e.message, "error"); }
     }));
@@ -116,12 +117,12 @@ export function renderSoftware(body, win) {
 
   async function editPackage(pkg) {
     const { uiPrompt } = await import("/js/app/utils.js");
-    const name = await uiPrompt(pkg ? "Paketname" : "Name des neuen Pakets", { value: pkg?.name || "" });
+    const name = await uiPrompt(pkg ? "Package name" : "Name of the new package", { value: pkg?.name || "" });
     if (!name) return;
-    const cmdWin = await uiPrompt("Installationskommando WINDOWS ({file}=Datei, {dir}=Ordner; leer = Silent-Automatik)",
+    const cmdWin = await uiPrompt("Installation command WINDOWS ({file}=file, {dir}=folder; empty = silent automatic)",
       { value: pkg?.commands?.win || "" });
     if (cmdWin === null) return;
-    const cmdLin = await uiPrompt("Installationskommando LINUX ({file}, {dir}; leer = Automatik)",
+    const cmdLin = await uiPrompt("Installation command LINUX ({file}, {dir}; empty = automatic)",
       { value: pkg?.commands?.linux || "" });
     if (cmdLin === null) return;
     const bodyData = { name, commands: { win: cmdWin || "", linux: cmdLin || "" }, note: pkg?.note || "" };
@@ -133,7 +134,7 @@ export function renderSoftware(body, win) {
   }
   $("#sw-new").addEventListener("click", () => editPackage(null));
 
-  // ---------------- Clients ----------------
+  // ---------------- clients ----------------
   function drawClients() {
     const filter = ($("#sw-filter").value || "").toLowerCase();
     const list = (state.clients || []).filter((c) => {
@@ -149,21 +150,21 @@ export function renderSoftware(body, win) {
         <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${osIcon(c)} ${esc(displayName(c))}</span>
         <span style="font-size:10.5px;color:var(--subtext)">${esc(clientTags(c).join(", "))}</span>
         <span style="font-size:10.5px;color:var(--subtext)">${c.online ? "online" : "offline"}</span>
-      </label>`).join("") || `<div style="color:var(--subtext);font-size:13px;padding:8px 0">Keine Clients.</div>`;
+      </label>`).join("") || `<div style="color:var(--subtext);font-size:13px;padding:8px 0">No clients.</div>`;
   }
   $("#sw-filter").addEventListener("input", drawClients);
   $("#sw-all").addEventListener("click", () => body.querySelectorAll("[data-cl]").forEach((c) => { c.checked = true; }));
   $("#sw-none").addEventListener("click", () => body.querySelectorAll("[data-cl]").forEach((c) => { c.checked = false; }));
 
-  // ---------------- Rollout ----------------
+  // ---------------- rollout ----------------
   $("#sw-deploy").addEventListener("click", async () => {
     const clients = [...body.querySelectorAll("[data-cl]:checked")].map((c) => c.dataset.cl);
-    if (!selPkg || !clients.length) { window.notify?.("Paket wählen und Clients anhaken", "info"); return; }
+    if (!selPkg || !clients.length) { window.notify?.("Select a package and tick clients", "info"); return; }
     const pkg = packages.find((p) => p.id === selPkg);
-    if (!(await uiConfirm(`„${pkg?.name}“ jetzt auf ${clients.length} Client(s) ausrollen?`))) return;
+    if (!(await uiConfirm(`Roll out "${pkg?.name}" to ${clients.length} client(s) now?`))) return;
     const log = $("#sw-log");
     log.classList.remove("hidden");
-    log.textContent = "Starte Rollout …";
+    log.textContent = "Starting rollout …";
     $("#sw-deploy").disabled = true;
     try {
       await moduleRequest("/api/software/deploy", {
@@ -173,8 +174,8 @@ export function renderSoftware(body, win) {
           if (Array.isArray(job.logs) && job.logs.length) { log.textContent = job.logs.join("\n"); log.scrollTop = log.scrollHeight; }
         },
       });
-      log.textContent += "\n✔ Rollout abgeschlossen.";
-    } catch (e) { log.textContent += `\n❌ ${e.message}`; }
+      log.textContent += "\nRollout complete.";
+    } catch (e) { log.textContent += `\nError: ${e.message}`; }
     $("#sw-deploy").disabled = false;
   });
 
