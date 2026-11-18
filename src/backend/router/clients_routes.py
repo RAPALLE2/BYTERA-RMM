@@ -261,6 +261,8 @@ class UpdateClientBody(BaseModel):
     fav_dir: str | None = None
     # Garantie-Ende (Unix-ms). 0/None = keine Garantie hinterlegt.
     warranty_until: int | None = None
+    # 1 = essentielles/kritisches Gerät: Icon wird bei Offline ROT statt grau.
+    essential: int | None = None
 
 
 def _with_live_state(c: dict) -> dict:

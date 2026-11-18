@@ -961,6 +961,9 @@ def init_db() -> None:
     _migrate_add_column("metrics_history", "extra", "TEXT")  # JSON-Snapshot aller Metriken (Historie für Ping/Temp/Power/...)
     # Garantie-Ende pro Client (Unix-ms, NULL = keine Garantie hinterlegt).
     _migrate_add_column("clients", "warranty_until", "INTEGER")
+    # "Essentielles" Gerät: 1 = kritisch - wird es offline, zeigt die Sidebar
+    # das Geräte-Icon ROT (statt grau). Gesetzt im Client-Edit-Dialog.
+    _migrate_add_column("clients", "essential", "INTEGER NOT NULL DEFAULT 0")
     # Ticket-Kommentare: Sichtbarkeit wie bei den Notizen ('all' | 'private' |
     # 'custom') und die Benutzer-ID des Verfassers (bisher nur der Anzeigename).
     _migrate_add_column("ticket_comments", "visibility", "TEXT DEFAULT 'all'")
@@ -2597,6 +2600,7 @@ def update_client(client_id: str, fields: dict) -> dict | None:
         "hostname", "tenant_id", "location_id", "folder_id", "parent_client_id",
         "color", "notes", "status_override", "active", "device_type", "auto_update",
         "device_type_ack", "fav_dir", "warranty_until", "patch_policy", "icon_type",
+        "essential",
     }
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:

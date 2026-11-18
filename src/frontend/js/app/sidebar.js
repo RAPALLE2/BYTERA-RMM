@@ -276,15 +276,68 @@ function select(type, id) {
   if (onTreeStateChanged) onTreeStateChanged();
 }
 
-// Baut das kleine "online"-Pünktchen für einen Client
-function clientDot(client) {
-  let color = "var(--subtext)"; // offline
-  if (client.status_override === "maintenance") color = "var(--warn)";
-  else if (client.online) color = "var(--online)";
-  // status dot + device icon (same icon as the topology map)
-  return `<span class="dot" style="background:${color}"></span>`
-    + clientIconSvg(client, 15, `margin-left:2px;${client.online ? "" : "opacity:.55"}`);
+// Status eines Clients als FARBE des Geräte-Icons (kein separater Punkt mehr):
+//   grün   = online
+//   orange = online, aber Problem (CPU/RAM ausgelastet, Disk voll, Akku leer)
+//   rot    = offline UND als "essentiell" markiert
+//   grau   = offline (nicht essentiell)
+//   blau   = Wartungsmodus (status_override "maintenance")
+function clientIssue(client) {
+  const m = client.metrics;
+  if (!m) return null;
+  const cpu = m.cpuLoad ?? 0;
+  const ram = m.memTotal ? ((m.memUsed || 0) / m.memTotal) * 100 : 0;
+  let disk = 0;
+  const disks = (m.disks && m.disks.length)
+    ? m.disks
+    : (m.diskTotal ? [{ used: m.diskUsed, total: m.diskTotal }] : []);
+  for (const d of disks) {
+    if (d && d.total) disk = Math.max(disk, ((d.used || 0) / d.total) * 100);
+  }
+  if (cpu >= 95) return `CPU ausgelastet (${Math.round(cpu)} %)`;
+  if (ram >= 95) return `RAM voll (${Math.round(ram)} %)`;
+  if (disk >= 90) return `Disk fast voll (${Math.round(disk)} %)`;
+  const b = m.battery;
+  if (b && !b.plugged && b.percent != null && b.percent <= 10) {
+    return `Akku fast leer (${Math.round(b.percent)} %)`;
+  }
+  return null;
 }
+
+function clientStatusColor(client) {
+  if (client.status_override === "maintenance") {
+    return { color: "var(--accent, #7aa2f7)", title: t("status_maintenance") };
+  }
+  if (!client.online) {
+    return client.essential
+      ? { color: "var(--danger, #f87171)", title: "OFFLINE - essentielles Gerät!" }
+      : { color: "var(--subtext, #6b7280)", title: "Offline" };
+  }
+  const issue = clientIssue(client);
+  if (issue) return { color: "var(--warn, #fbbf24)", title: `Online - ${issue}` };
+  return { color: "var(--online, #34d399)", title: "Online" };
+}
+
+// Geräte-Icon in Statusfarbe (ersetzt Punkt + Icon). data-stclient erlaubt
+// das Live-Umfärben bei Metrik-Updates ohne kompletten Re-Render.
+function clientDot(client) {
+  const st = clientStatusColor(client);
+  return `<span class="cl-stico" data-stclient="${esc(client.id)}" title="${esc(st.title)}"
+    style="display:inline-flex;align-items:center;color:${st.color}">${clientIconSvg(client, 15)}</span>`;
+}
+
+// Metrik-Ticks färben die Icons in-place um (billiger als renderSidebar()).
+window.addEventListener("metrics-updated", (ev) => {
+  const id = ev.detail?.id;
+  if (!id) return;
+  const client = state.clients?.find((c) => c.id === id);
+  if (!client) return;
+  const st = clientStatusColor(client);
+  document.querySelectorAll(`.cl-stico[data-stclient="${CSS.escape(id)}"]`).forEach((el) => {
+    el.style.color = st.color;
+    el.title = st.title;
+  });
+});
 
 // Rendert rekursiv die Ordnerstruktur + Clients innerhalb einer Location
 // -----------------------------------------------------------------

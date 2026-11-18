@@ -93,6 +93,13 @@ export function renderEditClient(body, win) {
       </div>
 
       <div class="form-row">
+        <label title="Essentielle Geräte werden in der Sidebar ROT angezeigt, sobald sie offline gehen (normale Geräte nur grau).">
+          <input type="checkbox" id="ec-essential" ${client.essential ? "checked" : ""} />
+          ⭐ Essentiell (bei Offline rot markieren)
+        </label>
+      </div>
+
+      <div class="form-row">
         <label>${tr("ec_devtype")}</label>
         <select id="ec-devtype">
           <option value="physical" ${(client.device_type || "physical") === "physical" ? "selected" : ""}>💻 ${tr("ec_dev_physical")}</option>
@@ -240,6 +247,7 @@ export function renderEditClient(body, win) {
         color: body.querySelector("#ec-color").value,
         status_override: body.querySelector("#ec-status").value || null,
         active: body.querySelector("#ec-active").checked,
+        essential: body.querySelector("#ec-essential").checked ? 1 : 0,
         device_type: devTypeSel.value,
         auto_update: body.querySelector("#ec-autoupdate").value,
         icon_type: body.querySelector("#ec-icon").value,
