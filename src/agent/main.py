@@ -4538,6 +4538,17 @@ class _FrameFlow:
 
     def congested(self) -> bool:
         with self.lock:
+            # WICHTIG: Auch HIER verlorene Rueckmeldungen aufraeumen - nicht nur
+            # in offer(). Vorher galt: Gingen beide ACKs verloren (typisch beim
+            # kurzen Reconnect - Socket.IO wirft offene Callbacks der alten
+            # Verbindung weg), blieb sent_ts fuer immer voll, die Capture-
+            # Schleife drehte nur noch in congested()->sleep und offer() wurde
+            # NIE mehr aufgerufen. Folge: Der Remote Screen fror nach einiger
+            # Zeit dauerhaft ein ("geht nach ~50 Frames aus").
+            now = time.time()
+            if self.sent_ts and now - self.sent_ts[0] > self.ACK_TIMEOUT:
+                self.sent_ts.clear()
+                self._adapt(now, slow=True)
             return len(self.sent_ts) >= self.WINDOW
 
     def _adapt(self, now: float, slow: bool = False):
@@ -5849,11 +5860,59 @@ def capture(sock, state):
             send(sock, b"S" + json.dumps({"state": st, "code": code, "detail": str(detail)[:300]}).encode())
         except Exception:
             state["stop"] = True
+    # --- Auto-Sync der Zwischenablage (Benutzersitzung -> Dashboard) ---
+    # Direkt per ctypes gelesen (CF_UNICODETEXT), damit kein Umweg ueber den
+    # Tk-Oberflaechen-Thread noetig ist. Ob der Text ein Echo eines vom
+    # Dashboard gesetzten Inhalts ist, filtert der AGENT (suppress-Abgleich).
+    clip = {"last": None, "ts": 0.0, "first": True}
+    def _clip_read():
+        import ctypes
+        u32 = ctypes.windll.user32
+        k32 = ctypes.windll.kernel32
+        if not u32.OpenClipboard(0):
+            return None
+        try:
+            h = u32.GetClipboardData(13)       # CF_UNICODETEXT
+            if not h:
+                return ""
+            p = k32.GlobalLock(h)
+            if not p:
+                return ""
+            try:
+                return ctypes.c_wchar_p(p).value or ""
+            finally:
+                k32.GlobalUnlock(h)
+        finally:
+            u32.CloseClipboard()
+    def _clip_poll():
+        now = time.time()
+        if now - clip["ts"] < 1.5:
+            return
+        clip["ts"] = now
+        try:
+            text = _clip_read()
+        except Exception:
+            return
+        if text is None:
+            return
+        if clip["first"]:
+            clip["last"] = text                # Bestand beim Start nicht pushen
+            clip["first"] = False
+            return
+        if text and text != clip["last"]:
+            clip["last"] = text
+            if len(text) <= 512 * 1024:
+                try:
+                    send(sock, b"R" + json.dumps({"session": "clip", "text": text}).encode())
+                except Exception:
+                    pass
+
     while not state["stop"]:
         if not state["stream"]:
             _keepalive()
             time.sleep(0.15)
             continue
+        _clip_poll()
         try:
             if sct is None:
                 sct = mss.mss()
@@ -6579,6 +6638,7 @@ def _screen_helper_loop(loop, helper) -> bool:
         _screen_stream["mon_left"] = meta.get("left", 0)
         _screen_stream["mon_top"] = meta.get("top", 0)
         if not sio.connected:
+            _FLOW.reset()                # ACKs der alten Verbindung kommen nie mehr
             continue                     # Backend gerade weg - Bild verwerfen
         _FLOW.offer({
             "id": DEVICE_ID, "image": base64.b64encode(jpeg).decode(),
@@ -6739,6 +6799,10 @@ def _screen_capture_loop(loop):
             # Backend gerade nicht erreichbar: nichts aufnehmen, nur warten.
             # Die Sitzung bleibt bestehen und laeuft nach dem Reconnect weiter.
             if not sio.connected:
+                # Offene Sende-Slots verwerfen: Die ACKs der alten Verbindung
+                # kommen nie mehr an - ohne Reset waere die "Leitung" nach dem
+                # Reconnect dauerhaft als voll markiert (eingefrorenes Bild).
+                _FLOW.reset()
                 time.sleep(0.5)
                 continue
             # Leitung voll? Dann nicht sinnlos weiter kodieren - kurz warten.
@@ -7565,6 +7629,13 @@ def _handle_session_reply(loop, obj: dict) -> None:
             _session.setdefault("perms", {})[name] = bool(obj.get("value"))
             _session_emit(loop, "screen-session-perms", _session_perm_payload())
             _print(f"[agent] Berechtigung '{name}' vom Benutzer {'erlaubt' if obj.get('value') else 'gesperrt'}")
+    elif kind == "clip":
+        # Zwischenablage der Benutzersitzung hat sich geaendert (Helfer-Watcher).
+        # Echo-Filter: Vom Dashboard gesetzte Inhalte nicht zurueckschicken.
+        text = str(obj.get("text") or "")
+        if (_session_perm("clipboard") and text
+                and text != _clip_watch.get("suppress") and len(text) <= _CLIP_MAX):
+            _session_emit(loop, "screen-clipboard", {"text": text, "push": True})
     elif kind == "audio":
         _session_emit(loop, "screen-audio", {k: obj.get(k) for k in ("state", "error", "code")})
     elif kind == "file-ack":
@@ -7781,6 +7852,8 @@ async def on_screen_start(data):
     _screen_stream["active"] = True
     _screen_stream["thread"] = threading.Thread(target=_screen_capture_loop, args=(loop,), daemon=True)
     _screen_stream["thread"].start()
+    # Zwischenablage-Sync (Geraet -> Dashboard) fuer die Dauer der Sitzung.
+    _start_clipboard_watch(loop)
     _print(f"[agent] {_at('log_screen_started')}")
 
     # Chat-/Steuerfenster in der Benutzersitzung - NUR wenn nicht Silent-Modus
@@ -8356,6 +8429,52 @@ def _clipboard_set(text: str) -> None:
     pyperclip.copy(text or "")
 
 
+# --- Automatischer Zwischenablage-Sync (wie AnyDesk) -------------------------
+# Waehrend einer aktiven Screen-Sitzung beobachtet ein Thread die hiesige
+# Zwischenablage und PUSHT Aenderungen von selbst ans Dashboard (Event
+# "screen-clipboard" mit push=True). Die Gegenrichtung (Dashboard -> Geraet)
+# laeuft weiter ueber screen-input type="clipboard-set".
+# "suppress" merkt sich den zuletzt VOM DASHBOARD gesetzten Text, damit der
+# Watcher ihn nicht als "neue Aenderung" wieder zurueckschickt (Ping-Pong).
+_clip_watch = {"thread": None, "suppress": ""}
+_CLIP_MAX = 512 * 1024          # sehr grosse Inhalte nicht automatisch uebertragen
+
+
+def _clipboard_watch_loop(loop):
+    last = None
+    first = True
+    while _screen_stream["active"]:
+        try:
+            if sio.connected and _session_perm("clipboard"):
+                text = _clipboard_get()
+                if first:
+                    last = text          # Bestand beim Start nicht pushen
+                    first = False
+                elif text and text != last:
+                    last = text
+                    if text != _clip_watch.get("suppress") and len(text) <= _CLIP_MAX:
+                        _session_emit(loop, "screen-clipboard",
+                                      {"text": text, "push": True})
+        except Exception:
+            pass                        # kein Clipboard-Zugriff: still weiterprobieren
+        time.sleep(1.2)
+    _clip_watch["thread"] = None
+
+
+def _start_clipboard_watch(loop) -> None:
+    # Windows-Dienst (Sitzung 0): Die Zwischenablage des Benutzers ist von hier
+    # aus nicht sichtbar - dort beobachtet sie der HELFER in der Benutzersitzung
+    # (Reply "clip" -> _handle_session_reply).
+    if _needs_session_helper():
+        return
+    t = _clip_watch.get("thread")
+    if t is not None and t.is_alive():
+        return
+    t = threading.Thread(target=_clipboard_watch_loop, args=(loop,), daemon=True)
+    _clip_watch["thread"] = t
+    t.start()
+
+
 @sio.on("screen-clipboard-get", namespace="/agent")
 async def on_screen_clipboard_get(data):
     """Liest die lokale Zwischenablage und schickt sie ans Dashboard zurueck."""
@@ -8384,6 +8503,9 @@ async def on_screen_input(data):
     if kind == "clipboard-set":
         if not _session_perm("clipboard"):
             return
+        # Vom Dashboard gesetzten Text merken, damit der Clipboard-Watcher ihn
+        # nicht gleich wieder als "Aenderung am Geraet" zurueckschickt.
+        _clip_watch["suppress"] = str((data or {}).get("text") or "")
     elif not _session_perm("input"):
         return
     # Laeuft ein Helfer in der Benutzersitzung? Dann MUSS die Eingabe dort

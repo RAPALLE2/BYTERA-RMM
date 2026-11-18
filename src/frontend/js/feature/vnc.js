@@ -271,10 +271,28 @@ export function renderVnc(body, win) {
   body.querySelector(`#vnc-clip-get-${win.key}`).addEventListener("click", () => {
     getClip();
   });
+  // Automatischer Sync in BEIDE Richtungen (wie AnyDesk):
+  //  * Geraet -> hier: Der Agent pusht Aenderungen von selbst (push=true) -
+  //    die landen still in der lokalen Zwischenablage.
+  //  * hier -> Geraet: Beim (Wieder-)Fokussieren des Fensters wird die lokale
+  //    Zwischenablage gelesen und bei Aenderung ans Geraet geschickt.
+  // _clipLast verhindert Ping-Pong (zuletzt gesyncter Text in beide Richtungen).
+  let _clipLast = null;
   async function onClipboard(data) {
     if (data.id !== clientId) return;
     if (data.error) { window.notify?.(t("vnc_clip_remote") + ": " + (data.code ? t(data.code) : data.error), "error"); return; }
     const text = data.text || "";
+    if (data.push) {
+      // Automatischer Push vom Geraet: still uebernehmen, kein Dialog-Spam.
+      if (!text || text === _clipLast) return;
+      _clipLast = text;
+      try {
+        await navigator.clipboard.writeText(text);
+        window.notify?.("📋 " + t("u_remote_zwischenablage_ubernommen") + text.length + " Zeichen)", "info", 2500);
+      } catch { /* Fenster nicht fokussiert / HTTP: naechster Push versucht es erneut */ }
+      return;
+    }
+    _clipLast = text;
     try {
       await navigator.clipboard.writeText(text);
       window.notify?.(t("u_remote_zwischenablage_ubernommen") + text.length + " Zeichen)", "success");
@@ -286,6 +304,20 @@ export function renderVnc(body, win) {
     }
   }
   dashboardSocket.on("screen-clipboard", onClipboard);
+
+  // Lokale Aenderungen beim Fokussieren des Fensters ans Geraet schicken.
+  async function _clipSyncLocal() {
+    let text = "";
+    try { text = await navigator.clipboard.readText(); } catch { return; }
+    if (!text || text === _clipLast || text.length > 512 * 1024) return;
+    _clipLast = text;
+    sendInput({ type: "clipboard-set", text });
+  }
+  const _onClipFocus = () => { _clipSyncLocal(); };
+  window.addEventListener("focus", _onClipFocus);
+  body.addEventListener("focusin", _onClipFocus);
+  // Entfernt wird der Listener im zentralen Cleanup-Block weiter unten
+  // (registerCleanup ueberschreibt pro Fenster - deshalb nicht hier anmelden).
 
   // --- Chat-/Steuerfenster der Fernwartung (Benutzer <-> Admin) ---
   // Die Person vor dem PC bekommt ein Fenster (nur wenn NICHT Silent-Modus);
@@ -1160,5 +1192,6 @@ export function renderVnc(body, win) {
     stopScreen();
     if (rdpActive) dashboardSocket.emit("rdp-stop", { clientId });
     window.removeEventListener("mouseup", onMouseUp);
+    window.removeEventListener("focus", _onClipFocus);
   });
 }
