@@ -10,6 +10,7 @@
 import { moduleRequest } from "/js/app/modules.js";
 import { esc, uiConfirm, uiPrompt, downloadText } from "/js/app/utils.js";
 import { state, findClient } from "/js/app/state.js";
+import { displayName, osIcon, clientTags } from "/js/app/deviceicons.js";
 import { openWindow, registerCleanup } from "/js/app/windowmanager.js";
 
 const CATEGORIES = {
@@ -342,7 +343,8 @@ export function renderInventory(body, win) {
           ${field("Garantie bis", it.warranty_until ? warrantyHtml(it.warranty_until)
             + (daysUntil(it.warranty_until) >= 0 ? ` <span style="color:var(--subtext);font-size:11px">(noch ${daysUntil(it.warranty_until)} Tage)</span>` : "") : "")}
           ${field("Lieferant", esc(it.supplier))}
-          ${field("RMM-Agent", client ? `<a href="#" id="ivd-agent">🖥️ ${esc(client.hostname || client.id)}</a>` : "")}
+          ${field("RMM-Agent", client ? `<a href="#" id="ivd-agent" title="${esc(client.hostname || "")}">${osIcon(client) || "🖥️"} ${esc(displayName(client))}</a>` : "")}
+          ${field("Tags", client && clientTags(client).length ? esc(clientTags(client).join(", ")) : "")}
         </div>
 
         ${it.notes ? `<div style="margin-top:10px">
@@ -472,7 +474,7 @@ export function renderInventory(body, win) {
         <div class="form-row"><label>Lieferant</label><input id="ive-sup" value="${v("supplier")}" /></div>
         <div class="form-row" style="grid-column:1/3"><label>Mit RMM-Agent verknüpfen (optional)</label>
           <select id="ive-client"><option value="">– keiner –</option>${clients.map((c) =>
-            `<option value="${esc(c.id)}" ${it.client_id === c.id ? "selected" : ""}>${esc(c.hostname || c.id)}</option>`).join("")}</select></div>
+            `<option value="${esc(c.id)}" ${it.client_id === c.id ? "selected" : ""}>${osIcon(c)} ${esc(displayName(c))}</option>`).join("")}</select></div>
         <div class="form-row" style="grid-column:1/3"><label>Notizen</label>
           <textarea id="ive-notes" rows="4" style="width:100%">${v("notes")}</textarea></div>
       </div>

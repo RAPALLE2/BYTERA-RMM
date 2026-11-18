@@ -462,8 +462,8 @@ export function renderTopology(body, win) {
     const gBoxes = el("g", {}, vp), gEdges = el("g", {}, vp), gNodes = el("g", {}, vp), gLabels = el("g", {}, vp);
     bottomOf = {};
     for (const n of nodes) {
-      const name = n.label || n.hostname || n.ip || "?";
-      bottomOf[n.id] = 56 + (n.ip && n.ip !== name ? 13 : 0) + (n.os ? 13 : 0);
+      const d = nodeDisplay(n);
+      bottomOf[n.id] = 56 + (n.ip && n.ip !== d.name ? 13 : 0) + (n.os ? 13 : 0) + (d.tags.length ? 12 : 0);
     }
     drawBackground();
 
@@ -594,7 +594,8 @@ export function renderTopology(body, win) {
     if (n.agent) el("circle", { cx: 27, cy: -27, r: 6, fill: n.agent.online ? "var(--ok, #34d399)" : "var(--danger, #f87171)",
                                 stroke: "var(--panel)", "stroke-width": 2 }, g);
     if (n.self) el("text", { x: -28, y: -22, "font-size": 13 }, g).textContent = "📍";
-    const name = n.label || n.hostname || n.ip || "?";
+    const disp = nodeDisplay(n);
+    const name = disp.os + disp.name;
     const txt = (s, y, size, fill, weight = "400", mono = false) => {
       const t = el("text", { x: 0, y, "text-anchor": "middle", "font-size": size, "font-weight": weight, fill,
                              "font-family": mono ? "ui-monospace,monospace" : null }, g);
@@ -604,6 +605,11 @@ export function renderTopology(body, win) {
     let y = 65;
     if (n.ip && n.ip !== name) { txt(n.ip, y, 10.5, "var(--subtext, #94a3b8)", "400", true); y += 13; }
     if (n.os) { txt(n.os.length > 24 ? n.os.slice(0, 23) + "…" : n.os, y, 10, "var(--subtext, #94a3b8)"); y += 13; }
+    if (disp.tags.length) {
+      const tl = disp.tags.join(" · ");
+      txt("🏷 " + (tl.length > 26 ? tl.slice(0, 25) + "…" : tl), y, 9.5, "var(--subtext, #94a3b8)");
+      y += 12;
+    }
     drawNote(g, n, y);
     g.addEventListener("contextmenu", (ev) => { ev.preventDefault(); openNodeDialog(n, !edit); });
     g.addEventListener("mouseenter", (ev) => { if (!dragging) showTip(n, ev); });
@@ -613,6 +619,18 @@ export function renderTopology(body, win) {
     g.addEventListener("dblclick", (ev) => { ev.stopPropagation(); if (edit && !lineMode) openNodeDialog(n); });
     nodeEls.set(n.id, g);
     paintNode(n.id);
+  }
+
+
+  // Kurzname/OS-Icon/Tags des verknuepften RMM-Clients (Core-Spalten short_name/tags).
+  function nodeDisplay(n) {
+    const cl = n.agent ? findClient(n.agent.id) : null;
+    const name = n.label || (cl && cl.short_name) || n.hostname || n.ip || "?";
+    const p = String((cl && cl.platform) || n.os || "").toLowerCase();
+    const os = p.includes("win") ? "🪟 " : (p.includes("mac") || p.includes("darwin")) ? "🍎 "
+      : (p.includes("linux") || p.includes("debian") || p.includes("ubuntu") || p.includes("proxmox")) ? "🐧 " : "";
+    const tags = String((cl && cl.tags) || "").split(",").map((t) => t.trim()).filter(Boolean);
+    return { name, os, tags };
   }
 
   // selection / line start: only recolour (no rebuild - keeps double-click working)
@@ -690,6 +708,7 @@ export function renderTopology(body, win) {
     const add = (k, v) => { if (v) rows.push(`<div><span style="color:var(--subtext)">${k}:</span> ${esc(String(v))}</div>`); };
     add("Type", TYPE_LABELS[n.type] || n.type);
     add("IP", n.ip); add("OS", n.os); add("MAC", n.mac); add("Hostname", n.hostname);
+    add("Tags", nodeDisplay(n).tags.join(", "));
     if (n.ports?.length) add("Open ports", n.ports.join(", "));
     if (n.gateway) rows.push(`<div>🌐 Default gateway</div>`);
     if (n.self) rows.push(`<div>📍 Discovered from here</div>`);

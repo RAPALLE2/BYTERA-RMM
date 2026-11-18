@@ -677,6 +677,23 @@ def init_db() -> None:
             used_at INTEGER
         );
 
+        -- Offline-Warteschlange: Aktionen, die ausgefuehrt werden, sobald der
+        -- Agent (wieder) online ist - z.B. "installiere Software XY" oder ein
+        -- Shell-Befehl. Abgearbeitet beim Agent-Anmelden (sockets.py, KUER).
+        CREATE TABLE IF NOT EXISTS client_queue (
+            id TEXT PRIMARY KEY,
+            client_id TEXT NOT NULL,
+            kind TEXT NOT NULL,               -- 'shell' | 'software' | ...
+            label TEXT NOT NULL DEFAULT '',   -- Anzeige ("Installiere 7-Zip")
+            payload TEXT NOT NULL DEFAULT '{}', -- JSON je nach kind
+            created_by TEXT,
+            created_at INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending', -- pending|running|done|failed
+            result TEXT,
+            finished_at INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_queue_client ON client_queue (client_id, status);
+
         -- Aktivierungscodes (Settings -> Aktivierung). Noch ohne Funktion:
         -- Der Code wird nur mit Einlösedatum gespeichert; später fragt das RMM
         -- damit den Lizenzserver ab (Premium-Features / Zusatz-Module).
@@ -1079,6 +1096,10 @@ def init_db() -> None:
     # "Essentielles" Gerät: 1 = kritisch - wird es offline, zeigt die Sidebar
     # das Geräte-Icon ROT (statt grau). Gesetzt im Client-Edit-Dialog.
     _migrate_add_column("clients", "essential", "INTEGER NOT NULL DEFAULT 0")
+    # Kurzname (Anzeige in Sidebar/Topologie/Inventar statt des Hostnamens)
+    # und freie Tags (kommagetrennt, z.B. "produktion,halle2,drucker").
+    _migrate_add_column("clients", "short_name", "TEXT NOT NULL DEFAULT ''")
+    _migrate_add_column("clients", "tags", "TEXT NOT NULL DEFAULT ''")
     # Ticket-Kommentare: Sichtbarkeit wie bei den Notizen ('all' | 'private' |
     # 'custom') und die Benutzer-ID des Verfassers (bisher nur der Anzeigename).
     _migrate_add_column("ticket_comments", "visibility", "TEXT DEFAULT 'all'")
@@ -2715,7 +2736,7 @@ def update_client(client_id: str, fields: dict) -> dict | None:
         "hostname", "tenant_id", "location_id", "folder_id", "parent_client_id",
         "color", "notes", "status_override", "active", "device_type", "auto_update",
         "device_type_ack", "fav_dir", "warranty_until", "patch_policy", "icon_type",
-        "essential",
+        "essential", "short_name", "tags",
     }
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
@@ -2732,6 +2753,52 @@ def delete_client(client_id: str) -> None:
     _conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
     # Client-scoped Rechte-Grants mit aufräumen (verwaiste Einträge vermeiden).
     _conn.execute("DELETE FROM permission_grants WHERE scope = ?", (client_id,))
+    _conn.commit()
+
+
+# ------------------------------------------------------------------
+# OFFLINE-WARTESCHLANGE (Aktionen "sobald der Agent online ist")
+# ------------------------------------------------------------------
+
+def queue_add(client_id: str, kind: str, label: str, payload: dict,
+              created_by: str | None = None) -> dict:
+    row = {"id": _new_id(), "client_id": client_id, "kind": kind,
+           "label": (label or "")[:200], "payload": json.dumps(payload or {}),
+           "created_by": created_by, "created_at": _now_ms(), "status": "pending"}
+    _conn.execute(
+        "INSERT INTO client_queue (id, client_id, kind, label, payload, created_by, "
+        "created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')",
+        (row["id"], client_id, kind, row["label"], row["payload"],
+         created_by, row["created_at"]))
+    _conn.commit()
+    return row
+
+
+def queue_list(client_id: str, include_done: bool = True) -> list[dict]:
+    sql = "SELECT * FROM client_queue WHERE client_id = ?"
+    if not include_done:
+        sql += " AND status IN ('pending','running')"
+    rows = _conn.execute(sql + " ORDER BY created_at", (client_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def queue_pending(client_id: str) -> list[dict]:
+    rows = _conn.execute(
+        "SELECT * FROM client_queue WHERE client_id = ? AND status = 'pending' "
+        "ORDER BY created_at", (client_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def queue_set_status(qid: str, status: str, result: str | None = None) -> None:
+    _conn.execute(
+        "UPDATE client_queue SET status = ?, result = ?, finished_at = ? WHERE id = ?",
+        (status, (result or "")[:4000],
+         _now_ms() if status in ("done", "failed") else None, qid))
+    _conn.commit()
+
+
+def queue_delete(qid: str) -> None:
+    _conn.execute("DELETE FROM client_queue WHERE id = ?", (qid,))
     _conn.commit()
 
 

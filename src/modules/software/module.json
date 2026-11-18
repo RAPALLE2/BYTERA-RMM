@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "id": "software",
+  "name": "Software-Rollout",
+  "version": "1.0.0",
+  "description": "Software auf viele Clients ausrollen: Pakete aus Installationsdateien (MSI/EXE/DEB/RPM/beliebig) plus Installationskommando je Plattform anlegen und mit einem Klick an mehrere Clients verteilen. Online-Clients installieren sofort (Live-Ergebnis), Offline-Clients bekommen den Auftrag in die Offline-Warteschlange und installieren automatisch beim nächsten Online-Gehen. Mit Panel-Aktion am Client und Platzhaltern {file}/{dir} im Kommando; ohne Kommando werden MSI/EXE/DEB/RPM automatisch still installiert.",
+  "author": "BYTERA",
+  "category": "Verwaltung",
+  "icon": "📦",
+  "requires": [],
+  "pip": [],
+  "entry": "module",
+  "routers": [
+    "software_routes"
+  ],
+  "hooks": {
+    "startup": "on_startup"
+  },
+  "init": {
+    "entry": "init.js",
+    "export": "init"
+  },
+  "apps": [
+    {
+      "id": "software",
+      "label": "Software",
+      "icon": "📦",
+      "title": "Software-Rollout",
+      "entry": "software.js",
+      "export": "renderSoftware",
+      "w": 880,
+      "h": 620
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "schema": 1,
+  "id": "usbguard",
+  "name": "USB-Wächter",
+  "version": "1.0.0",
+  "description": "Alarm und Nachfrage bei USB-Geräten: Wird auf einem Client ein USB-Gerät ein- oder ausgesteckt, erscheint im Dashboard eine Meldung bzw. ein Erlauben/Blockieren-Dialog. Im Blockier-Modus wird ein neues Gerät sofort vom System getrennt und erst nach dem Erlauben ans Betriebssystem durchgereicht (Linux: USB-Autorisierung über authorized_default - das Gerät wird vom Kernel gar nicht erst aktiviert; Windows: das Gerät wird unmittelbar nach dem Erkennen per pnputil deaktiviert, kurze Erkennungslücke technisch bedingt). Mit einstellbarem Timeout und automatischer Entscheidung (auto-erlauben oder auto-blockieren nach X Sekunden).",
+  "author": "BYTERA",
+  "category": "Sicherheit",
+  "icon": "🔌",
+  "requires": [],
+  "pip": [],
+  "entry": "module",
+  "routers": [
+    "usbguard_routes"
+  ],
+  "hooks": {
+    "startup": "on_startup"
+  },
+  "init": {
+    "entry": "init.js",
+    "export": "init"
+  },
+  "settings": [
+    {
+      "key": "enabled",
+      "type": "bool",
+      "label": "USB-Überwachung aktiv",
+      "default": false,
+      "help": "Agents melden Ein-/Ausstecken von USB-Geräten (Meldung im Dashboard + Glocke)."
+    },
+    {
+      "key": "block_new",
+      "type": "bool",
+      "label": "Neue Geräte blockieren, bis jemand erlaubt",
+      "default": false,
+      "help": "Linux: Gerät bleibt vom Kernel unautorisiert (keine Treiber, keine Daten), bis im Dashboard erlaubt wird. Windows: Gerät wird sofort nach dem Erkennen deaktiviert (kurze Lücke technisch bedingt)."
+    },
+    {
+      "key": "timeout_s",
+      "type": "number",
+      "label": "Timeout für die Nachfrage (Sekunden)",
+      "default": 60,
+      "min": 5,
+      "max": 3600
+    },
+    {
+      "key": "timeout_action",
+      "type": "string",
+      "label": "Nach Timeout automatisch: allow oder deny",
+      "default": "deny",
+      "help": "allow = Gerät nach Ablauf automatisch erlauben, deny = blockiert lassen."
+    }
+  ],
+  "apps": []
+}

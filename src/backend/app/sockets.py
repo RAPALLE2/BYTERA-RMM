@@ -685,6 +685,60 @@ def _new_request_id() -> str:
     return uuid.uuid4().hex
 
 
+
+# ------------------------------------------------------------------
+# Offline-Warteschlange abarbeiten (beim Agent-Anmelden und auf Anstoss
+# aus clients_routes, wenn der Agent schon online ist).
+# ------------------------------------------------------------------
+_queue_busy: set = set()
+
+
+async def kick_offline_queue(client_id: str) -> None:
+    if client_id in _queue_busy:
+        return
+    items = await db.call(db.queue_pending, client_id)
+    if not items:
+        return
+
+    async def _work():
+        _queue_busy.add(client_id)
+        try:
+            for it in items:
+                await db.call(db.queue_set_status, it["id"], "running")
+                try:
+                    payload = _json.loads(it.get("payload") or "{}")
+                    if it["kind"] == "shell":
+                        res = await request_exec(client_id, payload.get("command", ""),
+                                                 timeout_seconds=float(payload.get("timeout", 300)),
+                                                 elevated=bool(payload.get("elevated")))
+                        out = (res.get("stdout") or "") + (res.get("stderr") or "")
+                        ok = int(res.get("code") or 0) == 0
+                        await db.call(db.queue_set_status, it["id"],
+                                      "done" if ok else "failed",
+                                      f"exit {res.get('code')}\n{out[:3000]}")
+                    elif it["kind"] == "software":
+                        from app import modules as _mods
+                        roll = _mods.use("software", "rollout") if _mods.is_enabled("software") else None
+                        if roll is None:
+                            await db.call(db.queue_set_status, it["id"], "failed",
+                                          "Modul 'software' ist nicht aktiv")
+                        else:
+                            res = await roll.install(client_id, payload.get("package_id"))
+                            await db.call(db.queue_set_status, it["id"],
+                                          "done" if res.get("ok") else "failed",
+                                          str(res.get("output") or res.get("error") or "")[:3000])
+                    else:
+                        await db.call(db.queue_set_status, it["id"], "failed",
+                                      f"Unbekannte Aktionsart {it['kind']}")
+                except Exception as exc:
+                    await db.call(db.queue_set_status, it["id"], "failed", str(exc)[:1000])
+            await sio.emit("queue:changed", {"client_id": client_id}, namespace="/dashboard")
+        finally:
+            _queue_busy.discard(client_id)
+
+    asyncio.get_running_loop().create_task(_work())
+
+
 async def request_exec(client_id: str, command: str, timeout_seconds: float = 20.0,
                        session: str | None = None, shell: str = "auto",
                        elevated: bool = False) -> dict:
@@ -1464,6 +1518,22 @@ async def _do_register(sid, payload) -> tuple[bool, str]:
     await _side("auto-update", _auto_update)
     await _side("geraetetyp", _device_type)
     await _side("absturzmeldung", _crash_report)
+    async def _blackbox_cfg():
+        # Blackbox-Konfiguration (Settings -> Allgemein) an den Agenten geben.
+        enabled = (await db.call(db.get_setting, "blackbox_enabled", "0")) == "1"
+        try:
+            interval = int(await db.call(db.get_setting, "blackbox_interval_min", "5") or 5)
+        except (TypeError, ValueError):
+            interval = 5
+        await sio.emit("blackbox-config", {"enabled": enabled,
+                                           "interval_min": max(1, min(interval, 240))},
+                       to=sid, namespace="/agent")
+
+    async def _offline_queue():
+        # Offline-Warteschlange: vorgemerkte Aktionen jetzt ausfuehren
+        # ("wenn Agent online, dann installiere Software XY").
+        await kick_offline_queue(client_id)
+
     async def _pending_handoff():
         # Backend-Migration mit NEUER Adresse: Agents, die erst jetzt online
         # kommen, bekommen die neue Server-Adresse nachgereicht (gesetzt von
@@ -1476,6 +1546,8 @@ async def _do_register(sid, payload) -> tuple[bool, str]:
     await _side("wartungsmodus", _diag_mode)
     await _side("benachrichtigungen", _notify_online)
     await _side("migrations-handoff", _pending_handoff)
+    await _side("blackbox-config", _blackbox_cfg)
+    await _side("offline-queue", _offline_queue)
 
     return True, "ok"
 
@@ -1653,6 +1725,31 @@ async def on_forward_close(sid, payload):
 # dienten ausschliesslich dazu, WireGuard auf einer Node einzurichten.
 
 
+async def request_tempuser(client_id: str, expiry: str, timeout_seconds: float = 60.0) -> dict:
+    """Legt auf dem Agenten einen temporären Benutzer mit Einmal-Passwort an.
+    expiry: '1h' | '2h' | '4h' | '24h' | 'logoff' | 'never'."""
+    sid = state.client_id_to_sid.get(client_id)
+    if not sid:
+        raise RuntimeError("Client ist offline")
+    request_id = _new_request_id()
+    future: asyncio.Future = asyncio.get_event_loop().create_future()
+    state.pending_requests[request_id] = future
+    await sio.emit("tempuser-create", {"requestId": request_id, "expiry": expiry},
+                   to=sid, namespace="/agent")
+    try:
+        return await asyncio.wait_for(future, timeout=timeout_seconds)
+    finally:
+        state.pending_requests.pop(request_id, None)
+
+
+@sio.on("tempuser-result", namespace="/agent")
+async def on_tempuser_result(sid, payload):
+    """Antwort eines Agenten auf 'tempuser-create'."""
+    future = state.pending_requests.get((payload or {}).get("requestId"))
+    if future and not future.done():
+        future.set_result(payload)
+
+
 @sio.on("exec-result", namespace="/agent")
 async def on_exec_result(sid, payload):
     """Antwort eines Agenten auf einen zuvor gesendeten 'exec'-Befehl."""
@@ -1790,6 +1887,68 @@ async def on_fs_op_result(sid, payload):
     future = state.pending_requests.get(payload.get("requestId"))
     if future and not future.done():
         future.set_result(payload)
+
+
+
+# ------------------------------------------------------------------
+# BLACKBOX "letzter Stand": Agents melden periodisch Screenshot + Metrik-
+# Deltas + Log-Schwanz. Geht ein Client offline, sieht man hier seinen
+# letzten Zustand. Ablage: storage/blackbox/<client_id>/ - der Screenshot
+# wird bei jedem neuen VERWORFEN (ueberschrieben), Metriken als Deltas an
+# metrics.jsonl angehaengt (gekappt), Logs ueberschrieben.
+# ------------------------------------------------------------------
+
+def _blackbox_dir(client_id: str):
+    from app.paths import STORAGE_DIR
+    d = STORAGE_DIR / "blackbox" / client_id
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+@sio.on("blackbox-snap", namespace="/agent")
+async def on_blackbox_snap(sid, data):
+    data = data or {}
+    client_id = state.sid_to_client_id.get(sid)
+    if not client_id or (data.get("id") and data.get("id") != client_id):
+        return
+    import base64 as _b64
+
+    def _store():
+        d = _blackbox_dir(client_id)
+        ts = int(time.time() * 1000)
+        state_file = d / "state.json"
+        try:
+            prev = _json.loads(state_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            prev = {}
+        metrics = data.get("metrics") or {}
+        # DELTA: nur Felder speichern, die sich seit dem letzten Mal geaendert haben.
+        last = prev.get("metrics") or {}
+        delta = {k: v for k, v in metrics.items() if last.get(k) != v}
+        if delta:
+            line = _json.dumps({"ts": ts, **delta}, ensure_ascii=False)
+            mfile = d / "metrics.jsonl"
+            try:
+                lines = mfile.read_text(encoding="utf-8").splitlines()[-1999:]
+            except OSError:
+                lines = []
+            lines.append(line)
+            mfile.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        if data.get("log"):
+            (d / "log.txt").write_text(str(data["log"])[-100000:], encoding="utf-8")
+        if data.get("shot"):
+            try:
+                (d / "screenshot.jpg").write_bytes(_b64.b64decode(data["shot"]))
+            except Exception:
+                pass
+        state_file.write_text(_json.dumps({"ts": ts, "metrics": metrics,
+                                           "has_shot": bool(data.get("shot")) or prev.get("has_shot", False)},
+                                          ensure_ascii=False), encoding="utf-8")
+
+    try:
+        await asyncio.get_running_loop().run_in_executor(None, _store)
+    except Exception:
+        pass   # Blackbox ist best effort - nie die Agent-Verbindung stoeren
 
 
 @sio.on("screen-frame", namespace="/agent")

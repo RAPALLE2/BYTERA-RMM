@@ -1217,6 +1217,12 @@ async def on_register_ack(data=None):
         except Exception:
             pass
         await _report_update_failure()
+        # USB-Wächter: Konfiguration abholen (antwortet nur, wenn das Modul
+        # "usbguard" am Backend aktiv ist - sonst bleibt der Monitor aus).
+        try:
+            await sio.emit("usb-config-get", {"id": DEVICE_ID}, namespace="/agent")
+        except Exception:
+            pass
         return
 
     _REGISTERED.clear()
@@ -3738,6 +3744,458 @@ class _WinPipeTerminal:
             self.proc.kill()
         except Exception:
             pass
+
+
+# ------------------------------------------------------------------
+# USB-WÄCHTER (Modul "usbguard"): Ein-/Ausstecken melden und - im
+# Blockier-Modus - neue Geraete erst nach Freigabe ans System durchreichen.
+#   Linux:   /sys/bus/usb/devices/usb*/authorized_default = 0 -> neue Geraete
+#            bleiben vom Kernel unautorisiert (keine Treiber, keine Daten),
+#            bis "authorized" = 1 gesetzt wird. Hubs werden automatisch
+#            freigegeben (sonst waeren Geraete dahinter unsichtbar).
+#   Windows: neue USB-Geraete werden direkt nach dem Erkennen per pnputil
+#            deaktiviert und bei Freigabe wieder aktiviert (kurze, technisch
+#            bedingte Erkennungsluecke). Controller/Hubs (Klasse USB) bleiben.
+# ------------------------------------------------------------------
+_usb = {"enabled": False, "block": False, "thread": None, "pending": set()}
+_USB_SYS = "/sys/bus/usb/devices"
+
+
+def _usb_read(path: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            return fh.read().strip()
+    except Exception:
+        return ""
+
+
+def _usb_write(path: str, value: str) -> bool:
+    try:
+        with open(path, "w") as fh:
+            fh.write(value)
+        return True
+    except Exception:
+        return False
+
+
+def _usb_list_linux() -> dict:
+    out = {}
+    try:
+        names = os.listdir(_USB_SYS)
+    except Exception:
+        return out
+    for n in names:
+        if ":" in n:                      # Interfaces ueberspringen
+            continue
+        base = os.path.join(_USB_SYS, n)
+        vid = _usb_read(os.path.join(base, "idVendor"))
+        if not vid:
+            continue
+        pid = _usb_read(os.path.join(base, "idProduct"))
+        label = " ".join(x for x in (_usb_read(os.path.join(base, "manufacturer")),
+                                     _usb_read(os.path.join(base, "product"))) if x)
+        out[n] = {"name": f"{label or 'USB-Gerät'} ({vid}:{pid})",
+                  "hub": _usb_read(os.path.join(base, "bDeviceClass")) == "09",
+                  "root": n.startswith("usb"),
+                  "authorized": _usb_read(os.path.join(base, "authorized")) != "0"}
+    return out
+
+
+def _usb_list_windows() -> dict:
+    import subprocess as _sp
+    ps = ("Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -like 'USB\\*' } | "
+          "Select-Object InstanceId,FriendlyName,Class,Status | ConvertTo-Json -Compress")
+    try:
+        r = _sp.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                    capture_output=True, text=True, errors="replace", timeout=30,
+                    creationflags=0x08000000)
+        data = json.loads(r.stdout or "[]")
+    except Exception:
+        return {}
+    if isinstance(data, dict):
+        data = [data]
+    out = {}
+    for d in data or []:
+        iid = str(d.get("InstanceId") or "")
+        if not iid:
+            continue
+        out[iid] = {"name": str(d.get("FriendlyName") or "USB-Gerät"),
+                    "hub": str(d.get("Class") or "").upper() == "USB",
+                    "root": False,
+                    "authorized": str(d.get("Status") or "").upper() != "ERROR"}
+    return out
+
+
+def _usb_set_block_default(block: bool) -> None:
+    if IS_WINDOWS:
+        return
+    try:
+        for n in os.listdir(_USB_SYS):
+            if n.startswith("usb"):
+                _usb_write(os.path.join(_USB_SYS, n, "authorized_default"), "0" if block else "1")
+    except Exception:
+        pass
+
+
+def _usb_apply(dev: str, allow: bool) -> None:
+    import subprocess as _sp
+    if IS_WINDOWS:
+        verb = "/enable-device" if allow else "/disable-device"
+        try:
+            _sp.run(["pnputil", verb, dev], capture_output=True, timeout=60,
+                    creationflags=0x08000000)
+        except Exception:
+            pass
+    else:
+        _usb_write(os.path.join(_USB_SYS, dev, "authorized"), "1" if allow else "0")
+
+
+def _usb_emit(loop, payload: dict) -> None:
+    if sio.connected:
+        payload["id"] = DEVICE_ID
+        asyncio.run_coroutine_threadsafe(sio.emit("usb-event", payload, namespace="/agent"), loop)
+
+
+def _usb_loop(loop):
+    lister = _usb_list_windows if IS_WINDOWS else _usb_list_linux
+    known = lister()                       # Bestand beim Start nicht melden
+    while _usb["enabled"]:
+        time.sleep(3 if IS_WINDOWS else 1.5)
+        try:
+            cur = lister()
+            for dev, info in cur.items():
+                if dev in known or info.get("root"):
+                    continue
+                blocked = False
+                if _usb["block"]:
+                    if info.get("hub"):
+                        _usb_apply(dev, True)      # Hubs immer durchlassen
+                    else:
+                        if IS_WINDOWS:
+                            _usb_apply(dev, False)
+                        blocked = True
+                        _usb["pending"].add(dev)
+                _usb_emit(loop, {"action": "add", "dev": dev, "name": info["name"],
+                                 "blocked": blocked})
+            for dev, info in known.items():
+                if dev not in cur and not info.get("root"):
+                    _usb["pending"].discard(dev)
+                    _usb_emit(loop, {"action": "remove", "dev": dev, "name": info["name"],
+                                     "blocked": False})
+            known = cur
+        except Exception:
+            pass
+    _usb["thread"] = None
+
+
+@sio.on("usb-config", namespace="/agent")
+async def on_usb_config(data):
+    data = data or {}
+    _usb["enabled"] = bool(data.get("enabled"))
+    _usb["block"] = bool(data.get("enabled")) and bool(data.get("block_new"))
+    _usb_set_block_default(_usb["block"])
+    t = _usb.get("thread")
+    if _usb["enabled"] and (t is None or not t.is_alive()):
+        t = threading.Thread(target=_usb_loop, args=(asyncio.get_event_loop(),), daemon=True)
+        _usb["thread"] = t
+        t.start()
+    _print(f"[usb] Wächter {'aktiv' if _usb['enabled'] else 'aus'}"
+           + (" (Blockier-Modus)" if _usb["block"] else ""))
+
+
+@sio.on("usb-decide", namespace="/agent")
+async def on_usb_decide(data):
+    data = data or {}
+    dev = str(data.get("dev") or "")
+    if not dev or dev not in _usb["pending"]:
+        return
+    allow = bool(data.get("allow"))
+    await asyncio.get_event_loop().run_in_executor(None, _usb_apply, dev, allow)
+    if allow:
+        _usb["pending"].discard(dev)
+    _print(f"[usb] {dev}: {'freigegeben' if allow else 'bleibt blockiert'}")
+
+
+# ------------------------------------------------------------------
+# TEMPORÄRE BENUTZER: lokales Konto mit zufaelligem Einmal-Passwort anlegen
+# (Linux: useradd/chpasswd, Windows: net user). Verfall ueberwacht der Agent
+# selbst (persistiert in tempusers.json, ueberlebt also Neustarts):
+#   '1h'/'2h'/'4h'/'24h' -> nach Ablauf loeschen
+#   'logoff'             -> loeschen, sobald der Benutzer nach einer Anmeldung
+#                           keine Sitzung mehr hat ("bei Ende der Benutzung")
+#   'never'              -> nie automatisch loeschen
+# ------------------------------------------------------------------
+_TEMPUSER_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tempusers.json")
+_tempuser_lock = threading.Lock()
+_tempuser_thread = {"t": None}
+
+
+def _tempusers_load() -> dict:
+    try:
+        with open(_TEMPUSER_FILE, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return {}
+
+
+def _tempusers_save(data: dict) -> None:
+    try:
+        with open(_TEMPUSER_FILE, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+    except Exception:
+        pass
+
+
+def _tempuser_sessions(username: str) -> bool:
+    """Hat der Benutzer gerade eine Sitzung? (who/quser, best effort)"""
+    import subprocess as _sp
+    try:
+        if IS_WINDOWS:
+            out = _sp.run("quser", shell=True, capture_output=True, text=True,
+                          errors="replace", timeout=20).stdout or ""
+        else:
+            out = _sp.run(["who"], capture_output=True, text=True,
+                          errors="replace", timeout=20).stdout or ""
+        return any(line.split() and username.lower() in line.split()[0].lower()
+                   for line in out.splitlines())
+    except Exception:
+        return False
+
+
+def _tempuser_delete(username: str) -> bool:
+    import subprocess as _sp
+    try:
+        if IS_WINDOWS:
+            _sp.run(f'net user "{username}" /delete', shell=True,
+                    capture_output=True, timeout=60)
+        else:
+            _sp.run(["pkill", "-KILL", "-u", username], capture_output=True, timeout=30)
+            _sp.run(["userdel", "-r", username], capture_output=True, timeout=60)
+        _print(f"[tempuser] Benutzer {username} geloescht")
+        return True
+    except Exception as exc:
+        _print(f"[tempuser] Loeschen von {username} fehlgeschlagen: {exc}")
+        return False
+
+
+def _tempuser_watch_loop():
+    while True:
+        time.sleep(60)
+        try:
+            with _tempuser_lock:
+                data = _tempusers_load()
+            changed = False
+            now = time.time()
+            for name, info in list(data.items()):
+                mode = info.get("mode")
+                drop = False
+                if mode == "until" and now >= float(info.get("until") or 0):
+                    drop = True
+                elif mode == "logoff":
+                    if _tempuser_sessions(name):
+                        if not info.get("seen"):
+                            info["seen"] = True
+                            changed = True
+                    elif info.get("seen"):
+                        drop = True        # war angemeldet, jetzt nicht mehr
+                if drop:
+                    _tempuser_delete(name)
+                    data.pop(name, None)
+                    changed = True
+            if changed:
+                with _tempuser_lock:
+                    _tempusers_save(data)
+        except Exception:
+            pass
+
+
+def _tempuser_create(expiry: str) -> dict:
+    import secrets as _sec
+    import subprocess as _sp
+    username = "temp_" + "".join(_sec.choice("abcdefghjkmnpqrstuvwxyz23456789") for _ in range(6))
+    alphabet = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!#+-"
+    password = "".join(_sec.choice(alphabet) for _ in range(16))
+    if IS_WINDOWS:
+        r = _sp.run(f'net user "{username}" "{password}" /add /comment:"BYTERA Temp-Benutzer"',
+                    shell=True, capture_output=True, text=True, errors="replace", timeout=60)
+        if r.returncode != 0:
+            return {"ok": False, "error": (r.stderr or r.stdout or "net user fehlgeschlagen").strip()[:300]}
+        _sp.run(f'net localgroup Users "{username}" /add', shell=True, capture_output=True, timeout=30)
+        note = "Lokales Windows-Konto (Gruppe: Users)."
+    else:
+        if hasattr(os, "geteuid") and os.geteuid() != 0:
+            return {"ok": False, "error": "Agent laeuft nicht als root"}
+        r = _sp.run(["useradd", "-m", "-s", "/bin/bash", "-c", "BYTERA Temp-Benutzer", username],
+                    capture_output=True, text=True, errors="replace", timeout=60)
+        if r.returncode != 0:
+            return {"ok": False, "error": (r.stderr or "useradd fehlgeschlagen").strip()[:300]}
+        r = _sp.run(["chpasswd"], input=f"{username}:{password}", text=True,
+                    capture_output=True, timeout=30)
+        if r.returncode != 0:
+            _sp.run(["userdel", "-r", username], capture_output=True, timeout=30)
+            return {"ok": False, "error": "Passwort setzen fehlgeschlagen"}
+        note = "Lokales Linux-Konto mit Home-Verzeichnis."
+    hours = {"1h": 1, "2h": 2, "4h": 4, "24h": 24}.get(expiry)
+    with _tempuser_lock:
+        data = _tempusers_load()
+        if hours:
+            data[username] = {"mode": "until", "until": time.time() + hours * 3600}
+            note += f" Wird in {hours} h automatisch geloescht."
+        elif expiry == "logoff":
+            data[username] = {"mode": "logoff", "seen": False}
+            note += " Wird nach der Abmeldung (Ende der Benutzung) geloescht."
+        else:
+            note += " Kein automatischer Verfall."
+        _tempusers_save(data)
+    t = _tempuser_thread.get("t")
+    if t is None or not t.is_alive():
+        t = threading.Thread(target=_tempuser_watch_loop, daemon=True)
+        _tempuser_thread["t"] = t
+        t.start()
+    _print(f"[tempuser] Benutzer {username} angelegt (Verfall: {expiry})")
+    return {"ok": True, "username": username, "password": password, "note": note}
+
+
+@sio.on("tempuser-create", namespace="/agent")
+async def on_tempuser_create(data):
+    data = data or {}
+    loop = asyncio.get_event_loop()
+    try:
+        res = await loop.run_in_executor(None, _tempuser_create,
+                                         str(data.get("expiry") or "1h"))
+    except Exception as exc:
+        res = {"ok": False, "error": str(exc)[:300]}
+    res["requestId"] = data.get("requestId")
+    res["id"] = DEVICE_ID
+    await sio.emit("tempuser-result", res, namespace="/agent")
+
+
+# ------------------------------------------------------------------
+# BLACKBOX "letzter Stand": alle X Minuten (vom Backend konfiguriert) einen
+# kleinen Zustands-Schnappschuss melden: Desktop-Screenshot (verkleinert),
+# Metriken und die letzten Log-Zeilen. Geht das Geraet offline, zeigt das
+# Dashboard den letzten gemeldeten Stand. Das Backend speichert Metriken als
+# DELTAS und verwirft den alten Screenshot, sobald ein neuer ankommt.
+# ------------------------------------------------------------------
+_blackbox = {"enabled": False, "interval": 5, "thread": None, "last": 0.0}
+
+
+def _blackbox_shot() -> str | None:
+    """Kleiner JPEG-Screenshot (base64) - None, wenn kein Display greifbar."""
+    try:
+        import mss
+        from PIL import Image
+        import io as _io
+        import base64 as _b64
+        with mss.mss() as sct:
+            mon = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
+            raw = sct.grab(mon)
+        img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
+        img.thumbnail((800, 800))
+        buf = _io.BytesIO()
+        img.save(buf, "JPEG", quality=40)
+        return _b64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        return None
+
+
+def _blackbox_loop(loop):
+    while True:
+        time.sleep(10)
+        try:
+            if not _blackbox["enabled"] or not sio.connected:
+                continue
+            if time.time() - _blackbox["last"] < _blackbox["interval"] * 60:
+                continue
+            _blackbox["last"] = time.time()
+            payload = {
+                "id": DEVICE_ID,
+                "metrics": collect_metrics(),
+                "log": "\n".join(str(x) for x in list(_CONSOLE_BUFFER)[-120:]),
+            }
+            shot = _blackbox_shot()
+            if shot:
+                payload["shot"] = shot
+            asyncio.run_coroutine_threadsafe(
+                sio.emit("blackbox-snap", payload, namespace="/agent"), loop)
+        except Exception:
+            pass
+
+
+@sio.on("blackbox-config", namespace="/agent")
+async def on_blackbox_config(data):
+    data = data or {}
+    _blackbox["enabled"] = bool(data.get("enabled"))
+    try:
+        _blackbox["interval"] = max(1, min(int(data.get("interval_min") or 5), 240))
+    except (TypeError, ValueError):
+        _blackbox["interval"] = 5
+    _blackbox["last"] = 0.0          # bei Konfig-Wechsel zeitnah einen Stand melden
+    t = _blackbox.get("thread")
+    if _blackbox["enabled"] and (t is None or not t.is_alive()):
+        t = threading.Thread(target=_blackbox_loop,
+                             args=(asyncio.get_event_loop(),), daemon=True)
+        _blackbox["thread"] = t
+        t.start()
+
+
+@sio.on("software-install", namespace="/agent")
+async def on_software_install(data):
+    """Software-Rollout (Modul "software"): Installationsdateien vom Backend
+    laden und das Installationskommando ausfuehren. Platzhalter im Kommando:
+    {dir} = Download-Ordner, {file} = erste Datei (voller Pfad)."""
+    data = data or {}
+    request_id = data.get("requestId")
+    loop = asyncio.get_event_loop()
+
+    def _work():
+        import shutil as _sh
+        import subprocess as _sp
+        import tempfile as _tf
+        out, code = "", -1
+        tdir = _tf.mkdtemp(prefix="bytera-sw-")
+        try:
+            first = ""
+            for f in data.get("files") or []:
+                name = os.path.basename(str(f.get("name") or "datei"))
+                blob = _backend_fetch(str(f.get("path") or ""), timeout=600,
+                                      limit=2 * 1024 * 1024 * 1024)
+                p = os.path.join(tdir, name)
+                with open(p, "wb") as fh:
+                    fh.write(blob)
+                if not first:
+                    first = p
+            cmd = str(data.get("command") or "").replace("{dir}", tdir).replace("{file}", first)
+            if not cmd and first:
+                # Kein Kommando: bekannte Formate direkt still installieren.
+                low = first.lower()
+                if low.endswith(".msi"):
+                    cmd = f'msiexec /i "{first}" /qn /norestart'
+                elif low.endswith(".exe"):
+                    cmd = f'"{first}" /S'
+                elif low.endswith(".deb"):
+                    cmd = f'apt-get install -y "{first}" || dpkg -i "{first}"'
+                elif low.endswith(".rpm"):
+                    cmd = f'rpm -i "{first}"'
+            if not cmd:
+                return "Kein Installationskommando angegeben", 2
+            res = _sp.run(cmd, shell=True, cwd=tdir, capture_output=True,
+                          text=True, errors="replace", timeout=1800)
+            out = ((res.stdout or "") + (res.stderr or ""))[-6000:]
+            code = res.returncode
+            return out, code
+        except Exception as exc:
+            return f"{out}\n{exc}", code if code >= 0 else 1
+        finally:
+            _sh.rmtree(tdir, ignore_errors=True)
+
+    try:
+        out, code = await loop.run_in_executor(None, _work)
+    except Exception as exc:
+        out, code = str(exc), 1
+    await sio.emit("software-install-result", {
+        "id": DEVICE_ID, "requestId": request_id, "code": code, "output": out,
+    }, namespace="/agent")
 
 
 @sio.on("migrate-server", namespace="/agent")
@@ -8730,6 +9188,11 @@ async def main():
     _diag_install()
     _e2e_ensure_lib()                       # encryption library (older installations)
     _node_cfg_sync()                        # installed node: same pinned key
+    # Temp-Benutzer-Verfall weiter ueberwachen (uebersteht Agent-Neustarts).
+    if _tempusers_load():
+        t = threading.Thread(target=_tempuser_watch_loop, daemon=True)
+        _tempuser_thread["t"] = t
+        t.start()
     # Reste der Installation unter altem Namen (RAPALLE.net RMM) wegraeumen
     threading.Thread(target=_legacy_rebrand_cleanup, name="legacy-cleanup", daemon=True).start()
 

@@ -263,6 +263,9 @@ class UpdateClientBody(BaseModel):
     warranty_until: int | None = None
     # 1 = essentielles/kritisches Gerät: Icon wird bei Offline ROT statt grau.
     essential: int | None = None
+    # Kurzname für die Anzeige (leer = Hostname) und freie Tags (kommagetrennt).
+    short_name: str | None = None
+    tags: str | None = None
 
 
 def _with_live_state(c: dict) -> dict:
@@ -992,3 +995,133 @@ def get_rdp_file(client_id: str, user: dict = Depends(get_current_user)):
         media_type="application/x-rdp",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# ------------------------------------------------------------------
+# OFFLINE-WARTESCHLANGE: Aktionen "sobald der Agent online ist"
+# (z.B. Shell-Befehl oder Software-Installation). Ist der Agent gerade
+# online, kann der Aufrufer run_now=1 setzen - dann laeuft die Aktion sofort.
+# ------------------------------------------------------------------
+
+class QueueBody(BaseModel):
+    kind: str = "shell"            # 'shell' | 'software'
+    label: str = ""
+    command: str = ""              # fuer kind='shell'
+    elevated: bool = False
+    timeout: int = 300
+    package_id: str = ""           # fuer kind='software'
+
+
+@router.get("/api/clients/{client_id}/queue")
+async def client_queue_list(client_id: str, user: dict = Depends(get_current_user)):
+    _perm(user, "use_terminal", client_id)
+    return await db.call(db.queue_list, client_id)
+
+
+@router.post("/api/clients/{client_id}/queue")
+async def client_queue_add(client_id: str, body: QueueBody,
+                           user: dict = Depends(get_current_user)):
+    _perm(user, "use_terminal", client_id)
+    if body.kind == "shell":
+        cmd = (body.command or "").strip()
+        if not cmd:
+            raise HTTPException(400, "Befehl fehlt")
+        payload = {"command": cmd, "elevated": bool(body.elevated),
+                   "timeout": max(10, min(int(body.timeout or 300), 3600))}
+        label = body.label or (cmd[:60] + ("…" if len(cmd) > 60 else ""))
+    elif body.kind == "software":
+        if not body.package_id:
+            raise HTTPException(400, "package_id fehlt")
+        payload = {"package_id": body.package_id}
+        label = body.label or f"Software installieren ({body.package_id})"
+    else:
+        raise HTTPException(400, "Unbekannte Aktionsart")
+    row = await db.call(db.queue_add, client_id, body.kind, label, payload,
+                        user.get("username"))
+    db.add_audit_entry(user.get("username"), "queue.add", client_id, label)
+    # Agent gerade online? Dann die Warteschlange sofort anstossen, indem wir
+    # den normalen Abarbeiter benutzen (gleiches Verhalten wie beim Anmelden).
+    if state.is_online(client_id):
+        from app.sockets import kick_offline_queue
+        await kick_offline_queue(client_id)
+    return row
+
+
+@router.delete("/api/clients/{client_id}/queue/{qid}")
+async def client_queue_delete(client_id: str, qid: str,
+                              user: dict = Depends(get_current_user)):
+    _perm(user, "use_terminal", client_id)
+    await db.call(db.queue_delete, qid)
+    return {"ok": True}
+
+
+# ------------------------------------------------------------------
+# BLACKBOX "letzter Stand" (Screenshot + Metrik-Deltas + Logs des Agents,
+# gespeichert von sockets.on_blackbox_snap). Gedacht fuer die Diagnose,
+# NACHDEM ein Client offline gegangen ist.
+# ------------------------------------------------------------------
+
+@router.get("/api/clients/{client_id}/blackbox")
+async def client_blackbox(client_id: str, user: dict = Depends(get_current_user)):
+    _perm(user, "access_clients", client_id)
+    import json as _j
+    from app.paths import STORAGE_DIR
+    d = STORAGE_DIR / "blackbox" / client_id
+    try:
+        st = _j.loads((d / "state.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"ts": None}
+    try:
+        metrics_tail = (d / "metrics.jsonl").read_text(encoding="utf-8").splitlines()[-120:]
+    except OSError:
+        metrics_tail = []
+    try:
+        log_tail = (d / "log.txt").read_text(encoding="utf-8")[-12000:]
+    except OSError:
+        log_tail = ""
+    return {"ts": st.get("ts"), "metrics": st.get("metrics") or {},
+            "has_shot": (d / "screenshot.jpg").exists(),
+            "deltas": metrics_tail, "log": log_tail}
+
+
+@router.get("/api/clients/{client_id}/blackbox/screenshot")
+async def client_blackbox_shot(client_id: str, user: dict = Depends(get_current_user)):
+    _perm(user, "access_clients", client_id)
+    from fastapi.responses import FileResponse as _FR
+    from app.paths import STORAGE_DIR
+    p = STORAGE_DIR / "blackbox" / client_id / "screenshot.jpg"
+    if not p.exists():
+        raise HTTPException(404, "Kein Screenshot vorhanden")
+    return _FR(p, media_type="image/jpeg",
+               headers={"Cache-Control": "no-cache"})
+
+
+# ------------------------------------------------------------------
+# TEMPORÄRER BENUTZER mit Einmal-Passwort (Linux + Windows).
+# Das Passwort erzeugt der AGENT und es wird hier nur durchgereicht -
+# weder gespeichert noch geloggt (Audit nur Benutzername + Verfall).
+# ------------------------------------------------------------------
+
+class TempUserBody(BaseModel):
+    expiry: str = "1h"       # 1h | 2h | 4h | 24h | logoff | never
+
+
+@router.post("/api/clients/{client_id}/tempuser")
+async def client_tempuser(client_id: str, body: TempUserBody,
+                          user: dict = Depends(get_current_user)):
+    _perm(user, "use_terminal", client_id)
+    if body.expiry not in ("1h", "2h", "4h", "24h", "logoff", "never"):
+        raise HTTPException(400, "Ungültiger Verfall")
+    from app.sockets import request_tempuser
+    try:
+        res = await request_tempuser(client_id, body.expiry)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+    except (TimeoutError, asyncio.TimeoutError):
+        raise HTTPException(504, "Agent hat nicht rechtzeitig geantwortet")
+    if not res.get("ok"):
+        raise HTTPException(500, res.get("error") or "Anlegen fehlgeschlagen")
+    db.add_audit_entry(user.get("username"), "client.tempuser", client_id,
+                       f"{res.get('username')} (Verfall: {body.expiry})")
+    return {"username": res.get("username"), "password": res.get("password"),
+            "note": res.get("note") or ""}

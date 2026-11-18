@@ -11,7 +11,7 @@ import { state } from "./state.js";
 import { esc } from "./utils.js";
 import { t } from "./i18n.js";
 import { api } from "./api.js";
-import { clientIconSvg, batteryHtml } from "./deviceicons.js";
+import { clientIconSvg, batteryHtml, displayName, osIcon, tagChips } from "./deviceicons.js";
 
 // Wird von app.js gesetzt, um bei Auswahl das Haupt-Panel zu aktualisieren
 let onSelectCallback = null;
@@ -422,7 +422,7 @@ function renderClientNode(client) {
     <div class="tree-node">
       <div class="tree-row row-anim ${selected ? "selected" : ""}" data-select-client="${client.id}" data-drag-client="${client.id}" draggable="true">
         ${children.length ? `<span data-toggle="${client.id}">${isOpen ? "▾" : "▸"}</span>` : `<span style="width:10px;display:inline-block"></span>`}
-        ${clientDot(client)} <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(client.hostname)}</span>
+        ${clientDot(client)} <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis" title="${esc(client.hostname)}">${osIcon(client) ? osIcon(client) + " " : ""}${esc(displayName(client))}</span><span style="display:inline-flex;gap:3px;flex:none;max-width:40%;overflow:hidden">${tagChips(client, 2)}</span>
         ${batteryHtml(client)}
         ${favStar("clients", client.id)}
       </div>
@@ -647,7 +647,7 @@ function renderFavorites() {
     for (const c of favClients) {
       h += `
         <div class="tree-row row-anim fav-row" data-fav-select="client:${c.id}">
-          ${clientDot(c)} <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(c.hostname)}</span>
+          ${clientDot(c)} <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis" title="${esc(c.hostname)}">${osIcon(c) ? osIcon(c) + " " : ""}${esc(displayName(c))}</span>
           ${batteryHtml(c)}
           ${favStarHtml("clients", c.id)}
         </div>`;

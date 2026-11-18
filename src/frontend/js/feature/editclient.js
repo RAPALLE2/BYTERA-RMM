@@ -6,6 +6,7 @@
 
 import { state, findClient } from "../app/state.js";
 import { api } from "../app/api.js";
+import { moduleRequest } from "../app/modules.js";
 import { esc, uiConfirm } from "../app/utils.js";
 import { closeWindow, openWindow } from "../app/windowmanager.js";
 // t() unter Alias: "t" ist hier bereits als lokaler Variablenname belegt.
@@ -99,6 +100,17 @@ export function renderEditClient(body, win) {
         </label>
       </div>
 
+      <div style="display:flex;gap:10px">
+        <div class="form-row" style="flex:1">
+          <label>Kurzname (Anzeige; leer = Hostname)</label>
+          <input id="ec-shortname" value="${esc(client.short_name || "")}" placeholder="z.B. Kasse 1" maxlength="40" />
+        </div>
+        <div class="form-row" style="flex:1">
+          <label>Tags (kommagetrennt)</label>
+          <input id="ec-tags" value="${esc(client.tags || "")}" placeholder="produktion, halle2, drucker" maxlength="300" />
+        </div>
+      </div>
+
       <div class="form-row">
         <label>${tr("ec_devtype")}</label>
         <select id="ec-devtype">
@@ -152,6 +164,25 @@ export function renderEditClient(body, win) {
       </p>
       <button class="action-btn" id="ec-ws-goto">🔗 ${tr("ec_websites_open")}</button>
 
+      <h3 style="margin-top:22px">🧰 Werkzeuge</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="action-btn" id="ec-blackbox" title="Letzter gemeldeter Stand (Screenshot, Metriken, Logs) - nützlich, wenn der Client offline ist">🛟 Blackbox</button>
+        <button class="action-btn" id="ec-tempuser" title="Temporären Benutzer auf dem Gerät anlegen (Einmal-Passwort, Verfall wählbar)">👤 Temp-Benutzer</button>
+      </div>
+
+      <h3 style="margin-top:22px">⏳ Warteschlange (wenn online)</h3>
+      <p style="color:var(--subtext);font-size:12px;margin:4px 0 8px">
+        Vorgemerkte Aktionen laufen automatisch, sobald der Agent (wieder) online ist -
+        ist er gerade online, sofort. Software-Rollouts legen hier ebenfalls Einträge an.
+      </p>
+      <div id="ec-queue" style="font-size:12px"></div>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <input id="ec-q-cmd" placeholder="Shell-Befehl bei nächstem Online ausführen…" style="flex:1">
+        <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--subtext)">
+          <input type="checkbox" id="ec-q-admin" checked>als Admin</label>
+        <button class="btn" id="ec-q-add">＋ Vormerken</button>
+      </div>
+
     </div>
   `;
 
@@ -167,6 +198,132 @@ export function renderEditClient(body, win) {
       clientColor: client.color, w: 460, h: 520,
     });
   });
+
+  // ---- Blackbox: letzter gemeldeter Stand ----
+  body.querySelector("#ec-blackbox")?.addEventListener("click", async () => {
+    let d;
+    try { d = await moduleRequest(`/api/clients/${client.id}/blackbox`); }
+    catch (e) { window.notify?.(e.message, "error"); return; }
+    const ov = document.createElement("div");
+    ov.style.cssText = "position:fixed;inset:0;z-index:11000;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center";
+    const when = d.ts ? new Date(d.ts).toLocaleString() : null;
+    const m = d.metrics || {};
+    const ramPct = m.memTotal ? Math.round((m.memUsed || 0) / m.memTotal * 100) : null;
+    ov.innerHTML = `
+      <div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;max-width:860px;width:92%;max-height:90%;overflow:auto;padding:16px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <h3 style="margin:0;flex:1">🛟 Blackbox - ${esc(client.hostname)}</h3>
+          <button class="btn" data-close>✕</button>
+        </div>
+        ${!d.ts ? `<p style="color:var(--subtext)">Noch kein Stand gemeldet. Blackbox in den Einstellungen (Allgemein) aktivieren;
+          der Agent meldet dann im eingestellten Intervall.</p>` : `
+        <p style="font-size:12px;color:var(--subtext)">Letzter Stand: <b>${esc(when)}</b>
+          ${m.cpuLoad != null ? ` · CPU ${esc(String(m.cpuLoad))} %` : ""}${ramPct != null ? ` · RAM ${ramPct} %` : ""}</p>
+        ${d.has_shot ? `<img id="bb-shot" style="max-width:100%;border:1px solid var(--border);border-radius:8px" alt="Screenshot">` : ""}
+        ${d.deltas?.length ? `<h4 style="margin:12px 0 4px">Metrik-Deltas</h4>
+          <pre style="max-height:160px;overflow:auto;font-size:11px;background:var(--panel-2);padding:8px;border-radius:8px">${esc(d.deltas.join("\n"))}</pre>` : ""}
+        ${d.log ? `<h4 style="margin:12px 0 4px">Agent-Log (Schwanz)</h4>
+          <pre style="max-height:200px;overflow:auto;font-size:11px;background:var(--panel-2);padding:8px;border-radius:8px">${esc(d.log)}</pre>` : ""}`}
+      </div>`;
+    document.body.appendChild(ov);
+    ov.querySelector("[data-close]").addEventListener("click", () => ov.remove());
+    ov.addEventListener("click", (e) => { if (e.target === ov) ov.remove(); });
+    if (d.has_shot) {
+      const { getToken } = await import("../app/api.js");
+      fetch(`/api/clients/${client.id}/blackbox/screenshot`, { headers: { Authorization: `Bearer ${getToken()}` } })
+        .then((r) => (r.ok ? r.blob() : null))
+        .then((b) => { if (b) ov.querySelector("#bb-shot").src = URL.createObjectURL(b); })
+        .catch(() => {});
+    }
+  });
+
+  // ---- Temporärer Benutzer mit Einmal-Passwort ----
+  body.querySelector("#ec-tempuser")?.addEventListener("click", async () => {
+    const ov = document.createElement("div");
+    ov.style.cssText = "position:fixed;inset:0;z-index:11000;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center";
+    ov.innerHTML = `
+      <div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;width:420px;padding:16px">
+        <h3 style="margin:0 0 8px">👤 Temp-Benutzer auf ${esc(client.hostname)}</h3>
+        <p style="font-size:12px;color:var(--subtext)">Legt ein lokales Konto mit zufälligem Einmal-Passwort an
+          (Linux und Windows). Das Passwort wird nur EINMAL angezeigt und nirgends gespeichert.
+          Der Agent löscht das Konto automatisch gemäß Verfall.</p>
+        <div class="form-row"><label>Verfall</label>
+          <select id="tu-exp" style="width:100%">
+            <option value="1h">Nach 1 Stunde</option>
+            <option value="2h">Nach 2 Stunden</option>
+            <option value="4h">Nach 4 Stunden</option>
+            <option value="24h">Nach 24 Stunden</option>
+            <option value="logoff">Bei Ende der Benutzung (nach Abmeldung)</option>
+            <option value="never">Nie (manuell löschen)</option>
+          </select></div>
+        <div id="tu-out" style="margin:10px 0"></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button class="btn" data-close>Schließen</button>
+          <button class="btn-primary" id="tu-create">Anlegen</button>
+        </div>
+      </div>`;
+    document.body.appendChild(ov);
+    ov.querySelector("[data-close]").addEventListener("click", () => ov.remove());
+    ov.querySelector("#tu-create").addEventListener("click", async () => {
+      const out = ov.querySelector("#tu-out");
+      out.innerHTML = `<span style="color:var(--subtext);font-size:12px">Lege Benutzer an …</span>`;
+      ov.querySelector("#tu-create").disabled = true;
+      try {
+        const r = await moduleRequest(`/api/clients/${client.id}/tempuser`, {
+          method: "POST", noJob: true,
+          body: JSON.stringify({ expiry: ov.querySelector("#tu-exp").value }),
+        });
+        out.innerHTML = `
+          <div class="panel" style="padding:10px;border:1px solid var(--online,#34d399)">
+            <div style="font-size:12px;color:var(--subtext)">Einmalige Anzeige - jetzt kopieren:</div>
+            <div style="font-family:monospace;font-size:14px;margin-top:4px">Benutzer: <b>${esc(r.username)}</b><br>Passwort: <b>${esc(r.password)}</b></div>
+            <button class="btn btn-sm" style="margin-top:6px" id="tu-copy">📋 Kopieren</button>
+            <div style="font-size:11px;color:var(--subtext);margin-top:4px">${esc(r.note || "")}</div>
+          </div>`;
+        out.querySelector("#tu-copy").addEventListener("click", () =>
+          navigator.clipboard?.writeText(`Benutzer: ${r.username}\nPasswort: ${r.password}`));
+      } catch (e) {
+        out.innerHTML = `<div style="color:var(--danger);font-size:12px">${esc(e.message)}</div>`;
+        ov.querySelector("#tu-create").disabled = false;
+      }
+    });
+  });
+
+  // ---- Offline-Warteschlange ----
+  const Q_STATUS = { pending: "⏳ wartet", running: "▶ läuft", done: "✅ fertig", failed: "❌ fehlgeschlagen" };
+  async function loadQueue() {
+    const box = body.querySelector("#ec-queue");
+    if (!box) return;
+    try {
+      const items = await moduleRequest(`/api/clients/${client.id}/queue`);
+      box.innerHTML = items.length ? items.map((q) => `
+        <div style="display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--border)">
+          <span style="flex:none">${Q_STATUS[q.status] || q.status}</span>
+          <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis" title="${esc(q.result || "")}">${esc(q.label)}</span>
+          <span style="color:var(--subtext)">${esc(q.created_by || "")}</span>
+          <button class="action-btn btn-danger" data-qdel="${esc(q.id)}" title="Entfernen">✕</button>
+        </div>`).join("")
+        : `<div style="color:var(--subtext)">Keine vorgemerkten Aktionen.</div>`;
+      box.querySelectorAll("[data-qdel]").forEach((b) => b.addEventListener("click", async () => {
+        await moduleRequest(`/api/clients/${client.id}/queue/${b.dataset.qdel}`, { method: "DELETE", noJob: true });
+        loadQueue();
+      }));
+    } catch (e) { box.innerHTML = `<div style="color:var(--danger)">${esc(e.message)}</div>`; }
+  }
+  body.querySelector("#ec-q-add")?.addEventListener("click", async () => {
+    const cmd = body.querySelector("#ec-q-cmd").value.trim();
+    if (!cmd) return;
+    try {
+      await moduleRequest(`/api/clients/${client.id}/queue`, {
+        method: "POST", noJob: true,
+        body: JSON.stringify({ kind: "shell", command: cmd,
+                               elevated: body.querySelector("#ec-q-admin").checked }),
+      });
+      body.querySelector("#ec-q-cmd").value = "";
+      loadQueue();
+    } catch (e) { window.notify?.(e.message, "error"); }
+  });
+  loadQueue();
 
   const tenantSel = body.querySelector("#ec-tenant");
   // Live-Refresh der Tenant-Liste bei Hierarchie-Änderungen (Auswahl bleibt).
@@ -248,6 +405,8 @@ export function renderEditClient(body, win) {
         status_override: body.querySelector("#ec-status").value || null,
         active: body.querySelector("#ec-active").checked,
         essential: body.querySelector("#ec-essential").checked ? 1 : 0,
+        short_name: body.querySelector("#ec-shortname").value.trim(),
+        tags: body.querySelector("#ec-tags").value.split(",").map((t) => t.trim()).filter(Boolean).join(","),
         device_type: devTypeSel.value,
         auto_update: body.querySelector("#ec-autoupdate").value,
         icon_type: body.querySelector("#ec-icon").value,

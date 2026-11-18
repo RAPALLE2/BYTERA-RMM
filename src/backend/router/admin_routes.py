@@ -532,6 +532,11 @@ class SettingsBody(BaseModel):
     # Auto-Update auch für Clients, die offline waren, sobald sie sich wieder
     # verbinden ("1" = an, Standard).
     agent_auto_update_offline: str | None = None
+    # Blackbox "letzter Stand": Agents melden alle X Minuten Desktop-Screenshot,
+    # Metrik-Deltas und Log-Schwanz, damit man nach einem Offline-Gehen den
+    # letzten Zustand sehen kann ("1" = an; Intervall in Minuten).
+    blackbox_enabled: str | None = None
+    blackbox_interval_min: int | None = None
     # Spotify-Integration: Client-ID einer (vom Admin registrierten) Spotify-App.
     # Damit können sich Benutzer im Audio Player per OAuth (PKCE, ohne Secret)
     # anmelden und mit Premium volle Titel abspielen.

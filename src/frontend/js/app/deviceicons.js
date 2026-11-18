@@ -236,3 +236,44 @@ export function updateBatteryIndicators(client) {
     if (el.outerHTML !== html) el.outerHTML = html;
   });
 }
+
+// ------------------------------------------------------------------
+// Anzeige-Helfer: Kurzname, OS-Icon und Tag-Chips (Sidebar, Topologie,
+// Inventar und überall sonst, wo ein Client genannt wird).
+// ------------------------------------------------------------------
+
+/** Anzeigename: Kurzname (falls gesetzt), sonst Hostname. */
+export function displayName(client) {
+  return (client?.short_name || "").trim() || client?.hostname || client?.id || "?";
+}
+
+/** Kleines OS-Symbol anhand der Plattform ("win32", "Linux", "darwin", ...). */
+export function osIcon(platformOrClient) {
+  const p = String(typeof platformOrClient === "object"
+    ? (platformOrClient?.platform || platformOrClient?.os || "")
+    : (platformOrClient || "")).toLowerCase();
+  if (p.includes("win")) return "🪟";
+  if (p.includes("mac") || p.includes("darwin") || p.includes("osx")) return "🍎";
+  if (p.includes("android")) return "🤖";
+  if (p.includes("bsd")) return "👹";
+  if (p.includes("linux") || p.includes("debian") || p.includes("ubuntu")
+      || p.includes("proxmox") || p.includes("alpine")) return "🐧";
+  return "";
+}
+
+/** Tags eines Clients als Array (Spalte ist ein kommagetrennter Text). */
+export function clientTags(client) {
+  return String(client?.tags || "").split(",").map((t) => t.trim()).filter(Boolean);
+}
+
+/** Tag-Chips als HTML (kompakt; maxN weitere werden als "+n" zusammengefasst). */
+export function tagChips(client, maxN = 3) {
+  const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const tags = clientTags(client);
+  if (!tags.length) return "";
+  const shown = tags.slice(0, maxN);
+  const more = tags.length - shown.length;
+  return shown.map((t) => `<span class="tag-chip" style="font-size:9.5px;background:var(--panel-2,#1b2740);
+      border:1px solid var(--border);border-radius:6px;padding:0 5px;color:var(--subtext);white-space:nowrap">${esc(t)}</span>`).join("")
+    + (more > 0 ? `<span style="font-size:9.5px;color:var(--subtext)" title="${esc(tags.slice(maxN).join(", "))}">+${more}</span>` : "");
+}

@@ -689,6 +689,25 @@ export function renderSettings(body, win) {
         </div>
 
 
+        <h3 style="margin-top:24px">🛟 Blackbox „letzter Stand“</h3>
+        <p style="color:var(--subtext);font-size:13px">
+          Agents melden regelmäßig einen kleinen Zustands-Schnappschuss (Desktop-Screenshot,
+          Metrik-Deltas, letzte Log-Zeilen). Geht ein Client offline, zeigt „🛟 Blackbox“ im
+          Bearbeiten-Dialog seinen letzten Stand. Alte Screenshots werden beim Eintreffen
+          eines neuen verworfen. Gilt je Agent ab dessen nächster Verbindung.
+        </p>
+        <div class="form-row">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="ge-blackbox" ${(s.blackbox_enabled ?? "0") === "1" ? "checked" : ""} />
+            Blackbox aktivieren
+          </label>
+        </div>
+        <div class="form-row">
+          <label>Intervall (Minuten)</label>
+          <input type="number" id="ge-blackbox-interval" min="1" max="240"
+                 value="${esc(String(s.blackbox_interval_min ?? 5))}" style="width:110px" />
+        </div>
+
         <div id="ge-error" class="form-error hidden"></div>
         <button class="btn-primary" id="ge-save" style="margin-top:8px">${t("save")}</button>
 
@@ -732,6 +751,8 @@ export function renderSettings(body, win) {
         replay_retention_days: parseInt(val("ge-replay"), 10) || 10,
         agent_auto_update: root.querySelector("#ge-autoupdate").checked ? "1" : "0",
         agent_auto_update_offline: root.querySelector("#ge-autoupdate-offline").checked ? "1" : "0",
+        blackbox_enabled: root.querySelector("#ge-blackbox").checked ? "1" : "0",
+        blackbox_interval_min: parseInt(val("ge-blackbox-interval"), 10) || 5,
       };
       if (has("ge-default-design")) payload.default_design = val("ge-default-design");
       if (has("ge-server-host")) {
