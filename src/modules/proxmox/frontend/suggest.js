@@ -1,21 +1,22 @@
-// suggest.js (Modul "proxmox") - Vorschlaege: Agenten, die als VM/CT in Proxmox laufen
+// suggest.js (module "proxmox") - suggestions: agents that run as VM/CT in Proxmox
 // -----------------------------------------------------------------------------------
-// Hinweis unten rechts + Dialog: einzeln oder alle uebernehmen (als VM/CT markieren und dem
-// HEAD unterordnen) bzw. verwerfen. Backend: match_routes.py
+// Hint in the bottom right + dialog: accept one or all (mark as VM/CT and subordinate
+// them to the HEAD) or dismiss. Backend: match_routes.py
 //
-// HEAD = uebergeordneter Agent. In einem Proxmox-Cluster (pve1, pve2, ...) hat oft nur ein Agent
-// die Proxmox-Verbindung - die Gaeste sollen aber unter dem Agenten ihres eigenen Nodes stehen.
-//   * "Head je Proxmox-Node" (oben, generell): gilt fuer ALLE Gaeste dieses Nodes (auch bestehende).
-//   * Auswahl je Zeile: die ERSTE Aenderung auf einem Node legt den Head fuer den ganzen Node fest
-//     (Beispiel: einen Gast auf pve2 dem Agenten pve2 geben -> alle pve2-Gaeste gehen zu pve2, die
-//     pve1-Gaeste bleiben bei pve1). Danach ist eine Aenderung je Zeile eine Ausnahme nur fuer diesen Gast.
-// "Nicht erneut fragen" blendet die aktuellen Vorschlaege dauerhaft aus (pro Benutzer, wird synchronisiert);
-// im Proxmox-Dashboard (Register "Zuordnung") sind sie weiter erreichbar.
+// HEAD = parent agent. In a Proxmox cluster (pve1, pve2, ...) often only one agent
+// has the Proxmox connection - but the guests should sit under the agent of their own node.
+//   * "Head per Proxmox node" (top, general): applies to ALL guests of that node (existing too).
+//   * Per-row choice: the FIRST change on a node sets the head for the whole node
+//     (example: give a guest on pve2 to the agent pve2 -> all pve2 guests go to pve2, the
+//     pve1 guests stay with pve1). After that, a per-row change is an exception for that guest only.
+// "Do not ask again" permanently hides the current suggestions (per user, synced);
+// they remain reachable in the Proxmox dashboard (tab "Mapping").
 import { esc } from "/js/app/utils.js";
 import { state } from "/js/app/state.js";
 import { preq } from "./common.js";
+import { icon } from "./icons.js";
 
-const SEEN = "rmm_pve_suggest_seen";                       // "Später" (nur diese Sitzung)
+const SEEN = "rmm_pve_suggest_seen";                       // "Later" (this session only)
 const neverKey = () => `rmm_pve_never:${state.user?.username || ""}`;
 const sid = (s) => `${s.client_id}:${s.host}:${s.vmid}`;
 
@@ -39,18 +40,18 @@ export function maybeShowBanner(suggestions, onChange, extra = {}) {
   el.style.cssText = "position:fixed;right:16px;bottom:64px;z-index:9300;background:var(--panel);border:1px solid var(--accent);" +
     "border-radius:10px;padding:14px 16px;width:360px;max-width:calc(100vw - 32px);box-shadow:0 8px 28px rgba(0,0,0,.45);font-size:13px";
   el.innerHTML = `<div style="display:flex;gap:10px;align-items:flex-start">
-      <span style="font-size:20px">🖧</span>
-      <div style="flex:1"><b>${open.length} Agent(en) laufen in Proxmox</b>
+      <span style="display:flex">${icon("cluster", 20)}</span>
+      <div style="flex:1"><b>${open.length} agent(s) run in Proxmox</b>
         <div style="color:var(--subtext);margin-top:2px">${esc(open.slice(0, 3).map((s) => s.client_name).join(", "))}${open.length > 3 ? " …" : ""}
-        – als VM/CT einsortieren und dem Head (Proxmox-Node) unterordnen?</div>
-        <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap"><button class="btn btn-primary btn-sm" data-open>Ansehen</button>
-          <button class="btn btn-sm" data-later>Später</button>
-          <button class="btn btn-sm btn-ghost" data-never title="Diese Vorschläge nicht mehr als Hinweis anzeigen">Nicht erneut fragen</button></div></div></div>`;
+        - sort as VM/CT and subordinate to the head (Proxmox node)?</div>
+        <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap"><button class="btn btn-primary btn-sm" data-open>View</button>
+          <button class="btn btn-sm" data-later>Later</button>
+          <button class="btn btn-sm btn-ghost" data-never title="Stop showing these suggestions as a hint">Do not ask again</button></div></div></div>`;
   document.body.appendChild(el);
   el.querySelector("[data-later]").addEventListener("click", () => { sessionStorage.setItem(SEEN, ids); el.remove(); });
   el.querySelector("[data-never]").addEventListener("click", () => {
     addNever(open); el.remove();
-    window.notify?.("Wird nicht mehr nachgefragt – erreichbar im Proxmox-Dashboard unter „Zuordnung“.", "info", 6000);
+    window.notify?.("Will not be asked again - reachable in the Proxmox dashboard under \"Mapping\".", "info", 6000);
   });
   el.querySelector("[data-open]").addEventListener("click", () => { el.remove(); openSuggestDialog(open, onChange, extra); });
 }
@@ -60,28 +61,28 @@ export function openSuggestDialog(suggestions, onChange, extra = {}) {
   ov.style.cssText = "position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;padding:16px";
   ov.innerHTML = `<div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px 18px;width:760px;max-width:100%;
       max-height:90vh;display:flex;flex-direction:column;font-size:13px;box-sizing:border-box">
-    <div style="display:flex;align-items:center;margin-bottom:6px"><b style="flex:1;font-size:15px">🖧 Agenten in Proxmox erkannt</b><button class="btn-tool" data-x>✕</button></div>
-    <p style="color:var(--subtext);margin:0 0 10px">Diese Agenten laufen laut Proxmox in einer VM bzw. einem Container. Übernehmen markiert sie als
-      <b>VM</b>/<b>CT</b> und ordnet sie dem <b>Head</b> unter – dem Agenten des Proxmox-Nodes, auf dem der Gast läuft.
-      Im Agent-Panel gibt es dann „In Proxmox öffnen“.</p>
+    <div style="display:flex;align-items:center;margin-bottom:6px"><b style="flex:1;font-size:15px;display:flex;align-items:center;gap:6px">${icon("cluster", 16)} Agents detected in Proxmox</b><button class="btn-tool" data-x>${icon("close", 15)}</button></div>
+    <p style="color:var(--subtext);margin:0 0 10px">Per Proxmox, these agents run in a VM or container. Accepting marks them as
+      <b>VM</b>/<b>CT</b> and subordinates them to the <b>head</b> - the agent of the Proxmox node the guest runs on.
+      The agent panel then shows "Open in Proxmox".</p>
     <div data-heads></div>
     <div data-list style="flex:1;overflow:auto;min-height:80px"></div>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;flex-wrap:wrap">
-      <button class="btn btn-ghost" data-never style="margin-right:auto">Nicht erneut fragen</button>
-      <button class="btn" data-x2>Schließen</button>
-      <button class="btn btn-primary" data-all>Alle übernehmen</button></div></div>`;
+      <button class="btn btn-ghost" data-never style="margin-right:auto">Do not ask again</button>
+      <button class="btn" data-x2>Close</button>
+      <button class="btn btn-primary" data-all>Accept all</button></div></div>`;
   document.body.appendChild(ov);
   let list = [...suggestions];
   let cands = extra.candidates || [];
-  const override = {};                       // client_id -> head (Ausnahme nur fuer diesen Gast)
-  const setNodes = new Set();                // "host|node", deren Head hier schon festgelegt wurde
+  const override = {};                       // client_id -> head (exception for this guest only)
+  const setNodes = new Set();                // "host|node" whose head has already been set here
   const nodeKey = (s) => `${s.host}|${s.node}`;
   const close = () => { ov.remove(); onChange?.(); };
   ov.querySelector("[data-x]").onclick = close;
   ov.querySelector("[data-x2]").onclick = close;
   ov.querySelector("[data-never]").onclick = () => {
     addNever(list);
-    window.notify?.("Wird nicht mehr nachgefragt – erreichbar im Proxmox-Dashboard unter „Zuordnung“.", "info", 6000);
+    window.notify?.("Will not be asked again - reachable in the Proxmox dashboard under \"Mapping\".", "info", 6000);
     close();
   };
 
@@ -89,7 +90,7 @@ export function openSuggestDialog(suggestions, onChange, extra = {}) {
   const opts = (sel, exclude) => {
     const items = cands.filter((c) => c.id !== exclude);
     if (sel && !items.some((c) => c.id === sel)) items.unshift({ id: sel, hostname: nameOf(sel) });
-    return items.map((c) => `<option value="${esc(c.id)}" ${c.id === sel ? "selected" : ""}>${esc(c.hostname)}${c.connected ? " 🖧" : ""}</option>`).join("");
+    return items.map((c) => `<option value="${esc(c.id)}" ${c.id === sel ? "selected" : ""}>${esc(c.hostname)}${c.connected ? " *" : ""}</option>`).join("");
   };
   const headOf = (s) => override[s.client_id] || s.head;
 
@@ -107,25 +108,25 @@ export function openSuggestDialog(suggestions, onChange, extra = {}) {
     try {
       const r = await preq("/heads", { method: "PUT", body: { host, node, head } });
       setNodes.add(`${host}|${node}`);
-      window.notify?.(`Head für Node ${node}: ${nameOf(head)}` + (r.moved ? ` (${r.moved} bestehende Zuordnung(en) umgehängt)` : ""), "success", 4000);
-      // Ausnahmen, die jetzt dem Node-Head entsprechen, sind keine mehr
+      window.notify?.(`Head for node ${node}: ${nameOf(head)}` + (r.moved ? ` (${r.moved} existing mapping(s) moved)` : ""), "success", 4000);
+      // exceptions that now match the node head are no longer exceptions
       list.forEach((s) => { if (nodeKey(s) === `${host}|${node}` && override[s.client_id] === head) delete override[s.client_id]; });
     } catch (e) { window.notify?.(e.message, "error"); }
     await reload();
   }
 
   const draw = () => {
-    // ---- generell: Head je Proxmox-Node
+    // ---- general: head per Proxmox node
     const nodes = new Map();
     list.forEach((s) => { if (!nodes.has(nodeKey(s))) nodes.set(nodeKey(s), s); });
     ov.querySelector("[data-heads]").innerHTML = nodes.size ? `
       <div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:10px">
-        <div style="font-weight:600;margin-bottom:6px">Head je Proxmox-Node <span style="font-weight:400;color:var(--subtext)">(gilt für alle Gäste des Nodes)</span></div>
+        <div style="font-weight:600;margin-bottom:6px">Head per Proxmox node <span style="font-weight:400;color:var(--subtext)">(applies to all guests of the node)</span></div>
         ${[...nodes.values()].map((s) => `
           <div data-node="${esc(nodeKey(s))}" style="display:flex;gap:8px;align-items:center;padding:3px 0;flex-wrap:wrap">
             <span style="min-width:170px">Node <b>${esc(s.node)}</b> <span style="color:var(--subtext)">(${esc(s.host_name)})</span></span>
             <select data-nodehead style="flex:1;min-width:180px">${opts(s.head)}</select>
-            <span style="font-size:11px;color:var(--subtext)">${s.head_source === "set" ? "festgelegt" : s.head_source === "hostname" ? "erkannt (Hostname)" : "verbundener Agent"}</span>
+            <span style="font-size:11px;color:var(--subtext)">${s.head_source === "set" ? "set" : s.head_source === "hostname" ? "detected (hostname)" : "connected agent"}</span>
           </div>`).join("")}
       </div>` : "";
     ov.querySelectorAll("[data-node]").forEach((row) => {
@@ -133,17 +134,17 @@ export function openSuggestDialog(suggestions, onChange, extra = {}) {
       row.querySelector("[data-nodehead]").onchange = (e) => setNodeHead(host, node, e.target.value);
     });
 
-    // ---- je Gast
+    // ---- per guest
     ov.querySelector("[data-list]").innerHTML = list.length ? list.map((s) => `
       <div data-c="${esc(s.client_id)}" style="display:flex;gap:10px;align-items:center;padding:8px 2px;border-bottom:1px solid var(--border);flex-wrap:wrap">
-        <span style="font-size:18px">${s.type === "qemu" ? "🖥" : "📦"}</span>
+        <span style="display:flex">${s.type === "qemu" ? icon("server", 18) : icon("box", 18)}</span>
         <div style="flex:1;min-width:220px"><b>${esc(s.client_name)}</b>
-          <div style="font-size:12px;color:var(--subtext)">${s.type === "qemu" ? "VM" : "CT"} ${s.vmid} „${esc(s.name)}“ · Node ${esc(s.node)} (${esc(s.host_name)}) · erkannt über ${esc(s.reason)}</div></div>
+          <div style="font-size:12px;color:var(--subtext)">${s.type === "qemu" ? "VM" : "CT"} ${s.vmid} "${esc(s.name)}" · node ${esc(s.node)} (${esc(s.host_name)}) · detected via ${esc(s.reason)}</div></div>
         <label style="display:flex;gap:6px;align-items:center;font-size:12px">Head
           <select data-head style="max-width:190px">${opts(headOf(s), s.client_id)}</select></label>
-        ${override[s.client_id] ? `<span title="Ausnahme nur für diesen Gast" style="font-size:11px;color:var(--warning,#d97706)">Ausnahme</span>` : ""}
-        <button class="btn btn-sm" data-ign>Nein</button><button class="btn btn-primary btn-sm" data-acc>Übernehmen</button></div>`).join("")
-      : `<div style="color:var(--subtext);padding:8px 0">Alles erledigt.</div>`;
+        ${override[s.client_id] ? `<span title="Exception for this guest only" style="font-size:11px;color:var(--warning,#d97706)">Exception</span>` : ""}
+        <button class="btn btn-sm" data-ign>No</button><button class="btn btn-primary btn-sm" data-acc>Accept</button></div>`).join("")
+      : `<div style="color:var(--subtext);padding:8px 0">All done.</div>`;
     ov.querySelectorAll("[data-c]").forEach((row) => {
       const cid = row.dataset.c;
       const s = list.find((x) => x.client_id === cid);
@@ -152,7 +153,7 @@ export function openSuggestDialog(suggestions, onChange, extra = {}) {
       row.querySelector("[data-head]").onchange = (e) => {
         const v = e.target.value;
         if (!setNodes.has(nodeKey(s)) && s.head_source !== "set") {
-          // erste Wahl auf diesem Node -> gilt fuer den ganzen Node (alle anderen Gaeste dort ziehen mit)
+          // first choice on this node -> applies to the whole node (all other guests there follow)
           setNodeHead(s.host, s.node, v);
         } else {
           if (v === s.head) delete override[cid]; else override[cid] = v;
@@ -174,7 +175,7 @@ export function openSuggestDialog(suggestions, onChange, extra = {}) {
   }
   ov.querySelector("[data-all]").onclick = async () => {
     for (const s of [...list]) await act(s.client_id, "accept");
-    window.notify?.("Zuordnungen übernommen", "success");
+    window.notify?.("Mappings accepted", "success");
   };
   draw();
 }

@@ -1,4 +1,4 @@
-# module.py (Modul "proxmox") - automatischer Abgleich Agenten <-> Proxmox-Gaeste
+# module.py (module "proxmox") - automatic matching of agents <-> Proxmox guests
 # (Intervall aus den Modul-Einstellungen; neuer/umgezogener Agent -> Abgleich kurz danach)
 from . import match
 

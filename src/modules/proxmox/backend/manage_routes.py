@@ -1,10 +1,10 @@
-# manage_routes.py (Modul "proxmox") - Erweiterte Verwaltung
+# manage_routes.py (module "proxmox") - advanced management
 # ------------------------------------------------------------
-# Alles, was man auf der Proxmox-Oberfläche im Alltag tut, über das Modul:
-#   Storage/ISOs/Templates verwalten (Download per URL, pveam, löschen),
-#   VMs & Container erstellen, migrieren, klonen, in Vorlage wandeln, Disk
-#   vergrößern, Node-Netzwerk/Pools ansehen. Nutzt dieselben Helfer + Rechte
-#   wie proxmox_routes.py (pve_storage, pve_config, pve_access, pve_nodes).
+# Everything you do on the Proxmox UI day to day, via the module:
+#   manage storage/ISOs/templates (download by URL, pveam, delete),
+#   create VMs & containers, migrate, clone, convert to template, grow
+#   disks, view node network/pools. Uses the same helpers + permissions
+#   as proxmox_routes.py (pve_storage, pve_config, pve_access, pve_nodes).
 from __future__ import annotations
 
 import asyncio
@@ -34,14 +34,14 @@ def _cl(user, cid, perm):
 
 def _node(node):
     if not _NODE.match(node or ""):
-        raise HTTPException(400, "Ungültiger Node-Name")
+        raise HTTPException(400, "Invalid node name")
     return node
 
 
 def _vmid(vmid) -> int:
     v = int(vmid)
     if not (100 <= v <= 999999999):
-        raise HTTPException(400, "VMID muss zwischen 100 und 999999999 liegen")
+        raise HTTPException(400, "VMID must be between 100 and 999999999")
     return v
 
 
@@ -54,7 +54,7 @@ def next_id(cid: str, user: dict = Depends(get_current_user)):
 
 @router.get("/{cid}/node-names")
 def node_names(cid: str, user: dict = Depends(get_current_user)):
-    """Nur Node-Namen (für Auswahlfelder) – braucht nur pve_access, nicht pve_nodes."""
+    """Only node names (for select fields) - needs only pve_access, not pve_nodes."""
     cl = _cl(user, cid, "pve_access")
     return {"nodes": [n.get("node") for n in (_pve(cl.get, "/nodes") or []) if n.get("node")]}
 
@@ -80,7 +80,7 @@ def node_bridges(cid: str, node: str, user: dict = Depends(get_current_user)):
 def storage_content(cid: str, node: str, store: str, content: str = "", user: dict = Depends(get_current_user)):
     cl = _cl(user, cid, "pve_access")
     if not _STORE.match(store):
-        raise HTTPException(400, "Ungültiger Storage")
+        raise HTTPException(400, "Invalid storage")
     rows = _pve(cl.get, f"/nodes/{_node(node)}/storage/{store}/content", content=content or None) or []
     return {"content": [{"volid": r.get("volid"), "format": r.get("format"), "size": r.get("size"),
                          "content": r.get("content"), "vmid": r.get("vmid"), "ctime": r.get("ctime"),
@@ -107,14 +107,14 @@ async def download_url(cid: str, node: str, store: str, body: DownloadBody, back
                        user: dict = Depends(get_current_user)):
     _need(user, cid, "pve_storage")
     if not _STORE.match(store):
-        raise HTTPException(400, "Ungültiger Storage")
+        raise HTTPException(400, "Invalid storage")
     if body.content not in ("iso", "vztmpl"):
-        raise HTTPException(400, "content muss iso oder vztmpl sein")
+        raise HTTPException(400, "content must be iso or vztmpl")
     if not re.match(r"^https?://", body.url or ""):
-        raise HTTPException(400, "Ungültige URL")
+        raise HTTPException(400, "Invalid URL")
     fn = body.filename or body.url.rstrip("/").split("/")[-1]
     if not re.match(r"^[A-Za-z0-9._\-]+$", fn):
-        raise HTTPException(400, "Ungültiger Dateiname")
+        raise HTTPException(400, "Invalid file name")
 
     def impl():
         cl = _pve(pve_client.client_for, cid)
@@ -142,7 +142,7 @@ class DeleteVolBody(BaseModel):
 def delete_volume(cid: str, node: str, store: str, body: DeleteVolBody, user: dict = Depends(get_current_user)):
     cl = _cl(user, cid, "pve_storage")
     if not _STORE.match(store) or not _VOLID.match(body.volid or ""):
-        raise HTTPException(400, "Ungültige Angabe")
+        raise HTTPException(400, "Invalid input")
     import urllib.parse
     _pve(cl.call, "DELETE", f"/nodes/{_node(node)}/storage/{store}/content/{urllib.parse.quote(body.volid, safe='')}")
     _audit(user, cid, "storage.delete", body.volid)
@@ -167,7 +167,7 @@ class AplBody(BaseModel):
 async def apl_download(cid: str, node: str, body: AplBody, background: bool = False, user: dict = Depends(get_current_user)):
     _need(user, cid, "pve_storage")
     if not _STORE.match(body.storage):
-        raise HTTPException(400, "Ungültiger Storage")
+        raise HTTPException(400, "Invalid storage")
 
     def impl():
         cl = _pve(pve_client.client_for, cid)
@@ -177,9 +177,9 @@ async def apl_download(cid: str, node: str, body: AplBody, background: bool = Fa
         return {"upid": upid}
 
     async def work(job):
-        job.update(phase="proxmox.task", detail=f"Lade Vorlage {body.template} …")
+        job.update(phase="proxmox.task", detail=f"Downloading template {body.template} …")
         return await _follow_task(job, cid, node, await asyncio.to_thread(impl))
-    return await bgjobs.run("proxmox.task", f"{cid}:apl", title=f"Proxmox: Vorlage {body.template}",
+    return await bgjobs.run("proxmox.task", f"{cid}:apl", title=f"Proxmox: template {body.template}",
                             user=user, work=work, background=background, perm="pve_storage",
                             client_id=cid if db.get_client(cid) else None)
 
@@ -193,18 +193,18 @@ class VMCreate(BaseModel):
     sockets: int = 1
     memory: int = 2048            # MiB
     ostype: str = "l26"
-    iso: str = ""                 # volid einer ISO (ide2 cdrom)
-    storage: str = ""             # Ziel-Storage für die Disk
+    iso: str = ""                 # volid of an ISO (ide2 cdrom)
+    storage: str = ""             # target storage for the disk
     disk_gb: int = 32
-    disk_format: str = ""         # qcow2|raw|vmdk (leer = Storage-Standard)
+    disk_format: str = ""         # qcow2|raw|vmdk (empty = storage default)
     bridge: str = "vmbr0"
     vlan: int | None = None
     net_model: str = "virtio"
     start: bool = False
     bios: str = "seabios"         # seabios|ovmf
-    machine: str = ""             # z.B. q35
+    machine: str = ""             # e.g. q35
     agent: bool = True
-    extra: dict = {}              # rohe zusätzliche Parameter (Profis)
+    extra: dict = {}              # raw extra parameters (advanced)
 
 
 @router.post("/{cid}/create/qemu")
@@ -212,9 +212,9 @@ async def create_vm(cid: str, body: VMCreate, background: bool = False, user: di
     _need(user, cid, "pve_config")
     node = _node(body.node)
     if not body.storage or not _STORE.match(body.storage):
-        raise HTTPException(400, "Ziel-Storage fehlt oder ungültig")
+        raise HTTPException(400, "Target storage missing or invalid")
     if body.name and not re.match(r"^[A-Za-z0-9.-]{1,63}$", body.name):
-        raise HTTPException(400, "Ungültiger Name (nur Buchstaben, Ziffern, . und -)")
+        raise HTTPException(400, "Invalid name (only letters, digits, . and -)")
 
     def impl():
         cl = _pve(pve_client.client_for, cid)
@@ -232,7 +232,7 @@ async def create_vm(cid: str, body: VMCreate, background: bool = False, user: di
                   "boot": "order=scsi0;ide2;net0"}
         if body.iso:
             if not _VOLID.match(body.iso):
-                raise HTTPException(400, "Ungültige ISO")
+                raise HTTPException(400, "Invalid ISO")
             params["ide2"] = f"{body.iso},media=cdrom"
         for k, v in (body.extra or {}).items():
             if re.match(r"^[a-z0-9_]+$", str(k)):
@@ -271,7 +271,7 @@ class CTCreate(BaseModel):
     nesting: bool = False
     bridge: str = "vmbr0"
     vlan: int | None = None
-    ip: str = "dhcp"              # "dhcp" oder CIDR z.B. 192.168.1.50/24
+    ip: str = "dhcp"              # "dhcp" or CIDR e.g. 192.168.1.50/24
     gw: str = ""
     start: bool = False
     extra: dict = {}
@@ -282,13 +282,13 @@ async def create_ct(cid: str, body: CTCreate, background: bool = False, user: di
     _need(user, cid, "pve_config")
     node = _node(body.node)
     if not body.ostemplate or not _VOLID.match(body.ostemplate):
-        raise HTTPException(400, "CT-Template (ostemplate) fehlt oder ungültig")
+        raise HTTPException(400, "CT template (ostemplate) missing or invalid")
     if not body.storage or not _STORE.match(body.storage):
-        raise HTTPException(400, "rootfs-Storage fehlt oder ungültig")
+        raise HTTPException(400, "rootfs storage missing or invalid")
     if body.hostname and not re.match(r"^[A-Za-z0-9.-]{1,63}$", body.hostname):
-        raise HTTPException(400, "Ungültiger Hostname")
+        raise HTTPException(400, "Invalid hostname")
     if not body.password and not body.ssh_public_keys:
-        raise HTTPException(400, "Passwort oder SSH-Schlüssel nötig")
+        raise HTTPException(400, "Password or SSH key required")
 
     def impl():
         cl = _pve(pve_client.client_for, cid)
@@ -325,7 +325,7 @@ async def create_ct(cid: str, body: CTCreate, background: bool = False, user: di
                             client_id=cid if db.get_client(cid) else None)
 
 
-# ============================================================ Migrieren / Klonen / Vorlage / Resize
+# ============================================================ Migrate / Clone / Template / Resize
 class MigrateBody(BaseModel):
     target: str
     online: bool = True
@@ -339,7 +339,7 @@ async def migrate(cid: str, node: str, gtype: str, vmid: int, body: MigrateBody,
     _need(user, cid, "pve_config")
     _check_ids(node, gtype, vmid)
     if not _NODE.match(body.target):
-        raise HTTPException(400, "Ungültiger Ziel-Node")
+        raise HTTPException(400, "Invalid target node")
 
     def impl():
         cl = _pve(pve_client.client_for, cid)
@@ -351,7 +351,7 @@ async def migrate(cid: str, node: str, gtype: str, vmid: int, body: MigrateBody,
             if body.target_storage:
                 params["targetstorage"] = body.target_storage
         else:
-            params["restart"] = 1 if body.online else 0      # CTs: Live-Migration nicht möglich -> restart
+            params["restart"] = 1 if body.online else 0      # CTs: live migration not possible -> restart
         upid = _pve(cl.call, "POST", _gpath(node, gtype, vmid) + "/migrate", params)
         _audit(user, cid, "guest.migrate", f"{gtype}/{vmid} {node}->{body.target}")
         return {"upid": upid}
@@ -411,8 +411,8 @@ def to_template(cid: str, node: str, gtype: str, vmid: int, user: dict = Depends
 
 
 class ResizeBody(BaseModel):
-    disk: str              # z.B. scsi0 / rootfs
-    size: str              # z.B. "+8G" oder "40G"
+    disk: str              # e.g. scsi0 / rootfs
+    size: str              # e.g. "+8G" or "40G"
 
 
 @router.put("/{cid}/guests/{node}/{gtype}/{vmid}/resize")
@@ -420,7 +420,7 @@ def resize(cid: str, node: str, gtype: str, vmid: int, body: ResizeBody, user: d
     cl = _cl(user, cid, "pve_config")
     _check_ids(node, gtype, vmid)
     if not re.match(r"^[a-z0-9]+$", body.disk) or not re.match(r"^\+?\d+[MGT]$", body.size):
-        raise HTTPException(400, "Ungültige Disk/Größe (z.B. +8G)")
+        raise HTTPException(400, "Invalid disk/size (e.g. +8G)")
     _pve(cl.call, "PUT", _gpath(node, gtype, vmid) + "/resize", {"disk": body.disk, "size": body.size})
     _audit(user, cid, "guest.resize", f"{gtype}/{vmid} {body.disk} {body.size}")
     return {"ok": True}

@@ -1,21 +1,21 @@
 """
-store.py (Modul "passwords") - Speicher für den Passwort-Manager.
+store.py (module "passwords") - storage for the password manager.
 
-ZERO-KNOWLEDGE: Das Backend speichert ausschließlich Chiffrate. Es sieht nie das
-Master-Passwort, den abgeleiteten Schlüssel, den privaten Schlüssel, Tresor-
-Schlüssel oder Klartext. Alle Krypto passiert im Browser (frontend/crypto.js).
+ZERO-KNOWLEDGE: the backend stores ciphertext only. It never sees the master
+password, the derived key, the private key, vault keys or plaintext. All crypto
+happens in the browser (frontend/crypto.js).
 
 Tabellen (SQLite, db._conn):
-  pm_accounts  je Benutzer: salt/iters, public_key (Klartext), enc_private_key
-               (mit Master-Passwort verschlüsselt = der "verschlüsselte Master-
+  pm_accounts  per user: salt/iters, public_key (plaintext), enc_private_key
+               (encrypted with the master password = the "encrypted master
                Key"), verifier.
-  pm_vaults    Tresore (name_enc mit Tresor-Schlüssel verschlüsselt).
-  pm_members   Mitgliedschaft: wrapped_key = Tresor-Schlüssel, mit dem RSA-Public-
+  pm_vaults    vaults (name_enc encrypted with the vault key).
+  pm_members   membership: wrapped_key = vault key, wrapped with the member's RSA
                Key des Mitglieds verpackt. So bleibt Teilen Ende-zu-Ende.
-  pm_groups    Ordner (KeePass-artig), name_enc.
-  pm_entries   Einträge: blob = komplett verschlüsselter Eintrag; nur die
-               Verknüpfung client_id/service liegt als Metadatum im Klartext
-               (für Vorschlag/Autofill pro Client), nie Zugangsdaten.
+  pm_groups    folders (KeePass-like), name_enc.
+  pm_entries   entries: blob = fully encrypted entry; only the
+               client_id/service link is kept as plaintext metadata
+               (for per-client suggestion/autofill), never credentials.
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ def ensure_tables() -> None:
     c.commit()
 
 
-# ------------------------------------------------ Konto
+# ------------------------------------------------ Account
 def get_account(user_id: str) -> dict | None:
     r = _c().execute("SELECT * FROM pm_accounts WHERE user_id=?", (user_id,)).fetchone()
     return dict(r) if r else None
@@ -82,7 +82,7 @@ def rekey_account(user_id, salt, iters, enc_private_key, verifier):
 
 
 def directory() -> list[dict]:
-    """Benutzer, die den Passwort-Manager eingerichtet haben (für das Teilen)."""
+    """Users who have set up the password manager (for sharing)."""
     rows = _c().execute("SELECT user_id, public_key FROM pm_accounts").fetchall()
     keys = {str(r["user_id"]): r["public_key"] for r in rows}
     out = []
@@ -153,7 +153,7 @@ def remove_member(vault_id, user_id):
     _c().commit()
 
 
-# ------------------------------------------------ Ordner
+# ------------------------------------------------ Folders
 def groups(vault_id) -> list[dict]:
     rows = _c().execute("SELECT * FROM pm_groups WHERE vault_id=? ORDER BY sort,id", (vault_id,)).fetchall()
     return [dict(r) for r in rows]
@@ -182,14 +182,14 @@ def update_group(gid, name_enc=None, parent_id=None, sort=None):
 
 
 def delete_group(gid, vault_id):
-    # Untergruppen und Einträge dieser Gruppe in den Tresor-Wurzelbereich schieben
+    # Move subgroups and entries of this group into the vault root
     _c().execute("UPDATE pm_groups SET parent_id='' WHERE parent_id=? AND vault_id=?", (gid, vault_id))
     _c().execute("UPDATE pm_entries SET group_id='' WHERE group_id=? AND vault_id=?", (gid, vault_id))
     _c().execute("DELETE FROM pm_groups WHERE id=? AND vault_id=?", (gid, vault_id))
     _c().commit()
 
 
-# ------------------------------------------------ Einträge
+# ------------------------------------------------ Entries
 def entries(vault_id) -> list[dict]:
     rows = _c().execute("SELECT * FROM pm_entries WHERE vault_id=? ORDER BY updated_at DESC", (vault_id,)).fetchall()
     return [dict(r) for r in rows]
@@ -221,7 +221,7 @@ def delete_entry(eid):
 
 
 def entries_for_client(user_id, client_id) -> list[dict]:
-    """Einträge, die mit einem Client verknüpft sind, aus allen Tresoren des Benutzers."""
+    """Entries linked to a client, across all of the user's vaults."""
     rows = _c().execute("""SELECT e.*, m.wrapped_key, v.name_enc FROM pm_entries e
         JOIN pm_members m ON m.vault_id=e.vault_id AND m.user_id=?
         JOIN pm_vaults v ON v.id=e.vault_id WHERE e.client_id=?""", (user_id, client_id)).fetchall()

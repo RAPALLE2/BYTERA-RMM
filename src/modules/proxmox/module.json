@@ -3,9 +3,9 @@
   "id": "proxmox",
   "name": "Proxmox VE",
   "version": "1.3.0",
-  "description": "Verbindet einen Agenten mit einer Proxmox-VE-Instanz (mehrere Agenten = mehrere Instanzen): eigenes Proxmox-Dashboard mit VMs, LXC-Containern, Storage, Benutzern, Nodes und Aufgaben; Gäste starten/stoppen, Snapshots, Backups, Konfiguration, Konsole und API-Explorer. Adresse lokal, eigene oder über das RMM-Relay (Tunnel durch den Agenten); Anmeldung per API-Token oder Benutzer + Passwort. Eigene Rechte pro Agent plus „Standard-Proxmox“.",
+  "description": "Connects an agent to a Proxmox VE instance (several agents = several instances): a dedicated Proxmox dashboard with VMs, LXC containers, storage, users, nodes and tasks; start/stop guests, snapshots, backups, configuration, console and API explorer. Address local, custom or via the RMM relay (tunnel through the agent); login via API token or user + password. Per-agent permissions plus \"standard Proxmox\".",
   "author": "BYTERA",
-  "category": "Virtualisierung",
+  "category": "infrastruktur",
   "icon": "🖧",
   "requires": [],
   "pip": [],
@@ -27,41 +27,41 @@
     {
       "key": "auto_match",
       "type": "bool",
-      "label": "Automatisch abgleichen",
+      "label": "Match automatically",
       "default": true,
-      "help": "Agenten regelmäßig mit den VMs/CTs der verbundenen Proxmox-Hosts vergleichen (auch kurz nach dem Hinzufügen/Umziehen eines Agenten)."
+      "help": "Regularly compare agents with the VMs/CTs of the connected Proxmox hosts (also shortly after adding/moving an agent)."
     },
     {
       "key": "match_mac",
       "type": "bool",
-      "label": "Abgleich über MAC-Adresse",
+      "label": "Match by MAC address",
       "default": true
     },
     {
       "key": "match_ip",
       "type": "bool",
-      "label": "Abgleich über IP-Adresse",
+      "label": "Match by IP address",
       "default": true,
-      "help": "Nur wenn genau ein Gast diese IP hat."
+      "help": "Only when exactly one guest has this IP."
     },
     {
       "key": "match_hostname",
       "type": "bool",
-      "label": "Abgleich über Hostname",
+      "label": "Match by hostname",
       "default": true,
-      "help": "Hostname-Treffer sind immer nur ein Vorschlag."
+      "help": "Hostname matches are always only a suggestion."
     },
     {
       "key": "auto_assign",
       "type": "bool",
-      "label": "Sichere Treffer sofort zuordnen",
+      "label": "Map safe matches immediately",
       "default": false,
-      "help": "MAC-/IP-Treffer ohne Rückfrage als VM/CT einordnen und dem Head des Proxmox-Nodes unterordnen."
+      "help": "Sort MAC/IP matches as VM/CT without asking and subordinate them to the head of the Proxmox node."
     },
     {
       "key": "scan_minutes",
       "type": "number",
-      "label": "Abgleich alle … Minuten",
+      "label": "Match every … minutes",
       "default": 10,
       "min": 2,
       "max": 1440
@@ -80,9 +80,9 @@
     },
     {
       "id": "proxmox-console",
-      "label": "Proxmox-Konsole",
+      "label": "Proxmox console",
       "icon": "🖥",
-      "title": "Proxmox-Konsole",
+      "title": "Proxmox console",
       "entry": "console.js",
       "export": "renderConsole",
       "w": 1024,

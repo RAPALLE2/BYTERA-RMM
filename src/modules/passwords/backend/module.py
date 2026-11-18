@@ -1,4 +1,4 @@
-"""Passwort-Manager - Einstiegspunkt des Moduls "passwords"."""
+"""Password manager - entry point of the "passwords" module."""
 from . import store
 
 

@@ -1,19 +1,19 @@
-# pve_client.py (Modul "proxmox") - Verbindung zur Proxmox-VE-API (/api2/json)
+# pve_client.py (module "proxmox") - connection to the Proxmox VE API (/api2/json)
 # ----------------------------------------------------------------------------
-# Nur Standardbibliothek (urllib). Pro Agent ein Client (Zwischenspeicher).
+# Standard library only (urllib). One client per agent (cached).
 #
-# Adresse:
-#   local   https://<IP des Agenten>:<port>
-#   custom  https://<eigene Adresse>:<port>
-#   relay   Tunnel durch den Agenten: Modul "Netzwerk" legt eine Weiterleitung
-#           Server:<freier Port> -> Agent -> <relay_host>:<port> an, erreichbar NUR
-#           von 127.0.0.1. Das Backend spricht dann https://127.0.0.1:<freier Port>.
-# Anmeldung:
-#   token     Header "Authorization: PVEAPIToken=<user>!<tokenid>=<secret>"
-#   password  POST /access/ticket -> Cookie PVEAuthCookie + CSRFPreventionToken (2 h gueltig,
-#             wird nach 90 min automatisch erneuert)
-# TLS: Zertifikat pruefen, ODER nur den SHA-256-Fingerabdruck vergleichen (selbst signiert),
-#      ODER (nicht empfohlen) gar nicht pruefen.
+# Address:
+#   local   https://<agent IP>:<port>
+#   custom  https://<custom address>:<port>
+#   relay   tunnel through the agent: the "Network" module sets up a forwarding
+#           server:<free port> -> agent -> <relay_host>:<port>, reachable ONLY
+#           from 127.0.0.1. The backend then talks to https://127.0.0.1:<free port>.
+# Login:
+#   token     header "Authorization: PVEAPIToken=<user>!<tokenid>=<secret>"
+#   password  POST /access/ticket -> cookie PVEAuthCookie + CSRFPreventionToken (valid 2 h,
+#             renewed automatically after 90 min)
+# TLS: verify the certificate, OR only compare the SHA-256 fingerprint (self-signed),
+#      OR (not recommended) do not verify at all.
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def _fp(s: str) -> str:
 
 class _PinnedHTTPS(urllib.request.HTTPSHandler):
     """HTTPS mit Fingerabdruck-Vergleich statt Zertifikatskette (selbst signierte Zertifikate).
-    Geprueft wird DIREKT nach dem Verbindungsaufbau - bevor Zugangsdaten gesendet werden."""
+    Checked RIGHT after the connection is established - before credentials are sent."""
 
     def __init__(self, fingerprint: str):
         self._ctx = ssl.create_default_context()
@@ -68,7 +68,7 @@ class _PinnedHTTPS(urllib.request.HTTPSHandler):
                 der = self.sock.getpeercert(binary_form=True)
                 if not der or hashlib.sha256(der).hexdigest() != expected:
                     self.sock.close()
-                    raise PveError(495, "Zertifikats-Fingerabdruck stimmt nicht überein")
+                    raise PveError(495, "Certificate fingerprint does not match")
 
         return self.do_open(_Conn, req, context=self._ctx)
 
@@ -90,14 +90,14 @@ class PveClient:
         self.client_id = client_id
         self.cfg = pve_store.get(client_id, secrets=True)
         if not self.cfg:
-            raise PveError(404, "Für diesen Agenten ist keine Proxmox-Verbindung eingerichtet")
+            raise PveError(404, "No Proxmox connection configured for this agent")
         self._ticket = None
         self._csrf = None
         self._ticket_at = 0.0
         self._relay = None          # (listen_port, expires_ts, forward_id)
         self._opener = self._make_opener()
 
-    # ------------------------------------------------------------ Adresse
+    # ------------------------------------------------------------ Address
     def _make_opener(self):
         c = self.cfg
         if c.get("fingerprint"):
@@ -109,30 +109,30 @@ class PveClient:
         return urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
 
     def _relay_port(self) -> int:
-        """Tunnel durch den Agenten bereitstellen (wiederverwenden, solange gueltig)."""
+        """Provide the tunnel through the agent (reuse while still valid)."""
         from app import modules
         now = time.time()
         if self._relay and self._relay[1] - 300 > now:
             return self._relay[0]
         pf = modules.use("network", "portforward") if modules.is_enabled("network") else None
         if pf is None or not modules.feature("network", "portforward"):
-            raise PveError(409, "RMM-Relay braucht das Modul „Netzwerk“ mit Port-Weiterleitung")
-        # Die Weiterleitung spricht ueber die Live-Verbindung mit dem Agenten -> auf der
-        # HAUPT-Ereignisschleife des Servers ausfuehren (wir laufen hier in einem Thread).
+            raise PveError(409, "RMM relay needs the \"Network\" module with port forwarding")
+        # The forwarding talks over the live connection to the agent -> run on the
+        # MAIN event loop of the server (we are running in a thread here).
         main_loop = getattr(modules, "_loop", None)
         if main_loop is None:
-            raise PveError(503, "Server noch nicht bereit")
+            raise PveError(503, "Server not ready yet")
         coro = pf.create(client_id=self.client_id, target_port=int(self.cfg.get("port") or 8006), username="system:proxmox",
                          minutes=720, target_host=self.cfg.get("relay_host") or "127.0.0.1", allow_from="127.0.0.1/32",
                          label="Proxmox-API (RMM-Relay)")
         try:
             rec = asyncio.run_coroutine_threadsafe(coro, main_loop).result(timeout=30)
         except ValueError as e:
-            raise PveError(409, f"Agent nicht erreichbar: {e}")
+            raise PveError(409, f"Agent unreachable: {e}")
         except RuntimeError as e:
             raise PveError(503, str(e))
         except TimeoutError:
-            raise PveError(504, "Tunnel durch den Agenten konnte nicht aufgebaut werden (Zeitüberschreitung)")
+            raise PveError(504, "Could not establish the tunnel through the agent (timeout)")
         self._relay = (int(rec["listen_port"]), float(rec.get("expires_at") or now + 43200), rec.get("id"))
         return self._relay[0]
 
@@ -150,12 +150,12 @@ class PveClient:
             cl = db.get_client(self.client_id) or {}
             host = (cl.get("ip") or "").strip()
             if not host:
-                raise PveError(409, "Der Agent hat keine lokale IP gemeldet – bitte eigene Adresse oder RMM-Relay wählen")
+                raise PveError(409, "The agent reported no local IP - please choose a custom address or RMM relay")
         if ":" in host and not host.startswith("["):
             host = f"[{host}]"
         return f"https://{host}:{port}/api2/json"
 
-    # ------------------------------------------------------------ Anmeldung
+    # ------------------------------------------------------------ Login
     def _auth_headers(self, method: str) -> dict:
         c = self.cfg
         if c.get("auth") == "token":
@@ -173,9 +173,9 @@ class PveClient:
         self._ticket, self._csrf, self._ticket_at = res["ticket"], res["CSRFPreventionToken"], time.time()
 
     def ticket(self) -> tuple[str, str]:
-        """Ticket fuer Konsole/Weboberflaeche (bei Token-Anmeldung nicht verfuegbar)."""
+        """Ticket for console/web UI (not available with token login)."""
         if self.cfg.get("auth") == "token":
-            raise PveError(409, "Für die Konsole im Dashboard wird die Anmeldung mit Benutzer + Passwort gebraucht")
+            raise PveError(409, "The console in the dashboard requires user + password login")
         if not self._ticket or time.time() - self._ticket_at > 90 * 60:
             self._login()
         return self._ticket, self._csrf
@@ -204,16 +204,16 @@ class PveClient:
         except PveError:
             raise
         except ssl.SSLCertVerificationError:
-            raise PveError(495, "Proxmox-Zertifikat nicht vertrauenswürdig – Fingerabdruck übernehmen oder Prüfung abschalten")
+            raise PveError(495, "Proxmox certificate not trusted - apply the fingerprint or disable verification")
         except (urllib.error.URLError, socket.timeout, OSError) as e:
             if isinstance(getattr(e, "reason", None), ssl.SSLCertVerificationError):
-                raise PveError(495, "Proxmox-Zertifikat nicht vertrauenswürdig (selbst signiert?) – "
-                                    "Fingerabdruck übernehmen oder TLS-Prüfung abschalten")
+                raise PveError(495, "Proxmox certificate not trusted (self-signed?) - "
+                                    "apply the fingerprint or disable TLS verification")
             if isinstance(getattr(e, "reason", None), PveError):
                 raise e.reason
             if self.cfg.get("addr_mode") == "relay":
                 self._relay = None          # Tunnel beim naechsten Mal neu aufbauen
-            raise PveError(502, f"Proxmox nicht erreichbar: {getattr(e, 'reason', e)}")
+            raise PveError(502, f"Proxmox unreachable: {getattr(e, 'reason', e)}")
 
     def call(self, method: str, path: str, params: dict | None = None):
         method = method.upper()

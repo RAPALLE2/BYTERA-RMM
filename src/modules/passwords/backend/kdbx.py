@@ -1,14 +1,14 @@
 """
-kdbx.py (Modul "passwords") - KeePass-Dateien (.kdbx) lesen und schreiben.
+kdbx.py (module "passwords") - read and write KeePass files (.kdbx).
 
-Bewusste Ausnahme von Zero-Knowledge NUR für Im-/Export: Hier liegen Einträge
-kurzzeitig im Klartext im Backend vor (die .kdbx + ihr KeePass-Passwort kommen
-vom Browser). Der TRESOR selbst bleibt Ende-zu-Ende verschlüsselt: Nach dem
-Parsen verschlüsselt der Browser jeden Eintrag wieder, bevor er gespeichert
-wird; beim Export entschlüsselt der Browser zuerst und schickt erst dann
-Klartext zum Bauen der Datei. Es wird nichts dauerhaft im Klartext abgelegt.
+A deliberate exception to zero-knowledge ONLY for import/export: entries are
+briefly present in plaintext in the backend here (the .kdbx + its KeePass
+password come from the browser). The VAULT itself stays end-to-end encrypted:
+after parsing, the browser re-encrypts every entry before it is stored; on
+export the browser decrypts first and only then sends plaintext to build the
+file. Nothing is ever persisted in plaintext.
 
-Nutzt pykeepass (wird beim Aktivieren des Moduls per pip installiert).
+Uses pykeepass (installed via pip when the module is enabled).
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ def _load(data: bytes, password: str):
     try:
         return PyKeePass(io.BytesIO(data), password=password or None)
     except Exception as exc:
-        raise KdbxError(f"KeePass-Datei konnte nicht geöffnet werden (Passwort falsch oder kein KDBX?): {exc}")
+        raise KdbxError(f"Could not open the KeePass file (wrong password or not a KDBX?): {exc}")
 
 
 def _group_path(group) -> list[str]:
@@ -79,7 +79,7 @@ def build(password: str, tree: dict) -> bytes:
     except ImportError:
         raise KdbxError("Python-Paket 'pykeepass' fehlt (Modul neu aktivieren installiert es)")
     if not password:
-        raise KdbxError("Für die KeePass-Datei muss ein Passwort gesetzt werden")
+        raise KdbxError("A password must be set for the KeePass file")
     import tempfile
     import os
     tmp = tempfile.NamedTemporaryFile(suffix=".kdbx", delete=False)
@@ -113,7 +113,7 @@ def build(password: str, tree: dict) -> bytes:
     except KdbxError:
         raise
     except Exception as exc:
-        raise KdbxError(f"KeePass-Datei konnte nicht erstellt werden: {exc}")
+        raise KdbxError(f"Could not create the KeePass file: {exc}")
     finally:
         try:
             os.unlink(tmp.name)

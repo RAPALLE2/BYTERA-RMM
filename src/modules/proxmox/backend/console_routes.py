@@ -1,25 +1,24 @@
-# console_routes.py (Modul "proxmox") - Konsole von VMs/LXC
+# console_routes.py (module "proxmox") - console of VMs/LXC
 # ---------------------------------------------------------
-# 1) Konsole IM DASHBOARD (noVNC, durch das RMM getunnelt)
+# 1) Console IN THE DASHBOARD (noVNC, tunneled through the RMM)
 #    POST /api/proxmox/{cid}/guests/{node}/{type}/{vmid}/console
-#         -> Proxmox: POST .../vncproxy {websocket: 1}  => VNC-Port + VNC-Ticket
-#         -> einmalige Sitzung (60 s) {sid, ws, password}
-#    WS   /api/proxmox/{cid}/console/ws?sid=...   Dashboard-Sitzung im WebSocket-Protokoll
-#         "rmmtoken.<JWT>" (NICHT in der Adresse - die landet im Server-Log)
-#         -> Backend verbindet sich mit wss://<proxmox>/api2/json/nodes/../vncwebsocket
-#            (Cookie PVEAuthCookie) und reicht die Daten in beide Richtungen durch.
-#    Braucht die Anmeldung mit Benutzer + Passwort: Proxmox stellt Konsolen nur
-#    fuer Benutzer-Sitzungen (Ticket) aus, nicht fuer API-Tokens.
+#         -> Proxmox: POST .../vncproxy {websocket: 1}  => VNC port + VNC ticket
+#         -> one-time session (60 s) {sid, ws, password}
+#    WS   /api/proxmox/{cid}/console/ws?sid=...   dashboard session in the WebSocket protocol
+#         "rmmtoken.<JWT>" (NOT in the address - that ends up in the server log)
+#         -> backend connects to wss://<proxmox>/api2/json/nodes/../vncwebsocket
+#            (cookie PVEAuthCookie) and forwards the data in both directions.
+#    Requires user + password login: Proxmox only issues consoles for user
+#    sessions (ticket), not for API tokens.
 #
-# 2) Proxmox-WEBOBERFLAECHE im Browser
+# 2) Proxmox WEB UI in the browser
 #    POST /api/proxmox/{cid}/guests/{node}/{type}/{vmid}/webui {via: direct|forward}
-#         direct  -> Adresse der Weboberflaeche (nur bei "lokal"/"eigene Adresse"; dein Browser
-#                    muss Proxmox erreichen)
-#         forward -> Weiterleitung ueber den RMM-Server, erreichbar NUR von deiner IP (60 min)
-#    In der Weboberflaeche meldet man sich mit seinem Proxmox-Konto an.
+#         direct  -> address of the web UI (only for "local"/"custom address"; your browser
+#                    must be able to reach Proxmox)
+#         forward -> forwarding via the RMM server, reachable ONLY from your IP (60 min)
+#    In the web UI you sign in with your Proxmox account.
 #
-# Recht: pve_console (+ Gast sichtbar: pve_vms_all/pve_lxc_all oder Gast-Freigabe).
-
+# Permission: pve_console (+ guest visible: pve_vms_all/pve_lxc_all or guest share).
 from __future__ import annotations
 
 import asyncio
@@ -50,11 +49,11 @@ def _purge():
         _sessions.pop(k, None)
 
 
-# ------------------------------------------------------------------ Konsole anfordern
+# ------------------------------------------------------------------ Request console
 @router.post("/{cid}/guests/{node}/{gtype}/{vmid}/console")
 def console_start(cid: str, node: str, gtype: str, vmid: int, user: dict = Depends(get_current_user)):
     cl = _guest(user, cid, node, gtype, vmid, "pve_console")
-    _pve(cl.ticket)                                          # Passwort-Anmeldung noetig (409 bei Token)
+    _pve(cl.ticket)                                          # password login required (409 with token)
     res = _pve(cl.call, "POST", f"/nodes/{node}/{gtype}/{int(vmid)}/vncproxy", {"websocket": 1})
     if not res or "port" not in res or "ticket" not in res:
         raise HTTPException(502, "Proxmox hat keinen Konsolen-Zugang geliefert")
@@ -76,17 +75,17 @@ def _ssl_ctx(cfg: dict) -> ssl.SSLContext:
 
 
 def _check_fingerprint(host: str, port: int, expected: str) -> None:
-    """Vor dem Senden des Tickets: Zertifikat der Gegenstelle mit dem gespeicherten Abdruck vergleichen."""
+    """Before sending the ticket: compare the peer certificate with the stored fingerprint."""
     got = pve_client.fetch_fingerprint(host, port).replace(":", "").lower()
     if got != expected.replace(":", "").replace(" ", "").lower():
-        raise pve_client.PveError(495, "Zertifikats-Fingerabdruck stimmt nicht überein")
+        raise pve_client.PveError(495, "Certificate fingerprint does not match")
 
 
 @router.websocket("/{cid}/console/ws")
 async def console_ws(websocket: WebSocket, cid: str, sid: str = ""):
-    # Anmeldung: Dashboard-Sitzung + einmalige Konsolen-Sitzung (sid, 60 s, nur einmal nutzbar).
-    # Browser-WebSockets koennen keine Header setzen -> die Sitzung kommt als Unterprotokoll
-    # "rmmtoken.<JWT>" (wird nicht protokolliert, anders als die Adresse).
+    # Auth: dashboard session + one-time console session (sid, 60 s, usable once).
+    # Browser WebSockets cannot set headers -> the session arrives as a subprotocol
+    # "rmmtoken.<JWT>" (not logged, unlike the address).
     offered = websocket.scope.get("subprotocols") or []
     token = next((p[len("rmmtoken."):] for p in offered if p.startswith("rmmtoken.")), "")
     try:
@@ -101,7 +100,7 @@ async def console_ws(websocket: WebSocket, cid: str, sid: str = ""):
     try:
         _need(user, cid, "pve_console")
         if not _guest_visible(user, cid, sess["gtype"], sess["vmid"]):
-            raise HTTPException(404, "Gast nicht freigegeben")
+            raise HTTPException(404, "Guest not shared")
     except HTTPException:
         await websocket.close(code=4403)
         return
@@ -141,8 +140,8 @@ async def console_ws(websocket: WebSocket, cid: str, sid: str = ""):
             done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for t in pending:
                 t.cancel()
-    except Exception as e:      # noqa: BLE001 - Verbindung beenden, Grund ins Log
-        print(f"[proxmox] Konsole {cid} {sess['gtype']}/{sess['vmid']}: {type(e).__name__}: {e}")
+    except Exception as e:      # noqa: BLE001 - close the connection, reason to the log
+        print(f"[proxmox] console {cid} {sess['gtype']}/{sess['vmid']}: {type(e).__name__}: {e}")
     finally:
         try:
             await websocket.close()
@@ -150,7 +149,7 @@ async def console_ws(websocket: WebSocket, cid: str, sid: str = ""):
             pass
 
 
-# ------------------------------------------------------------------ Weboberflaeche
+# ------------------------------------------------------------------ Web UI
 class WebUiBody(BaseModel):
     via: str = "direct"          # direct | forward
 
@@ -161,14 +160,14 @@ async def webui(cid: str, node: str, gtype: str, vmid: int, body: WebUiBody, req
     _need(user, cid, "pve_console")
     _check_ids(node, gtype, vmid)
     if not _guest_visible(user, cid, gtype, vmid):
-        raise HTTPException(404, "Gast nicht gefunden oder nicht freigegeben")
+        raise HTTPException(404, "Guest not found or not shared")
     cfg = pve_store.get(cid) or {}
     port = int(cfg.get("port") or 8006)
     query = urllib.parse.urlencode({"console": "kvm" if gtype == "qemu" else "lxc", "novnc": 1, "vmid": int(vmid),
                                     "node": node, "resize": "off"})
     if body.via == "direct":
         if cfg.get("addr_mode") == "relay":
-            raise HTTPException(409, "Bei „RMM-Relay“ ist Proxmox für deinen Browser nicht direkt erreichbar – „über Weiterleitung“ wählen")
+            raise HTTPException(409, "With \"RMM relay\" Proxmox is not directly reachable for your browser - choose \"via forwarding\"")
         host = cfg.get("host") if cfg.get("addr_mode") == "custom" else ((db.get_client(cid) or {}).get("ip") or "")
         if not host:
             raise HTTPException(409, "Keine Adresse bekannt")
@@ -177,28 +176,28 @@ async def webui(cid: str, node: str, gtype: str, vmid: int, body: WebUiBody, req
         _audit(user, cid, "webui", f"direkt {gtype}/{vmid}")
         return {"url": f"https://{host}:{port}/?{query}", "via": "direct"}
     if body.via != "forward":
-        raise HTTPException(400, "via muss direct oder forward sein")
+        raise HTTPException(400, "via must be direct or forward")
     pf = modules.use("network", "portforward") if modules.is_enabled("network") else None
     if pf is None or not modules.feature("network", "portforward"):
-        raise HTTPException(409, "Die Weiterleitung braucht das Modul „Netzwerk“ mit Port-Weiterleitung")
+        raise HTTPException(409, "Forwarding needs the \"Network\" module with port forwarding")
     ip = request.client.host if request.client else ""
     try:
         a = ipaddress.ip_address(ip)
         allow = f"{a}/{32 if a.version == 4 else 128}"
     except ValueError:
-        raise HTTPException(400, "Deine IP-Adresse ist nicht bestimmbar")
-    # Ziel aus Sicht des Agenten
+        raise HTTPException(400, "Your IP address could not be determined")
+    # target from the agent's point of view
     target = cfg.get("relay_host") if cfg.get("addr_mode") == "relay" else (
         cfg.get("host") if cfg.get("addr_mode") == "custom" else "127.0.0.1")
     try:
         rec = await pf.create(client_id=cid, target_port=port, username=user["username"], minutes=60,
-                              target_host=target or "127.0.0.1", allow_from=allow, label="Proxmox-Weboberfläche")
+                              target_host=target or "127.0.0.1", allow_from=allow, label="Proxmox web UI")
     except ValueError as e:
-        raise HTTPException(409, f"Agent nicht erreichbar: {e}")
+        raise HTTPException(409, f"Agent unreachable: {e}")
     except RuntimeError as e:
         raise HTTPException(503, str(e))
     host = request.url.hostname or ""
-    _audit(user, cid, "webui", f"Weiterleitung {gtype}/{vmid} Port {rec['listen_port']} nur {allow}")
+    _audit(user, cid, "webui", f"forwarding {gtype}/{vmid} port {rec['listen_port']} only {allow}")
     return {"url": f"https://{host}:{rec['listen_port']}/?{query}", "via": "forward", "expires": rec.get("expires_at"),
-            "note": "Die Weiterleitung ist 60 Minuten nur von deiner IP erreichbar. Proxmox zeigt sein Zertifikat "
-                    "(selbst signiert) – im Browser einmal bestätigen und mit dem Proxmox-Konto anmelden."}
+            "note": "The forwarding is reachable only from your IP for 60 minutes. Proxmox shows its certificate "
+                    "(self-signed) - confirm once in the browser and sign in with the Proxmox account."}

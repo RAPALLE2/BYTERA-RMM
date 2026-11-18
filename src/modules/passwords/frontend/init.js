@@ -1,15 +1,15 @@
-// init.js (Modul "passwords") - Knopf "Passwörter" in den Client-Aktionen
-// ----------------------------------------------------------------------
-// Öffnet den Passwort-Manager, vorgefiltert auf den Client (Einträge, die per
-// ip/client/service mit ihm verknüpft sind). Autofill-Haken: andere Module
-// können window.RMM_PM_FILL(entry) setzen, um Zugangsdaten in ihre Dialoge /
-// den internen Browser einzusetzen; der Manager ruft diesen Haken beim „⤵“.
+// init.js (module "passwords") - "Passwords" button in the client actions.
+// ------------------------------------------------------------------------
+// Opens the password manager pre-filtered to the client (entries linked to it
+// by ip/client/service). Autofill hook: other modules can set
+// window.RMM_PM_FILL(entry) to insert credentials into their dialogs / the
+// built-in browser; the manager calls this hook on the "insert" action.
 import { registerClientAction, registerModuleApi } from "/js/app/modules.js";
 import { hasGlobalPerm, isAdmin } from "/js/app/state.js";
 import { openWindow } from "/js/app/windowmanager.js";
 
 function open(client) {
-  openWindow({ key: "passwords", appId: "passwords", title: "Passwörter",
+  openWindow({ key: "passwords", appId: "passwords", title: "Passwords",
               props: { clientId: client ? client.id : null }, w: 1100, h: 740, clientColor: client && client.color });
 }
 
@@ -18,7 +18,7 @@ export function init() {
   registerClientAction("passwords", {
     label(client) {
       if (!(hasGlobalPerm("use_passwords") || isAdmin())) return null;
-      return "🔑 Passwörter";
+      return "Passwords";
     },
     onClick(client) { open(client); },
   });

@@ -1,27 +1,27 @@
-# match.py (Modul "proxmox") - Agenten mit Proxmox-Gaesten abgleichen
+# match.py (module "proxmox") - match agents with Proxmox guests
 # --------------------------------------------------------------------
-# Fuer jeden Agenten mit verbundenem Proxmox (= Host) werden alle VMs/LXC samt Konfiguration
-# gelesen und mit den uebrigen Agenten verglichen:
-#   1. MAC-Adresse  (net0..: "virtio=BC:24:11:..", LXC "hwaddr=BC:24:11:..")  -> eindeutig ("sicher")
-#   2. IP-Adresse   (LXC ip=..; nur wenn genau EIN Gast diese IP hat)        -> eindeutig ("sicher")
-#   3. Hostname     (LXC "hostname", sonst Gastname) == Agent-Hostname      -> nur wenn eindeutig (Vorschlag)
-# Methoden, automatischer Abgleich, Intervall und "sichere Treffer sofort zuordnen" stehen in den
-# Modul-Einstellungen (auto_match, match_mac, match_ip, match_hostname, auto_assign, scan_minutes).
+# For every agent with a connected Proxmox (= host) all VMs/LXC are read with their
+# configuration and compared against the other agents:
+#   1. MAC address  (net0..: "virtio=BC:24:11:..", LXC "hwaddr=BC:24:11:..")  -> unique ("safe")
+#   2. IP address   (LXC ip=..; only when exactly ONE guest has this IP)      -> unique ("safe")
+#   3. Hostname     (LXC "hostname", else guest name) == agent hostname       -> only when unique (suggestion)
+# Methods, automatic matching, interval and "map safe matches immediately" are in the
+# module settings (auto_match, match_mac, match_ip, match_hostname, auto_assign, scan_minutes).
 #
-# HEAD (uebergeordneter Agent): Ein Proxmox-Cluster hat mehrere Nodes (pve1, pve2, ...), oft hat aber nur
-# EIN Agent die Proxmox-Verbindung. Ein Gast wird deshalb nicht stur dem verbundenen Agenten untergeordnet,
-# sondern dem HEAD seines Proxmox-Nodes: heads[<verbundener Agent>][<Node-Name>] = <Agent-ID>.
-# Ohne Festlegung wird geraten: Agent, dessen Hostname dem Node-Namen entspricht, sonst der verbundene Agent.
-# Wird der Head eines Nodes festgelegt (im Vorschlagsdialog je Gast oder je Node), gilt er fuer ALLE Gaeste
-# dieses Nodes - auch fuer bereits zugeordnete.
-# Die MACs der Agenten stammen aus ihren Live-Messwerten (mac, interfaces[].mac) - abgeglichen
-# werden also Agenten, die gerade online sind; das Ergebnis wird gespeichert.
+# HEAD (parent agent): a Proxmox cluster has several nodes (pve1, pve2, ...), but often only
+# ONE agent has the Proxmox connection. A guest is therefore not blindly subordinated to the
+# connected agent but to the HEAD of its Proxmox node: heads[<connected agent>][<node name>] = <agent id>.
+# Without a setting the head is guessed: the agent whose hostname equals the node name, else the connected agent.
+# When the head of a node is set (per guest or per node in the suggestion dialog), it applies to ALL guests
+# of that node - including already mapped ones.
+# The agents' MACs come from their live metrics (mac, interfaces[].mac) - so agents that are
+# currently online are matched; the result is stored.
 #
-# Ablage data/modules/proxmox/guest_map.json:
-#   {"map": {client_id: {host, node, type, vmid, name}},          uebernommene Zuordnungen
+# Storage data/modules/proxmox/guest_map.json:
+#   {"map": {client_id: {host, node, type, vmid, name}},          accepted mappings
 #    "suggestions": {client_id: {host, node, type, vmid, name, reason, found}},
-#    "ignored": {client_id: "<host>:<vmid>"},                     abgelehnt -> nicht erneut vorschlagen
-#    "heads": {host: {node: client_id}},                          festgelegter Head je Proxmox-Node
+#    "ignored": {client_id: "<host>:<vmid>"},                     dismissed -> do not suggest again
+#    "heads": {host: {node: client_id}},                          set head per Proxmox node
 #    "scanned": {host: ts}}
 
 from __future__ import annotations
@@ -109,7 +109,7 @@ def _short(h: str) -> str:
 
 
 def guess_head(d: dict, host_cid: str, node: str, clients: list[dict] | None = None) -> tuple[str, str]:
-    """Head fuer einen Proxmox-Node -> (client_id, quelle 'set'|'hostname'|'host')."""
+    """Head for a Proxmox node -> (client_id, source 'set'|'hostname'|'host')."""
     h = (d.get("heads") or {}).get(host_cid, {}).get(node)
     if h and db.get_client(h):
         return h, "set"
@@ -139,7 +139,7 @@ def _guest_info(cfg: dict, res: dict) -> dict:
 
 
 def _read_guests(host_cid: str) -> list[dict]:
-    """Alle Gaeste eines Hosts mit MACs/Hostname (blockierend - im Executor aufrufen)."""
+    """All guests of a host with MACs/hostname (blocking - call in the executor)."""
     cl = pve_client.client_for(host_cid)
     out = []
     for r in cl.get("/cluster/resources", type="vm") or []:
@@ -206,12 +206,12 @@ async def scan(host_cid: str, cfg: dict | None = None) -> dict:
             head, src = guess_head(d, host_cid, g["node"], clients)
             dt = c.get("device_type") or "physical"
             if not cur and dt == ("vm" if g["type"] == "qemu" else "lxc") and c.get("parent_client_id") in (host_cid, head):
-                d["map"][cid] = entry                                 # von Hand schon passend eingeordnet
+                d["map"][cid] = entry                                 # already mapped correctly by hand
                 continue
             if d["ignored"].get(cid) == f"{host_cid}:{g['vmid']}":
                 continue
             if sure and cfg["auto_assign"]:
-                d["map"][cid] = entry                                 # sicherer Treffer -> sofort zuordnen
+                d["map"][cid] = entry                                 # safe match -> map immediately
                 d["suggestions"].pop(cid, None)
                 _set_parent(cid, entry, head)
                 assigned += 1
@@ -246,8 +246,8 @@ def suggestions_with_heads() -> dict:
 
 
 def set_head(host_cid: str, node: str, head: str) -> int:
-    """Head eines Proxmox-Nodes festlegen. Bereits zugeordnete Gaeste dieses Nodes werden umgehaengt.
-    Rueckgabe: Anzahl umgehaengter Agenten."""
+    """Set the head of a Proxmox node. Already mapped guests of this node are moved.
+    Returns: number of moved agents."""
     if not db.get_client(head):
         raise KeyError(head)
     moved = []
@@ -267,15 +267,15 @@ def set_head(host_cid: str, node: str, head: str) -> int:
 
 
 def accept(client_id: str, head: str | None = None, remember: bool = True) -> dict:
-    """Vorschlag uebernehmen. head = uebergeordneter Agent (Standard: Head des Proxmox-Nodes).
-    remember: gewaehlten Head fuer den ganzen Node merken (gilt dann fuer alle Gaeste dieses Nodes)."""
+    """Accept a suggestion. head = parent agent (default: head of the Proxmox node).
+    remember: remember the chosen head for the whole node (then applies to all guests of this node)."""
     with _lock:
         d = _load()
         s = d["suggestions"].get(client_id)
         if not s:
             raise KeyError(client_id)
         if head and (head == client_id or not db.get_client(head)):
-            raise ValueError("Ungültiger Head")
+            raise ValueError("Invalid head")
         auto_head, _src = guess_head(d, s["host"], s["node"])
         head = head or auto_head
         d["suggestions"].pop(client_id, None)
@@ -321,7 +321,7 @@ _task: asyncio.Task | None = None
 
 
 async def _loop():
-    await asyncio.sleep(60)                     # nach dem Start erst Agenten verbinden lassen
+    await asyncio.sleep(60)                     # after start, let agents connect first
     while True:
         try:
             await scan_all()
@@ -334,8 +334,8 @@ _soon: asyncio.Task | None = None
 
 
 def scan_soon(delay: float = 45.0) -> None:
-    """Neuer/umgezogener Agent ist da -> bald abgleichen (entprellt), damit die Frage zum
-    Einsortieren nicht erst nach dem naechsten Intervall kommt."""
+    """A new/moved agent arrived -> match soon (debounced), so the sorting prompt
+    does not have to wait for the next interval."""
     global _soon
     if _soon and not _soon.done():
         return

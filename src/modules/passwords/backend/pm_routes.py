@@ -1,17 +1,17 @@
-# pm_routes.py (Modul "passwords") - Passwort-Manager (Recht use_passwords)
+# pm_routes.py (module "passwords") - password manager (permission use_passwords)
 # -------------------------------------------------------------------------
-# ZERO-KNOWLEDGE: Das Backend speichert nur Chiffrate (siehe store.py). Alle
-# Ver-/Entschlüsselung passiert im Browser. Ausnahme NUR beim KeePass-Im-/Export
-# (kdbx.py), wo Einträge kurzzeitig im Klartext verarbeitet werden.
+# ZERO-KNOWLEDGE: the backend stores ciphertext only (see store.py). All
+# Encryption/decryption happens in the browser. Exception ONLY for KeePass import/export
+# (kdbx.py), where entries are briefly processed in plaintext.
 #
-#   GET/POST  /api/pm/account            Konto-Blobs holen/anlegen
-#   POST      /api/pm/account/rekey      Master-Passwort geändert -> neue Blobs
-#   GET       /api/pm/directory          Benutzer + Public-Keys (zum Teilen)
-#   GET/POST  /api/pm/vaults             Tresore / anlegen
-#   PUT/DELETE/members …                 Tresor verwalten + teilen
-#   GET       /api/pm/vaults/{id}/data   Ordner + Einträge (verschlüsselt)
-#   …/groups …/entries                   Ordner & Einträge CRUD
-#   GET       /api/pm/lookup?client_id=  Einträge zu einem Client (Autofill)
+#   GET/POST  /api/pm/account            get/create account blobs
+#   POST      /api/pm/account/rekey      master password changed -> new blobs
+#   GET       /api/pm/directory          users + public keys (for sharing)
+#   GET/POST  /api/pm/vaults             vaults / create
+#   PUT/DELETE/members ...               manage + share a vault
+#   GET       /api/pm/vaults/{id}/data   folders + entries (encrypted)
+#   .../groups .../entries                folders & entries CRUD
+#   GET       /api/pm/lookup?client_id=  entries for a client (autofill)
 #   POST      /api/pm/kdbx/parse|build   KeePass import/export (serverseitig)
 from __future__ import annotations
 
@@ -38,9 +38,9 @@ def _uid(user) -> str:
 def _require_member(vault_id, user, roles=None) -> dict:
     m = store.member(vault_id, _uid(user))
     if not m:
-        raise HTTPException(404, "Tresor nicht gefunden")
+        raise HTTPException(404, "Vault not found")
     if roles and m["role"] not in roles:
-        raise HTTPException(403, "Keine Berechtigung für diese Aktion")
+        raise HTTPException(403, "No permission for this action")
     return m
 
 
@@ -170,17 +170,17 @@ def remove_member(vault_id: str, member_id: str, user: dict = Depends(get_curren
     _perm(user)
     v = store.get_vault(vault_id)
     if not v:
-        raise HTTPException(404, "Tresor nicht gefunden")
-    # Besitzer/Admin dürfen andere entfernen; jeder darf sich selbst entfernen
+        raise HTTPException(404, "Vault not found")
+    # Owner/admin may remove others; anyone may remove themselves
     if member_id != _uid(user):
         _require_member(vault_id, user, roles=("owner", "admin"))
     if member_id == v["owner_id"]:
-        raise HTTPException(400, "Der Besitzer kann nicht entfernt werden (Tresor löschen stattdessen)")
+        raise HTTPException(400, "The owner cannot be removed (delete the vault instead)")
     store.remove_member(vault_id, member_id)
     return {"ok": True}
 
 
-# ------------------------------------------------ Inhalt (Ordner + Einträge)
+# ------------------------------------------------ Content (folders + entries)
 @router.get("/vaults/{vault_id}/data")
 def vault_data(vault_id: str, user: dict = Depends(get_current_user)):
     _perm(user)
@@ -278,12 +278,12 @@ async def kdbx_parse(file: UploadFile = File(...), password: str = Form(""), use
     _perm(user)
     data = await file.read()
     if len(data) > 60 * 1024 * 1024:
-        raise HTTPException(413, "Datei zu groß")
+        raise HTTPException(413, "File too large")
     try:
         res = kdbx.parse(data, password)
     except kdbx.KdbxError as exc:
         raise HTTPException(400, str(exc))
-    db.add_audit_entry(user["username"], "pm.kdbx_import", details=f"{len(res['entries'])} Einträge")
+    db.add_audit_entry(user["username"], "pm.kdbx_import", details=f"{len(res['entries'])} entries")
     return res
 
 
@@ -299,6 +299,6 @@ def kdbx_build(body: BuildBody, user: dict = Depends(get_current_user)):
         data = kdbx.build(body.password, body.tree or {})
     except kdbx.KdbxError as exc:
         raise HTTPException(400, str(exc))
-    db.add_audit_entry(user["username"], "pm.kdbx_export", details=f"{len(body.tree.get('entries', []))} Einträge")
+    db.add_audit_entry(user["username"], "pm.kdbx_export", details=f"{len(body.tree.get('entries', []))} entries")
     return Response(data, media_type="application/octet-stream",
                     headers={"Content-Disposition": 'attachment; filename="bytera-export.kdbx"'})

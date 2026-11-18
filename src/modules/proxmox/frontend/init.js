@@ -1,16 +1,16 @@
-// init.js (Modul "proxmox") - Knopf im Agent-Panel + Vorschlaege
-//   Gast (Agent laeuft in einer Proxmox-VM/CT und ist zugeordnet)  -> "🖧 In Proxmox öffnen" (Dashboard beim Gast)
-//   physisches Geraet mit Proxmox + Recht "Dashboard sehen"           -> "🖧 Proxmox"
-//   physisches Geraet ohne Proxmox + Recht "Proxmox verwalten"        -> "🖧 Proxmox verbinden"
-//   VM/CT ohne Zuordnung                                               -> kein Knopf (Proxmox laeuft auf Hosts)
-// Vorschlaege (Agenten, die laut Proxmox in VMs/CTs laufen) erscheinen als Hinweis unten rechts.
+// init.js (module "proxmox") - button in the agent panel + suggestions
+//   guest (agent runs in a Proxmox VM/CT and is mapped)      -> "Open in Proxmox" (dashboard at the guest)
+//   physical device with Proxmox + permission "view dashboard" -> "Proxmox"
+//   physical device without Proxmox + permission "manage Proxmox" -> "Connect Proxmox"
+//   VM/CT without mapping                                      -> no button (Proxmox runs on hosts)
+// Suggestions (agents that, per Proxmox, run in VMs/CTs) appear as a hint in the bottom right.
 import { registerClientAction, registerModuleApi } from "/js/app/modules.js";
 import { renderMainContent } from "/js/app/panel.js";
 import { hasClientPerm, state } from "/js/app/state.js";
 import { openWindow } from "/js/app/windowmanager.js";
 import { preq } from "./common.js";
 import { openConnectionDialog } from "./connect.js";
-import "./console.js";      // Konsolen-Knoepfe in der Gast-Ansicht (Event "rmm-pve-guest")
+import "./console.js";      // console buttons in the guest view (event "rmm-pve-guest")
 import { maybeShowBanner, openSuggestDialog } from "./suggest.js";
 
 let connected = new Set();
@@ -19,14 +19,14 @@ let suggestions = [];
 let candidates = [];
 
 async function refresh() {
-  try { connected = new Set((await preq("/clients")).clients.map((c) => c.client_id)); } catch { /* Modul aus / kein Zugriff */ }
+  try { connected = new Set((await preq("/clients")).clients.map((c) => c.client_id)); } catch { /* module off / no access */ }
   try {
     const g = await preq("/guest-map");
     guestMap = g.map || {};
     suggestions = g.suggestions || [];
     candidates = g.candidates || [];
     maybeShowBanner(suggestions, refresh, { candidates });
-  } catch { /* egal */ }
+  } catch { /* ignore */ }
 }
 
 export function openDashboard(client, guest = null) {
@@ -45,7 +45,7 @@ export function init() {
   window.addEventListener("rmm-client-updated", (e) => {
     const c = (state.clients || []).find((x) => x.id === e.detail?.id);
     if (c) Object.assign(c, e.detail);
-    refresh().then(() => { try { renderMainContent(); } catch { /* egal */ } });
+    refresh().then(() => { try { renderMainContent(); } catch { /* ignore */ } });
   });
   registerModuleApi("proxmox", { openDashboard, refresh, isConnected: (id) => connected.has(id),
                                  guestOf: (id) => guestMap[id] || null,
@@ -53,10 +53,10 @@ export function init() {
   registerClientAction("proxmox", {
     label(client) {
       const g = guestMap[client.id];
-      if (g && g.can_open) return "🖧 In Proxmox öffnen";
+      if (g && g.can_open) return "Open in Proxmox";
       if ((client.device_type || "physical") !== "physical") return null;
-      if (connected.has(client.id) && hasClientPerm(client.id, "pve_access")) return "🖧 Proxmox";
-      if (!connected.has(client.id) && hasClientPerm(client.id, "pve_manage")) return "🖧 Proxmox verbinden";
+      if (connected.has(client.id) && hasClientPerm(client.id, "pve_access")) return "Proxmox";
+      if (!connected.has(client.id) && hasClientPerm(client.id, "pve_manage")) return "Connect Proxmox";
       return null;
     },
     onClick(client) {

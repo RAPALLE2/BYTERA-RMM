@@ -1,16 +1,20 @@
 {
   "schema": 1,
   "id": "passwords",
-  "name": "Passwörter",
+  "name": "Passwords",
   "version": "1.0.0",
-  "description": "Passwort-Manager mit echter Ende-zu-Ende-Verschlüsselung (Zero-Knowledge): Passwörter erzeugen, speichern, kopieren und einsetzen. Alles wird im Browser mit AES-256-GCM verschlüsselt; der private Schlüssel liegt nur mit dem Master-Passwort verschlüsselt im Backend (PBKDF2). Zum Öffnen ist immer das Master-Passwort nötig. Felder: Name, Benutzername, Passwort, URL, Notizen, eigene Felder, Verknüpfung zu IP/Client/Service. Ordner wie in KeePass, persönliche und geteilte Tresore (asymmetrisch geteilt). Import, Export und Abgleich im KeePass-Format (.kdbx).",
+  "description": "End-to-end encrypted (zero-knowledge) password manager: generate, store, copy and insert passwords. Everything is encrypted in the browser with AES-256-GCM; the private key is stored in the backend only, encrypted with the master password (PBKDF2). The master password is always required to open the vault. Fields: name, username, password, URL, notes, custom fields, link to IP/client/service. KeePass-like folders, personal and shared vaults (shared asymmetrically). Import, export and sync in the KeePass format (.kdbx).",
   "author": "BYTERA",
-  "category": "Betrieb",
+  "category": "sicherheit",
   "icon": "🔑",
   "requires": [],
-  "pip": ["pykeepass"],
+  "pip": [
+    "pykeepass"
+  ],
   "routers": [
-    { "module": "pm_routes" }
+    {
+      "module": "pm_routes"
+    }
   ],
   "hooks": {
     "startup": "on_startup",
@@ -24,9 +28,9 @@
   "apps": [
     {
       "id": "passwords",
-      "label": "Passwörter",
+      "label": "Passwords",
       "icon": "🔑",
-      "title": "Passwörter",
+      "title": "Passwords",
       "entry": "app.js",
       "export": "renderPasswords",
       "w": 1100,

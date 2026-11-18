@@ -1,14 +1,14 @@
-# match_routes.py (Modul "proxmox") - Agenten <-> Proxmox-Gaeste
+# match_routes.py (module "proxmox") - agents <-> Proxmox guests
 # --------------------------------------------------------------
-#   GET    /api/proxmox/guest-map                    Zuordnungen + offene Vorschlaege (die ich uebernehmen darf)
-#   POST   /api/proxmox/scan                         {host?} jetzt abgleichen (pve_manage am Host)
-#   POST   /api/proxmox/suggestions/{cid}/accept     Vorschlag uebernehmen: als VM/LXC markieren + dem Host zuordnen
-#   POST   /api/proxmox/suggestions/{cid}/ignore     Vorschlag verwerfen (kommt nicht wieder)
-#   DELETE /api/proxmox/guest-map/{cid}              Zuordnung aufheben
-#   PUT    /api/proxmox/heads                        {host, node, head} Head eines Proxmox-Nodes festlegen
-#                                                    (gilt fuer alle Gaeste dieses Nodes, auch bestehende)
-# accept nimmt optional {head, remember}: uebergeordneter Agent (Head) + fuer den Node merken.
-# Uebernehmen braucht "Proxmox verwalten" am Host UND "Clients verwalten" am Gast (wie im Dashboard).
+#   GET    /api/proxmox/guest-map                    mappings + open suggestions (that I may accept)
+#   POST   /api/proxmox/scan                         {host?} match now (pve_manage on the host)
+#   POST   /api/proxmox/suggestions/{cid}/accept     accept suggestion: mark as VM/LXC + map to the host
+#   POST   /api/proxmox/suggestions/{cid}/ignore     dismiss suggestion (does not come back)
+#   DELETE /api/proxmox/guest-map/{cid}              remove mapping
+#   PUT    /api/proxmox/heads                        {host, node, head} set the head of a Proxmox node
+#                                                    (applies to all guests of that node, existing too)
+# accept optionally takes {head, remember}: parent agent (head) + remember for the node.
+# Accepting requires "manage Proxmox" on the host AND "manage clients" on the guest (as in the dashboard).
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ def _hostname(cid: str) -> str:
 
 
 def _head_candidates(user, sug: list[dict]) -> list[dict]:
-    """Agenten, die als Head (Proxmox-Node) in Frage kommen: physische Geraete, die ich sehe."""
+    """Agents eligible as head (Proxmox node): physical devices I can see."""
     skip = {s["client_id"] for s in sug}
     out = []
     for c in db.list_clients():
@@ -75,13 +75,13 @@ class HeadBody(BaseModel):
 @router.put("/heads")
 def set_head(body: HeadBody, user: dict = Depends(get_current_user)):
     if not pve_store.is_connected(body.host) or not _can(user, "pve_manage", body.host):
-        raise HTTPException(403, "Dafür brauchst du „Proxmox verwalten“ am Host")
+        raise HTTPException(403, "You need \"manage Proxmox\" on the host for this")
     if not _can(user, "manage_clients", body.head):
-        raise HTTPException(403, "Keine Berechtigung für den gewählten Head")
+        raise HTTPException(403, "No permission for the chosen head")
     try:
         moved = match.set_head(body.host, body.node, body.head)
     except KeyError:
-        raise HTTPException(404, "Agent nicht gefunden")
+        raise HTTPException(404, "Agent not found")
     db.add_audit_entry(user["username"], "proxmox.head_set", target=body.head,
                        details=f"Node {body.node} von {_hostname(body.host)} -> {_hostname(body.head)}, {moved} umgehaengt")
     return {"ok": True, "moved": moved}
@@ -99,11 +99,11 @@ class ScanBody(BaseModel):
 @router.post("/scan")
 async def scan(body: ScanBody, background: bool = False, user: dict = Depends(get_current_user)):
     """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
-    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    Progress + result in the task view. ?background=1 -> job immediately."""
     async def _work(job):
-        job.update(phase='proxmox.match', detail="Proxmox: Geräte-Zuordnung abgleichen")
+        job.update(phase='proxmox.match', detail="Proxmox: matching device mapping")
         return await _scan_impl(body=body, user=user)
-    return await bgjobs.run('proxmox.match', 'scan', title="Proxmox: Geräte-Zuordnung abgleichen", user=user, work=_work,
+    return await bgjobs.run('proxmox.match', 'scan', title="Proxmox: match device mapping", user=user, work=_work,
                             background=background, private=True)
 
 
@@ -114,7 +114,7 @@ async def _scan_impl(body: ScanBody, user: dict = Depends(get_current_user)):
         raise HTTPException(403 if body.host else 404, "Kein Proxmox-Host, den du abgleichen darfst")
     res = {}
     for h in hosts:
-        res[_hostname(h)] = await match.scan(h)        # manuell: laeuft auch bei auto_match aus
+        res[_hostname(h)] = await match.scan(h)        # manual: runs even when auto_match is off
     db.add_audit_entry(user["username"], "proxmox.scan", details=", ".join(res))
     return {"results": res}
 
@@ -123,13 +123,13 @@ async def _scan_impl(body: ScanBody, user: dict = Depends(get_current_user)):
 def suggestion(cid: str, act: str, body: AcceptBody | None = None, user: dict = Depends(get_current_user)):
     s = match.data()["suggestions"].get(cid)
     if not s:
-        raise HTTPException(404, "Kein Vorschlag für dieses Gerät")
+        raise HTTPException(404, "No suggestion for this device")
     if not _may_apply(user, s, cid):
-        raise HTTPException(403, "Dafür brauchst du „Proxmox verwalten“ am Host und „Clients verwalten“ am Gerät")
+        raise HTTPException(403, "You need \"manage Proxmox\" on the host and \"manage clients\" on the device")
     if act == "accept":
         head = (body.head if body else "") or None
         if head and not can_access_client(user, head):
-            raise HTTPException(403, "Keine Berechtigung für den gewählten Head")
+            raise HTTPException(403, "No permission for the chosen head")
         try:
             entry = match.accept(cid, head, body.remember if body else True)
         except ValueError as e:

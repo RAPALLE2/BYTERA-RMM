@@ -1,30 +1,30 @@
-# proxmox_routes.py (Modul "proxmox") - Proxmox-Steuerung pro Agent
+# proxmox_routes.py (module "proxmox") - Proxmox control per agent
 # -------------------------------------------------------------------
-# Alle Routen gelten fuer EINEN Agenten ({cid}) mit eingerichteter Proxmox-Verbindung.
-# Rechte (Client-Rechte, auch ueber "Standard-Proxmox" pve:* vergebbar):
-#   pve_access   Dashboard/Uebersicht        pve_vms_all / pve_lxc_all  alle VMs / LXCs
-#   pve_power    starten/stoppen/...          pve_console  Konsole
-#   pve_snapshot Snapshots                    pve_backup   Backups
-#   pve_config   Konfiguration aendern        pve_storage  Storage
-#   pve_users    Proxmox-Benutzer/ACL         pve_nodes    Nodes/Aufgaben
-#   pve_api      beliebige API-Aufrufe        pve_manage   Verbindung + Gast-Freigaben
-# "Bestimmte VMs/LXCs": Gast-Freigaben pro Benutzer/Gruppe (GET/PUT /{cid}/acl).
+# All routes apply to ONE agent ({cid}) with a configured Proxmox connection.
+# Permissions (client permissions, also grantable via "standard Proxmox" pve:*):
+#   pve_access   dashboard/overview          pve_vms_all / pve_lxc_all  all VMs / LXCs
+#   pve_power    start/stop/...               pve_console  console
+#   pve_snapshot snapshots                    pve_backup   backups
+#   pve_config   change configuration         pve_storage  storage
+#   pve_users    Proxmox users/ACL            pve_nodes    nodes/tasks
+#   pve_api      arbitrary API calls          pve_manage   connection + guest shares
+# "Specific VMs/LXCs": guest shares per user/group (GET/PUT /{cid}/acl).
 #
-#   GET    /api/proxmox/clients                         Agenten mit Proxmox (fuer mich sichtbar)
-#   GET    /api/proxmox/{cid}/connection   PUT  DELETE  Verbindung (pve_manage)
-#   POST   /api/proxmox/{cid}/test                      Verbindung testen (pve_manage)
-#   POST   /api/proxmox/{cid}/fingerprint               Zertifikats-Fingerabdruck holen (pve_manage)
-#   GET    /api/proxmox/{cid}/overview                  Version, Nodes, Zaehler
-#   GET    /api/proxmox/{cid}/guests?type=qemu|lxc      Gaeste (gefiltert nach Rechten/Freigaben)
-#   GET    /api/proxmox/{cid}/guests/{node}/{type}/{vmid}           Status + Konfiguration
+#   GET    /api/proxmox/clients                         agents with Proxmox (visible to me)
+#   GET    /api/proxmox/{cid}/connection   PUT  DELETE  connection (pve_manage)
+#   POST   /api/proxmox/{cid}/test                      test connection (pve_manage)
+#   POST   /api/proxmox/{cid}/fingerprint               fetch certificate fingerprint (pve_manage)
+#   GET    /api/proxmox/{cid}/overview                  version, nodes, counters
+#   GET    /api/proxmox/{cid}/guests?type=qemu|lxc      guests (filtered by permissions/shares)
+#   GET    /api/proxmox/{cid}/guests/{node}/{type}/{vmid}           status + configuration
 #   POST   .../action/{start|stop|shutdown|reboot|suspend|resume|reset}
-#   PUT    .../config                                   Konfiguration aendern
+#   PUT    .../config                                   change configuration
 #   GET POST .../snapshots   POST .../snapshots/{name}/rollback   DELETE .../snapshots/{name}
-#   GET POST .../backups                                vzdump-Backups
+#   GET POST .../backups                                vzdump backups
 #   GET    /api/proxmox/{cid}/storage   .../storage/{node}/{storage}/content
 #   GET    /api/proxmox/{cid}/users     .../nodes     .../tasks     .../tasks/{node}/{upid}
-#   GET PUT /api/proxmox/{cid}/acl                      Gast-Freigaben
-#   *      /api/proxmox/{cid}/api/{pfad}                API-Explorer (pve_api)
+#   GET PUT /api/proxmox/{cid}/acl                      guest shares
+#   *      /api/proxmox/{cid}/api/{path}                API explorer (pve_api)
 
 from __future__ import annotations
 
@@ -54,26 +54,26 @@ def _pve(fn, *args, **kw):
     try:
         return fn(*args, **kw)
     except PveError as e:
-        # 401/403 von PROXMOX nicht durchreichen: das Dashboard wuerde 401 als "RMM-Sitzung
-        # abgelaufen" (Abmeldung!) und 403 als fehlendes RMM-Recht deuten.
+        # Do not pass PROXMOX 401/403 through: the dashboard would read 401 as "RMM session
+        # expired" (logout!) and 403 as a missing RMM permission.
         if e.status == 401:
-            raise HTTPException(502, f"Proxmox lehnt die Anmeldung ab – Benutzer/Token/Passwort prüfen ({e})")
+            raise HTTPException(502, f"Proxmox rejected the login - check user/token/password ({e})")
         if e.status == 403:
-            raise HTTPException(502, f"Dem Proxmox-Benutzer fehlen Rechte in Proxmox ({e})")
+            raise HTTPException(502, f"The Proxmox user lacks permissions in Proxmox ({e})")
         raise HTTPException(e.status if 400 <= e.status < 600 else 502, str(e))
 
 
 def _need(user, cid: str, perm: str) -> None:
     if not pve_store.is_connected(cid):
-        raise HTTPException(404, "Für diesen Agenten ist kein Proxmox verbunden")
+        raise HTTPException(404, "No Proxmox connected for this agent")
     if not can_access_client(user, cid):
-        raise HTTPException(404, "Gerät nicht gefunden")
+        raise HTTPException(404, "Device not found")
     require_perm(user, perm, cid)
 
 
 def _check_ids(node: str, gtype: str, vmid: int) -> None:
     if not _NODE.match(node) or gtype not in ("qemu", "lxc") or not (100 <= int(vmid) <= 999999999):
-        raise HTTPException(400, "Ungültige Gast-Angabe")
+        raise HTTPException(400, "Invalid guest specification")
 
 
 def _groups(user) -> set[str]:
@@ -97,7 +97,7 @@ def _guest(user, cid: str, node: str, gtype: str, vmid: int, perm: str = "pve_ac
     _need(user, cid, perm)
     _check_ids(node, gtype, vmid)
     if not _guest_visible(user, cid, gtype, vmid):
-        raise HTTPException(404, "Gast nicht gefunden oder nicht freigegeben")
+        raise HTTPException(404, "Guest not found or not shared")
     return _pve(pve_client.client_for, cid)
 
 
@@ -109,7 +109,7 @@ def _audit(user, cid, action, detail=""):
     db.add_audit_entry(user["username"], f"proxmox.{action}", target=cid, details=detail[:300])
 
 
-# ------------------------------------------------------------------ Agenten
+# ------------------------------------------------------------------ Agents
 @router.get("/clients")
 def pve_clients(user: dict = Depends(get_current_user)):
     out = []
@@ -123,7 +123,7 @@ def pve_clients(user: dict = Depends(get_current_user)):
     return {"clients": sorted(out, key=lambda x: (x["hostname"] or "").lower())}
 
 
-# ------------------------------------------------------------------ Verbindung
+# ------------------------------------------------------------------ Connection
 class ConnBody(BaseModel):
     addr_mode: str = "local"          # local | custom | relay
     host: str = ""
@@ -141,7 +141,7 @@ class ConnBody(BaseModel):
 
 def _conn_check(user, cid):
     if not can_access_client(user, cid):
-        raise HTTPException(404, "Gerät nicht gefunden")
+        raise HTTPException(404, "Device not found")
     require_perm(user, "pve_manage", cid)
 
 
@@ -156,17 +156,17 @@ def get_connection(cid: str, user: dict = Depends(get_current_user)):
 def put_connection(cid: str, body: ConnBody, user: dict = Depends(get_current_user)):
     _conn_check(user, cid)
     if body.addr_mode not in ("local", "custom", "relay") or body.auth not in ("token", "password"):
-        raise HTTPException(400, "Ungültige Adress- oder Anmeldeart")
+        raise HTTPException(400, "Invalid address or login type")
     if not 1 <= body.port <= 65535:
-        raise HTTPException(400, "Ungültiger Port")
+        raise HTTPException(400, "Invalid port")
     if body.addr_mode == "custom" and not re.match(r"^[A-Za-z0-9.\-:\[\]]{1,253}$", body.host.strip()):
-        raise HTTPException(400, "Bitte eine gültige Adresse eingeben")
+        raise HTTPException(400, "Please enter a valid address")
     if not re.match(r"^[^@\s]+@[A-Za-z0-9._-]+$", body.user.strip()):
-        raise HTTPException(400, "Benutzer bitte als name@realm angeben (z. B. rmm@pve)")
+        raise HTTPException(400, "Please specify the user as name@realm (e.g. rmm@pve)")
     old = pve_store.get(cid) or {}
     if body.auth == "token":
         if not re.match(r"^[A-Za-z][A-Za-z0-9._-]{1,63}$", body.token_id.strip()):
-            raise HTTPException(400, "Token-ID ungültig (nur der Name hinter dem !, z. B. rmm)")
+            raise HTTPException(400, "Invalid token ID (only the name after the !, e.g. rmm)")
         if not body.secret and not old.get("has_secret"):
             raise HTTPException(400, "Token-Secret fehlt")
     elif not body.password and not old.get("has_password"):
@@ -210,7 +210,7 @@ def _test_connection_impl(cid: str, user: dict = Depends(get_current_user)):
 
 @router.post("/{cid}/fingerprint")
 def fingerprint(cid: str, user: dict = Depends(get_current_user)):
-    """Fingerabdruck des Proxmox-Zertifikats ueber die eingestellte Adresse holen."""
+    """Fetch the Proxmox certificate fingerprint over the configured address."""
     _conn_check(user, cid)
     cl = _pve(pve_client.client_for, cid, fresh=True)
     from urllib.parse import urlparse
@@ -218,10 +218,10 @@ def fingerprint(cid: str, user: dict = Depends(get_current_user)):
     try:
         return {"fingerprint": pve_client.fetch_fingerprint(u.hostname, u.port or 8006)}
     except OSError as e:
-        raise HTTPException(502, f"Zertifikat nicht abrufbar: {e}")
+        raise HTTPException(502, f"Certificate could not be fetched: {e}")
 
 
-# ------------------------------------------------------------------ Uebersicht & Gaeste
+# ------------------------------------------------------------------ Overview & guests
 def _resources(cl):
     return _pve(cl.get, "/cluster/resources") or []
 
@@ -305,9 +305,9 @@ async def guest_config(cid: str, node: str, gtype: str, vmid: int, body: ConfigB
     """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
     Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
     async def _work(job):
-        job.update(phase='proxmox.task', detail=f"Proxmox {gtype}/{vmid}: Konfiguration ändern")
+        job.update(phase='proxmox.task', detail=f"Proxmox {gtype}/{vmid}: change configuration")
         return await asyncio.to_thread(_guest_config_impl, cid=cid, node=node, gtype=gtype, vmid=vmid, body=body, user=user)
-    return await bgjobs.run('proxmox.task', None, title=f"Proxmox {gtype}/{vmid}: Konfiguration ändern", user=user, work=_work,
+    return await bgjobs.run('proxmox.task', None, title=f"Proxmox {gtype}/{vmid}: change configuration", user=user, work=_work,
                             background=background, client_id=cid if db.get_client(cid) else None)
 
 
@@ -362,15 +362,15 @@ async def snapshot_rollback(cid: str, node: str, gtype: str, vmid: int, name: st
     """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
     Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
     async def _work(job):
-        job.update(phase='proxmox.task', detail=f"Proxmox {gtype}/{vmid}: Snapshot „{name}“ zurückspielen")
+        job.update(phase='proxmox.task', detail=f"Proxmox {gtype}/{vmid}: roll back snapshot '{name}'")
         return await _follow_task(job, cid, node, await asyncio.to_thread(_snapshot_rollback_impl, cid=cid, node=node, gtype=gtype, vmid=vmid, name=name, user=user))
-    return await bgjobs.run('proxmox.task', f'{cid}:{vmid}', title=f"Proxmox {gtype}/{vmid}: Snapshot „{name}“ zurückspielen", user=user, work=_work,
+    return await bgjobs.run('proxmox.task', f'{cid}:{vmid}', title=f"Proxmox {gtype}/{vmid}: roll back snapshot '{name}'", user=user, work=_work,
                             background=background, client_id=cid if db.get_client(cid) else None)
 
 
 def _snapshot_rollback_impl(cid: str, node: str, gtype: str, vmid: int, name: str, user: dict = Depends(get_current_user)):
     if not _SNAP.match(name):
-        raise HTTPException(400, "Ungültiger Snapshot-Name")
+        raise HTTPException(400, "Invalid snapshot name")
     cl = _guest(user, cid, node, gtype, vmid, "pve_snapshot")
     upid = _pve(cl.post, _gpath(node, gtype, vmid) + f"/snapshot/{name}/rollback")
     _audit(user, cid, "snapshot.rollback", f"{gtype}/{vmid} {name}")
@@ -382,15 +382,15 @@ async def snapshot_delete(cid: str, node: str, gtype: str, vmid: int, name: str,
     """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
     Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
     async def _work(job):
-        job.update(phase='proxmox.task', detail=f"Proxmox {gtype}/{vmid}: Snapshot „{name}“ löschen")
+        job.update(phase='proxmox.task', detail=f"Proxmox {gtype}/{vmid}: delete snapshot '{name}'")
         return await _follow_task(job, cid, node, await asyncio.to_thread(_snapshot_delete_impl, cid=cid, node=node, gtype=gtype, vmid=vmid, name=name, user=user))
-    return await bgjobs.run('proxmox.task', f'{cid}:{vmid}', title=f"Proxmox {gtype}/{vmid}: Snapshot „{name}“ löschen", user=user, work=_work,
+    return await bgjobs.run('proxmox.task', f'{cid}:{vmid}', title=f"Proxmox {gtype}/{vmid}: delete snapshot '{name}'", user=user, work=_work,
                             background=background, client_id=cid if db.get_client(cid) else None)
 
 
 def _snapshot_delete_impl(cid: str, node: str, gtype: str, vmid: int, name: str, user: dict = Depends(get_current_user)):
     if not _SNAP.match(name):
-        raise HTTPException(400, "Ungültiger Snapshot-Name")
+        raise HTTPException(400, "Invalid snapshot name")
     cl = _guest(user, cid, node, gtype, vmid, "pve_snapshot")
     upid = _pve(cl.call, "DELETE", _gpath(node, gtype, vmid) + f"/snapshot/{name}")
     _audit(user, cid, "snapshot.delete", f"{gtype}/{vmid} {name}")
@@ -434,7 +434,7 @@ async def backup_create(cid: str, node: str, gtype: str, vmid: int, body: Backup
 def _backup_create_impl(cid: str, node: str, gtype: str, vmid: int, body: BackupBody, user: dict = Depends(get_current_user)):
     if not _STORE.match(body.storage) or body.mode not in ("snapshot", "suspend", "stop") \
             or body.compress not in ("zstd", "lzo", "gzip", "0"):
-        raise HTTPException(400, "Ungültige Backup-Angaben")
+        raise HTTPException(400, "Invalid backup parameters")
     cl = _guest(user, cid, node, gtype, vmid, "pve_backup")
     params = {"vmid": int(vmid), "storage": body.storage, "mode": body.mode, "compress": body.compress}
     if body.notes:
@@ -444,7 +444,7 @@ def _backup_create_impl(cid: str, node: str, gtype: str, vmid: int, body: Backup
     return {"ok": True, "upid": upid}
 
 
-# ------------------------------------------------------------------ Storage, Benutzer, Nodes, Aufgaben
+# ------------------------------------------------------------------ Storage, users, Nodes, Aufgaben
 @router.get("/{cid}/storage")
 def storage(cid: str, user: dict = Depends(get_current_user)):
     _need(user, cid, "pve_storage")
@@ -456,7 +456,7 @@ def storage(cid: str, user: dict = Depends(get_current_user)):
 def storage_content(cid: str, node: str, store: str, content: str = "", user: dict = Depends(get_current_user)):
     _need(user, cid, "pve_storage")
     if not _NODE.match(node) or not _STORE.match(store):
-        raise HTTPException(400, "Ungültige Angabe")
+        raise HTTPException(400, "Invalid input")
     cl = _pve(pve_client.client_for, cid)
     return {"content": _pve(cl.get, f"/nodes/{node}/storage/{store}/content", content=content or None) or []}
 
@@ -492,10 +492,10 @@ def tasks(cid: str, limit: int = 50, user: dict = Depends(get_current_user)):
 
 @router.get("/{cid}/tasks/{node}/{upid:path}")
 def task_status(cid: str, node: str, upid: str, user: dict = Depends(get_current_user)):
-    """Status + Log einer Aufgabe (z.B. nach Start/Backup) - mit pve_access sichtbar."""
+    """Status + log of a task (e.g. after start/backup) - visible with pve_access."""
     _need(user, cid, "pve_access")
     if not _NODE.match(node) or not upid.startswith("UPID:"):
-        raise HTTPException(400, "Ungültige Aufgabe")
+        raise HTTPException(400, "Invalid task")
     cl = _pve(pve_client.client_for, cid)
     from urllib.parse import quote
     u = quote(upid, safe="")
@@ -503,7 +503,7 @@ def task_status(cid: str, node: str, upid: str, user: dict = Depends(get_current
             "log": _pve(cl.get, f"/nodes/{node}/tasks/{u}/log", limit=200) or []}
 
 
-# ------------------------------------------------------------------ Gast-Freigaben
+# ------------------------------------------------------------------ Guest-Freigaben
 class AclBody(BaseModel):
     subject: str            # user:<id> | group:<id>
     vmids: list[int] = []
@@ -522,7 +522,7 @@ def put_acl(cid: str, body: AclBody, user: dict = Depends(get_current_user)):
     _need(user, cid, "pve_manage")
     kind, _, sid = body.subject.partition(":")
     if kind not in ("user", "group") or not sid:
-        raise HTTPException(400, "subject muss user:<id> oder group:<id> sein")
+        raise HTTPException(400, "subject must be user:<id> or group:<id>")
     pve_store.set_acl(cid, body.subject, body.vmids)
     _audit(user, cid, "acl", f"{body.subject}: {body.vmids}")
     return {"ok": True, "acl": pve_store.acl(cid)}
@@ -534,9 +534,9 @@ async def api_explorer(cid: str, path: str, request: Request, user: dict = Depen
     """Beliebiger Proxmox-API-Aufruf (/api2/json/<pfad>) - Recht pve_api."""
     _need(user, cid, "pve_api")
     if ".." in path.split("/"):
-        raise HTTPException(400, "Ungültiger Pfad")
+        raise HTTPException(400, "Invalid path")
     params = dict(request.query_params)
-    params.pop("background", None)        # Steuer-Parameter des Dashboards (Backend-Jobs), nicht fuer Proxmox
+    params.pop("background", None)        # dashboard control parameter (backend jobs), not for Proxmox
     if request.method in ("POST", "PUT"):
         try:
             body = await request.json()
@@ -552,11 +552,11 @@ async def api_explorer(cid: str, path: str, request: Request, user: dict = Depen
     return {"data": data}
 
 
-# ------------------------------------------------------------------ Proxmox-Tasks als Backend-Job
-# Start/Stop, Snapshots und Backups starten in Proxmox einen Task (UPID). Der
-# Backend-Job verfolgt diesen Task bis zum Ende (Status + Task-Log), damit die
-# Aufgaben-Anzeige den echten Stand zeigt - auch nach dem Neuladen und fuer
-# andere Benutzer. Abbrechen stoppt den Proxmox-Task.
+# ------------------------------------------------------------------ Proxmox tasks as a backend job
+# Start/stop, snapshots and backups start a task (UPID) in Proxmox. The backend
+# job follows this task until it finishes (status + task log), so the task view
+# shows the real state - even after a reload and for other users. Cancelling
+# stops the Proxmox task.
 async def _follow_task(job, cid: str, node: str, res: dict) -> dict:
     upid = (res or {}).get("upid")
     if not isinstance(upid, str) or not upid.startswith("UPID"):
@@ -564,7 +564,7 @@ async def _follow_task(job, cid: str, node: str, res: dict) -> dict:
     import urllib.parse
     cl = _pve(pve_client.client_for, cid)
     tpath = f"/nodes/{node}/tasks/{urllib.parse.quote(upid, safe='')}"
-    job.update(phase="task", detail="Proxmox-Task läuft", upid=upid)
+    job.update(phase="task", detail="Proxmox task running", upid=upid)
     job.on_cancel = lambda j: asyncio.to_thread(lambda: cl.call("DELETE", tpath))
     seen = 0
     while True:
@@ -572,8 +572,8 @@ async def _follow_task(job, cid: str, node: str, res: dict) -> dict:
         try:
             st = await asyncio.to_thread(cl.get, tpath + "/status") or {}
             lines = await asyncio.to_thread(lambda: cl.get(tpath + "/log", start=seen, limit=500)) or []
-        except Exception as e:                 # Proxmox kurz nicht erreichbar -> weiter warten
-            job.update(detail=f"Proxmox nicht erreichbar ({e}) – warte …")
+        except Exception as e:                 # Proxmox briefly unreachable -> keep waiting
+            job.update(detail=f"Proxmox unreachable ({e}) - waiting …")
             continue
         for ln in lines:
             if isinstance(ln, dict) and ln.get("t") not in (None, "no content"):

@@ -1,21 +1,21 @@
-# pve_store.py (Modul "proxmox") - Verbindungen und Gast-Freigaben
+# pve_store.py (module "proxmox") - connections and guest shares
 # -----------------------------------------------------------------
-# Verbindung pro Agent (mehrere Agenten = mehrere Proxmox-Instanzen moeglich):
-#   addr_mode  local   IP des Agenten (vom Agenten gemeldet) - Server erreicht Proxmox direkt
-#              custom  eigene Adresse (IP/Name), z.B. Cluster-IP oder ueber VPN
-#              relay   RMM-Relay: Verbindung laeuft durch den Agenten (Tunnel), Proxmox muss
-#                      vom Server NICHT erreichbar sein. relay_host = Ziel aus Sicht des Agenten
-#                      (meist 127.0.0.1, wenn der Agent auf dem Proxmox-Host laeuft)
+# Connection per agent (several agents = several Proxmox instances possible):
+#   addr_mode  local   agent IP (reported by the agent) - the server reaches Proxmox directly
+#              custom  custom address (IP/name), e.g. cluster IP or over VPN
+#              relay   RMM relay: the connection runs through the agent (tunnel), Proxmox does
+#                      NOT have to be reachable from the server. relay_host = target from the
+#                      agent's point of view (usually 127.0.0.1 if the agent runs on the Proxmox host)
 #   port       8006
-#   auth       token    user@realm!tokenid + Secret   (empfohlen, in Proxmox widerrufbar)
-#              password user@realm + Passwort (Ticket, wird automatisch erneuert)
-#   verify_tls / fingerprint (SHA-256 des Zertifikats, fuer selbst signierte Zertifikate)
+#   auth       token    user@realm!tokenid + secret   (recommended, revocable in Proxmox)
+#              password user@realm + password (ticket, renewed automatically)
+#   verify_tls / fingerprint (SHA-256 of the certificate, for self-signed certificates)
 #
-# Geheimnisse (Token-Secret, Passwort) liegen verschluesselt (Fernet) in
+# Secrets (token secret, password) are stored encrypted (Fernet) in
 # data/modules/proxmox/connections.json.
 #
-# Gast-Freigaben ("bestimmte VMs/LXCs"): pro Agent und Benutzer/Gruppe eine Liste von
-# VMIDs - zusaetzlich zu den Rechten pve_vms_all / pve_lxc_all.
+# Guest shares ("specific VMs/LXCs"): per agent and user/group a list of
+# VMIDs - in addition to the pve_vms_all / pve_lxc_all permissions.
 
 from __future__ import annotations
 
@@ -71,7 +71,7 @@ def _write(path, data: dict) -> None:
 
 
 def _conns() -> dict:
-    """Mit Zwischenspeicher (wird bei jeder Rechtepruefung pve_* gefragt)."""
+    """With cache (queried on every pve_* permission check)."""
     try:
         mt = CONN_FILE.stat().st_mtime
     except FileNotFoundError:
@@ -136,7 +136,7 @@ def remove(client_id: str) -> bool:
     return True
 
 
-# ------------------------------------------------------------------ Gast-Freigaben
+# ------------------------------------------------------------------ Guest shares
 def acl(client_id: str) -> dict:
     """{"user:<id>": [vmid, ...], "group:<id>": [...]}"""
     return _read(ACL_FILE).get(client_id, {})

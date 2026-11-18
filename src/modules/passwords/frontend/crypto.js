@@ -1,19 +1,19 @@
-// crypto.js (Modul "passwords") - Ende-zu-Ende-Verschlüsselung im Browser.
+// crypto.js (module "passwords") - end-to-end encryption in the browser.
 // -----------------------------------------------------------------------
-// Zero-Knowledge: Master-Passwort, abgeleiteter Schlüssel, privater Schlüssel,
-// Tresor-Schlüssel und Klartext verlassen NIE den Browser. Das Backend speichert
-// ausschließlich Chiffrate. Nur WebCrypto (keine Fremdbibliotheken).
+// Zero-knowledge: the master password, derived key, private key, vault keys and
+// plaintext NEVER leave the browser. The backend stores ciphertext only. Uses
+// WebCrypto exclusively (no third-party libraries).
 //
-// Aufbau (wie Bitwarden/KeePass-Prinzip):
-//   Master-Passwort --PBKDF2--> userKey (AES-256)        [nur im Speicher]
-//   userKey verschlüsselt:  privaten RSA-Schlüssel + einen Verifier
-//   Öffentlicher RSA-Schlüssel: im Klartext gespeichert (zum Teilen)
-//   Jeder Tresor hat einen zufälligen vaultKey (AES-256-GCM),
-//     je Mitglied mit dessen RSA-Public-Key verpackt (wrapped_key)
-//   Einträge: komplett mit vaultKey (AES-GCM) verschlüsselt
+// Design (Bitwarden/KeePass principle):
+//   master password --PBKDF2--> userKey (AES-256)        [in memory only]
+//   userKey encrypts:  the RSA private key + a verifier
+//   RSA public key: stored in plaintext (for sharing)
+//   each vault has a random vaultKey (AES-256-GCM),
+//     wrapped per member with their RSA public key (wrapped_key)
+//   entries: fully encrypted with the vaultKey (AES-GCM)
 //
-// Das ist "der verschlüsselte Master-Key, der mitgespeichert wird": der private
-// Schlüssel liegt nur als mit dem Master-Passwort verschlüsseltes Blob im Backend.
+// This is "the encrypted master key that gets stored": the private key lives in
+// the backend only as a blob encrypted with the master password.
 
 const te = new TextEncoder();
 const td = new TextDecoder();
@@ -47,8 +47,8 @@ export const decText = async (key, packed) => td.decode(await aesDec(key, packed
 export const encJson = (key, obj) => encText(key, JSON.stringify(obj));
 export const decJson = async (key, packed) => JSON.parse(await decText(key, packed));
 
-// ---------------------------------------------------------------- Konto anlegen
-// Erzeugt Salt, RSA-Schlüsselpaar, verschlüsselten privaten Schlüssel, Verifier.
+// ---------------------------------------------------------------- Create account
+// Generates salt, RSA key pair, encrypted private key, verifier.
 export async function createAccount(masterPassword) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const saltB64 = b64(salt);
@@ -64,14 +64,14 @@ export async function createAccount(masterPassword) {
            _session: { userKey, privateKey: kp.privateKey, publicKey: pub } };
 }
 
-// ---------------------------------------------------------------- Entsperren
+// ---------------------------------------------------------------- Unlock
 export async function unlock(masterPassword, account) {
   const userKey = await deriveUserKey(masterPassword, account.salt, account.iters || PBKDF2_ITERS);
   try {
     const v = await decText(userKey, account.verifier);
     if (v !== "BYTERA-PM-OK") throw new Error("bad");
   } catch {
-    throw new Error("Falsches Master-Passwort");
+    throw new Error("Wrong master password");
   }
   const privBytes = await aesDec(userKey, account.enc_private_key);
   const privateKey = await crypto.subtle.importKey("pkcs8", privBytes,
@@ -79,9 +79,9 @@ export async function unlock(masterPassword, account) {
   return { userKey, privateKey, publicKey: account.public_key };
 }
 
-// ---------------------------------------------------------------- Master-Passwort ändern
-// Nur das Blob mit dem privaten Schlüssel + Verifier werden neu verschlüsselt;
-// Tresor-Schlüssel bleiben unberührt (sie hängen am RSA-Schlüssel, nicht am Master).
+// ---------------------------------------------------------------- Change master password
+// Only the blob with the private key + verifier are re-encrypted; vault keys stay
+// untouched (they hang off the RSA key, not the master password).
 export async function rekey(session, newMasterPassword) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const saltB64 = b64(salt);
@@ -93,27 +93,27 @@ export async function rekey(session, newMasterPassword) {
            _userKey: userKey };
 }
 
-// ---------------------------------------------------------------- Tresor-Schlüssel
+// ---------------------------------------------------------------- Vault keys
 export async function newVaultKey() {
   return crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
 }
-// vaultKey mit einem RSA-Public-Key (spki, base64) verpacken -> wrapped_key
+// wrap the vaultKey with an RSA public key (spki, base64) -> wrapped_key
 export async function wrapVaultKey(vaultKey, publicKeyB64) {
   const pub = await crypto.subtle.importKey("spki", unb64(publicKeyB64), { name: "RSA-OAEP", hash: "SHA-256" }, false, ["wrapKey"]);
   const wrapped = await crypto.subtle.wrapKey("raw", vaultKey, pub, { name: "RSA-OAEP" });
   return b64(wrapped);
 }
-// wrapped_key mit dem eigenen privaten Schlüssel auspacken -> vaultKey
+// unwrap the wrapped_key with your own private key -> vaultKey
 export async function unwrapVaultKey(wrappedB64, privateKey) {
   return crypto.subtle.unwrapKey("raw", unb64(wrappedB64), privateKey, { name: "RSA-OAEP" },
     { name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
 }
-// Rohen vaultKey exportieren/importieren (für Im-/Export zum Backend, base64)
+// export/import the raw vaultKey (for import/export to the backend, base64)
 export const exportVaultKeyRaw = async (vaultKey) => b64(await crypto.subtle.exportKey("raw", vaultKey));
 export const importVaultKeyRaw = async (rawB64) =>
   crypto.subtle.importKey("raw", unb64(rawB64), { name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
 
-// ---------------------------------------------------------------- Passwort-Generator
+// ---------------------------------------------------------------- Password generator
 const SETS = { lower: "abcdefghijkmnpqrstuvwxyz", upper: "ABCDEFGHJKLMNPQRSTUVWXYZ",
                digits: "23456789", symbols: "!@#$%^&*()-_=+[]{};:,.?", ambiguous: "il1Lo0O" };
 export function generatePassword(opts = {}) {
@@ -128,7 +128,7 @@ export function generatePassword(opts = {}) {
   }
   if (!pool) pool = SETS.lower;
   const pick = (set) => set[crypto.getRandomValues(new Uint32Array(1))[0] % set.length];
-  const out = req.map(pick);                    // mind. je ein Zeichen aus jeder Gruppe
+  const out = req.map(pick);                    // at least one char from each group
   for (let i = out.length; i < o.length; i++) out.push(pick(pool));
   for (let i = out.length - 1; i > 0; i--) {    // Fisher-Yates
     const j = crypto.getRandomValues(new Uint32Array(1))[0] % (i + 1);
@@ -137,7 +137,7 @@ export function generatePassword(opts = {}) {
   return out.join("");
 }
 export function generatePassphrase(words = 5, sep = "-") {
-  // Kurze, einprägsame Wörter; rein zufällig aus WebCrypto gewählt
+  // Short, memorable words; chosen purely at random from WebCrypto
   const W = ("able acid aged also area army away baby back ball band bank base bath bear beat been beer bell belt bird " +
     "blue boat body bone book boot born boss both bowl bulk burn bush busy cake call calm came camp card care case cash " +
     "cast cell chat chip city clay club coal coat code cold come cook cool cope copy core cost crew crop dark data date " +
@@ -154,7 +154,7 @@ export function generatePassphrase(words = 5, sep = "-") {
   return out.join(sep);
 }
 
-// Grobe Stärke-Einschätzung (Entropie-Heuristik) 0..4
+// Rough strength estimate (entropy heuristic) 0..4
 export function strength(pw) {
   if (!pw) return 0;
   let pool = 0;

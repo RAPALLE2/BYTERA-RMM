@@ -1,57 +1,58 @@
-// connect.js (Modul "proxmox") - Proxmox mit einem Agenten verbinden
+// connect.js (module "proxmox") - connect Proxmox to an agent
 // ------------------------------------------------------------------
-// Dialog: Adresse (lokal / eigene / RMM-Relay), Port, Anmeldung (API-Token oder
-// Benutzer + Passwort), Zertifikat (Fingerabdruck / Pruefung), Test, Entfernen.
-// Das ❔-Symbol oeffnet die Anleitung, was in Proxmox einzurichten ist.
+// Dialog: address (local / custom / RMM relay), port, login (API token or
+// user + password), certificate (fingerprint / verification), test, remove.
+// The help icon opens the guide on what to set up in Proxmox.
 
 import { esc, uiConfirm } from "/js/app/utils.js";
 import { preq } from "./common.js";
+import { icon } from "./icons.js";
 
 export const HELP_HTML = `
-  <h4 style="margin:0 0 6px">So richtest du Proxmox für das RMM ein</h4>
-  <p style="margin:0 0 8px;color:var(--subtext)">Alles in der Proxmox-Weboberfläche unter <b>Rechenzentrum → Berechtigungen</b>.</p>
+  <h4 style="margin:0 0 6px">How to set up Proxmox for the RMM</h4>
+  <p style="margin:0 0 8px;color:var(--subtext)">Everything in the Proxmox web UI under <b>Datacenter &rarr; Permissions</b>.</p>
   <ol style="margin:0 0 10px 18px;padding:0;line-height:1.55">
-    <li><b>Benutzer anlegen:</b> Benutzer → Hinzufügen → Name <code>rmm</code>, Realm
-        <i>Proxmox VE authentication server</i> → ergibt <code>rmm@pve</code>.</li>
-    <li><b>Rechte geben:</b> Berechtigungen → Hinzufügen → <i>Benutzer-Berechtigung</i>: Pfad <code>/</code>,
-        Benutzer <code>rmm@pve</code>, Rolle <b>PVEAdmin</b> (alles steuern) oder <b>PVEAuditor</b> (nur ansehen),
-        „Propagieren“ angehakt.</li>
-    <li><b>Anmeldung wählen:</b>
+    <li><b>Create a user:</b> Users &rarr; Add &rarr; name <code>rmm</code>, realm
+        <i>Proxmox VE authentication server</i> &rarr; gives <code>rmm@pve</code>.</li>
+    <li><b>Grant permissions:</b> Permissions &rarr; Add &rarr; <i>User permission</i>: path <code>/</code>,
+        user <code>rmm@pve</code>, role <b>PVEAdmin</b> (control everything) or <b>PVEAuditor</b> (view only),
+        "Propagate" checked.</li>
+    <li><b>Choose a login:</b>
       <ul style="margin:4px 0 0 16px;padding:0">
-        <li><b>API-Token (empfohlen):</b> API-Token → Hinzufügen → Benutzer <code>rmm@pve</code>, Token-ID
-            <code>rmm</code>, <b>„Privilegientrennung“ ausschalten</b> (sonst hat der Token keine Rechte). Das
-            <b>Secret</b> wird nur einmal angezeigt – kopieren. Hier eintragen: Benutzer <code>rmm@pve</code>,
-            Token-ID <code>rmm</code>, Secret.</li>
-        <li><b>Benutzer + Passwort:</b> beim Benutzer ein Passwort setzen (Benutzer → Passwort). Nötig für die
-            <b>Konsole direkt im Dashboard</b> – Proxmox stellt Konsolen-Tickets nur für Benutzer-Anmeldungen aus.</li>
+        <li><b>API token (recommended):</b> API Tokens &rarr; Add &rarr; user <code>rmm@pve</code>, token ID
+            <code>rmm</code>, <b>turn off "Privilege separation"</b> (otherwise the token has no permissions). The
+            <b>secret</b> is shown only once - copy it. Enter here: user <code>rmm@pve</code>,
+            token ID <code>rmm</code>, secret.</li>
+        <li><b>User + password:</b> set a password on the user (Users &rarr; Password). Required for the
+            <b>console directly in the dashboard</b> - Proxmox only issues console tickets for user logins.</li>
       </ul></li>
   </ol>
-  <h4 style="margin:0 0 6px">Adresse</h4>
+  <h4 style="margin:0 0 6px">Address</h4>
   <ul style="margin:0 0 10px 18px;padding:0;line-height:1.55">
-    <li><b>Lokale Adresse</b> – die IP des Agenten (Agent läuft auf dem Proxmox-Host); der RMM-Server muss sie erreichen.</li>
-    <li><b>Eigene Adresse</b> – z. B. die Cluster-IP oder ein DNS-Name, erreichbar vom RMM-Server (auch über VPN).</li>
-    <li><b>RMM-Relay</b> – die Verbindung läuft <b>durch den Agenten</b>; Proxmox muss vom Server aus nicht erreichbar
-        sein. Ziel aus Sicht des Agenten: <code>127.0.0.1</code>, wenn der Agent auf dem Proxmox-Host läuft.
-        Braucht das Modul „Netzwerk“ mit Port-Weiterleitung.</li>
+    <li><b>Local address</b> - the agent's IP (agent runs on the Proxmox host); the RMM server must be able to reach it.</li>
+    <li><b>Custom address</b> - e.g. the cluster IP or a DNS name, reachable from the RMM server (also over VPN).</li>
+    <li><b>RMM relay</b> - the connection runs <b>through the agent</b>; Proxmox does not have to be reachable from the
+        server. Target from the agent's point of view: <code>127.0.0.1</code> if the agent runs on the Proxmox host.
+        Requires the "Network" module with port forwarding.</li>
   </ul>
-  <p style="margin:0 0 4px">Port ist bei Proxmox <code>8006</code>.</p>
-  <h4 style="margin:0 0 6px">Zertifikat</h4>
-  <p style="margin:0;line-height:1.55">Proxmox nutzt ab Werk ein selbst signiertes Zertifikat. Verbindung speichern und
-    <b>„Fingerabdruck holen“</b> klicken – das RMM vertraut dann genau diesem Zertifikat (sicher). Den Abdruck kannst du in
-    Proxmox unter <i>Node → System → Zertifikate</i> vergleichen. „Zertifikat prüfen“ nur bei einem gültigen Zertifikat
-    (z. B. Let's Encrypt) einschalten.</p>`;
+  <p style="margin:0 0 4px">The Proxmox port is <code>8006</code>.</p>
+  <h4 style="margin:0 0 6px">Certificate</h4>
+  <p style="margin:0;line-height:1.55">Proxmox uses a self-signed certificate out of the box. Save the connection and
+    click <b>"Fetch fingerprint"</b> - the RMM then trusts exactly this certificate (secure). You can compare the
+    fingerprint in Proxmox under <i>Node &rarr; System &rarr; Certificates</i>. Only enable "Verify certificate" with a valid
+    certificate (e.g. Let's Encrypt).</p>`;
 
 export function showHelp() {
   const ov = document.createElement("div");
   ov.style.cssText = "position:fixed;inset:0;z-index:9600;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;padding:16px";
   ov.innerHTML = `<div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:18px;width:640px;
       max-width:100%;max-height:90vh;overflow:auto;font-size:13px">${HELP_HTML}
-    <div style="text-align:right;margin-top:12px"><button class="btn-primary" data-x>Verstanden</button></div></div>`;
+    <div style="text-align:right;margin-top:12px"><button class="btn-primary" data-x>Got it</button></div></div>`;
   ov.addEventListener("click", (e) => { if (e.target === ov || e.target.dataset.x !== undefined) ov.remove(); });
   document.body.appendChild(ov);
 }
 
-/** Verbindungsdialog fuer einen Agenten. onDone(connected:boolean) */
+/** Connection dialog for an agent. onDone(connected:boolean) */
 export async function openConnectionDialog(client, onDone) {
   let info;
   try { info = await preq(`/${encodeURIComponent(client.id)}/connection`); }
@@ -66,39 +67,39 @@ export async function openConnectionDialog(client, onDone) {
     <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:18px;width:560px;max-width:100%;
                 max-height:92vh;overflow:auto;font-size:13px">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-        <b style="font-size:15px;flex:1">🖧 Proxmox – ${esc(info.hostname || client.hostname || "")}</b>
-        <button class="btn-tool" data-help title="Anleitung: Was muss ich in Proxmox einrichten?">❔</button>
-        <button class="btn-tool" data-close title="Schließen">✕</button>
+        <b style="font-size:15px;flex:1;display:flex;align-items:center;gap:6px">${icon("cluster", 16)} Proxmox – ${esc(info.hostname || client.hostname || "")}</b>
+        <button class="btn-tool" data-help title="Guide: what do I set up in Proxmox?">${icon("help", 15)}</button>
+        <button class="btn-tool" data-close title="Close">${icon("close", 15)}</button>
       </div>
-      <div class="form-row"><label>Bezeichnung (optional)</label><input data-f="label" value="${esc(c.label || "")}" placeholder="z. B. Cluster Büro"></div>
-      <label style="font-weight:600;display:block;margin:6px 0 4px">Adresse</label>
-      <label class="pxchk"><input type="radio" name="pxa" value="local"> Lokale Adresse des Agenten: <b>${esc(info.agent_ip || "nicht bekannt")}</b></label>
-      <label class="pxchk"><input type="radio" name="pxa" value="custom"> Eigene Adresse:
+      <div class="form-row"><label>Label (optional)</label><input data-f="label" value="${esc(c.label || "")}" placeholder="e.g. Office cluster"></div>
+      <label style="font-weight:600;display:block;margin:6px 0 4px">Address</label>
+      <label class="pxchk"><input type="radio" name="pxa" value="local"> Local address of the agent: <b>${esc(info.agent_ip || "unknown")}</b></label>
+      <label class="pxchk"><input type="radio" name="pxa" value="custom"> Custom address:
         <input data-f="host" value="${esc(c.host || "")}" placeholder="pve.firma.lan / 10.0.0.5" style="flex:1;margin-left:6px"></label>
-      <label class="pxchk"><input type="radio" name="pxa" value="relay"> RMM-Relay (durch den Agenten), Ziel beim Agenten:
+      <label class="pxchk"><input type="radio" name="pxa" value="relay"> RMM relay (through the agent), target at the agent:
         <input data-f="relay_host" value="${esc(c.relay_host || "127.0.0.1")}" style="width:130px;margin-left:6px"></label>
       <div class="form-row" style="margin-top:6px"><label>Port</label><input data-f="port" type="number" min="1" max="65535" value="${esc(String(c.port || 8006))}" style="width:110px"></div>
-      <label style="font-weight:600;display:block;margin:6px 0 4px">Anmeldung</label>
-      <label class="pxchk"><input type="radio" name="pxu" value="token"> API-Token (empfohlen)</label>
-      <label class="pxchk"><input type="radio" name="pxu" value="password"> Benutzer + Passwort (nötig für die Konsole im Dashboard)</label>
-      <div class="form-row"><label>Benutzer (name@realm)</label><input data-f="user" value="${esc(c.user || "")}" placeholder="rmm@pve"></div>
+      <label style="font-weight:600;display:block;margin:6px 0 4px">Login</label>
+      <label class="pxchk"><input type="radio" name="pxu" value="token"> API token (recommended)</label>
+      <label class="pxchk"><input type="radio" name="pxu" value="password"> User + password (needed for the console in the dashboard)</label>
+      <div class="form-row"><label>User (name@realm)</label><input data-f="user" value="${esc(c.user || "")}" placeholder="rmm@pve"></div>
       <div data-auth="token">
         <div class="form-row"><label>Token-ID</label><input data-f="token_id" value="${esc(c.token_id || "")}" placeholder="rmm"></div>
-        <div class="form-row"><label>Secret ${c.has_secret ? "(gespeichert – leer lassen zum Behalten)" : ""}</label><input data-f="secret" type="password" autocomplete="off"></div>
+        <div class="form-row"><label>Secret ${c.has_secret ? "(stored - leave empty to keep)" : ""}</label><input data-f="secret" type="password" autocomplete="off"></div>
       </div>
       <div data-auth="password">
-        <div class="form-row"><label>Passwort ${c.has_password ? "(gespeichert – leer lassen zum Behalten)" : ""}</label><input data-f="password" type="password" autocomplete="off"></div>
+        <div class="form-row"><label>Password ${c.has_password ? "(stored - leave empty to keep)" : ""}</label><input data-f="password" type="password" autocomplete="off"></div>
       </div>
-      <label style="font-weight:600;display:block;margin:6px 0 4px">Zertifikat</label>
-      <div class="form-row"><label>SHA-256-Fingerabdruck (selbst signiertes Zertifikat)</label>
+      <label style="font-weight:600;display:block;margin:6px 0 4px">Certificate</label>
+      <div class="form-row"><label>SHA-256 fingerprint (self-signed certificate)</label>
         <input data-f="fingerprint" value="${esc(c.fingerprint || "")}" placeholder="AB:CD:…" style="font-family:ui-monospace,monospace;font-size:11.5px"></div>
       <div style="margin:-2px 0 6px"><button class="btn btn-sm" data-fp ${info.connection ? "" : "disabled"}
-        title="${info.connection ? "Zertifikat über die eingestellte Adresse abrufen" : "Erst speichern"}">🔐 Fingerabdruck holen</button></div>
-      <label class="pxchk"><input type="checkbox" data-f="verify_tls" ${c.verify_tls ? "checked" : ""}> Zertifikat prüfen (nur bei gültigem Zertifikat)</label>
+        title="${info.connection ? "Fetch the certificate over the configured address" : "Save first"}">${icon("lock", 14)} Fetch fingerprint</button></div>
+      <label class="pxchk"><input type="checkbox" data-f="verify_tls" ${c.verify_tls ? "checked" : ""}> Verify certificate (only with a valid certificate)</label>
       <div data-status style="min-height:18px;margin:10px 0;color:var(--subtext)"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn-primary" data-save>Speichern &amp; testen</button>
-        ${info.connection ? `<button class="btn btn-danger" data-del>Verbindung entfernen</button>` : ""}
+        <button class="btn-primary" data-save>Save &amp; test</button>
+        ${info.connection ? `<button class="btn btn-danger" data-del>Remove connection</button>` : ""}
       </div>
     </div>`;
   document.body.appendChild(ov);
@@ -129,30 +130,30 @@ export async function openConnectionDialog(client, onDone) {
   });
   const cid = encodeURIComponent(client.id);
   $("[data-save]").addEventListener("click", async () => {
-    status("Speichere …");
+    status("Saving …");
     try {
       await preq(`/${cid}/connection`, { method: "PUT", body: body() });
       changed = true;
       $("[data-fp]").disabled = false;
-      status("Gespeichert – teste Verbindung …");
+      status("Saved - testing connection …");
       const t = await preq(`/${cid}/test`, { method: "POST" });
-      status(`✅ Verbunden: Proxmox VE ${esc(t.version || "?")} · Nodes: ${esc((t.nodes || []).join(", "))} · ${esc(t.address)}`);
+      status(`${icon("check", 14)} Connected: Proxmox VE ${esc(t.version || "?")} · nodes: ${esc((t.nodes || []).join(", "))} · ${esc(t.address)}`);
     } catch (e) {
-      const hint = e.status === 495 ? " – Tipp: „Fingerabdruck holen“ klicken." : "";
-      status(`❌ ${esc(e.message)}${hint}`, true);
+      const hint = e.status === 495 ? " - tip: click \"Fetch fingerprint\"." : "";
+      status(`${icon("cross", 14)} ${esc(e.message)}${hint}`, true);
     }
   });
   $("[data-fp]").addEventListener("click", async () => {
-    status("Hole Fingerabdruck …");
+    status("Fetching fingerprint …");
     try {
       const r = await preq(`/${cid}/fingerprint`, { method: "POST" });
       f("fingerprint").value = r.fingerprint;
-      status("Fingerabdruck übernommen – jetzt „Speichern & testen“. (Vergleich in Proxmox: Node → System → Zertifikate)");
-    } catch (e) { status(`❌ ${esc(e.message)}`, true); }
+      status("Fingerprint applied - now \"Save & test\". (Compare in Proxmox: Node \u2192 System \u2192 Certificates)");
+    } catch (e) { status(`${icon("cross", 14)} ${esc(e.message)}`, true); }
   });
   $("[data-del]")?.addEventListener("click", async () => {
-    if (!(await uiConfirm("Proxmox-Verbindung dieses Agenten entfernen?", { description: "Zugangsdaten und Gast-Freigaben werden gelöscht. In Proxmox selbst ändert sich nichts.", okText: "Entfernen", danger: true }))) return;
+    if (!(await uiConfirm("Remove this agent\u2019s Proxmox connection?", { description: "Credentials and guest shares are deleted. Nothing changes in Proxmox itself.", okText: "Remove", danger: true }))) return;
     try { await preq(`/${cid}/connection`, { method: "DELETE" }); changed = true; close(); }
-    catch (e) { status(`❌ ${esc(e.message)}`, true); }
+    catch (e) { status(`${icon("cross", 14)} ${esc(e.message)}`, true); }
   });
 }
