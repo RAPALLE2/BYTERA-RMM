@@ -60,6 +60,14 @@ async def fire_event(trigger: str, client_id: str | None = None,
     """
     if trigger not in TRIGGERS:
         return
+    # Wartungsmodus (Core): keine Alarme fuer Geraete in Wartung.
+    if client_id:
+        try:
+            from app import db as _db
+            if _db.in_maintenance(client_id):
+                return
+        except Exception:
+            pass
     if notification is None:
         from router.admin_routes import build_notification
         notification = build_notification(trigger, level="info")

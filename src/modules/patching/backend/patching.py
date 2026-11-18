@@ -763,7 +763,8 @@ async def run_auto_cycle() -> dict:
                 scanned += 1
                 continue                     # Installieren beim nächsten Lauf
 
-            if not in_window(rule):
+            # Wartungsmodus (Core): Updates sind dann jederzeit freigegeben.
+            if not in_window(rule) and not db.in_maintenance(cid):
                 continue
             items = selectable(cid, rule)
             if not items:

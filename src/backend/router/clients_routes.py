@@ -1125,3 +1125,47 @@ async def client_tempuser(client_id: str, body: TempUserBody,
                        f"{res.get('username')} (Verfall: {body.expiry})")
     return {"username": res.get("username"), "password": res.get("password"),
             "note": res.get("note") or ""}
+
+
+# ------------------------------------------------------------------
+# WARTUNGSMODUS (Core): Alarme aus, Schutzmechanismen ausgesetzt
+# (USB-Sperre, Patch-Zeitfenster ...). duration: "30m","1h","2h","4h",
+# "8h","24h", "manual" (bis manuell beendet) oder "off" (beenden).
+# ------------------------------------------------------------------
+
+_MAINT_MIN = {"30m": 30, "1h": 60, "2h": 120, "4h": 240, "8h": 480, "24h": 1440, "manual": 0}
+
+
+class MaintenanceBody(BaseModel):
+    duration: str = "1h"
+    client_ids: list[str] = []      # nur fuer die Sammel-Route
+
+
+async def _set_maint(client_id: str, duration: str, user: dict) -> dict:
+    _perm(user, "edit_clients", client_id)
+    if duration != "off" and duration not in _MAINT_MIN:
+        raise HTTPException(400, "Ungültige Dauer")
+    await db.call(db.set_maintenance, client_id,
+                  None if duration == "off" else _MAINT_MIN[duration])
+    db.add_audit_entry(user.get("username"), "client.maintenance", client_id,
+                       "beendet" if duration == "off" else f"an ({duration})")
+    from app.sockets import push_maintenance
+    return await push_maintenance(client_id)
+
+
+@router.post("/api/clients/{client_id}/maintenance")
+async def client_maintenance_set(client_id: str, body: MaintenanceBody,
+                                 user: dict = Depends(get_current_user)):
+    return await _set_maint(client_id, body.duration, user)
+
+
+@router.post("/api/clients-maintenance")
+async def clients_maintenance_bulk(body: MaintenanceBody,
+                                   user: dict = Depends(get_current_user)):
+    out = {}
+    for cid in dict.fromkeys(body.client_ids or []):
+        try:
+            out[cid] = await _set_maint(cid, body.duration, user)
+        except HTTPException as exc:
+            out[cid] = {"error": exc.detail}
+    return out

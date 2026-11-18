@@ -20,7 +20,7 @@ from app.paths import MODULES_DATA_DIR, STORAGE_DIR
 
 DIR = MODULES_DATA_DIR / "software"
 PKG_FILE = DIR / "packages.json"
-FILES_DIR = STORAGE_DIR / "dist" / "software"     # ausgeliefert unter /dist/software/
+FILES_DIR = STORAGE_DIR / "software"   # nicht oeffentlich - Agents laden per Agent-Token
 _lock = threading.RLock()
 
 _pending: dict[str, asyncio.Future] = {}
@@ -78,7 +78,9 @@ async def install(client_id: str, package_id: str, timeout: float = 1800.0) -> d
     if not client:
         return {"ok": False, "error": "Client nicht gefunden"}
 
-    files = [{"name": f["name"], "path": f"/dist/software/{package_id}/{f['name']}"}
+    from urllib.parse import quote
+    files = [{"name": f["name"],
+              "path": f"/api/software/agent-file/{package_id}/{quote(f['name'])}"}
              for f in pkg.get("files", [])]
     request_id = uuid.uuid4().hex
     loop = asyncio.get_running_loop()

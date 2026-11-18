@@ -1100,6 +1100,11 @@ def init_db() -> None:
     # und freie Tags (kommagetrennt, z.B. "produktion,halle2,drucker").
     _migrate_add_column("clients", "short_name", "TEXT NOT NULL DEFAULT ''")
     _migrate_add_column("clients", "tags", "TEXT NOT NULL DEFAULT ''")
+    # Wartungsmodus (Core): Ende als Unix-ms, 0 = "bis ich es selbst ausmache".
+    # Aktiv ist er, solange status_override = 'maintenance' ist (siehe
+    # client_maintenance()). Waehrend der Wartung schweigen Alarme, und
+    # Schutzmechanismen (USB-Sperre, Patch-Zeitfenster ...) sind ausgesetzt.
+    _migrate_add_column("clients", "maintenance_until", "INTEGER NOT NULL DEFAULT 0")
     # Ticket-Kommentare: Sichtbarkeit wie bei den Notizen ('all' | 'private' |
     # 'custom') und die Benutzer-ID des Verfassers (bisher nur der Anzeigename).
     _migrate_add_column("ticket_comments", "visibility", "TEXT DEFAULT 'all'")
@@ -2736,7 +2741,7 @@ def update_client(client_id: str, fields: dict) -> dict | None:
         "hostname", "tenant_id", "location_id", "folder_id", "parent_client_id",
         "color", "notes", "status_override", "active", "device_type", "auto_update",
         "device_type_ack", "fav_dir", "warranty_until", "patch_policy", "icon_type",
-        "essential", "short_name", "tags",
+        "essential", "short_name", "tags", "maintenance_until",
     }
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
@@ -2754,6 +2759,50 @@ def delete_client(client_id: str) -> None:
     # Client-scoped Rechte-Grants mit aufräumen (verwaiste Einträge vermeiden).
     _conn.execute("DELETE FROM permission_grants WHERE scope = ?", (client_id,))
     _conn.commit()
+
+
+# ------------------------------------------------------------------
+# WARTUNGSMODUS (Core) - Alarme aus, Schutzmechanismen ausgesetzt
+# ------------------------------------------------------------------
+
+def client_maintenance(client: dict | None) -> dict:
+    """{"active": bool, "until": ms (0 = bis manuell beendet)} fuer einen Client-Datensatz."""
+    if not client or client.get("status_override") != "maintenance":
+        return {"active": False, "until": 0}
+    until = int(client.get("maintenance_until") or 0)
+    if until and until <= _now_ms():
+        return {"active": False, "until": until}       # abgelaufen
+    return {"active": True, "until": until}
+
+
+def in_maintenance(client_id: str | None) -> bool:
+    """Bequemer Test fuer Core und Module (z.B. Notifier, Patching, USB)."""
+    if not client_id:
+        return False
+    try:
+        return client_maintenance(get_client(client_id))["active"]
+    except Exception:
+        return False
+
+
+def set_maintenance(client_id: str, minutes: int | None) -> dict:
+    """minutes > 0: fuer X Minuten; 0: bis manuell beendet; None: beenden."""
+    if minutes is None:
+        _conn.execute("UPDATE clients SET status_override = NULL, maintenance_until = 0 "
+                      "WHERE id = ? AND status_override = 'maintenance'", (client_id,))
+    else:
+        until = _now_ms() + int(minutes) * 60_000 if minutes > 0 else 0
+        _conn.execute("UPDATE clients SET status_override = 'maintenance', maintenance_until = ? "
+                      "WHERE id = ?", (until, client_id))
+    _conn.commit()
+    return client_maintenance(get_client(client_id))
+
+
+def expired_maintenance_ids() -> list[str]:
+    rows = _conn.execute(
+        "SELECT id FROM clients WHERE status_override = 'maintenance' "
+        "AND maintenance_until > 0 AND maintenance_until <= ?", (_now_ms(),)).fetchall()
+    return [r["id"] for r in rows]
 
 
 # ------------------------------------------------------------------

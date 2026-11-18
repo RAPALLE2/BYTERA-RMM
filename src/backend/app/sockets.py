@@ -693,6 +693,26 @@ def _new_request_id() -> str:
 _queue_busy: set = set()
 
 
+async def push_maintenance(client_id: str) -> dict:
+    """Wartungsstatus an Agent + Dashboards verteilen (nach Setzen/Ablauf)."""
+    m = db.client_maintenance(await db.call(db.get_client, client_id))
+    try:
+        await send_to_agent(client_id, "maintenance-mode", m)
+    except Exception:
+        pass
+    await sio.emit("clients:changed", namespace="/dashboard")
+    return m
+
+
+async def maintenance_expiry_loop() -> None:
+    """Beendet abgelaufene Wartungsmodi (Core-Hintergrundschleife)."""
+    while True:
+        await asyncio.sleep(30)
+        for cid in await db.call(db.expired_maintenance_ids):
+            await db.call(db.set_maintenance, cid, None)
+            await push_maintenance(cid)
+
+
 async def kick_offline_queue(client_id: str) -> None:
     if client_id in _queue_busy:
         return
@@ -1518,6 +1538,11 @@ async def _do_register(sid, payload) -> tuple[bool, str]:
     await _side("auto-update", _auto_update)
     await _side("geraetetyp", _device_type)
     await _side("absturzmeldung", _crash_report)
+    async def _maintenance_push():
+        # Wartungsmodus (Core) an den Agenten: Schutzmechanismen aussetzen.
+        m = db.client_maintenance(await db.call(db.get_client, client_id))
+        await sio.emit("maintenance-mode", m, to=sid, namespace="/agent")
+
     async def _blackbox_cfg():
         # Blackbox-Konfiguration (Settings -> Allgemein) an den Agenten geben.
         enabled = (await db.call(db.get_setting, "blackbox_enabled", "0")) == "1"
@@ -1547,6 +1572,7 @@ async def _do_register(sid, payload) -> tuple[bool, str]:
     await _side("benachrichtigungen", _notify_online)
     await _side("migrations-handoff", _pending_handoff)
     await _side("blackbox-config", _blackbox_cfg)
+    await _side("wartungsmodus-core", _maintenance_push)
     await _side("offline-queue", _offline_queue)
 
     return True, "ok"

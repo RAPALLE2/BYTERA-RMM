@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "id": "usbguard",
-  "name": "USB-Wächter",
-  "version": "1.0.0",
-  "description": "Alarm und Nachfrage bei USB-Geräten: Wird auf einem Client ein USB-Gerät ein- oder ausgesteckt, erscheint im Dashboard eine Meldung bzw. ein Erlauben/Blockieren-Dialog. Im Blockier-Modus wird ein neues Gerät sofort vom System getrennt und erst nach dem Erlauben ans Betriebssystem durchgereicht (Linux: USB-Autorisierung über authorized_default - das Gerät wird vom Kernel gar nicht erst aktiviert; Windows: das Gerät wird unmittelbar nach dem Erkennen per pnputil deaktiviert, kurze Erkennungslücke technisch bedingt). Mit einstellbarem Timeout und automatischer Entscheidung (auto-erlauben oder auto-blockieren nach X Sekunden).",
+  "name": "USB-Steuerung",
+  "version": "1.1.0",
+  "description": "USB-Steuerung und -Wächter: Ein-/Ausstecken auf Clients wird gemeldet; im Blockier-Modus werden neue Geräte erst nach Freigabe im Dashboard ans Betriebssystem durchgereicht (Linux: Kernel-USB-Autorisierung - das Gerät wird gar nicht erst aktiviert; Windows: das Gerät wird unmittelbar nach dem Erkennen per pnputil deaktiviert, kurze Erkennungslücke technisch bedingt), mit Timeout und automatischer Entscheidung. Vertrauenswürdige Geräte werden automatisch zugelassen: per Geräte-ID (VID:PID, optional Seriennummer - z.B. YubiKeys) oder bei Speichersticks per signierter, an die Seriennummer gebundener Schlüsseldatei (.bytera-usbkey, Ed25519, einzeln widerrufbar). Im Wartungsmodus (Core) werden alle USB-Geräte zugelassen und es gibt keine Alarme.",
   "author": "BYTERA",
   "category": "Sicherheit",
   "icon": "🔌",
@@ -45,11 +45,31 @@
     },
     {
       "key": "timeout_action",
-      "type": "string",
-      "label": "Nach Timeout automatisch: allow oder deny",
+      "type": "select",
+      "label": "Nach Timeout automatisch",
       "default": "deny",
-      "help": "allow = Gerät nach Ablauf automatisch erlauben, deny = blockiert lassen."
+      "options": [
+        {
+          "value": "deny",
+          "label": "Blockieren"
+        },
+        {
+          "value": "allow",
+          "label": "Erlauben"
+        }
+      ]
     }
   ],
-  "apps": []
+  "apps": [
+    {
+      "id": "usbguard",
+      "label": "USB-Steuerung",
+      "icon": "🔌",
+      "title": "USB-Steuerung",
+      "entry": "usbguard.js",
+      "export": "renderUsbguard",
+      "w": 820,
+      "h": 580
+    }
+  ]
 }

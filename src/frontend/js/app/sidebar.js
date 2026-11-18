@@ -305,8 +305,11 @@ function clientIssue(client) {
 }
 
 function clientStatusColor(client) {
-  if (client.status_override === "maintenance") {
-    return { color: "var(--accent, #7aa2f7)", title: t("status_maintenance") };
+  if (client.status_override === "maintenance"
+      && !(client.maintenance_until && client.maintenance_until <= Date.now())) {
+    const until = client.maintenance_until
+      ? ` bis ${new Date(client.maintenance_until).toLocaleString()}` : " (bis manuell beendet)";
+    return { color: "var(--accent, #7aa2f7)", title: `🛠️ ${t("status_maintenance")}${until} - Alarme aus` };
   }
   if (!client.online) {
     return client.essential

@@ -1,7 +1,7 @@
 """
 software_routes.py (Modul "software") - Pakete verwalten und ausrollen.
 
-Dateien liegen unter storage/dist/software/<paket>/<datei> und werden den
+Dateien liegen unter storage/software/<paket>/<datei> (nicht oeffentlich) und werden den
 Agents ueber ihren authentifizierten Backend-Kanal ausgeliefert. Rollout an
 mehrere Clients laeuft als Hintergrund-Job: online = sofort installieren,
 offline = Eintrag in der Offline-Warteschlange (laeuft beim naechsten
@@ -15,11 +15,15 @@ import shutil
 import time
 import uuid
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+import hmac
+
+from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app import bgjobs, db
 from app.auth import get_current_user, require_perm
+from app.config import AGENT_TOKEN
 
 from rmm_mod_software import rollout
 from rmm_mod_software.rollout import FILES_DIR, load_packages, save_packages
@@ -194,3 +198,15 @@ async def deploy(body: DeployBody, background: bool = False,
     return await bgjobs.run("software", f"deploy-{body.package_id}",
                             title=f"Rollout: {pkg['name']} ({len(clients)} Clients)",
                             user=user, work=work, background=background)
+
+
+@router.get("/agent-file/{pid}/{name}")
+def agent_file(pid: str, name: str, x_agent_token: str | None = Header(default=None)):
+    """Installationsdatei fuer den AGENTEN (nicht oeffentlich, nur mit Agent-Token)."""
+    if not x_agent_token or not hmac.compare_digest(x_agent_token, AGENT_TOKEN):
+        raise HTTPException(403, "Agent-Token fehlt oder ist falsch")
+    safe = NAME_RE.sub("_", name)[:120]
+    p = (FILES_DIR / pid / safe).resolve()
+    if not str(p).startswith(str(FILES_DIR.resolve())) or not p.is_file():
+        raise HTTPException(404, "Datei nicht gefunden")
+    return FileResponse(p, media_type="application/octet-stream")

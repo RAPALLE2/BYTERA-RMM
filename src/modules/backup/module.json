@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "id": "backup",
+  "name": "Backup & Snapshots",
+  "version": "1.0.0",
+  "description": "Backups und Snapshots im Proxmox-Stil für alle Clients. Speicherziele: Backend, NAS per SMB, SFTP oder FTP(S) und Proxmox Backup Server. Wege: direkt vom Client aufs NAS, aufs Backend oder über das Backend aufs NAS. Ordner- oder Image-Backups (Linux: Systemplatte, Windows: VSS-Schattenkopie von C:) mit restic - inkrementell, dedupliziert, Ende-zu-Ende verschlüsselt; Komprimierung keine/schnell/gut/schnell & gut. Backup-Jobs mit Zeitplan (täglich, wöchentlich, alle N Stunden), Verpasste nachholen, Aufbewahrung wie bei Proxmox (keep-last/-daily/-weekly/-monthly/-yearly), Namensvorlagen, Schutz einzelner Backups. Wiederherstellen an den Originalort, in einen Ordner, einzelner Dateien oder auf einen anderen Client. Clients, die Proxmox-VMs/-LXCs sind, lassen sich stattdessen per vzdump über das Proxmox-Modul sichern (inkl. Proxmox-Snapshots). Betriebssystem-Snapshots: Windows VSS, Linux btrfs/ZFS/LVM.",
+  "author": "BYTERA",
+  "category": "Verwaltung",
+  "icon": "💾",
+  "requires": [],
+  "pip": [
+    "smbprotocol",
+    "paramiko"
+  ],
+  "entry": "module",
+  "routers": [
+    "backup_routes",
+    "rest_routes"
+  ],
+  "hooks": {
+    "startup": "on_startup"
+  },
+  "init": {
+    "entry": "init.js",
+    "export": "init"
+  },
+  "apps": [
+    {
+      "id": "backup",
+      "label": "Backup",
+      "icon": "💾",
+      "title": "Backup & Snapshots",
+      "entry": "backup.js",
+      "export": "renderBackup",
+      "w": 1000,
+      "h": 680
+    }
+  ]
+}

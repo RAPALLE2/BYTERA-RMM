@@ -641,6 +641,9 @@ async def _start_background_tasks():
     # Garantie-Prüfschleife: laeuft jetzt im Modul "notify" (ctx.spawn)
     _supervise("server-auto-update", _server_auto_update_engine)
     _supervise("db-sync", _db_sync_engine)
+    # Wartungsmodus: abgelaufene Zeitfenster beenden und an Agents melden.
+    from app.sockets import maintenance_expiry_loop as _maint_loop
+    _supervise("wartungsmodus-ablauf", _maint_loop)
 
 
     # Frueher wurde hier vpn.start() angeworfen (wireguard-go + TUN-Geraet).

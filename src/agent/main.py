@@ -3747,7 +3747,825 @@ class _WinPipeTerminal:
 
 
 # ------------------------------------------------------------------
-# USB-WÄCHTER (Modul "usbguard"): Ein-/Ausstecken melden und - im
+# BACKUP & SNAPSHOTS (Modul "backup", Proxmox-Stil)
+#   Engine restic (Ordner ODER Image; inkrementell, dedupliziert, Ende-zu-Ende
+#   verschluesselt) - Repo je nach Weg:
+#     rest_path -> restic-REST am Backend (lokal oder ueber Backend auf NAS)
+#     smb       -> Windows: UNC-Pfad, Linux: kurzzeitiger CIFS-Mount
+#     sftp      -> restic-SFTP mit Schluessel-Login
+#   Engine pbs: Proxmox Backup Server per proxmox-backup-client (Linux).
+#   Image: Linux liest das Block-Geraet (Standard: Systemplatte), Windows
+#   eine VSS-Schattenkopie von C: (konsistenter Volume-Stand).
+#   OS-Snapshots: Windows VSS, Linux btrfs / ZFS / LVM.
+# ------------------------------------------------------------------
+_BK_TOOLS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools")
+_NOWIN = 0x08000000 if IS_WINDOWS else 0
+
+
+class _BkError(Exception):
+    pass
+
+
+def _bk_run(cmd, timeout=600, input_text=None, env=None):
+    r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=timeout,
+                       input=input_text, env=env, creationflags=_NOWIN)
+    return r.returncode, r.stdout or "", r.stderr or ""
+
+
+def _bk_arch() -> str:
+    m = platform.machine().lower()
+    return {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64",
+            "i686": "386", "x86": "386", "armv7l": "arm"}.get(m, m)
+
+
+def _restic_bin() -> str:
+    found = shutil.which("restic")
+    if found:
+        return found
+    name = "restic.exe" if IS_WINDOWS else "restic"
+    p = os.path.join(_BK_TOOLS, name)
+    if os.path.isfile(p) and os.path.getsize(p) > 1_000_000:
+        return p
+    os.makedirs(_BK_TOOLS, exist_ok=True)
+    osn = "windows" if IS_WINDOWS else platform.system().lower()
+    data = _backend_fetch(f"/api/backup/tools/restic?os={osn}&arch={_bk_arch()}",
+                          timeout=900, limit=200 * 1024 * 1024)
+    tmp = p + ".part"
+    with open(tmp, "wb") as fh:
+        fh.write(data)
+    if not IS_WINDOWS:
+        os.chmod(tmp, 0o755)
+    os.replace(tmp, p)
+    return p
+
+
+def _iso_ms(s: str) -> int:
+    from datetime import datetime
+    s = str(s or "")
+    m = re.match(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?(Z|[+-]\d\d:\d\d)?", s)
+    if not m:
+        return 0
+    frac = (m.group(2) or ".0")[:7]
+    tz = m.group(3) or "+00:00"
+    tz = "+00:00" if tz == "Z" else tz
+    try:
+        return int(datetime.fromisoformat(m.group(1) + frac + tz).timestamp() * 1000)
+    except ValueError:
+        return 0
+
+
+class _Repo:
+    """Bereitet den Zugang zu einem restic-Repo vor (Mount, Schluessel ...)."""
+
+    def __init__(self, spec: dict):
+        self.spec = spec or {}
+        self.env = dict(os.environ)
+        self.extra: list = []
+        self.repo = ""
+        self._cleanup: list = []
+        self.insecure = False
+
+    def __enter__(self):
+        s = self.spec
+        self.env["RESTIC_PASSWORD"] = s.get("password") or ""
+        self.env["RESTIC_CACHE_DIR"] = os.path.join(_BK_TOOLS, "cache")
+        sub = (s.get("subdir") or "").strip("/")
+        if s.get("rest_path"):
+            self.repo = "rest:" + BACKEND_URL.rstrip("/") + s["rest_path"]
+        elif s.get("smb"):
+            c = s["smb"]
+            share = "\\\\" + c["server"] + "\\" + c["share"].strip("\\/")
+            path = "\\".join(x for x in [c.get("path", "").strip("\\/").replace("/", "\\"),
+                                          sub.replace("/", "\\")] if x)
+            if IS_WINDOWS:
+                user = c.get("user") or ""
+                if user and c.get("domain") and "\\" not in user:
+                    user = c["domain"] + "\\" + user
+                cmd = ["net", "use", share]
+                if user:
+                    cmd += [c.get("password") or "", f"/user:{user}"]
+                _bk_run(cmd + ["/persistent:no"], timeout=60)
+                self._cleanup.append(lambda: _bk_run(["net", "use", share, "/delete", "/y"], timeout=30))
+                self.repo = share + "\\" + path
+                os.makedirs(self.repo, exist_ok=True)
+            else:
+                mnt = tempfile.mkdtemp(prefix="bytera-smb-")
+                cred = os.path.join(tempfile.mkdtemp(prefix="bytera-cred-"), "c")
+                with open(os.open(cred, os.O_WRONLY | os.O_CREAT, 0o600), "w") as fh:
+                    fh.write(f"username={c.get('user') or 'guest'}\npassword={c.get('password') or ''}\n")
+                    if c.get("domain"):
+                        fh.write(f"domain={c['domain']}\n")
+                rc, _o, err = _bk_run(["mount", "-t", "cifs", "//" + c["server"] + "/" + c["share"].strip("\\/"),
+                                       mnt, "-o", f"credentials={cred},uid=0,gid=0"], timeout=60)
+                shutil.rmtree(os.path.dirname(cred), ignore_errors=True)
+                if rc != 0:
+                    os.rmdir(mnt)
+                    raise _BkError(f"SMB-Freigabe nicht einhängbar (cifs-utils installiert?): {err.strip()[:300]}")
+                self._cleanup.append(lambda: (_bk_run(["umount", mnt], timeout=60), os.rmdir(mnt)))
+                self.repo = os.path.join(mnt, path.replace("\\", "/"))
+                os.makedirs(self.repo, exist_ok=True)
+        elif s.get("sftp"):
+            c = s["sftp"]
+            if not c.get("private_key"):
+                raise _BkError("SFTP direkt braucht einen SSH-Schlüssel (im Speicherziel erzeugen)")
+            kd = tempfile.mkdtemp(prefix="bytera-ssh-")
+            key = os.path.join(kd, "id")
+            with open(os.open(key, os.O_WRONLY | os.O_CREAT, 0o600), "w") as fh:
+                fh.write(c["private_key"].strip() + "\n")
+            self._cleanup.append(lambda: shutil.rmtree(kd, ignore_errors=True))
+            kh = os.path.join(_BK_TOOLS, "known_hosts")
+            os.makedirs(_BK_TOOLS, exist_ok=True)
+            base = (c.get("path") or "").rstrip("/")
+            self.repo = f"sftp:{c['user']}@{c['host']}:{base}/{sub}"
+            self.extra = ["-o", f"sftp.command=ssh {c['user']}@{c['host']} -p {int(c.get('port') or 22)} "
+                                f"-i {key} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile={kh} -s sftp"]
+        else:
+            raise _BkError("Unbekanntes Repo")
+        self.env["RESTIC_REPOSITORY"] = self.repo
+        return self
+
+    def __exit__(self, *exc):
+        for fn in reversed(self._cleanup):
+            try:
+                fn()
+            except Exception:
+                pass
+
+
+def _restic(rp: _Repo, args: list, stdin=None, progress=None, timeout=None):
+    """restic ausfuehren; JSON-Statuszeilen werden zu Fortschrittsmeldungen."""
+    def once(insecure):
+        cmd = [_restic_bin(), *rp.extra, *(["--insecure-tls"] if insecure else []), *args]
+        p = subprocess.Popen(cmd, stdin=stdin if stdin is not None else subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=rp.env,
+                             text=True, errors="replace", creationflags=_NOWIN)
+        out, last = [], 0.0
+        for line in p.stdout:
+            line = line.rstrip("\n")
+            if line.startswith('{"message_type":"status"'):
+                if progress and time.time() - last > 5:
+                    last = time.time()
+                    try:
+                        st = json.loads(line)
+                        done = st.get("bytes_done") or 0
+                        total = st.get("total_bytes") or 0
+                        progress(f"{(st.get('percent_done') or 0) * 100:.1f} % - "
+                                 f"{done / 1048576:.0f} / {total / 1048576:.0f} MB")
+                    except ValueError:
+                        pass
+                continue
+            out.append(line)
+        err = p.stderr.read()
+        rc = p.wait(timeout=timeout)
+        return rc, "\n".join(out), err
+    rc, out, err = once(rp.insecure)
+    if rc != 0 and not rp.insecure and stdin is None and rp.repo.startswith("rest:https") \
+            and ("x509" in err or "certificate" in err):
+        rp.insecure = True                    # selbstsigniertes Backend-Zertifikat
+        rc, out, err = once(True)
+    return rc, out, err
+
+
+def _restic_init(rp: _Repo) -> None:
+    rc, _o, err = _restic(rp, ["cat", "config"], timeout=300)
+    if rc == 0:
+        return
+    rc, _o, err2 = _restic(rp, ["init", "--repository-version", "2"], timeout=300)
+    if rc != 0:
+        raise _BkError(f"Repo konnte nicht angelegt werden: {(err2 or err).strip()[-400:]}")
+
+
+def _restic_snapshots(rp: _Repo) -> list:
+    rc, out, err = _restic(rp, ["snapshots", "--json", "--no-lock"], timeout=600)
+    if rc != 0:
+        if "does not exist" in err or "unable to open config" in err:
+            return []
+        raise _BkError(err.strip()[-400:])
+    items = []
+    for s in json.loads(out or "[]") or []:
+        tags = s.get("tags") or []
+        summ = s.get("summary") or {}
+        items.append({"id": s.get("id"), "short": s.get("short_id"), "time": _iso_ms(s.get("time")),
+                      "paths": s.get("paths") or [], "host": s.get("hostname"),
+                      "mode": "image" if "bytera-image" in tags else "files",
+                      "protected": "protected" in tags,
+                      "size": summ.get("total_bytes_processed"), "added": summ.get("data_added")})
+    return sorted(items, key=lambda x: x["time"], reverse=True)
+
+
+def _root_disk() -> str:
+    rc, src, _e = _bk_run(["findmnt", "-no", "SOURCE", "/"], timeout=20)
+    rc, out, _e = _bk_run(["lsblk", "-nspo", "NAME,TYPE", src.strip()], timeout=20)
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[1] == "disk":
+            return parts[0].lstrip("`-|└─├ ")
+    raise _BkError("Systemplatte nicht ermittelbar - bitte Gerät im Job angeben")
+
+
+def _ps(script: str, timeout=120):
+    return _bk_run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], timeout=timeout)
+
+
+def _vss_create(volume="C:\\") -> tuple:
+    rc, out, err = _ps(
+        f"$r=(Get-WmiObject -List Win32_ShadowCopy).Create('{volume}','ClientAccessible');"
+        "if($r.ReturnValue -ne 0){throw \"VSS-Fehler $($r.ReturnValue)\"};"
+        "$c=Get-WmiObject Win32_ShadowCopy | Where-Object {$_.ID -eq $r.ShadowID};"
+        "\"$($c.ID)|$($c.DeviceObject)\"", timeout=300)
+    if rc != 0 or "|" not in out:
+        raise _BkError(f"VSS-Schattenkopie fehlgeschlagen: {(err or out).strip()[-300:]}")
+    sid, dev = out.strip().splitlines()[-1].split("|", 1)
+    return sid.strip(), dev.strip()
+
+
+def _vss_delete(sid: str) -> None:
+    _bk_run(["vssadmin", "delete", "shadows", f"/shadow={sid}", "/quiet"], timeout=120)
+
+
+def _bk_backup_restic(spec, args, progress) -> dict:
+    with _Repo(spec) as rp:
+        _restic_init(rp)
+        tags = ["--tag", "bytera"]
+        if args.get("job"):
+            tags += ["--tag", f"job:{args['job']}"]
+        comp = ["--compression", args.get("compression") or "auto"]
+        summary = None
+        if args.get("mode") == "image":
+            tags += ["--tag", "bytera-image"]
+            if IS_WINDOWS:
+                sid, dev = _vss_create("C:\\")
+                progress(f"VSS-Schattenkopie erstellt ({sid}) - lese Volume C: …")
+                try:
+                    p = subprocess.Popen([_restic_bin(), *rp.extra,
+                                          *(["--insecure-tls"] if rp.insecure else []),
+                                          "backup", "--json", *tags, *comp,
+                                          "--stdin", "--stdin-filename", "volume-C.img"],
+                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                         stderr=subprocess.PIPE, env=rp.env, creationflags=_NOWIN)
+                    err_box = []
+
+                    def feeder():
+                        try:
+                            with open(dev, "rb", buffering=0) as src:
+                                while True:
+                                    try:
+                                        chunk = src.read(4 * 1024 * 1024)
+                                    except OSError:
+                                        break             # Ende des Volumes
+                                    if not chunk:
+                                        break
+                                    p.stdin.write(chunk)
+                        except Exception as e:
+                            err_box.append(str(e))
+                        finally:
+                            try:
+                                p.stdin.close()
+                            except Exception:
+                                pass
+                    th = threading.Thread(target=feeder, daemon=True)
+                    th.start()
+                    out_lines = [ln.decode("utf-8", "replace") for ln in p.stdout]
+                    th.join()
+                    err = p.stderr.read().decode("utf-8", "replace")
+                    if p.wait() != 0 or err_box:
+                        raise _BkError(f"Image-Backup fehlgeschlagen: {(err_box[0] if err_box else err)[-400:]}")
+                    out = "".join(out_lines)
+                finally:
+                    _vss_delete(sid)
+            else:
+                dev = args.get("image_device") or _root_disk()
+                progress(f"Lese Datenträger {dev} (absturzkonsistent) …")
+                dd = subprocess.Popen(["dd", f"if={dev}", "bs=4M", "status=none"], stdout=subprocess.PIPE)
+                rc, out, err = _restic(rp, ["backup", "--json", *tags, *comp, "--stdin",
+                                            "--stdin-filename", f"disk-{os.path.basename(dev)}.img"],
+                                       stdin=dd.stdout, progress=progress)
+                dd.wait()
+                if rc != 0:
+                    raise _BkError(f"Image-Backup fehlgeschlagen: {err.strip()[-400:]}")
+        else:
+            paths = [p for p in (args.get("paths") or []) if p.strip()]
+            if not paths:
+                paths = (["C:\\Users"] if IS_WINDOWS else ["/etc", "/home", "/root"])
+                paths = [p for p in paths if os.path.exists(p)]
+            ex = []
+            for e in args.get("excludes") or []:
+                ex += ["--exclude", e]
+            vss = ["--use-fs-snapshot"] if IS_WINDOWS else []
+            progress(f"Sichere {', '.join(paths)} …")
+            rc, out, err = _restic(rp, ["backup", "--json", *tags, *comp, *vss, *ex, *paths],
+                                   progress=progress)
+            if rc not in (0, 3):                  # 3 = einzelne Dateien nicht lesbar
+                raise _BkError(f"Backup fehlgeschlagen: {err.strip()[-400:]}")
+            if rc == 3:
+                progress("Hinweis: einige Dateien waren nicht lesbar und fehlen im Backup")
+        for line in (out or "").splitlines():
+            if '"message_type":"summary"' in line:
+                try:
+                    summary = json.loads(line)
+                except ValueError:
+                    pass
+        for sid in args.get("protected") or []:
+            _restic(rp, ["tag", "--add", "protected", sid], timeout=300)
+        keep = args.get("keep") or {}
+        if keep:
+            flags = []
+            for k, v in keep.items():
+                flags += [f"--{k.replace('_', '-')}", str(int(v))]
+            progress(f"Aufbewahrung anwenden ({', '.join(f'{k}={v}' for k, v in keep.items())}) …")
+            rc, _o, err = _restic(rp, ["forget", "--tag", "bytera", "--keep-tag", "protected",
+                                       *flags, "--prune"], timeout=6 * 3600)
+            if rc != 0:
+                progress(f"Aufbewahrung fehlgeschlagen: {err.strip()[-200:]}")
+        snaps = _restic_snapshots(rp)
+        return {"snapshot_id": (summary or {}).get("snapshot_id"),
+                "summary": {k: (summary or {}).get(k) for k in
+                            ("files_new", "files_changed", "data_added", "total_bytes_processed",
+                             "total_duration")},
+                "snapshots": snaps}
+
+
+def _bk_restore_restic(spec, args, progress) -> dict:
+    sid = args.get("id") or ""
+    with _Repo(spec) as rp:
+        snaps = {s["id"]: s for s in _restic_snapshots(rp)}
+        snap = snaps.get(sid)
+        if not snap:
+            raise _BkError("Backup nicht gefunden")
+        if snap["mode"] == "image":
+            dest = args.get("image_dest") or ""
+            if not dest:
+                raise _BkError("Für ein Image bitte eine Zieldatei (oder unter Linux einen Datenträger) angeben")
+            name = (snap.get("paths") or ["/"])[0]
+            if args.get("image_to_device"):
+                if IS_WINDOWS:
+                    raise _BkError("Unter Windows lässt sich ein Image nur als Datei wiederherstellen")
+                with open("/proc/mounts") as fh:
+                    if any(line.split()[0].startswith(dest) for line in fh):
+                        raise _BkError(f"{dest} ist eingehängt - nur auf einen NICHT benutzten Datenträger schreiben")
+            progress(f"Schreibe Image nach {dest} …")
+            with open(dest, "wb") as fh:
+                p = subprocess.Popen([_restic_bin(), *rp.extra,
+                                      *(["--insecure-tls"] if rp.insecure else []),
+                                      "dump", sid, name], stdout=fh,
+                                     stderr=subprocess.PIPE, env=rp.env, creationflags=_NOWIN)
+                err = p.stderr.read().decode("utf-8", "replace")
+                if p.wait() != 0:
+                    raise _BkError(err[-400:])
+            return {"restored": dest}
+        inc = []
+        for i in args.get("include") or []:
+            inc += ["--include", i]
+        if args.get("target") == "path":
+            target = args.get("path") or ""
+            if not target:
+                raise _BkError("Zielordner fehlt")
+            os.makedirs(target, exist_ok=True)
+            rc, _o, err = _restic(rp, ["restore", sid, "--target", target, *inc], progress=progress)
+        elif IS_WINDOWS:
+            # restic speichert C:\x als /C/x -> je Laufwerk in dessen Wurzel zurueckspielen
+            drives = sorted({p.strip("/").split("/")[0] for p in snap.get("paths") or [] if p.strip("/")})
+            rc, err = 0, ""
+            for d in drives:
+                dinc = []
+                for i in args.get("include") or []:
+                    if i.startswith(f"/{d}/") or i == f"/{d}":
+                        dinc += ["--include", i[len(d) + 1:] or "/"]
+                if args.get("include") and not dinc:
+                    continue
+                rc, _o, err = _restic(rp, ["restore", f"{sid}:/{d}", "--target", f"{d}:\\", *dinc],
+                                      progress=progress)
+                if rc != 0:
+                    break
+        else:
+            rc, _o, err = _restic(rp, ["restore", sid, "--target", "/", *inc], progress=progress)
+        if rc != 0:
+            raise _BkError(f"Wiederherstellung fehlgeschlagen: {err.strip()[-400:]}")
+        return {"restored": args.get("path") or "Originalort"}
+
+
+# ---------------- Proxmox Backup Server (Linux) ----------------
+def _pbs_bin() -> str:
+    if IS_WINDOWS:
+        raise _BkError("Für Windows gibt es keinen Proxmox-Backup-Client - bitte SMB/SFTP/Backend "
+                       "nutzen oder den Client (falls VM/LXC) über das Proxmox-Modul sichern")
+    found = shutil.which("proxmox-backup-client")
+    if found:
+        return found
+    rc, _o, err = _bk_run(["apt-get", "install", "-y", "proxmox-backup-client"], timeout=900,
+                          env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"})
+    found = shutil.which("proxmox-backup-client")
+    if not found:
+        raise _BkError("proxmox-backup-client fehlt und ließ sich nicht installieren "
+                       f"(Proxmox-Paketquelle eingerichtet?): {err.strip()[-200:]}")
+    return found
+
+
+def _pbs_env(spec) -> tuple:
+    c = spec["pbs"]
+    env = {**os.environ, "PBS_PASSWORD": c.get("secret") or "",
+           "PBS_REPOSITORY": f"{c['user']}@{c['server']}:{int(c.get('port') or 8007)}:{c['datastore']}"}
+    if c.get("fingerprint"):
+        env["PBS_FINGERPRINT"] = c["fingerprint"]
+    ns = ["--ns", c["namespace"]] if c.get("namespace") else []
+    return env, ns
+
+
+def _pbs_snapshots(spec) -> list:
+    env, ns = _pbs_env(spec)
+    group = f"host/{spec['backup_id']}"
+    rc, out, err = _bk_run([_pbs_bin(), "snapshot", "list", group, "--output-format", "json", *ns],
+                           timeout=300, env=env)
+    if rc != 0:
+        if "does not exist" in err or "not found" in err.lower():
+            return []
+        raise _BkError(err.strip()[-300:])
+    items = []
+    for s in json.loads(out or "[]"):
+        t = int(s.get("backup-time") or 0)
+        files = [f.get("filename") for f in s.get("files") or []]
+        items.append({"id": f"host/{spec['backup_id']}/{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(t))}",
+                      "time": t * 1000, "size": s.get("size"), "notes": s.get("comment") or "",
+                      "protected": bool(s.get("protected")),
+                      "mode": "image" if any(str(f).startswith("disk") for f in files) else "files",
+                      "paths": [_pbs_decode(f) for f in files if str(f).endswith(".pxar.didx")]})
+    return sorted(items, key=lambda x: x["time"], reverse=True)
+
+
+def _pbs_name(path: str) -> str:
+    return "p" + path.encode("utf-8").hex()
+
+
+def _pbs_decode(fname: str) -> str:
+    base = str(fname).split(".")[0]
+    try:
+        return bytes.fromhex(base[1:]).decode("utf-8") if base.startswith("p") else base
+    except ValueError:
+        return base
+
+
+def _bk_backup_pbs(spec, args, progress) -> dict:
+    env, ns = _pbs_env(spec)
+    if args.get("mode") == "image":
+        dev = args.get("image_device") or _root_disk()
+        archives = [f"disk.img:{dev}"]
+    else:
+        paths = [p for p in (args.get("paths") or []) if p.strip()] or ["/etc", "/home", "/root"]
+        archives = [f"{_pbs_name(p)}.pxar:{p}" for p in paths if os.path.exists(p)]
+    progress(f"Proxmox Backup Server: sichere {len(archives)} Archiv(e) …")
+    rc, out, err = _bk_run([_pbs_bin(), "backup", *archives, "--backup-type", "host",
+                            "--backup-id", spec["backup_id"], *ns], timeout=24 * 3600, env=env)
+    if rc != 0:
+        raise _BkError(f"PBS-Backup fehlgeschlagen: {err.strip()[-400:]}")
+    snaps = _pbs_snapshots(spec)
+    newest = snaps[0]["id"] if snaps else None
+    if newest and args.get("name"):
+        _bk_run([_pbs_bin(), "snapshot", "notes", "update", newest, args["name"], *ns], timeout=120, env=env)
+    keep = args.get("keep") or {}
+    if keep:
+        flags = []
+        for k, v in keep.items():
+            flags += [f"--{k.replace('_', '-')}", str(int(v))]
+        _bk_run([_pbs_bin(), "prune", f"host/{spec['backup_id']}", *flags, *ns], timeout=3600, env=env)
+        snaps = _pbs_snapshots(spec)
+    return {"snapshot_id": newest, "snapshots": snaps}
+
+
+def _bk_restore_pbs(spec, args, progress) -> dict:
+    env, ns = _pbs_env(spec)
+    snap = next((s for s in _pbs_snapshots(spec) if s["id"] == args.get("id")), None)
+    if not snap:
+        raise _BkError("Backup nicht gefunden")
+    if snap["mode"] == "image":
+        dest = args.get("image_dest") or ""
+        if not dest:
+            raise _BkError("Zieldatei oder Datenträger angeben")
+        rc, _o, err = _bk_run([_pbs_bin(), "restore", snap["id"], "disk.img", dest, *ns],
+                              timeout=24 * 3600, env=env)
+    else:
+        rc, err = 0, ""
+        for p in snap["paths"]:
+            target = os.path.join(args["path"], p.strip("/").replace("/", "_")) \
+                if args.get("target") == "path" else p
+            progress(f"Stelle {p} wieder her nach {target} …")
+            rc, _o, err = _bk_run([_pbs_bin(), "restore", snap["id"], f"{_pbs_name(p)}.pxar", target,
+                                   "--overwrite", "true", *ns], timeout=24 * 3600, env=env)
+            if rc != 0:
+                break
+    if rc != 0:
+        raise _BkError(f"PBS-Wiederherstellung fehlgeschlagen: {err.strip()[-400:]}")
+    return {"restored": args.get("path") or args.get("image_dest") or "Originalort"}
+
+
+# ---------------- Betriebssystem-Snapshots ----------------
+def _fs_root_info():
+    rc, out, _e = _bk_run(["findmnt", "-no", "FSTYPE,SOURCE,TARGET", "/"], timeout=20)
+    parts = out.split()
+    if len(parts) < 3:
+        raise _BkError("Dateisystem nicht ermittelbar")
+    return parts[0], parts[1].split("[")[0], parts[2]
+
+
+def _lvm_names(source: str):
+    rc, out, _e = _bk_run(["lvs", "--noheadings", "--separator", "|", "-o", "vg_name,lv_name", source], timeout=30)
+    if rc != 0 or "|" not in out:
+        return None
+    vg, lv = out.strip().split("|", 1)
+    return vg.strip(), lv.strip()
+
+
+def _fs_snap(op: str, args: dict) -> dict:
+    name = re.sub(r"[^A-Za-z0-9_-]", "_", str(args.get("name") or "snap"))[:40]
+    if IS_WINDOWS:
+        if op == "list":
+            rc, out, err = _ps(
+                "$v=@{};Get-CimInstance Win32_Volume|%{$v[$_.DeviceID]=$_.DriveLetter};"
+                "Get-CimInstance Win32_ShadowCopy|%{[pscustomobject]@{id=$_.ID;"
+                "time=[int64](([datetime]$_.InstallDate).ToUniversalTime()-[datetime]'1970-01-01').TotalMilliseconds;"
+                "volume=$v[$_.VolumeName];device=$_.DeviceObject}}|ConvertTo-Json -Compress")
+            data = json.loads(out or "[]") if out.strip() else []
+            data = [data] if isinstance(data, dict) else data
+            return {"kind": "vss", "snapshots": [{"id": d["id"], "time": d["time"],
+                                                  "volume": d.get("volume") or "", "device": d.get("device")}
+                                                 for d in data],
+                    "info": "Windows-Schattenkopien (VSS). Einzelne Dateien/Ordner lassen sich zurückholen; "
+                            "das ganze Systemlaufwerk lässt sich im laufenden Betrieb nicht zurücksetzen."}
+        if op == "create":
+            sid, _dev = _vss_create((args.get("volume") or "C:").rstrip("\\") + "\\")
+            return {"id": sid}
+        if op == "delete":
+            _vss_delete(args["id"])
+            return {}
+        if op == "restore":
+            snaps = {s["id"]: s for s in _fs_snap("list", {})["snapshots"]}
+            s = snaps.get(args["id"])
+            path = str(args.get("path") or "")
+            if not s or len(path) < 3 or path[1:3] != ":\\":
+                raise _BkError("Snapshot oder Pfad ungültig (z.B. C:\\Users\\max\\Dokumente)")
+            link = os.path.join(os.environ.get("ProgramData", "C:\\ProgramData"), f"bytera-shadow-{uuid.uuid4().hex[:8]}")
+            _bk_run(["cmd", "/c", "mklink", "/d", link, s["device"] + "\\"], timeout=60)
+            try:
+                src = os.path.join(link, path[3:])
+                dest = args.get("dest") or path
+                if os.path.isdir(src):
+                    rc, out, err = _bk_run(["robocopy", src, dest, "/E", "/COPY:DAT", "/R:1", "/W:1",
+                                            "/NFL", "/NDL"], timeout=6 * 3600)
+                    if rc >= 8:
+                        raise _BkError(f"robocopy-Fehler {rc}: {(out + err)[-300:]}")
+                else:
+                    os.makedirs(os.path.dirname(dest), exist_ok=True)
+                    shutil.copy2(src, dest)
+            finally:
+                _bk_run(["cmd", "/c", "rmdir", link], timeout=60)
+            return {"note": f"{path} wiederhergestellt nach {args.get('dest') or path}"}
+        if op == "rollback":
+            raise _BkError("Windows-Schattenkopien lassen sich nicht komplett zurücksetzen - "
+                           "bitte einzelne Dateien/Ordner wiederherstellen")
+    fstype, source, mnt = _fs_root_info()
+    if fstype == "btrfs":
+        sdir = os.path.join(mnt, ".snapshots")
+        if op == "list":
+            items = []
+            if os.path.isdir(sdir):
+                for n in sorted(os.listdir(sdir)):
+                    if n.startswith("bytera-"):
+                        m = re.match(r"bytera-(\d+)-(.*)", n)
+                        items.append({"id": n, "time": int(m.group(1)) * 1000 if m else 0,
+                                      "name": m.group(2) if m else n})
+            return {"kind": "btrfs", "snapshots": items,
+                    "info": "btrfs-Snapshots (nur lesend) unter /.snapshots. Dateien lassen sich zurückholen."}
+        if op == "create":
+            os.makedirs(sdir, exist_ok=True)
+            sid = f"bytera-{int(time.time())}-{name}"
+            rc, _o, err = _bk_run(["btrfs", "subvolume", "snapshot", "-r", mnt, os.path.join(sdir, sid)])
+            if rc != 0:
+                raise _BkError(err.strip()[-300:])
+            return {"id": sid}
+        if op == "delete":
+            rc, _o, err = _bk_run(["btrfs", "subvolume", "delete", os.path.join(sdir, os.path.basename(args["id"]))])
+            if rc != 0:
+                raise _BkError(err.strip()[-300:])
+            return {}
+        snap_root = os.path.join(sdir, os.path.basename(args.get("id") or ""))
+    elif fstype == "zfs":
+        if op == "list":
+            rc, out, err = _bk_run(["zfs", "list", "-H", "-p", "-t", "snapshot", "-o", "name,creation", "-d", "1", source])
+            items = []
+            for line in out.splitlines():
+                n, c = line.split("\t")
+                items.append({"id": n, "time": int(c) * 1000, "name": n.split("@", 1)[1]})
+            return {"kind": "zfs", "snapshots": items, "info": f"ZFS-Snapshots von {source}."}
+        if op == "create":
+            sid = f"{source}@bytera-{name}"
+            rc, _o, err = _bk_run(["zfs", "snapshot", sid])
+            if rc != 0:
+                raise _BkError(err.strip()[-300:])
+            return {"id": sid}
+        if op == "delete":
+            if not str(args["id"]).startswith(source + "@"):
+                raise _BkError("Ungültiger Snapshot")
+            rc, _o, err = _bk_run(["zfs", "destroy", args["id"]])
+            if rc != 0:
+                raise _BkError(err.strip()[-300:])
+            return {}
+        if op == "rollback":
+            if mnt == "/":
+                raise _BkError("Das laufende Root-Dateisystem lässt sich nicht live zurücksetzen - "
+                               "bitte einzelne Dateien wiederherstellen")
+            rc, _o, err = _bk_run(["zfs", "rollback", "-r", args["id"]])
+            if rc != 0:
+                raise _BkError(err.strip()[-300:])
+            return {"note": "zurückgesetzt"}
+        snap_root = os.path.join(mnt, ".zfs", "snapshot", str(args.get("id", "")).split("@", 1)[-1])
+    else:
+        names = _lvm_names(source)
+        if not names:
+            raise _BkError(f"Dateisystem {fstype} auf {source} unterstützt keine Snapshots "
+                           "(btrfs, ZFS oder LVM nötig)")
+        vg, lv = names
+        if op == "list":
+            rc, out, _e = _bk_run(["lvs", "--noheadings", "--separator", "|", "-o",
+                                   "lv_name,lv_time,origin", "--config", "report/time_format=%s", vg])
+            items = []
+            for line in out.splitlines():
+                p = [x.strip() for x in line.split("|")]
+                if len(p) == 3 and p[2] == lv and p[0].startswith("bytera_"):
+                    items.append({"id": f"{vg}/{p[0]}", "time": int(p[1]) * 1000 if p[1].isdigit() else 0,
+                                  "name": p[0][7:]})
+            return {"kind": "lvm", "snapshots": items,
+                    "info": "LVM-Snapshots. Zurücksetzen wird beim nächsten Neustart angewendet."}
+        if op == "create":
+            sid = f"{vg}/bytera_{name}"
+            rc, _o, err = _bk_run(["lvcreate", "-s", "-n", f"bytera_{name}", "-l", "20%ORIGIN", f"{vg}/{lv}"])
+            if rc != 0:
+                raise _BkError(f"LVM-Snapshot fehlgeschlagen (freier Platz in der VG?): {err.strip()[-300:]}")
+            return {"id": sid}
+        if op == "delete":
+            rc, _o, err = _bk_run(["lvremove", "-y", args["id"]])
+            if rc != 0:
+                raise _BkError(err.strip()[-300:])
+            return {}
+        if op == "rollback":
+            rc, _o, err = _bk_run(["lvconvert", "--merge", args["id"]])
+            if rc != 0:
+                raise _BkError(err.strip()[-300:])
+            return {"note": "Zurücksetzen vorgemerkt - wird beim nächsten Neustart angewendet"}
+        tmp = tempfile.mkdtemp(prefix="bytera-lvsnap-")
+        rc, _o, err = _bk_run(["mount", "-o", "ro,nouuid" if fstype == "xfs" else "ro", f"/dev/{args['id']}", tmp])
+        if rc != 0:
+            os.rmdir(tmp)
+            raise _BkError(err.strip()[-300:])
+        try:
+            return _fs_copy_back(tmp, mnt, args)
+        finally:
+            _bk_run(["umount", tmp])
+            os.rmdir(tmp)
+    if op == "rollback":
+        raise _BkError("Für diesen Snapshot-Typ bitte einzelne Dateien/Ordner wiederherstellen")
+    return _fs_copy_back(snap_root, mnt, args)
+
+
+def _fs_copy_back(snap_root: str, mnt: str, args: dict) -> dict:
+    path = os.path.abspath(str(args.get("path") or ""))
+    rel = os.path.relpath(path, mnt)
+    if rel.startswith(".."):
+        raise _BkError("Pfad liegt nicht auf diesem Dateisystem")
+    src = os.path.join(snap_root, rel)
+    if not os.path.exists(src):
+        raise _BkError("Pfad existiert im Snapshot nicht")
+    dest = args.get("dest") or path
+    if os.path.isdir(src):
+        os.makedirs(dest, exist_ok=True)
+        rc, _o, err = _bk_run(["cp", "-a", src + "/.", dest + "/"], timeout=6 * 3600)
+    else:
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        rc, _o, err = _bk_run(["cp", "-a", src, dest], timeout=6 * 3600)
+    if rc != 0:
+        raise _BkError(err.strip()[-300:])
+    return {"note": f"{path} wiederhergestellt nach {dest}"}
+
+
+def _bk_dispatch(op: str, spec: dict, args: dict, progress) -> dict:
+    pbs = spec.get("kind") == "pbs"
+    if op == "backup":
+        return _bk_backup_pbs(spec, args, progress) if pbs else _bk_backup_restic(spec, args, progress)
+    if op == "snapshots":
+        if pbs:
+            return {"snapshots": _pbs_snapshots(spec)}
+        with _Repo(spec) as rp:
+            return {"snapshots": _restic_snapshots(rp)}
+    if op == "restore":
+        return _bk_restore_pbs(spec, args, progress) if pbs else _bk_restore_restic(spec, args, progress)
+    if op == "forget":
+        if pbs:
+            env, ns = _pbs_env(spec)
+            for sid in args.get("ids") or []:
+                rc, _o, err = _bk_run([_pbs_bin(), "snapshot", "forget", sid, *ns], timeout=600, env=env)
+                if rc != 0:
+                    raise _BkError(err.strip()[-300:])
+            return {"snapshots": _pbs_snapshots(spec)}
+        with _Repo(spec) as rp:
+            rc, _o, err = _restic(rp, ["forget", *(args.get("ids") or []), "--prune"], timeout=6 * 3600)
+            if rc != 0:
+                raise _BkError(err.strip()[-300:])
+            return {"snapshots": _restic_snapshots(rp)}
+    if op == "meta":
+        if pbs:
+            env, ns = _pbs_env(spec)
+            if args.get("notes") is not None:
+                _bk_run([_pbs_bin(), "snapshot", "notes", "update", args["id"], args["notes"] or "", *ns],
+                        timeout=120, env=env)
+            if args.get("protected") is not None:
+                _bk_run([_pbs_bin(), "snapshot", "protected", "update", args["id"],
+                         "true" if args["protected"] else "false", *ns], timeout=120, env=env)
+            return {}
+        if args.get("protected") is not None:
+            with _Repo(spec) as rp:
+                rc, _o, err = _restic(rp, ["tag", "--add" if args["protected"] else "--remove",
+                                           "protected", args["id"]], timeout=600)
+                if rc != 0:
+                    raise _BkError(err.strip()[-300:])
+        return {}
+    if op == "ls":
+        if pbs:
+            raise _BkError("Dateiansicht für PBS-Backups bitte im PBS-Webinterface - "
+                           "hier lassen sich ganze Archive wiederherstellen")
+        with _Repo(spec) as rp:
+            rc, out, err = _restic(rp, ["ls", "--json", args["id"], args.get("path") or "/"], timeout=600)
+            if rc != 0:
+                raise _BkError(err.strip()[-300:])
+            base = (args.get("path") or "/").rstrip("/")
+            entries = []
+            for line in out.splitlines():
+                try:
+                    n = json.loads(line)
+                except ValueError:
+                    continue
+                if n.get("struct_type") == "node" and n.get("path", "").rstrip("/") != base:
+                    entries.append({k: n.get(k) for k in ("name", "type", "path", "size", "mtime")})
+            return {"entries": entries}
+    if op.startswith("fs-snap-"):
+        return _fs_snap(op[8:], args)
+    raise _BkError(f"Unbekannte Aktion {op}")
+
+
+@sio.on("backup-cmd", namespace="/agent")
+async def on_backup_cmd(data):
+    data = data or {}
+    rid = data.get("requestId")
+    loop = asyncio.get_event_loop()
+
+    def progress(line):
+        if sio.connected:
+            asyncio.run_coroutine_threadsafe(
+                sio.emit("backup-progress", {"id": DEVICE_ID, "requestId": rid, "line": str(line)[:500]},
+                         namespace="/agent"), loop)
+
+    def work():
+        try:
+            return {"ok": True, **(_bk_dispatch(str(data.get("op") or ""), data.get("spec") or {},
+                                                data.get("args") or {}, progress) or {})}
+        except _BkError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    res = await loop.run_in_executor(None, work)
+    await sio.emit("backup-result", {"id": DEVICE_ID, "requestId": rid, **res}, namespace="/agent")
+
+
+# ------------------------------------------------------------------
+# WARTUNGSMODUS (Core): Schutzmechanismen aussetzen. Das Backend schickt
+# {"active", "until"}; laeuft die Zeit ab, beendet der Agent ihn auch selbst.
+# ------------------------------------------------------------------
+_maint = {"active": False, "until": 0}
+
+
+def _maintenance_active() -> bool:
+    if not _maint["active"]:
+        return False
+    until = int(_maint.get("until") or 0)
+    if until and until <= time.time() * 1000:
+        _maint["active"] = False
+        _print("[wartung] Wartungsmodus abgelaufen")
+        _usb_on_maintenance_change()
+        return False
+    return True
+
+
+@sio.on("maintenance-mode", namespace="/agent")
+async def on_maintenance_mode(data):
+    data = data or {}
+    was = _maint["active"]
+    _maint["active"] = bool(data.get("active"))
+    _maint["until"] = int(data.get("until") or 0)
+    if was != _maint["active"]:
+        _print(f"[wartung] Wartungsmodus {'AKTIV - Schutzmechanismen ausgesetzt' if _maint['active'] else 'beendet'}")
+        await asyncio.get_event_loop().run_in_executor(None, _usb_on_maintenance_change)
+
+
+# ------------------------------------------------------------------
+# USB-STEUERUNG (Modul "usbguard"): Ein-/Ausstecken melden und - im
 # Blockier-Modus - neue Geraete erst nach Freigabe ans System durchreichen.
 #   Linux:   /sys/bus/usb/devices/usb*/authorized_default = 0 -> neue Geraete
 #            bleiben vom Kernel unautorisiert (keine Treiber, keine Daten),
@@ -3755,10 +4573,21 @@ class _WinPipeTerminal:
 #            freigegeben (sonst waeren Geraete dahinter unsichtbar).
 #   Windows: neue USB-Geraete werden direkt nach dem Erkennen per pnputil
 #            deaktiviert und bei Freigabe wieder aktiviert (kurze, technisch
-#            bedingte Erkennungsluecke). Controller/Hubs (Klasse USB) bleiben.
+#            bedingte Erkennungsluecke). Hubs/Host-Controller bleiben aktiv.
+# Vertrauenswuerdige Geraete werden automatisch zugelassen:
+#   * per Geraete-ID (VID:PID, optional Seriennummer) - z.B. YubiKeys
+#   * Speichersticks per SIGNIERTER Schluesseldatei ".bytera-usbkey" im
+#     Stammverzeichnis. Die Datei ist mit dem Backend-Schluessel (Ed25519)
+#     signiert und an die Seriennummer des Sticks gebunden - Kopieren auf
+#     einen anderen Stick nuetzt also nichts. Zum Pruefen wird der Stick kurz
+#     NUR LESEND (noexec) eingehaengt; ist die Datei ungueltig, wird er
+#     sofort wieder gesperrt.
+# Im Wartungsmodus wird nichts blockiert.
 # ------------------------------------------------------------------
-_usb = {"enabled": False, "block": False, "thread": None, "pending": set()}
+_usb = {"enabled": False, "block": False, "thread": None, "pending": set(),
+        "trust": [], "pubkey": "", "revoked": set(), "loop": None}
 _USB_SYS = "/sys/bus/usb/devices"
+USB_KEYFILE = ".bytera-usbkey"
 
 
 def _usb_read(path: str) -> str:
@@ -3794,8 +4623,18 @@ def _usb_list_linux() -> dict:
         pid = _usb_read(os.path.join(base, "idProduct"))
         label = " ".join(x for x in (_usb_read(os.path.join(base, "manufacturer")),
                                      _usb_read(os.path.join(base, "product"))) if x)
+        storage = False
+        try:
+            for sub in os.listdir(base):
+                if sub.startswith(n + ":") and _usb_read(os.path.join(base, sub, "bInterfaceClass")) == "08":
+                    storage = True
+        except Exception:
+            pass
         out[n] = {"name": f"{label or 'USB-Gerät'} ({vid}:{pid})",
+                  "vid": vid.lower(), "pid": pid.lower(),
+                  "serial": _usb_read(os.path.join(base, "serial")),
                   "hub": _usb_read(os.path.join(base, "bDeviceClass")) == "09",
+                  "storage": storage,
                   "root": n.startswith("usb"),
                   "authorized": _usb_read(os.path.join(base, "authorized")) != "0"}
     return out
@@ -3804,7 +4643,7 @@ def _usb_list_linux() -> dict:
 def _usb_list_windows() -> dict:
     import subprocess as _sp
     ps = ("Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -like 'USB\\*' } | "
-          "Select-Object InstanceId,FriendlyName,Class,Status | ConvertTo-Json -Compress")
+          "Select-Object InstanceId,FriendlyName,Class,Status,Service | ConvertTo-Json -Compress")
     try:
         r = _sp.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
                     capture_output=True, text=True, errors="replace", timeout=30,
@@ -3819,8 +4658,21 @@ def _usb_list_windows() -> dict:
         iid = str(d.get("InstanceId") or "")
         if not iid:
             continue
-        out[iid] = {"name": str(d.get("FriendlyName") or "USB-Gerät"),
-                    "hub": str(d.get("Class") or "").upper() == "USB",
+        name = str(d.get("FriendlyName") or "USB-Gerät")
+        up = iid.upper()
+        m = re.search(r"VID_([0-9A-F]{4})&PID_([0-9A-F]{4})", up)
+        seg = iid.split("\\")[-1]
+        # Ein Segment mit '&' ist eine von Windows erzeugte Kennung, keine
+        # echte Seriennummer - dann ist keine Bindung an den Stick moeglich.
+        serial = "" if "&" in seg else seg
+        out[iid] = {"name": name,
+                    "vid": (m.group(1).lower() if m else ""), "pid": (m.group(2).lower() if m else ""),
+                    "serial": serial,
+                    # NUR echte Hubs/Controller durchlassen. Achtung: Das
+                    # "USB-Massenspeichergeraet" hat ebenfalls die Klasse "USB"!
+                    "hub": "ROOT_HUB" in up or "HUB" in name.upper()
+                           or "HOST CONTROLLER" in name.upper(),
+                    "storage": str(d.get("Service") or "").upper() == "USBSTOR",
                     "root": False,
                     "authorized": str(d.get("Status") or "").upper() != "ERROR"}
     return out
@@ -3850,39 +4702,190 @@ def _usb_apply(dev: str, allow: bool) -> None:
         _usb_write(os.path.join(_USB_SYS, dev, "authorized"), "1" if allow else "0")
 
 
-def _usb_emit(loop, payload: dict) -> None:
-    if sio.connected:
+def _usb_emit(payload: dict) -> None:
+    loop = _usb.get("loop")
+    if sio.connected and loop:
         payload["id"] = DEVICE_ID
         asyncio.run_coroutine_threadsafe(sio.emit("usb-event", payload, namespace="/agent"), loop)
 
 
-def _usb_loop(loop):
+def _usb_blocking() -> bool:
+    return _usb["enabled"] and _usb["block"] and not _maintenance_active()
+
+
+def _usb_on_maintenance_change() -> None:
+    """Wartung an: alles freigeben. Wartung aus: Sperre wieder scharf schalten."""
+    if not _usb["enabled"]:
+        return
+    _usb_set_block_default(_usb_blocking())
+    if not _usb_blocking():
+        for dev in list(_usb["pending"]):
+            _usb_apply(dev, True)
+            _usb["pending"].discard(dev)
+
+
+def _usb_id_trusted(info: dict) -> bool:
+    for t in _usb["trust"]:
+        if str(t.get("vid") or "").lower() != info.get("vid"):
+            continue
+        if t.get("pid") and str(t["pid"]).lower() != info.get("pid"):
+            continue
+        if t.get("serial") and str(t["serial"]) != info.get("serial"):
+            continue
+        return True
+    return False
+
+
+def _usb_verify_keyfile(raw: bytes, info: dict) -> str | None:
+    """Prueft eine Schluesseldatei. Rueckgabe: Label (gueltig) oder None."""
+    try:
+        import base64 as _b64
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        doc = json.loads(raw.decode("utf-8"))
+        if doc.get("v") != 1 or not _usb["pubkey"]:
+            return None
+        kid = str(doc.get("kid") or "")
+        if not kid or kid in _usb["revoked"]:
+            return None
+        vid, pid, serial = (str(doc.get(k) or "") for k in ("vid", "pid", "serial"))
+        # Bindung an DIESEN Stick: Seriennummer (und ID) muessen passen.
+        if not serial or serial != info.get("serial"):
+            return None
+        if vid.lower() != info.get("vid") or pid.lower() != info.get("pid"):
+            return None
+        msg = f"bytera-usbkey|v1|{kid}|{vid.lower()}|{pid.lower()}|{serial}|{doc.get('label','')}|{doc.get('iat',0)}"
+        Ed25519PublicKey.from_public_bytes(_b64.b64decode(_usb["pubkey"])).verify(
+            _b64.b64decode(doc.get("sig") or ""), msg.encode("utf-8"))
+        return str(doc.get("label") or "Schlüsseldatei")
+    except Exception:
+        return None
+
+
+def _usb_read_keyfile_linux(dev: str) -> bytes | None:
+    """Stick kurz autorisieren, nur lesend einhaengen, Schluesseldatei lesen."""
+    import subprocess as _sp
+    import tempfile as _tf
+    _usb_write(os.path.join(_USB_SYS, dev, "authorized"), "1")
+    devpath = os.path.realpath(os.path.join(_USB_SYS, dev))
+    parts = []
+    for _ in range(20):                       # bis 10 s auf das Block-Geraet warten
+        time.sleep(0.5)
+        try:
+            for blk in os.listdir("/sys/block"):
+                if not os.path.realpath(os.path.join("/sys/block", blk)).startswith(devpath):
+                    continue
+                subs = [p for p in os.listdir(os.path.join("/sys/block", blk)) if p.startswith(blk)]
+                parts = ["/dev/" + p for p in subs] or ["/dev/" + blk]
+        except Exception:
+            pass
+        if parts:
+            break
+    for part in parts:
+        mnt = _tf.mkdtemp(prefix="bytera-usbchk-")
+        try:
+            r = _sp.run(["mount", "-o", "ro,noexec,nosuid,nodev", part, mnt],
+                        capture_output=True, timeout=20)
+            if r.returncode != 0:
+                continue
+            try:
+                p = os.path.join(mnt, USB_KEYFILE)
+                if os.path.isfile(p) and os.path.getsize(p) < 16384:
+                    with open(p, "rb") as fh:
+                        return fh.read()
+            finally:
+                _sp.run(["umount", mnt], capture_output=True, timeout=20)
+        except Exception:
+            pass
+        finally:
+            try:
+                os.rmdir(mnt)
+            except OSError:
+                pass
+    return None
+
+
+def _win_removable_letters() -> set:
+    try:
+        import ctypes
+        import string
+        mask = ctypes.windll.kernel32.GetLogicalDrives()
+        out = set()
+        for i, letter in enumerate(string.ascii_uppercase):
+            if mask & (1 << i) and ctypes.windll.kernel32.GetDriveTypeW(f"{letter}:\\") == 2:
+                out.add(letter)
+        return out
+    except Exception:
+        return set()
+
+
+def _usb_read_keyfile_windows(before: set) -> bytes | None:
+    for _ in range(20):                       # bis 10 s auf den Laufwerksbuchstaben warten
+        time.sleep(0.5)
+        new = _win_removable_letters() - before
+        for letter in sorted(new):
+            p = f"{letter}:\\{USB_KEYFILE}"
+            try:
+                if os.path.isfile(p) and os.path.getsize(p) < 16384:
+                    with open(p, "rb") as fh:
+                        return fh.read()
+            except Exception:
+                pass
+        if new:
+            return None
+    return None
+
+
+def _usb_handle_new(dev: str, info: dict, letters_before: set) -> None:
+    base = {"dev": dev, "name": info["name"], "vid": info.get("vid", ""),
+            "pid": info.get("pid", ""), "serial": info.get("serial", ""),
+            "storage": bool(info.get("storage"))}
+    if not _usb_blocking():
+        if _usb["enabled"] and _usb["block"]:
+            _usb_apply(dev, True)              # Wartungsmodus: immer zulassen
+        _usb_emit({**base, "action": "add", "blocked": False,
+                   "trusted": "maintenance" if _maintenance_active() else ""})
+        return
+    if info.get("hub"):
+        _usb_apply(dev, True)                  # Hubs immer durchlassen
+        return
+    if _usb_id_trusted(info):
+        _usb_apply(dev, True)
+        _usb_emit({**base, "action": "add", "blocked": False, "trusted": "id"})
+        return
+    if info.get("storage"):
+        raw = (_usb_read_keyfile_windows(letters_before) if IS_WINDOWS
+               else _usb_read_keyfile_linux(dev))
+        label = _usb_verify_keyfile(raw, info) if raw else None
+        if label:
+            _usb_apply(dev, True)
+            _usb_emit({**base, "action": "add", "blocked": False, "trusted": f"key:{label}"})
+            return
+    _usb_apply(dev, False)                     # sperren (Linux: wieder entziehen)
+    _usb["pending"].add(dev)
+    _usb_emit({**base, "action": "add", "blocked": True, "trusted": ""})
+
+
+def _usb_loop():
     lister = _usb_list_windows if IS_WINDOWS else _usb_list_linux
-    known = lister()                       # Bestand beim Start nicht melden
+    known = lister()                           # Bestand beim Start nicht melden
+    letters = _win_removable_letters() if IS_WINDOWS else set()
     while _usb["enabled"]:
         time.sleep(3 if IS_WINDOWS else 1.5)
         try:
+            _maintenance_active()              # Ablauf auch lokal erkennen
             cur = lister()
             for dev, info in cur.items():
                 if dev in known or info.get("root"):
                     continue
-                blocked = False
-                if _usb["block"]:
-                    if info.get("hub"):
-                        _usb_apply(dev, True)      # Hubs immer durchlassen
-                    else:
-                        if IS_WINDOWS:
-                            _usb_apply(dev, False)
-                        blocked = True
-                        _usb["pending"].add(dev)
-                _usb_emit(loop, {"action": "add", "dev": dev, "name": info["name"],
-                                 "blocked": blocked})
+                _usb_handle_new(dev, info, letters)
             for dev, info in known.items():
                 if dev not in cur and not info.get("root"):
                     _usb["pending"].discard(dev)
-                    _usb_emit(loop, {"action": "remove", "dev": dev, "name": info["name"],
-                                     "blocked": False})
+                    _usb_emit({"action": "remove", "dev": dev, "name": info["name"],
+                               "blocked": False})
             known = cur
+            if IS_WINDOWS:
+                letters = _win_removable_letters()
         except Exception:
             pass
     _usb["thread"] = None
@@ -3891,16 +4894,21 @@ def _usb_loop(loop):
 @sio.on("usb-config", namespace="/agent")
 async def on_usb_config(data):
     data = data or {}
+    _usb["loop"] = asyncio.get_event_loop()
     _usb["enabled"] = bool(data.get("enabled"))
     _usb["block"] = bool(data.get("enabled")) and bool(data.get("block_new"))
-    _usb_set_block_default(_usb["block"])
+    _usb["trust"] = list(data.get("trust") or [])
+    _usb["pubkey"] = str(data.get("pubkey") or "")
+    _usb["revoked"] = set(data.get("revoked") or [])
+    _usb_set_block_default(_usb_blocking())
     t = _usb.get("thread")
     if _usb["enabled"] and (t is None or not t.is_alive()):
-        t = threading.Thread(target=_usb_loop, args=(asyncio.get_event_loop(),), daemon=True)
+        t = threading.Thread(target=_usb_loop, daemon=True)
         _usb["thread"] = t
         t.start()
-    _print(f"[usb] Wächter {'aktiv' if _usb['enabled'] else 'aus'}"
-           + (" (Blockier-Modus)" if _usb["block"] else ""))
+    _print(f"[usb] Steuerung {'aktiv' if _usb['enabled'] else 'aus'}"
+           + (" (Blockier-Modus)" if _usb["block"] else "")
+           + (f", {len(_usb['trust'])} vertrauenswürdige Geräte-IDs" if _usb["trust"] else ""))
 
 
 @sio.on("usb-decide", namespace="/agent")

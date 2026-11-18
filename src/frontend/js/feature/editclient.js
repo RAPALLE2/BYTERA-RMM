@@ -170,6 +170,24 @@ export function renderEditClient(body, win) {
         <button class="action-btn" id="ec-tempuser" title="Temporären Benutzer auf dem Gerät anlegen (Einmal-Passwort, Verfall wählbar)">👤 Temp-Benutzer</button>
       </div>
 
+      <h3 style="margin-top:22px">🛠️ Wartungsmodus</h3>
+      <p style="color:var(--subtext);font-size:12px;margin:4px 0 8px">
+        Während der Wartung schweigen alle Alarme für dieses Gerät, und Schutzmechanismen sind
+        ausgesetzt: USB-Geräte werden immer zugelassen, Updates sind außerhalb des Patch-Zeitfensters
+        freigegeben. Endet automatisch nach der gewählten Dauer.
+      </p>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span id="ec-maint-state" style="font-size:12px"></span>
+        <select id="ec-maint-dur">
+          <option value="30m">30 Minuten</option><option value="1h" selected>1 Stunde</option>
+          <option value="2h">2 Stunden</option><option value="4h">4 Stunden</option>
+          <option value="8h">8 Stunden</option><option value="24h">24 Stunden</option>
+          <option value="manual">Bis ich es selbst beende</option>
+        </select>
+        <button class="action-btn" id="ec-maint-on">🛠️ Starten</button>
+        <button class="action-btn btn-danger" id="ec-maint-off">Beenden</button>
+      </div>
+
       <h3 style="margin-top:22px">⏳ Warteschlange (wenn online)</h3>
       <p style="color:var(--subtext);font-size:12px;margin:4px 0 8px">
         Vorgemerkte Aktionen laufen automatisch, sobald der Agent (wieder) online ist -
@@ -198,6 +216,32 @@ export function renderEditClient(body, win) {
       clientColor: client.color, w: 460, h: 520,
     });
   });
+
+  // ---- Wartungsmodus (Core) ----
+  function drawMaint(m) {
+    const el = body.querySelector("#ec-maint-state");
+    if (!el) return;
+    const active = m ? m.active : (client.status_override === "maintenance"
+      && (!client.maintenance_until || client.maintenance_until > Date.now()));
+    const until = m ? m.until : client.maintenance_until;
+    el.innerHTML = active
+      ? `<b style="color:var(--accent)">● aktiv</b> ${until ? `bis ${esc(new Date(until).toLocaleString())}` : "(bis manuell beendet)"}`
+      : `<span style="color:var(--subtext)">○ aus</span>`;
+  }
+  drawMaint(null);
+  async function setMaint(duration) {
+    try {
+      const m = await moduleRequest(`/api/clients/${client.id}/maintenance`, {
+        method: "POST", noJob: true, body: JSON.stringify({ duration }) });
+      client.status_override = m.active ? "maintenance" : null;
+      client.maintenance_until = m.until;
+      drawMaint(m);
+      window.notify?.(m.active ? "Wartungsmodus aktiv" : "Wartungsmodus beendet", "success");
+    } catch (e) { window.notify?.(e.message, "error"); }
+  }
+  body.querySelector("#ec-maint-on")?.addEventListener("click", () =>
+    setMaint(body.querySelector("#ec-maint-dur").value));
+  body.querySelector("#ec-maint-off")?.addEventListener("click", () => setMaint("off"));
 
   // ---- Blackbox: letzter gemeldeter Stand ----
   body.querySelector("#ec-blackbox")?.addEventListener("click", async () => {

@@ -16,12 +16,22 @@ from __future__ import annotations
 import asyncio
 import time
 
-_pending: dict[str, dict] = {}     # f"{client_id}|{dev}" -> {"task": ..., "ts": ...}
+_pending: dict[str, dict] = {}
+_broadcast_sio = None
+
+
+async def broadcast_config() -> int:
+    """Aktuelle Konfiguration (inkl. Vertrauensliste) an alle Agents schicken."""
+    if _broadcast_sio is None:
+        return 0
+    await _broadcast_sio.emit("usb-config", _cfg(), namespace="/agent")
+    return 1     # f"{client_id}|{dev}" -> {"task": ..., "ts": ...}
 
 
 def _cfg():
     from app import modules
-    return {
+    from rmm_mod_usbguard import trust
+    return {**trust.agent_payload(),
         "enabled": bool(modules.setting("usbguard", "enabled", False)),
         "block_new": bool(modules.setting("usbguard", "block_new", False)),
         "timeout_s": max(5, min(int(modules.setting("usbguard", "timeout_s", 60) or 60), 3600)),
@@ -53,6 +63,11 @@ def register(ctx) -> None:
     async def on_config_get(sid, data=None):
         await sio.emit("usb-config", _cfg(), to=sid, namespace="/agent")
 
+    # Konfiguration nach Aenderung (Einstellungen, Vertrauensliste) an alle
+    # verbundenen Agents neu verteilen - siehe broadcast_config().
+    global _broadcast_sio
+    _broadcast_sio = sio
+
     async def on_event(sid, data):
         data = data or {}
         client_id = state.sid_to_client_id.get(sid)
@@ -64,8 +79,11 @@ def register(ctx) -> None:
         from app import db
         client = await db.call(db.get_client, client_id)
         host = (client or {}).get("short_name") or (client or {}).get("hostname") or client_id
+        trusted = str(data.get("trusted") or "")
         ev = {
-            "client_id": client_id, "host": host,
+            "client_id": client_id, "host": host, "trusted": trusted,
+            "vid": str(data.get("vid") or ""), "pid": str(data.get("pid") or ""),
+            "serial": str(data.get("serial") or "")[:128], "storage": bool(data.get("storage")),
             "action": "add" if data.get("action") == "add" else "remove",
             "dev": str(data.get("dev") or "?")[:200],
             "name": str(data.get("name") or "USB-Gerät")[:200],
@@ -73,9 +91,13 @@ def register(ctx) -> None:
             "ts": int(time.time() * 1000),
             "timeout_s": cfg["timeout_s"], "timeout_action": cfg["timeout_action"],
         }
+        why = {"id": " (vertrauenswürdige Geräte-ID)", "maintenance": " (Wartungsmodus)"}.get(
+            trusted, f" (Schlüsseldatei: {trusted[4:]})" if trusted.startswith("key:") else "")
         db.add_audit_entry("system", "usbguard.event", client_id,
                            f"{ev['name']} {'eingesteckt' if ev['action'] == 'add' else 'ausgesteckt'}"
-                           + (" (blockiert, wartet auf Freigabe)" if ev["blocked"] else ""))
+                           + (" (blockiert, wartet auf Freigabe)" if ev["blocked"] else why))
+        if db.in_maintenance(client_id) and not ev["blocked"]:
+            return                         # Wartung: protokollieren, aber kein Alarm
         if ev["blocked"]:
             await sio.emit("usb:ask", ev, namespace="/dashboard")
             key = f"{client_id}|{ev['dev']}"
