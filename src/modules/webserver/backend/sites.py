@@ -1,19 +1,19 @@
-# sites.py (Modul "webserver") - Websites, Rechte, oeffentliche Adressen
+# sites.py (module "webserver") - websites, permissions, public addresses
 # ----------------------------------------------------------------------
-# Website = Ordner backend/storage/websites/<name>/, oeffentlich unter rmm.url.de/<name>
-# (nur wenn "oeffentlich" an ist - sonst 404, wie beim Deployment).
+# Website = folder backend/storage/websites/<name>/, public at rmm.url.de/<name>
+# (only if "public" is on - otherwise 404, as with deployment).
 #
-# Verzeichnis: data/modules/webserver/sites.json
+# Directory: data/modules/webserver/sites.json
 #   {"<name>": {"title", "public", "listing", "members": [{"type": user|group, "id", "role": editor|admin}],
 #               "created", "created_by"}}
-# Rechte:
-#   manage_websites (global)  Websites anlegen/loeschen, ALLE Websites bearbeiten
-#   Mitglied "editor"         Dateien der Website bearbeiten (App "Webserver", Explorer/Relay "Websites")
-#   Mitglied "admin"          zusaetzlich Einstellungen + Mitglieder der Website
+# Permissions:
+#   manage_websites (global)  create/delete websites, edit ALL websites
+#   member "editor"           edit the website's files (the "Webserver" app, Explorer/relay "Websites")
+#   member "admin"            additionally settings + members of the website
 #
-# Adressen: Jede Website bekommt ihre EIGENE feste Route (/<name> und /<name>/...),
-# eingehaengt VOR dem Dashboard. Namen, die das Dashboard oder andere Module schon
-# belegen (api, css, js, deployment, dav ...), sind gesperrt.
+# Addresses: each website gets its OWN fixed route (/<name> and /<name>/...),
+# mounted BEFORE the dashboard. Names already taken by the dashboard or other
+# modules (api, css, js, deployment, dav ...) are blocked.
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ import threading
 import time
 from pathlib import Path
 
-from starlette.requests import Request   # auf Modulebene: FastAPI muss die Typangabe aufloesen koennen
+from starlette.requests import Request   # at module level: FastAPI must be able to resolve the type hint
 
 from app import db
 from app.auth import is_super_admin, user_has_permission
@@ -33,15 +33,15 @@ from app.paths import MODULES_DATA_DIR, STORAGE_DIR, WEB_DIR
 from . import webhost
 
 ROOT = WEB_DIR  # storage/web/<name>
-PREFIX = "/web"       # Standard-Namensraum
-NS_PREFIX = {"web": "/web", "docker": "/docker"}   # oeffentliche Adresse je Namensraum
+PREFIX = "/web"       # default namespace
+NS_PREFIX = {"web": "/web", "docker": "/docker"}   # public address per namespace
 
 
 def site_prefix(name: str) -> str:
     return NS_PREFIX.get((get(name) or {}).get("ns") or "web", "/web")
 REG = MODULES_DATA_DIR / "webserver" / "sites.json"
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
-# Immer gesperrt (zusaetzlich zu allen belegten Adressen, siehe reserved())
+# Always blocked (in addition to all taken addresses, see reserved())
 RESERVED = {"api", "dav", "deployment", "deploy", "agent-dist", "client-dist", "modules", "css", "js", "image", "images",
             "socket.io", "ws", "docs", "redoc", "openapi.json", "static", "assets", "favicon.ico", "index.html",
             "login", "logout", "admin", "dashboard", "robots.txt", "health", "metrics", "relay", "websites",
@@ -83,7 +83,7 @@ def folder(name: str) -> Path:
 
 # ------------------------------------------------------------------ gesperrte Namen
 def reserved() -> set[str]:
-    """Alle ersten Pfadteile, die schon belegt sind (Dashboard-Dateien, API, Module ...)."""
+    """All first path parts that are already taken (dashboard files, API, modules ...)."""
     out = set(RESERVED)
     try:
         from app.paths import FRONTEND_DIR
@@ -105,9 +105,9 @@ def reserved() -> set[str]:
 def check_name(name: str) -> str:
     name = (name or "").strip().lower()
     if not NAME_RE.match(name):
-        raise ValueError("Name: 2–63 Zeichen, nur a–z, 0–9 und Bindestrich, nicht mit Bindestrich beginnen")
+        raise ValueError("Name: 2–63 characters, only a–z, 0–9 and hyphen, must not start with a hyphen")
     if name in reserved():
-        raise ValueError(f"„{name}“ ist schon belegt (Dashboard, Schnittstelle oder anderes Modul)")
+        raise ValueError(f"\"{name}\" is already taken (dashboard, interface or another module)")
     return name
 
 
@@ -146,17 +146,17 @@ def visible(user) -> list[dict]:
 # ------------------------------------------------------------------ Aendern
 def create(name: str, title: str, user: dict, kind: str = "static", upstream: dict | None = None,
            public: bool = False, ns: str = "web") -> dict:
-    """kind "static" = Ordner ausliefern, "proxy" = Weiterleitung an upstream (siehe proxy.py).
-    ns = Namensraum der oeffentlichen Adresse: "web" -> /web/<name>, "docker" -> /docker/<name>."""
+    """kind "static" = serve a folder, "proxy" = forward to upstream (see proxy.py).
+    ns = namespace of the public address: "web" -> /web/<name>, "docker" -> /docker/<name>."""
     name = check_name(name)
     if kind not in ("static", "proxy") or (kind == "proxy" and not upstream):
-        raise ValueError("Ungültige Website-Art")
+        raise ValueError("Invalid website type")
     if ns not in ("web", "docker"):
-        raise ValueError("Ungültiger Namensraum")
+        raise ValueError("Invalid namespace")
     with _lock:
         d = _load()
         if name in d:
-            raise ValueError(f"„{name}“ gibt es schon")
+            raise ValueError(f"\"{name}\" already exists")
         d[name] = {"title": (title or name).strip()[:80], "public": bool(public), "listing": True, "members": [],
                    "created": int(time.time()), "created_by": user["username"], "kind": kind, "ns": ns}
         if kind == "proxy":
@@ -169,7 +169,7 @@ def create(name: str, title: str, user: dict, kind: str = "static", upstream: di
     if not any(f.iterdir()):
         (f / "index.html").write_text(
             f"<!doctype html><meta charset=utf-8><title>{d[name]['title']}</title>"
-            f"<h1>{d[name]['title']}</h1><p>Diese Website wird mit dem BYTERA RMM betrieben.</p>\n", encoding="utf-8")
+            f"<h1>{d[name]['title']}</h1><p>This website is powered by BYTERA RMM.</p>\n", encoding="utf-8")
     sync_routes()
     return get(name)
 
@@ -195,7 +195,7 @@ def update(name: str, changes: dict) -> dict:
         if new and new != name:
             check_name(new)
             if new in d:
-                raise ValueError(f"„{new}“ gibt es schon")
+                raise ValueError(f"\"{new}\" already exists")
             d[new] = d.pop(name)
             if (ROOT / name).exists():
                 (ROOT / name).rename(ROOT / new)
@@ -224,7 +224,7 @@ def _handler(name: str):
         s = get(name)
         if not s or not s.get("public"):
             from starlette.responses import PlainTextResponse
-            return PlainTextResponse("Diese Website ist nicht freigegeben.", status_code=404)
+            return PlainTextResponse("This website is not shared.", status_code=404)
         if s.get("kind") == "proxy":
             from . import proxy
             return await proxy.http(request, name, s, path)
@@ -274,7 +274,7 @@ def sync_routes() -> None:
         async def to_slash(_n=name, _p=pref):
             return RedirectResponse(f"{_p}/{_n}/", status_code=308)
         new.append(APIRoute(f"{pref}/{name}", endpoint=to_slash, methods=["GET", "HEAD"], include_in_schema=False))
-        # Alte Adresse rmm.url.de/<name> weiter auf die neue umleiten.
+        # Keep redirecting the old address rmm.url.de/<name> to the new one.
         async def to_ns(_n=name, _p=pref):
             return RedirectResponse(f"{_p}/{_n}/", status_code=308)
         new.append(APIRoute(f"/{name}", endpoint=to_ns, methods=["GET", "HEAD"], include_in_schema=False))

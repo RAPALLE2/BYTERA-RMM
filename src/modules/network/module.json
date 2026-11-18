@@ -1,11 +1,11 @@
 {
   "schema": 1,
   "id": "network",
-  "name": "Netzwerk-Werkzeuge",
+  "name": "Network Tools",
   "version": "1.0.0",
-  "description": "Netzwerk-Scan, Portscan, Speedtest und Port-Weiterleitung. Jede Teilfunktion ist einzeln schaltbar.",
+  "description": "Network scan, port scan, speed test and port forwarding. Each sub-function can be toggled individually.",
   "author": "BYTERA",
-  "category": "Netzwerk",
+  "category": "netzwerk",
   "icon": "🌐",
   "requires": [],
   "pip": [],
@@ -47,9 +47,9 @@
   "apps": [
     {
       "id": "network",
-      "label": "Netzwerk-Scanner",
+      "label": "Network Scanner",
       "icon": "📡",
-      "title": "Netzwerk-Scanner",
+      "title": "Network Scanner",
       "entry": "network.js",
       "export": "renderNetwork",
       "w": 620,

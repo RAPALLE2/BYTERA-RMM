@@ -1,8 +1,8 @@
-# module.py (Modul "cloudflare") - Cloudflare Tunnel
+# module.py (module "cloudflare") - Cloudflare Tunnel
 # --------------------------------------------------
-# startup: cloudflared (feste Version) laden; gibt es schon einen Tunnel, Connector starten.
-# shutdown/disable: Connector stoppen. (Die Tunnel/Routen in Cloudflare bleiben bestehen -
-# "Alles entfernen" in der Modul-App raeumt sie ab.)
+# startup: download cloudflared (fixed version); if a tunnel already exists, start the connector.
+# shutdown/disable: stop the connector. (The tunnels/routes in Cloudflare stay -
+# "Remove everything" in the module app clears them.)
 
 import asyncio
 
@@ -10,13 +10,13 @@ from . import connector, remote, store
 
 
 async def _remote_loop():
-    """Fernzugriffe der Client-App nach Ablauf / Nutzungsende wieder schliessen."""
+    """Close client-app remote accesses again after expiry / end of use."""
     while True:
         await asyncio.sleep(30)
         try:
             await asyncio.to_thread(remote.cleanup)
         except Exception as e:      # noqa: BLE001
-            print(f"[cloudflare] Aufräumen: {e}")
+            print(f"[cloudflare] cleanup: {e}")
 
 
 def on_startup(ctx):
@@ -25,7 +25,7 @@ def on_startup(ctx):
     t = store.load()["tunnels"].get("server") or {}
     if t.get("token_enc") and store.load()["routes"]:
         connector.start(store.dec(t["token_enc"]))
-        ctx.log("Cloudflare-Tunnel wird verbunden")
+        ctx.log("Connecting Cloudflare tunnel")
 
 
 def on_shutdown(ctx):

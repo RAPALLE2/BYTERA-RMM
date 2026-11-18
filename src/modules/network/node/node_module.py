@@ -1,9 +1,9 @@
-# node_module.py (Node-Teil von Modul "network")
+# node_module.py (node part of module "network")
 # ---------------------------------------------
-# LAN-Scan und Portscan IM NETZ DIESER NODE (statt vom RMM-Server aus).
-# network_scan.py ist dieselbe Datei wie im Backend-Modul (nur Standardbibliothek).
+# LAN scan and port scan IN THIS NODE'S NETWORK (instead of from the RMM server).
+# network_scan.py is the same file as in the backend module (standard library only).
 #   "net-scan-start"  {target, speed}            -> {job_id}
-#   "net-scan-status" {job_id}                   -> Job (Fortschritt, Geraete)
+#   "net-scan-status" {job_id}                   -> job (progress, devices)
 #   "net-scan-cancel" {job_id}                   -> {ok}
 #   "net-portscan"    {ip, ports:[..], concurrency, timeout} -> {open:[...]}
 #   "net-preview"     {target}                   -> {label, subnets}
@@ -22,7 +22,7 @@ async def scan_start(ctx, data: dict) -> dict:
 def scan_status(ctx, data: dict) -> dict:
     job = ns.get_scan_job(str(data.get("job_id") or ""))
     if not job:
-        raise RuntimeError("Scan-Job nicht gefunden (evtl. abgelaufen)")
+        raise RuntimeError("Scan job not found (may have expired)")
     return {k: v for k, v in job.items() if k != "cancel"}
 
 

@@ -1,9 +1,9 @@
-"""Netzwerk-Werkzeuge - Einstiegspunkt."""
+"""Network tools - entry point."""
 from . import portforward
 
 
 async def on_startup(ctx):
-    """Offene Port-Weiterleitungen wiederherstellen und die Ablaufschleife starten."""
+    """Restore open port forwards and start the expiry loop."""
     if ctx.feature("portforward"):
-        ctx.spawn("weiterleitung-restore", portforward.restore)
-        ctx.spawn("weiterleitung-ablauf", portforward.expiry_loop)
+        ctx.spawn("forward-restore", portforward.restore)
+        ctx.spawn("forward-expiry", portforward.expiry_loop)

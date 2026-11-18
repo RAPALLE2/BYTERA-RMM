@@ -1,13 +1,13 @@
-# proxy.py (Modul "webserver") - Websites der Art "Weiterleitung" (Reverse-Proxy)
+# proxy.py (module "webserver") - websites of the "forward" type (reverse proxy)
 # ------------------------------------------------------------------------------
-# rmm.url.de/web/<name>/<pfad>  ->  <ziel>/<pfad>   (HTTP und WebSocket)
-# Ziel (site["upstream"]):
-#   {"url": "http://10.0.0.5:8080"}                       feste Adresse
-#   {"provider": "docker", "ref": {...}}                  vom Modul "docker" aufgeloest
-#                                                         (Container-Adresse kann sich aendern)
-# Gesetzte Kopfzeilen: X-Forwarded-For/-Proto/-Host und X-Forwarded-Prefix=/web/<name>
-# (viele Apps bauen damit ihre Links richtig). Location-Antworten des Ziels werden
-# auf /<name>/... umgeschrieben.
+# rmm.url.de/web/<name>/<path>  ->  <target>/<path>   (HTTP and WebSocket)
+# Target (site["upstream"]):
+#   {"url": "http://10.0.0.5:8080"}                       fixed address
+#   {"provider": "docker", "ref": {...}}                  resolved by the "docker" module
+#                                                         (container address can change)
+# Headers set: X-Forwarded-For/-Proto/-Host and X-Forwarded-Prefix=/web/<name>
+# (many apps build their links correctly with these). Location responses of the target are
+# rewritten to /<name>/....
 
 from __future__ import annotations
 
@@ -37,9 +37,9 @@ async def upstream_url(site: dict) -> str:
     if up.get("provider"):
         from app import modules
         if not modules.is_enabled(up["provider"]):
-            raise RuntimeError(f"Modul „{up['provider']}“ ist aus")
+            raise RuntimeError(f"Module \"{up['provider']}\" is off")
         return (await modules.use(up["provider"], "publish").resolve(up.get("ref") or {})).rstrip("/")
-    raise RuntimeError("Kein Ziel eingestellt")
+    raise RuntimeError("No target set")
 
 
 def _prefix_for(name: str) -> str:
@@ -63,7 +63,7 @@ async def http(request: Request, name: str, site: dict, path: str):
     try:
         base = await upstream_url(site)
     except Exception as e:      # noqa: BLE001
-        return PlainTextResponse(f"Ziel nicht erreichbar: {e}", status_code=502)
+        return PlainTextResponse(f"Target not reachable: {e}", status_code=502)
     url = f"{base}/{path}" + (f"?{request.url.query}" if request.url.query else "")
     headers = _fwd_headers(request.headers, request.client.host if request.client else "", request.url.scheme,
                            request.headers.get("host", ""), name)
@@ -71,7 +71,7 @@ async def http(request: Request, name: str, site: dict, path: str):
         req = _http().build_request(request.method, url, headers=headers, content=request.stream())
         resp = await _http().send(req, stream=True)
     except Exception as e:      # noqa: BLE001
-        return PlainTextResponse(f"Ziel nicht erreichbar: {e}", status_code=502)
+        return PlainTextResponse(f"Target not reachable: {e}", status_code=502)
     out_headers = []
     for k, v in resp.headers.multi_items():
         lk = k.lower()

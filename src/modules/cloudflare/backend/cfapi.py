@@ -1,10 +1,10 @@
-# cfapi.py (Modul "cloudflare") - kleiner Cloudflare-API-Client (nur Standardbibliothek)
+# cfapi.py (module "cloudflare") - small Cloudflare API client (standard library only)
 # -------------------------------------------------------------------------------------
-# Anmeldung: API-Token (empfohlen) ODER Global API Key + E-Mail.
-# Benoetigte Token-Rechte: Account > Cloudflare Tunnel: Edit, Account > Access: Apps and
+# Auth: API token (recommended) OR Global API Key + email.
+# Required token permissions: Account > Cloudflare Tunnel: Edit, Account > Access: Apps and
 # Policies: Edit, Account > Access: Organizations, Identity Providers, and Groups: Edit,
-# Account > Zero Trust: Edit (private Netze/WARP), Zone > DNS: Edit, Zone > Zone: Read.
-# RMM_CF_API (Umgebung) ersetzt die API-Adresse - nur fuer Tests.
+# Account > Zero Trust: Edit (private networks/WARP), Zone > DNS: Edit, Zone > Zone: Read.
+# RMM_CF_API (environment) replaces the API address - for tests only.
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ class Cf:
         self.email = auth.get("email") or ""
         self.secret = store.dec(auth.get("token_enc") if self.type == "token" else auth.get("key_enc"))
         if not self.secret:
-            raise CfError("Cloudflare-Zugang ist nicht eingerichtet")
+            raise CfError("Cloudflare access is not set up")
 
     @classmethod
     def from_store(cls, data: dict | None = None) -> "Cf":
@@ -62,7 +62,7 @@ class Cf:
             msg = "; ".join(f"{x.get('message')} ({x.get('code')})" for x in errs) or f"HTTP {e.code}"
             raise CfError(f"Cloudflare: {msg}", e.code, [x.get("code") for x in errs]) from None
         except urllib.error.URLError as e:
-            raise CfError(f"Cloudflare nicht erreichbar: {e.reason}") from None
+            raise CfError(f"Cloudflare not reachable: {e.reason}") from None
         if raw:
             return payload
         if not payload.get("success", True):
@@ -83,7 +83,7 @@ class Cf:
                 return out
             page += 1
 
-    # ----------------------------------------------------------------- Konto
+    # ----------------------------------------------------------------- account
     def verify(self) -> dict:
         if self.type == "token":
             res = self.call("GET", "/user/tokens/verify")
@@ -145,7 +145,7 @@ class Cf:
                 if r.get("content") != target or not r.get("proxied"):
                     self.call("PUT", f"/zones/{zone}/dns_records/{r['id']}", rec)
                 return r["id"]
-            raise CfError(f"Für {name} gibt es schon einen {r.get('type')}-Eintrag – bitte in Cloudflare entfernen")
+            raise CfError(f"There is already a {r.get('type')} record for {name} – please remove it in Cloudflare")
         return self.call("POST", f"/zones/{zone}/dns_records", rec)["id"]
 
     def dns_delete(self, zone: str, rid: str) -> None:
@@ -194,12 +194,12 @@ class Cf:
         else:
             self.call("POST", f"/accounts/{acc}/access/apps/{app_id}/policies", policy)
 
-    # ----------------------------------------------------------------- private Netze (WARP)
+    # ----------------------------------------------------------------- private networks (WARP)
     def teamnet_add(self, acc: str, network: str, tid: str, comment: str) -> str:
         for r in self.all(f"/accounts/{acc}/teamnet/routes", {"network_subset": network, "is_deleted": "false"}):
             if r.get("network") == network:
                 if r.get("tunnel_id") != tid:
-                    raise CfError(f"Das Netz {network} ist bereits einem anderen Tunnel zugeordnet")
+                    raise CfError(f"The network {network} is already assigned to another tunnel")
                 return r["id"]
         return self.call("POST", f"/accounts/{acc}/teamnet/routes",
                          {"network": network, "tunnel_id": tid, "comment": comment})["id"]

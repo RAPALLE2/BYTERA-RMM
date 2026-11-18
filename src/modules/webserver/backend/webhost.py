@@ -1,17 +1,17 @@
-# webhost.py (Modul "webserver") - gemeinsamer Hosting-Kern
+# webhost.py (module "webserver") - shared hosting core
 # ---------------------------------------------------------
-# EINE Stelle fuer alles, was "einen Ordner als Webseite ausliefern" heisst.
-# Benutzt von:
-#   * den Websites des Moduls "webserver"   (rmm.url.de/<website>)
-#   * dem Modul "deployment"                (rmm.url.de/web/deploy) - requires: [webserver]
+# ONE place for everything that means "serve a folder as a website".
+# Used by:
+#   * the websites of the "webserver" module  (rmm.url.de/<website>)
+#   * the "deployment" module                 (rmm.url.de/web/deploy) - requires: [webserver]
 #
-# Ordner-Funktionen (Pfade bleiben IMMER im jeweiligen Wurzelordner):
+# Folder functions (paths ALWAYS stay inside the respective root folder):
 #   resolve(root, sub) listdir(root, sub) write(root, sub, data) mkdir(root, sub)
 #   delete(root, sub) move(root, src, dst) entry(path)
-# Ausliefern:
+# Serving:
 #   serve(root, parts, base, title=..., custom_html=..., listing=True)
-#     -> Datei (Range/Streaming via FileResponse), index.html eines Ordners,
-#        eigene HTML-Startseite oder automatische Dateiliste.
+#     -> file (range/streaming via FileResponse), index.html of a folder,
+#        custom HTML start page or automatic file listing.
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ INDEX_FILES = ("index.html", "index.htm")
 
 # ------------------------------------------------------------------ Pfade
 def resolve(root: Path, sub: list[str] | str) -> Path:
-    """Pfad im Wurzelordner - kann ihn nie verlassen (.., ~, absolute Pfade, NUL)."""
+    """Path inside the root folder - can never leave it (.., ~, absolute paths, NUL)."""
     if isinstance(sub, str):
         sub = sub.replace("\\", "/").split("/")
     base = Path(root).resolve()
@@ -38,13 +38,13 @@ def resolve(root: Path, sub: list[str] | str) -> Path:
         if seg in ("", "."):
             continue
         if seg == ".." or "/" in seg or "\\" in seg or seg.startswith("~") or "\x00" in seg:
-            raise PermissionError("Ungültiger Name")
+            raise PermissionError("Invalid name")
         parts.append(seg)
     p = (base / Path(*parts)).resolve() if parts else base
     try:
         p.relative_to(base)
     except ValueError:
-        raise PermissionError("Pfad außerhalb des Ordners")
+        raise PermissionError("Path outside the folder")
     return p
 
 
@@ -67,7 +67,7 @@ def listdir(root: Path, sub) -> list[dict]:
 def write(root: Path, sub, data: bytes) -> None:
     p = resolve(root, sub)
     if p == Path(root).resolve():
-        raise PermissionError("Ungültiges Ziel")
+        raise PermissionError("Invalid target")
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(data or b"")
 
@@ -79,7 +79,7 @@ def mkdir(root: Path, sub) -> None:
 def delete(root: Path, sub) -> None:
     p = resolve(root, sub)
     if p == Path(root).resolve():
-        raise PermissionError("Der Hauptordner kann nicht gelöscht werden")
+        raise PermissionError("The main folder cannot be deleted")
     if p.is_dir():
         shutil.rmtree(p)
     elif p.exists():
@@ -91,25 +91,25 @@ def delete(root: Path, sub) -> None:
 def move(root: Path, src, dst) -> None:
     a, b = resolve(root, src), resolve(root, dst)
     if a == Path(root).resolve():
-        raise PermissionError("Der Hauptordner kann nicht verschoben werden")
+        raise PermissionError("The main folder cannot be moved")
     if b.exists():
         raise FileExistsError(b.name)
     b.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(a), str(b))
 
 
-# ------------------------------------------------------------------ Ausliefern
+# ------------------------------------------------------------------ serving
 def _listing_page(title: str, base: str, rel: list[str], entries: list[dict]) -> str:
     def url(name: str = "") -> str:
         segs = rel + ([name] if name else [])
         return base + "/" + "/".join(_up.quote(s) for s in segs)
     rows = []
     if rel:
-        rows.append(f'<tr><td><a href="{html.escape(url()[:url().rfind("/")] or base)}">⬆ ..</a></td><td></td></tr>')
+        rows.append(f'<tr><td><a href="{html.escape(url()[:url().rfind("/")] or base)}">↑ ..</a></td><td></td></tr>')
     for e in entries:
         if e["name"].startswith("."):
             continue
-        icon = "📁" if e["is_dir"] else "📄"
+        icon = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" style="vertical-align:-2px"><path d="M3.5 6.5h6l2 2.5h9v11h-17z"/></svg>' if e["is_dir"] else '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" style="vertical-align:-2px"><path d="M6 3.5h8l4 4V20.5H6z"/><path d="M14 3.5v4h4"/></svg>'
         size = "" if e["is_dir"] else f'{e["size"] / 1024:.1f} KB'
         rows.append(f'<tr><td>{icon} <a href="{html.escape(url(e["name"]))}{"/" if e["is_dir"] else ""}">'
                     f'{html.escape(e["name"])}</a></td><td style="text-align:right">{size}</td></tr>')
@@ -126,29 +126,29 @@ def _listing_page(title: str, base: str, rel: list[str], entries: list[dict]) ->
 
 def serve(root: Path, parts: list[str], base: str, title: str = "Website",
           custom_html: str = "", listing: bool = True):
-    """Einen Pfad der Website ausliefern.
+    """Serve a path of the website.
 
-    base        Adresse der Website ohne Schraegstrich am Ende, z.B. "/web/deploy" oder "/meine-seite"
-    custom_html eigene Startseite (nur fuer die Wurzel), hat Vorrang vor index.html
-    listing     automatische Dateiliste fuer Ordner ohne index.html
+    base        address of the website without a trailing slash, e.g. "/web/deploy" or "/my-site"
+    custom_html custom start page (for the root only), takes precedence over index.html
+    listing     automatic file listing for folders without index.html
     """
     try:
         p = resolve(root, parts)
     except PermissionError:
-        return PlainTextResponse("Nicht erlaubt", status_code=403)
+        return PlainTextResponse("Not allowed", status_code=403)
     if any(seg.startswith(".") for seg in parts if seg):
-        return PlainTextResponse("Nicht gefunden", status_code=404)      # versteckte Dateien nie ausliefern
+        return PlainTextResponse("Not found", status_code=404)      # never serve hidden files
     if not parts and custom_html.strip():
         return HTMLResponse(custom_html)
     if not p.exists():
-        return PlainTextResponse("Nicht gefunden", status_code=404)
+        return PlainTextResponse("Not found", status_code=404)
     if p.is_dir():
         for name in INDEX_FILES:
             idx = p / name
             if idx.is_file():
                 return FileResponse(idx, media_type="text/html")
         if not listing:
-            return PlainTextResponse("Nicht gefunden", status_code=404)
+            return PlainTextResponse("Not found", status_code=404)
         try:
             entries = listdir(root, parts)
         except Exception:

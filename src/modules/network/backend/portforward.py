@@ -1,39 +1,38 @@
 """
 portforward.py
 ==============
-Port-Weiterleitung: einen Dienst auf einem Client erreichbar machen,
-ohne VPN, ohne Treiber, ohne offene Ports beim Kunden.
+Port forwarding: make a service on a client reachable, without VPN, without a
+driver, without open ports at the customer.
 
-Warum das der bessere Weg ist
+Why this is the better way
 -----------------------------
-Der eigentliche Wunsch lautet fast immer: "Ich moechte auf den VNC-Server
-von Opas Rechner." Ein ganzes VPN dafuer aufzubauen ist ein grosser Umweg -
-und es scheitert an Voraussetzungen, die man auf einem NAS nicht immer hat
-(Kernelmodul, TUN-Geraet, erweiterte Rechte).
+The actual wish is almost always: "I want to reach the VNC server on grandpa's
+machine." Building a whole VPN for that is a big detour - and it fails on
+prerequisites that a NAS does not always have (kernel module, TUN device,
+elevated permissions).
 
-Hier passiert stattdessen etwas viel Einfacheres: Das Backend oeffnet einen
-Lauschport, und alles, was dort ankommt, wird ueber die BEREITS BESTEHENDE
-Agenten-Verbindung an den Zielrechner weitergereicht.
+Instead, something much simpler happens here: the backend opens a listening
+port, and everything that arrives there is passed to the target machine over
+the ALREADY EXISTING agent connection.
 
-    VNC-Betrachter  ->  NAS:55900  ->  Socket.IO  ->  Agent  ->  127.0.0.1:5900
+    VNC viewer  ->  NAS:55900  ->  Socket.IO  ->  agent  ->  127.0.0.1:5900
 
-Voraussetzungen: keine. Kein WireGuard, kein Treiber, kein offener Port beim
-Kunden - der Agent hat die Verbindung ohnehin von sich aus aufgebaut. Auf
-dem Zielgeraet aendert sich nichts.
+Prerequisites: none. No WireGuard, no driver, no open port at the customer -
+the agent built the connection on its own anyway. Nothing changes on the
+target device.
 
-Es benutzt genau die Ereignisse, die der Agent fuer das VPN schon kennt
-(vpn-open / vpn-data / vpn-close). Der Agent muss dafuer NICHT angefasst
-werden.
+It uses exactly the events the agent already knows for the VPN
+(vpn-open / vpn-data / vpn-close). The agent does NOT need to be touched.
 
-Grenzen, ehrlich benannt
+Limits, honestly named
 ------------------------
-  * TCP, nicht UDP. Fuer VNC, RDP, SSH, SMB und Weboberflaechen reicht das;
-    fuer Spracheuebertragung oder Spiele nicht.
-  * Der Verkehr laeuft ueber das Backend. Bei grossen Dateiuebertragungen
-    ist das langsamer als eine Direktverbindung.
-  * Ein Lauschport ist fuer JEDEN erreichbar, der das Backend erreicht.
-    Deshalb laesst sich die Herkunft einschraenken (siehe 'allow_from') und
-    jede Weiterleitung laeuft nach einer eingestellten Zeit ab.
+  * TCP, not UDP. For VNC, RDP, SSH, SMB and web interfaces that is enough;
+    for voice transmission or games it is not.
+  * The traffic runs through the backend. For large file transfers that is
+    slower than a direct connection.
+  * A listening port is reachable by ANYONE who can reach the backend.
+    Therefore the origin can be restricted (see 'allow_from') and every
+    forward expires after a configured time.
 """
 
 from __future__ import annotations
@@ -47,17 +46,17 @@ import uuid
 from app import db
 from app.errors import Codes, report
 
-# Bereich, aus dem freie Lauschports vergeben werden.
+# Range from which free listening ports are assigned.
 PORT_RANGE_START = 55000
 PORT_RANGE_END = 55999
-# Wie viele Verbindungen eine Weiterleitung gleichzeitig tragen darf.
+# How many connections one forward may carry at once.
 MAX_CONNECTIONS = 64
-# Zeitlimit fuer den Verbindungsaufbau zum Ziel.
+# Time limit for establishing the connection to the target.
 OPEN_TIMEOUT = 15.0
 
 
 class _Conn:
-    """Eine einzelne durchgereichte TCP-Verbindung."""
+    """A single forwarded TCP connection."""
 
     def __init__(self, stream_id: str, reader, writer, forward: "Forward"):
         self.id = stream_id
@@ -71,7 +70,7 @@ class _Conn:
 
 
 class Forward:
-    """Eine laufende Weiterleitung: ein Lauschport -> ein Ziel auf einem Client."""
+    """A running forward: one listening port -> one target on a client."""
 
     def __init__(self, rec: dict):
         self.id = rec["id"]
@@ -106,7 +105,7 @@ class Forward:
             self.server = None
 
     def _allowed(self, peer_ip: str) -> bool:
-        """Darf diese Herkunft die Weiterleitung benutzen?"""
+        """May this origin use the forward?"""
         if not self.allow_from:
             return True
         for entry in self.allow_from.replace(";", ",").split(","):
@@ -121,7 +120,7 @@ class Forward:
                 continue
         return False
 
-    # -- Eine ankommende Verbindung ------------------------------------
+    # -- An incoming connection ----------------------------------------
 
     async def _on_client(self, reader, writer) -> None:
         peer = writer.get_extra_info("peername")
@@ -152,11 +151,11 @@ class Forward:
             ok = await asyncio.wait_for(conn.opened, timeout=OPEN_TIMEOUT)
         except asyncio.TimeoutError:
             report(Codes.SOCK_TIMEOUT, None,
-                   "Agent hat die Weiterleitung nicht bestaetigt",
-                   client=self.client_id, ziel=f"{self.host}:{self.port}")
+                   "agent did not confirm the forward",
+                   client=self.client_id, target=f"{self.host}:{self.port}")
             ok = False
         except Exception as e:
-            report(Codes.SOCK_EMIT, e, "Weiterleitung aufbauen",
+            report(Codes.SOCK_EMIT, e, "establish forward",
                    client=self.client_id)
             ok = False
 
@@ -178,7 +177,7 @@ class Forward:
         except (ConnectionResetError, asyncio.IncompleteReadError):
             pass
         except Exception as e:
-            report(Codes.VPN_PACKET, e, "Weiterleitung lesen")
+            report(Codes.VPN_PACKET, e, "read forward")
         finally:
             try:
                 await send_to_agent(self.client_id, "vpn-close",
@@ -224,7 +223,7 @@ _streams: dict[str, _Conn] = {}
 
 
 def owns_stream(stream_id: str) -> bool:
-    """Gehoert dieser Datenstrom zu einer Weiterleitung (und nicht zum VPN)?"""
+    """Does this data stream belong to a forward (and not to the VPN)?"""
     return stream_id in _streams
 
 
@@ -259,7 +258,7 @@ def on_close(payload: dict) -> None:
 
 
 def free_port() -> int:
-    """Ein freier Lauschport aus dem vorgesehenen Bereich."""
+    """A free listening port from the designated range."""
     import socket as _s
     used = {f.listen_port for f in forwards.values()}
     for port in range(PORT_RANGE_START, PORT_RANGE_END + 1):
@@ -280,10 +279,10 @@ async def create(client_id: str, target_port: int, username: str,
                  minutes: int = 240, target_host: str = "127.0.0.1",
                  listen_port: int = 0, allow_from: str = "",
                  label: str = "") -> dict:
-    """Legt eine Weiterleitung an und startet sie sofort."""
+    """Creates a forward and starts it immediately."""
     client = db.get_client(client_id)
     if not client:
-        raise ValueError("Client unbekannt")
+        raise ValueError("Client unknown")
 
     rec = {
         "id": uuid.uuid4().hex,
@@ -304,7 +303,7 @@ async def create(client_id: str, target_port: int, username: str,
         await forward.start()
     except OSError as e:
         db.close_port_forward(rec["id"])
-        raise RuntimeError(f"Port {rec['listen_port']} nicht verfügbar: {e}")
+        raise RuntimeError(f"Port {rec['listen_port']} not available: {e}")
     forwards[rec["id"]] = forward
     return rec
 
@@ -318,7 +317,7 @@ async def stop(forward_id: str) -> bool:
 
 
 async def restore() -> None:
-    """Nach einem Neustart die noch gueltigen Weiterleitungen wieder oeffnen."""
+    """After a restart, reopen the forwards that are still valid."""
     for rec in db.list_port_forwards(active_only=True):
         if rec.get("expires_at") and rec["expires_at"] < time.time() * 1000:
             db.close_port_forward(rec["id"])
@@ -328,7 +327,7 @@ async def restore() -> None:
             await forward.start()
             forwards[rec["id"]] = forward
         except OSError as e:
-            report(Codes.EXTERNAL, e, "Weiterleitung nicht wiederhergestellt",
+            report(Codes.EXTERNAL, e, "forward not restored",
                    port=rec["listen_port"])
             db.close_port_forward(rec["id"])
 

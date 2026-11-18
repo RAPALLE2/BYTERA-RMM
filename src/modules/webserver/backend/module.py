@@ -1,8 +1,8 @@
-# module.py (Modul "webserver")
+# module.py (module "webserver")
 # -----------------------------
-# Haengt die oeffentlichen Adressen aller Websites ein (rmm.url.de/<name>) und
-# beim Abschalten wieder aus. Der Hosting-Kern (webhost.py) wird auch vom Modul
-# "deployment" benutzt (requires: [webserver]).
+# Mounts the public addresses of all websites (rmm.url.de/<name>) and unmounts
+# them again when disabled. The hosting core (webhost.py) is also used by the
+# "deployment" module (requires: [webserver]).
 
 from . import sites
 
@@ -12,7 +12,7 @@ def on_startup(ctx):
     sites.sync_routes()
     n = len(sites.all_sites())
     if n:
-        ctx.log(f"{n} Website(s) eingehängt")
+        ctx.log(f"{n} website(s) mounted")
 
 
 def on_enable(ctx):

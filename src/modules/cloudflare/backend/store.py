@@ -1,14 +1,14 @@
-# store.py (Modul "cloudflare") - Einstellungen, Tunnel und Routen
+# store.py (module "cloudflare") - settings, tunnels and routes
 # ----------------------------------------------------------------
 # data/modules/cloudflare/config.json:
 #   auth      {type: "token"|"key", email, token_enc | key_enc}
-#   account   {id, name}, team_domain ("<team>.cloudflareaccess.com"), public_base ("https://rmm.firma.de")
+#   account   {id, name}, team_domain ("<team>.cloudflareaccess.com"), public_base ("https://rmm.company.com")
 #   tunnels   {server: {id, name, token_enc}, nodes: {<client_id>: {id, name, token_enc, deployed}}}
-#   routes    [Route, ...]  (siehe services.py / sync.py)
+#   routes    [Route, ...]  (see services.py / sync.py)
 #   oidc      {key_enc (RSA-PEM), kid}
-#   otp_idp   ID des Cloudflare-"One-time PIN"-Logins
-# Geheimnisse (API-Token/-Key, Tunnel-Token, OIDC-Schluessel, Client-Secrets) liegen
-# verschluesselt (Fernet, Schluessel aus JWT_SECRET) - wie beim Modul Proxmox.
+#   otp_idp   ID of the Cloudflare "one-time PIN" login
+# Secrets (API token/key, tunnel token, OIDC key, client secrets) are stored
+# encrypted (Fernet, key from JWT_SECRET) - as in the Proxmox module.
 
 from __future__ import annotations
 
@@ -90,7 +90,7 @@ def route(data: dict, rid: str) -> dict | None:
 
 
 def public_view(data: dict) -> dict:
-    """Fuer die Oberflaeche: ohne Geheimnisse."""
+    """For the UI: without secrets."""
     a = data.get("auth") or {}
     return {"auth": {"type": a.get("type", ""), "email": a.get("email", ""),
                      "configured": bool(a.get("token_enc") or a.get("key_enc"))},

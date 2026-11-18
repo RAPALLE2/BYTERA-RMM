@@ -8,6 +8,7 @@
 // Reader (Bytes live gezaehlt), Upload via wiederholten POSTs mit
 // unkomprimierbaren Zufallsdaten. Endpunkte: backend/routers/speedtest_routes.py
 
+import { icon } from "./icons.js";
 import { registerCleanup } from "/js/app/windowmanager.js";
 // t() unter Alias: "t" ist hier bereits als lokaler Variablenname belegt.
 import { t as tr } from "/js/app/i18n.js";
@@ -62,7 +63,7 @@ export function renderSpeedtest(body, win) {
       <!-- Ergebnis-Kacheln -->
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;width:100%;max-width:520px">
         ${[["ping", "Ping", "ms"], ["jitter", "Jitter", "ms"],
-           ["down", "⬇️ Download", "Mbit/s"], ["up", "⬆️ Upload", "Mbit/s"]].map(([id, label, unit]) => `
+           ["down", `${icon("download", 13)} Download`, "Mbit/s"], ["up", `${icon("upload", 13)} Upload`, "Mbit/s"]].map(([id, label, unit]) => `
           <div style="background:var(--panel-2);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center">
             <div style="color:var(--subtext);font-size:11.5px">${label}</div>
             <div id="st-r-${id}" style="font-size:20px;font-weight:700;margin-top:2px">–</div>
@@ -245,7 +246,7 @@ export function renderSpeedtest(body, win) {
     ping: tr("u_latenz_wird_gemessen"),
     download: tr("u_download_wird_gemessen"),
     upload: tr("u_upload_wird_gemessen"),
-    done: "Fertig ✓",
+    done: "Done",
   };
 
   // Naechstgelegene M-Lab-Server holen (liefert wss-URLs fuer download/upload)
@@ -416,12 +417,12 @@ export function renderSpeedtest(body, win) {
     try {
       if (isNdt) {
         await runNdt7();
-        if (!closed) phaseEl.textContent = "Fertig ✓";
+        if (!closed) phaseEl.textContent = "Done";
       } else {
         await measurePing();
         await measureDownload();
         await measureUpload();
-        phaseEl.textContent = "Fertig ✓";
+        phaseEl.textContent = "Done";
       }
     } catch (e) {
       phaseEl.textContent = `Messung fehlgeschlagen: ${e.message || tr("u_verbindung_prufen")}`;

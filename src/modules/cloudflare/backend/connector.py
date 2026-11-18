@@ -1,11 +1,11 @@
-# connector.py (Modul "cloudflare") - cloudflared fuer den Tunnel des RMM-Servers
+# connector.py (module "cloudflare") - cloudflared for the RMM server's tunnel
 # -------------------------------------------------------------------------------
-# Beim Aktivieren des Moduls wird cloudflared (feste Version) nach
-# data/modules/cloudflare/bin geladen - Docker UND nativ (Linux amd64/arm64, Windows).
-# Laeuft als Kindprozess des Backends ("tunnel run --token ..."), wird bei Absturz neu
-# gestartet (Wartezeit waechst bis 60 s). Das Token geht per Umgebung (TUNNEL_TOKEN),
-# nicht ueber die Kommandozeile (waere sonst in "ps" sichtbar).
-# Die Nodes betreiben ihren eigenen Connector (Node-Teil des Moduls, Docker-Image).
+# When the module is enabled, cloudflared (fixed version) is downloaded to
+# data/modules/cloudflare/bin - Docker AND native (Linux amd64/arm64, Windows).
+# Runs as a child process of the backend ("tunnel run --token ..."), is restarted on a
+# crash (wait time grows up to 60 s). The token is passed via the environment (TUNNEL_TOKEN),
+# not via the command line (would otherwise be visible in "ps").
+# The nodes run their own connector (node part of the module, Docker image).
 
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def installed_version() -> str:
 
 
 def ensure_binary() -> None:
-    """cloudflared laden, falls die feste Version fehlt (beim Aktivieren des Moduls)."""
+    """Download cloudflared if the fixed version is missing (when the module is enabled)."""
     b = binary()
     marker = b.with_suffix(".version")
     if b.exists() and marker.exists() and marker.read_text().strip() == VERSION:
@@ -101,7 +101,7 @@ def start(token: str) -> None:
         changed = token != _state["token"]
         _state.update(want=True, token=token, error="")
         th = _state.get("thread")
-        if th and th.is_alive():               # Waechter laeuft schon (auch waehrend der Neustart-Pause)
+        if th and th.is_alive():               # Watcher already running (also during the restart pause)
             if changed and _state["proc"] and _state["proc"].poll() is None:
                 _state["proc"].terminate()     # neues Token -> mit neuem Token neu starten
             return

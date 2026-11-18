@@ -1,16 +1,16 @@
 // apps/portscan.js
 // ----------------
-// Eigenständiger Portscanner. Kann aus dem Startmenü geöffnet werden (dann gibt
-// man die IP selbst ein) oder aus dem Netzwerk-Scanner (dann ist die IP schon
-// vorausgefüllt, siehe win.props.ip).
+// Standalone port scanner. Can be opened from the start menu (then you enter
+// the IP yourself) or from the network scanner (then the IP is already
+// prefilled, see win.props.ip).
 //
-// Scan-Modi:
-//   - standard: die gängigen Ports (schnell)
-//   - all:      alle Ports 1-65535 (dauert länger)
-//   - custom:   frei angegebene Ports/Bereiche, z.B. "22,80,8000-8100"
+// Scan modes:
+//   - standard: the common ports (fast)
+//   - all:      all ports 1-65535 (takes longer)
+//   - custom:   freely given ports/ranges, e.g. "22,80,8000-8100"
 //
-// Der Scan laeuft als BACKEND-JOB (app/bgjobs.py) - Fenster schliessen oder
-// Seite neu laden bricht ihn nicht ab; beim Wiederoeffnen wird er angezeigt.
+// The scan runs as a BACKEND JOB (app/bgjobs.py) - closing the window or
+// reloading the page does not abort it; on reopening it is shown.
 
 import { nodeHint } from "/js/app/nodechoice.js";
 import { api } from "/js/app/api.js";
@@ -25,13 +25,14 @@ function fillVia(sel, preset = "") {
     for (const n of r.nodes || []) {
       const o = document.createElement("option");
       o.value = n.id; o.disabled = !n.active;
-      o.textContent = `🖧 Node ${n.name}${nodeHint(n)}`;
+      o.textContent = `Node ${n.name}${nodeHint(n)}`;
       sel.appendChild(o);
     }
     if (preset) sel.value = preset;
   }).catch(() => {});
 }
 import { t } from "/js/app/i18n.js";
+import { icon } from "./icons.js";
 
 export function renderPortscan(body, win) {
   const presetIp = win.props?.ip || "";
@@ -47,9 +48,9 @@ export function renderPortscan(body, win) {
           <option value="all">${t("ps_mode_all")}</option>
           <option value="custom">${t("ps_mode_custom")}</option>
         </select>
-        <select id="ps-via-${win.key}" title="Von wo aus scannen?"><option value="">🖥 Vom Backend</option></select>
-        <button class="btn-primary" id="ps-scan-${win.key}">🔍 ${t("ps_scan")}</button>
-        <button class="btn" id="ps-stop-${win.key}" style="display:none">✋ ${t("cancel")}</button>
+        <select id="ps-via-${win.key}" title="Where to scan from?"><option value="">From the backend</option></select>
+        <button class="btn-primary" id="ps-scan-${win.key}">${icon("search", 14)} ${t("ps_scan")}</button>
+        <button class="btn" id="ps-stop-${win.key}" style="display:none">${icon("stop", 14)} ${t("cancel")}</button>
       </div>
       <div id="ps-custom-row-${win.key}" class="explorer-toolbar" style="display:none">
         <input type="text" id="ps-ports-${win.key}" placeholder="${t("ps_custom_placeholder")}"
@@ -151,8 +152,8 @@ export function renderPortscan(body, win) {
   ipInput.addEventListener("keydown", (e) => { if (e.key === "Enter") scan(); });
   portsInput.addEventListener("keydown", (e) => { if (e.key === "Enter") scan(); });
 
-  // Wenn die IP schon vorausgefüllt ist (aus dem Netzwerk-Scanner), direkt scannen
-  // (laeuft fuer diese IP schon ein Scan, haengt sich das Fenster nur dran).
+  // If the IP is already prefilled (from the network scanner), scan right away
+  // (if a scan is already running for this IP, the window just attaches to it).
   if (presetIp) setTimeout(scan, 50);
   else {
     watch(undefined);          // ohne IP: zuletzt gelaufenen Portscan zeigen (z.B. nach Neuladen)

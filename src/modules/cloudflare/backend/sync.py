@@ -1,11 +1,11 @@
-# sync.py (Modul "cloudflare") - Routen nach Cloudflare uebertragen
+# sync.py (module "cloudflare") - push routes to Cloudflare
 # -----------------------------------------------------------------
-# apply() bringt Cloudflare auf den Stand der Routen (idempotent, jederzeit wiederholbar):
-#   Tunnel anlegen (RMM-Server + je Node) -> Weiterleitungen zu Agents (Modul network,
-#   dauerhaft) -> Ingress je Tunnel (aus den ECHTEN Ports, services.origin) -> DNS-CNAMEs
-#   -> private Netze (WARP) -> Access: Login (RMM-Konto per OIDC, Einmal-PIN per E-Mail)
-#   -> Node-Connector verteilen -> eigenen Connector starten.
-# remove_route() raeumt alles einer Route ab (DNS, Access, Login, Netz, Weiterleitung).
+# apply() brings Cloudflare up to the state of the routes (idempotent, repeatable any time):
+#   create tunnels (RMM server + per node) -> forwards to agents (network module,
+#   permanent) -> ingress per tunnel (from the REAL ports, services.origin) -> DNS CNAMEs
+#   -> private networks (WARP) -> Access: login (RMM account via OIDC, one-time PIN by email)
+#   -> distribute node connector -> start own connector.
+# remove_route() clears everything of a route (DNS, Access, login, network, forward).
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ def _run(coro, timeout=120):
     """Async-Funktion des Backends aus diesem Thread aufrufen."""
     loop = modules._loop
     if loop is None:
-        raise RuntimeError("Backend-Ereignisschleife nicht verfügbar")
+        raise RuntimeError("Backend event loop not available")
     return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout)
 
 
@@ -43,37 +43,37 @@ def validate(r: dict, data: dict) -> None:
     proto = services.proto_of(r)
     mode = r.get("mode") or ("http" if proto == "http" else services.MODES[proto][0])
     if mode not in services.MODES[proto]:
-        raise ValueError(f"Zugangsart „{mode}“ passt nicht zu {proto.upper()} "
-                         f"(möglich: {', '.join(services.MODES[proto])})")
+        raise ValueError(f"Access mode \"{mode}\" does not fit {proto.upper()} "
+                         f"(possible: {', '.join(services.MODES[proto])})")
     r["mode"] = mode
     if mode != "warp":
         h = (r.get("hostname") or "").strip().lower().rstrip(".")
         if not HOST_RE.match(h):
-            raise ValueError("Bitte eine gültige Adresse (z. B. rmm.firma.de) angeben")
+            raise ValueError("Please give a valid address (e.g. rmm.company.com)")
         zone = next((z for z in data.get("zones") or [] if h == z["name"] or h.endswith("." + z["name"])), None)
         if not zone:
-            raise ValueError("Die Adresse gehört zu keiner Zone dieses Cloudflare-Kontos")
+            raise ValueError("The address belongs to no zone of this Cloudflare account")
         r["hostname"], r["zone_id"], r["zone"] = h, zone["id"], zone["name"]
         for o in data["routes"]:
             if o["id"] != r["id"] and o.get("mode") != "warp" and o.get("hostname") == h:
-                raise ValueError(f"{h} wird schon von „{o['name']}“ benutzt")
+                raise ValueError(f"{h} is already used by \"{o['name']}\"")
     else:
         r["hostname"] = ""
     acc = r.get("access") or "none"
     if acc not in ("none", "rmm", "otp", "service"):
-        raise ValueError("Schutz: none, rmm oder otp")
+        raise ValueError("Protection: none, rmm or otp")
     if mode == "browser" and acc == "none":
-        raise ValueError("SSH/VNC im Browser geht nur mit Cloudflare Access – bitte einen Login wählen")
+        raise ValueError("SSH/VNC in the browser only works with Cloudflare Access – please choose a login")
     if mode == "warp" and acc != "none":
-        acc = "none"            # Zugriff regeln dort die WARP-/Zero-Trust-Geraeteregeln
+        acc = "none"            # access is governed there by the WARP/Zero Trust device rules
     if acc == "otp" and not [e for e in r.get("emails") or [] if "@" in e]:
-        raise ValueError("Für den Einmal-PIN bitte mindestens eine E-Mail-Adresse angeben")
+        raise ValueError("For the one-time PIN please give at least one email address")
     r["access"] = acc
     if r["kind"] == "agent":
         if not (r.get("ref") or {}).get("client_id"):
             raise ValueError("Agent fehlt")
         if r.get("endpoint") == "node" and not r.get("node_id"):
-            raise ValueError("Bitte die Node wählen, auf der der Tunnel enden soll")
+            raise ValueError("Please choose the node where the tunnel should end")
 
 
 # ===================================================================== Tunnel
@@ -106,7 +106,7 @@ def ensure_node_tunnel(cf: Cf, data: dict, cid: str) -> dict:
         try:
             if not cf.tunnel_get(acc, t["id"]).get("deleted_at"):
                 return t
-        except CfError as e:            # in Cloudflare geloescht -> neu anlegen
+        except CfError as e:            # deleted in Cloudflare -> re-create
             if e.status != 404:
                 raise
     name = tunnel_name("node", cid[:12])
@@ -122,9 +122,9 @@ def ensure_node_tunnel(cf: Cf, data: dict, cid: str) -> dict:
 
 
 def _ensure_forward(r: dict, username: str) -> int:
-    """endpoint server: dauerhafte Weiterleitung RMM -> Agent (Modul network)."""
+    """endpoint server: permanent forward RMM -> agent (network module)."""
     if not modules.is_enabled("network"):
-        raise ValueError("Für „Tunnel endet am RMM-Server“ wird das Modul „Netzwerk“ gebraucht")
+        raise ValueError("\"Tunnel ends at the RMM server\" needs the Network module")
     pf = modules.use("network", "portforward")
     st = r.setdefault("state", {})
     host, port = services.agent_target(r)
@@ -162,8 +162,8 @@ def _access(cf: Cf, data: dict, r: dict) -> None:
                 st.pop(key, None)
         return
     if r["access"] == "service":
-        # Fernzugriff der Client-App: eigener Service-Token je Route (nur wer im RMM das Recht auf
-        # diesen Agenten hat, bekommt ihn) - keine Browser-Anmeldung noetig
+        # client-app remote access: own service token per route (only someone who has the
+        # permission on this agent in the RMM gets it) - no browser sign-in needed
         for key in ("idp_id",):
             if st.get(key):
                 try:
@@ -184,8 +184,8 @@ def _access(cf: Cf, data: dict, r: dict) -> None:
     if r["access"] == "rmm":
         base = _base(data)
         if not base.startswith("https://"):
-            raise ValueError("Für den RMM-Login wird die öffentliche RMM-Adresse (https://…) gebraucht – "
-                             "Tab „Verbindung“ (am besten eine Route „RMM-Dashboard“ ohne Schutz oder mit Schutz anlegen)")
+            raise ValueError("The RMM login needs the public RMM address (https://…) – "
+                             "tab \"Connection\" (best create an \"RMM dashboard\" route, with or without protection)")
         o = r.setdefault("oidc", {})
         if not o.get("client_id"):
             o["client_id"] = f"rmm-{r['id']}"
@@ -205,7 +205,7 @@ def _access(cf: Cf, data: dict, r: dict) -> None:
                 cf.idp_delete(acc, st.pop("idp_id"))
             except CfError:
                 pass
-        if not data.get("_otp_ok"):              # je Abgleich einmal pruefen (kann in Cloudflare geloescht sein)
+        if not data.get("_otp_ok"):              # check once per sync (may have been deleted in Cloudflare)
             data["otp_idp"], data["_otp_ok"] = cf.otp_idp(acc), True
         idp = data["otp_idp"]
         include = [{"email": {"email": e.strip()}} for e in r.get("emails") or [] if "@" in e]
@@ -217,8 +217,8 @@ def _access(cf: Cf, data: dict, r: dict) -> None:
 
 
 def _oidc_bypass(cf: Cf, data: dict) -> None:
-    """Die Login-Adressen /cf-oidc/... duerfen nicht selbst hinter Access liegen (Cloudflare holt
-    dort das Token) - liegt die RMM-Adresse hinter einem Schutz, bekommt /cf-oidc eine Ausnahme."""
+    """The login addresses /cf-oidc/... must not themselves sit behind Access (Cloudflare fetches
+    the token there) - if the RMM address is behind protection, /cf-oidc gets an exception."""
     acc = data["account"]["id"]
     host = _base(data).split("://", 1)[-1].split("/", 1)[0]
     need = any(r["access"] == "rmm" for r in data["routes"]) and any(
@@ -226,7 +226,7 @@ def _oidc_bypass(cf: Cf, data: dict) -> None:
     cur = data.get("oidc_bypass_app", "")
     if need:
         data["oidc_bypass_app"] = cf.app_upsert(acc, cur, {
-            "name": "RMM: Login-Ausnahme (/cf-oidc)", "domain": f"{host}/cf-oidc", "type": "self_hosted",
+            "name": "RMM: login exception (/cf-oidc)", "domain": f"{host}/cf-oidc", "type": "self_hosted",
             "session_duration": "24h", "app_launcher_visible": False})
         cf.app_policy_set(acc, data["oidc_bypass_app"],
                           {"name": "RMM", "decision": "bypass", "include": [{"everyone": {}}], "precedence": 1})
@@ -243,7 +243,7 @@ def apply(username: str = "") -> dict:
     with _sync_lock:
         data = store.load()
         if not (data.get("account") or {}).get("id"):
-            raise ValueError("Zuerst den Cloudflare-Zugang einrichten und ein Konto wählen")
+            raise ValueError("First set up the Cloudflare access and choose an account")
         cf = Cf.from_store(data)
         acc = data["account"]["id"]
         report = {"routes": {}, "errors": []}
@@ -276,7 +276,7 @@ def apply(username: str = "") -> dict:
                     if o["service"].startswith("https://"):
                         rule["originRequest"] = {"noTLSVerify": True}
                     ingress[key].append(rule)
-                    if o.get("path"):                 # Website-Adresse: Rest der Adresse -> 404 statt Dashboard
+                    if o.get("path"):                 # website address: rest of the address -> 404 instead of dashboard
                         ingress[key].append({"hostname": r["hostname"], "service": "http_status:404"})
                     st["dns_id"] = cf.dns_upsert(r["zone_id"], r["hostname"], tid)
                     if st.get("teamnet_id"):
@@ -294,8 +294,8 @@ def apply(username: str = "") -> dict:
         try:
             _oidc_bypass(cf, data)
         except (ValueError, CfError) as e:
-            report["errors"].append(f"Login-Ausnahme: {e}")
-        # Ingress je Tunnel (Pfad-Regeln vor allgemeinen Regeln derselben Adresse) + Auffangregel
+            report["errors"].append(f"Login exception: {e}")
+        # ingress per tunnel (path rules before general rules of the same address) + catch-all rule
         for key, rules in ingress.items():
             rules.sort(key=lambda x: (x.get("hostname", ""), 0 if x.get("path") else 1))
             try:
@@ -322,7 +322,7 @@ def apply(username: str = "") -> dict:
 
 async def _deploy_node(cid: str, token: str):
     from app.node_manager import NodesAPI
-    # Diese Node wurde im Cloudflare-Modul ausdruecklich fuer den Tunnel gewaehlt -> aktivieren
+    # This node was explicitly chosen for the tunnel in the Cloudflare module -> activate
     return await NodesAPI("cloudflare").deploy(cid, {"tunnel_token": token}, activate=True)
 
 
@@ -333,7 +333,7 @@ def remove_route(rid: str) -> None:
         if not r:
             return
         st = dict(r.get("state") or {})
-        # Ein privates Netz (IP/32) teilen sich ggf. mehrere WARP-Routen derselben Adresse
+        # A private network (IP/32) may be shared by several WARP routes of the same address
         if st.get("teamnet_id") and any((o.get("state") or {}).get("teamnet_id") == st["teamnet_id"]
                                         for o in data["routes"] if o["id"] != rid):
             st.pop("teamnet_id")
@@ -372,7 +372,7 @@ def remove_node_tunnel(cid: str) -> None:
     with _sync_lock:
         data = store.load()
         if any(services.tunnel_key(r) == f"node:{cid}" for r in data["routes"]):
-            raise ValueError("Es gibt noch Routen über diese Node")
+            raise ValueError("There are still routes over this node")
         t = data["tunnels"]["nodes"].pop(cid, None)
         store.save(data)
     if t:

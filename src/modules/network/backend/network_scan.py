@@ -1,18 +1,17 @@
 """
 network_scan.py
 ----------------
-Durchsucht das lokale Netzwerk (das /24-Subnetz, in dem der Backend-Rechner
-selbst steckt) nach erreichbaren Geräten - das Gegenstück zu "Network Center"
-in Synology DSM.
+Scans the local network (the /24 subnet the backend machine itself is in) for
+reachable devices - the counterpart to "Network Center" in Synology DSM.
 
-Vorgehen:
-1. Eigene lokale IP herausfinden -> daraus das Subnetz ableiten (z.B. 192.168.1.x)
-2. Alle 254 möglichen Adressen parallel anpingen ("Ping-Sweep")
-3. Für die Antworten die MAC-Adresse aus der System-ARP-Tabelle auslesen
-4. Für die Antworten den Hostnamen per Reverse-DNS versuchen aufzulösen
+Approach:
+1. Find the own local IP -> derive the subnet from it (e.g. 192.168.1.x)
+2. Ping all 254 possible addresses in parallel ("ping sweep")
+3. For the replies, read the MAC address from the system ARP table
+4. For the replies, try to resolve the hostname via reverse DNS
 
-Alles läuft asynchron (asyncio), damit 254 Pings nicht 254x nacheinander
-Zeit kosten, sondern weitgehend gleichzeitig ablaufen.
+Everything runs asynchronously (asyncio) so that 254 pings do not cost time
+254 times in a row, but run largely in parallel.
 """
 
 import asyncio
@@ -27,11 +26,11 @@ IS_WINDOWS = platform.system() == "Windows"
 
 def get_local_subnet() -> tuple[str, str]:
     """
-    Ermittelt die eigene lokale IP-Adresse und daraus das /24-Subnetz-Präfix.
-    Trick: wir "verbinden" testweise einen UDP-Socket zu einer öffentlichen
-    Adresse (ohne wirklich Daten zu senden!) - das Betriebssystem wählt dafür
-    automatisch die "richtige" lokale Netzwerkkarte aus.
-    Rückgabe: (Subnetz-Präfix z.B. "192.168.1.", eigene IP z.B. "192.168.1.42")
+    Determines the own local IP address and the /24 subnet prefix from it.
+    Trick: we "connect" a UDP socket to a public address as a test (without
+    actually sending data!) - the operating system then automatically picks the
+    "right" local network interface.
+    Returns: (subnet prefix e.g. "192.168.1.", own IP e.g. "192.168.1.42")
     """
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -48,7 +47,7 @@ def get_local_subnet() -> tuple[str, str]:
 
 
 async def _ping_host(ip: str) -> bool:
-    """Pingt eine einzelne IP-Adresse an (plattformabhängiger Befehl)."""
+    """Pings a single IP address (platform-dependent command)."""
     if IS_WINDOWS:
         cmd = ["ping", "-n", "1", "-w", "300", ip]
     else:
@@ -68,7 +67,7 @@ async def _ping_host(ip: str) -> bool:
 
 
 async def _read_arp_table() -> dict[str, str]:
-    """Liest die System-ARP-Tabelle aus, um zu Pings passende MAC-Adressen zu finden."""
+    """Reads the system ARP table to find MAC addresses matching the pings."""
     mapping: dict[str, str] = {}
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -85,16 +84,16 @@ async def _read_arp_table() -> dict[str, str]:
         for match in pattern.finditer(text):
             mapping[match.group(1)] = match.group(2).upper()
     except Exception:
-        pass  # arp nicht verfügbar -> einfach keine MAC-Adressen anzeigen
+        pass  # arp not available -> simply show no MAC addresses
     return mapping
 
 
 async def _reverse_dns(ip: str) -> str | None:
-    """Versucht, zu einer IP-Adresse einen Hostnamen zu finden (kann fehlschlagen, ist ok)."""
+    """Tries to find a hostname for an IP address (may fail, that is ok)."""
     loop = asyncio.get_event_loop()
     try:
-        # gethostbyaddr ist eine blockierende Funktion -> in einem Thread ausführen,
-        # damit sie den restlichen asyncio-Code nicht aufhält.
+        # gethostbyaddr is a blocking function -> run it in a thread so it does
+        # not hold up the rest of the asyncio code.
         hostname, _, _ = await loop.run_in_executor(None, socket.gethostbyaddr, ip)
         return hostname
     except Exception:
@@ -102,37 +101,37 @@ async def _reverse_dns(ip: str) -> str | None:
 
 
 # ------------------------------------------------------------------
-# Ziel-Angabe parsen: /24, /16 (z.B. "10.10") oder CIDR
+# Parse the target spec: /24, /16 (e.g. "10.10") or CIDR
 # ------------------------------------------------------------------
 def parse_scan_target(spec: str | None) -> tuple[list[str], str]:
     """
-    Wandelt eine Ziel-Angabe in eine Liste von /24-Präfixen um.
-    Unterstützt:
-      "192.168.1." / "192.168.1"   -> ein /24            (254 Adressen)
-      "10.10." / "10.10"           -> 256 /24-Netze      (65.024 Adressen)
-      "10."  / "10"                -> 65.536 /24-Netze   (bewusst erlaubt,
-                                      dauert entsprechend lang)
+    Converts a target spec into a list of /24 prefixes.
+    Supports:
+      "192.168.1." / "192.168.1"   -> one /24           (254 addresses)
+      "10.10." / "10.10"           -> 256 /24 networks   (65,024 addresses)
+      "10."  / "10"                -> 65,536 /24 networks (deliberately allowed,
+                                      takes correspondingly long)
       "10.10.0.0/16", "192.168.1.0/24", "172.16.0.0/22"  -> CIDR
-      leer                          -> eigenes /24
-    Rückgabe: (Liste der /24-Präfixe wie "10.10.7.", Beschriftung)
+      empty                         -> own /24
+    Returns: (list of /24 prefixes like "10.10.7.", label)
     """
     spec = (spec or "").strip()
     if not spec:
         prefix, _ = get_local_subnet()
         return [prefix], prefix + "x"
 
-    # --- CIDR-Schreibweise ---
+    # --- CIDR notation ---
     if "/" in spec:
         import ipaddress
         try:
             net = ipaddress.ip_network(spec, strict=False)
         except ValueError as e:
-            raise ValueError(f"Ungültige CIDR-Angabe: {e}")
+            raise ValueError(f"Invalid CIDR spec: {e}")
         if net.version != 4:
-            raise ValueError("Nur IPv4 wird unterstützt")
+            raise ValueError("Only IPv4 is supported")
         if net.prefixlen < 8:
-            raise ValueError("Netz zu groß (mindestens /8)")
-        # Alle enthaltenen /24-Blöcke sammeln
+            raise ValueError("Network too large (at least /8)")
+        # Collect all contained /24 blocks
         prefixes = []
         if net.prefixlen >= 24:
             first = net.network_address
@@ -142,31 +141,31 @@ def parse_scan_target(spec: str | None) -> tuple[list[str], str]:
                 prefixes.append(".".join(str(sub.network_address).split(".")[:3]) + ".")
         return prefixes, str(net)
 
-    # --- Punkt-Schreibweise: Anzahl der Oktette entscheidet ---
+    # --- Dotted notation: the number of octets decides ---
     parts = [p for p in spec.split(".") if p != ""]
     for p in parts:
         if not p.isdigit() or not (0 <= int(p) <= 255):
-            raise ValueError(f"Ungültiges Oktett: {p}")
+            raise ValueError(f"Invalid octet: {p}")
     if len(parts) == 3:
         pref = ".".join(parts) + "."
         return [pref], pref + "x"
     if len(parts) == 4:
         pref = ".".join(parts[:3]) + "."
         return [pref], pref + "x"
-    if len(parts) == 2:                       # z.B. "10.10" -> 10.10.0.x … 10.10.255.x
+    if len(parts) == 2:                       # e.g. "10.10" -> 10.10.0.x … 10.10.255.x
         return [f"{parts[0]}.{parts[1]}.{i}." for i in range(256)], f"{parts[0]}.{parts[1]}.x.x"
-    if len(parts) == 1:                       # z.B. "10" -> /8
+    if len(parts) == 1:                       # e.g. "10" -> /8
         return [f"{parts[0]}.{i}.{j}." for i in range(256) for j in range(256)], f"{parts[0]}.x.x.x"
-    raise ValueError("Ziel bitte als 10.10, 192.168.1. oder 10.10.0.0/16 angeben")
+    raise ValueError("Please give the target as 10.10, 192.168.1. or 10.10.0.0/16")
 
 
 async def scan_local_network(subnet_prefix: str | None = None) -> list[dict]:
     """
-    Führt den kompletten Scan durch und gibt eine Liste von Geräten zurück:
+    Runs the complete scan and returns a list of devices:
     [{"ip": ..., "mac": ..., "hostname": ..., "alive": True}, ...]
 
-    subnet_prefix: optionales Subnetz wie "192.168.5." - wenn nicht angegeben,
-    wird das eigene Subnetz automatisch ermittelt.
+    subnet_prefix: optional subnet like "192.168.5." - if not given, the own
+    subnet is determined automatically.
     """
     if subnet_prefix:
         prefix = subnet_prefix if subnet_prefix.endswith(".") else subnet_prefix + "."
@@ -176,7 +175,7 @@ async def scan_local_network(subnet_prefix: str | None = None) -> list[dict]:
 
     candidate_ips = [f"{prefix}{i}" for i in range(1, 255)]
 
-    # Maximal 32 Pings gleichzeitig, um das Netzwerk nicht zu überlasten
+    # At most 32 pings at once, so as not to overload the network
     semaphore = asyncio.Semaphore(32)
     alive_ips: set[str] = set()
 
@@ -187,7 +186,7 @@ async def scan_local_network(subnet_prefix: str | None = None) -> list[dict]:
 
     await asyncio.gather(*(check_one(ip) for ip in candidate_ips))
     if own_ip:
-        alive_ips.add(own_ip)  # der eigene Rechner ist ja auch "im Netz"
+        alive_ips.add(own_ip)  # the own machine is "in the network" too
 
     arp_table = await _read_arp_table()
 
@@ -197,39 +196,38 @@ async def scan_local_network(subnet_prefix: str | None = None) -> list[dict]:
 
     devices = await asyncio.gather(*(build_device(ip) for ip in alive_ips))
 
-    # Nach IP-Adresse sortieren (numerisch, nicht alphabetisch, sonst kommt .10 vor .2)
+    # Sort by IP address (numerically, not alphabetically, otherwise .10 comes before .2)
     devices.sort(key=lambda d: tuple(int(part) for part in d["ip"].split(".")))
     return devices
 
 
 # ==================================================================
-# JOB-BASIERTER SCAN (für große Netze wie /16)
-# Ein /24 in einem Rutsch zu scannen dauert Sekunden - ein /16 sind 256
-# solcher Blöcke. Deshalb läuft ein großer Scan als Hintergrund-Job:
-# Das Frontend startet ihn, fragt den Fortschritt ab und bekommt gefundene
-# Geräte schon WÄHREND des Scans zu sehen.
+# JOB-BASED SCAN (for large networks like /16)
+# Scanning one /24 in one go takes seconds - a /16 is 256 such blocks. That is
+# why a large scan runs as a background job: the frontend starts it, polls the
+# progress and sees found devices already DURING the scan.
 #
-# "Speed-Up": Die /24-Blöcke werden auf mehrere Worker verteilt, die parallel
-# arbeiten - und jeder Worker pingt seinerseits mehrere Adressen gleichzeitig.
-# Effektive Nebenläufigkeit = workers * per_subnet.
+# "Speed-Up": the /24 blocks are distributed across several workers that run in
+# parallel - and each worker in turn pings several addresses at once.
+# Effective concurrency = workers * per_subnet.
 # ==================================================================
 SCAN_SPEEDS = {
-    # name: (parallele /24-Blöcke, gleichzeitige Pings je Block)
-    "normal": (1, 64),      # schont Netz und CPU
-    "fast":   (8, 96),      # Speed-Up an
-    "turbo":  (24, 128),    # sehr aggressiv, nur im eigenen LAN sinnvoll
+    # name: (parallel /24 blocks, concurrent pings per block)
+    "normal": (1, 64),      # gentle on network and CPU
+    "fast":   (8, 96),      # Speed-Up on
+    "turbo":  (24, 128),    # very aggressive, only useful in your own LAN
 }
 
-# HARTE Obergrenze für gleichzeitige Pings über ALLE Worker hinweg.
-# Jeder Ping ist ein eigener Systemprozess; ohne diese Bremse würde Turbo
-# (24 x 128) über 3000 Prozesse gleichzeitig starten und je nach Limit
-# (ulimit -u) am Betriebssystem scheitern. 512 ist schnell und bleibt sicher.
+# HARD upper bound for concurrent pings across ALL workers.
+# Each ping is its own system process; without this brake Turbo (24 x 128)
+# would start over 3000 processes at once and, depending on the limit
+# (ulimit -u), fail at the operating system. 512 is fast and stays safe.
 MAX_TOTAL_PINGS = 512
 _ping_gate: asyncio.Semaphore | None = None
 
 
 def _gate() -> asyncio.Semaphore:
-    """Der Semaphore muss im laufenden Event-Loop erzeugt werden."""
+    """The semaphore must be created in the running event loop."""
     global _ping_gate
     if _ping_gate is None:
         _ping_gate = asyncio.Semaphore(MAX_TOTAL_PINGS)
@@ -251,7 +249,7 @@ def cancel_scan_job(job_id: str) -> bool:
 
 
 def _prune_scan_jobs(keep: int = 8) -> None:
-    """Alte, abgeschlossene Jobs aufräumen, damit der Speicher nicht wächst."""
+    """Clean up old, finished jobs so memory does not grow."""
     done = [(j["started"], jid) for jid, j in _scan_jobs.items()
             if j["status"] in ("done", "error", "cancelled")]
     for _, jid in sorted(done)[:-keep] if len(done) > keep else []:
@@ -259,15 +257,15 @@ def _prune_scan_jobs(keep: int = 8) -> None:
 
 
 async def _scan_one_subnet(prefix: str, per_subnet: int, job: dict) -> list[str]:
-    """Pingt ein /24 durch und liefert die erreichbaren IPs."""
+    """Pings through a /24 and returns the reachable IPs."""
     sem = asyncio.Semaphore(per_subnet)
     alive: list[str] = []
 
     async def one(ip: str) -> None:
         if job.get("cancel"):
             return
-        # Zwei Bremsen: pro Subnetz (sem) und global über alle Worker (_gate),
-        # damit nie mehr als MAX_TOTAL_PINGS Prozesse gleichzeitig laufen.
+        # Two brakes: per subnet (sem) and global across all workers (_gate),
+        # so that never more than MAX_TOTAL_PINGS processes run at once.
         async with sem:
             if job.get("cancel"):
                 return
@@ -284,7 +282,7 @@ async def _scan_one_subnet(prefix: str, per_subnet: int, job: dict) -> list[str]
 
 
 async def run_scan_job(job_id: str, target: str | None, speed: str = "normal") -> None:
-    """Hintergrund-Task: scannt alle /24-Blöcke des Ziels und füllt den Job."""
+    """Background task: scans all /24 blocks of the target and fills the job."""
     job = _scan_jobs[job_id]
     try:
         prefixes, label = parse_scan_target(target)
@@ -297,7 +295,7 @@ async def run_scan_job(job_id: str, target: str | None, speed: str = "normal") -
             "max_parallel": min(workers * per_subnet, MAX_TOTAL_PINGS),
         })
 
-        # Die /24-Blöcke gleichmäßig auf die Worker verteilen (Speed-Up).
+        # Distribute the /24 blocks evenly across the workers (Speed-Up).
         queue: asyncio.Queue = asyncio.Queue()
         for pref in prefixes:
             queue.put_nowait(pref)
@@ -314,7 +312,7 @@ async def run_scan_job(job_id: str, target: str | None, speed: str = "normal") -
 
         await asyncio.gather(*(worker() for _ in range(min(workers, len(prefixes)))))
 
-        # Eigene IP ergänzen, wenn das eigene Netz gescannt wurde
+        # Add the own IP if the own network was scanned
         _, own_ip = get_local_subnet()
         if own_ip and any(own_ip.startswith(p) for p in prefixes) and own_ip not in alive_ips:
             alive_ips.append(own_ip)
@@ -338,8 +336,8 @@ async def run_scan_job(job_id: str, target: str | None, speed: str = "normal") -
 
 
 def start_scan_job(target: str | None, speed: str = "normal") -> str:
-    """Legt einen Job an und startet ihn im Hintergrund. Gibt die Job-ID zurück."""
-    # Ziel vorab prüfen, damit Fehleingaben sofort auffallen.
+    """Creates a job and starts it in the background. Returns the job ID."""
+    # Check the target up front so bad input is noticed immediately.
     prefixes, label = parse_scan_target(target)
     job_id = uuid.uuid4().hex[:12]
     _scan_jobs[job_id] = {
@@ -353,7 +351,7 @@ def start_scan_job(target: str | None, speed: str = "normal") -> str:
     return job_id
 
 
-# Häufige Ports mit Klartext-Namen (für die Portscan-Ausgabe)
+# Common ports with plain-text names (for the port-scan output)
 COMMON_PORTS = {
     21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP", 53: "DNS", 80: "HTTP",
     110: "POP3", 135: "RPC", 139: "NetBIOS", 143: "IMAP", 443: "HTTPS",
@@ -364,8 +362,8 @@ COMMON_PORTS = {
 
 def parse_port_spec(spec: str) -> list[int]:
     """
-    Wandelt eine Port-Angabe wie "22,80,8000-8100" in eine sortierte, eindeutige
-    Liste gültiger Ports (1-65535) um. Ungültige Teile werden ignoriert.
+    Converts a port spec like "22,80,8000-8100" into a sorted, unique list of
+    valid ports (1-65535). Invalid parts are ignored.
     """
     ports: set[int] = set()
     for part in (spec or "").replace(" ", "").split(","):
@@ -398,12 +396,12 @@ async def scan_ports(
     timeout: float = 1.0,
 ) -> list[dict]:
     """
-    Prüft für eine IP, welche der angegebenen Ports offen sind.
-    Ohne Portliste werden die gängigen Ports (COMMON_PORTS) geprüft.
-    Rückgabe: [{"port": 22, "service": "SSH", "open": True}, ...] (nur offene).
+    Checks which of the given ports are open for an IP.
+    Without a port list the common ports (COMMON_PORTS) are checked.
+    Returns: [{"port": 22, "service": "SSH", "open": True}, ...] (open ones only).
 
-    Bei sehr großen Portlisten (z.B. "alle Ports") sorgen höhere Nebenläufigkeit
-    und ein kürzeres Timeout dafür, dass der Scan in vertretbarer Zeit fertig wird.
+    For very large port lists (e.g. "all ports"), higher concurrency and a
+    shorter timeout keep the scan finishing in a reasonable time.
     """
     if ports is None:
         ports = sorted(COMMON_PORTS.keys())
@@ -423,7 +421,7 @@ async def scan_ports(
                     pass
                 open_ports.append({"port": port, "service": COMMON_PORTS.get(port, "?"), "open": True})
             except Exception:
-                pass  # Port geschlossen/gefiltert
+                pass  # port closed/filtered
 
     await asyncio.gather(*(check_port(p) for p in ports))
     open_ports.sort(key=lambda x: x["port"])

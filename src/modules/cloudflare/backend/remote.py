@@ -1,18 +1,18 @@
-# remote.py (Modul "cloudflare") - Fernzugriff der Client-App ueber den Tunnel
+# remote.py (module "cloudflare") - client-app remote access over the tunnel
 # ----------------------------------------------------------------------------
-# Die Client-App will RDP/VNC/SSH zu einem Agent oeffnen, aber kein Port ist erreichbar und
-# es gibt (noch) kein VPN: Das Backend legt eine Route "Agent ueber RMM-Server" an
-# (dauerhafte Weiterleitung RMM -> Agent im Modul network + Tunnel-Adresse), geschuetzt mit
-# einem EIGENEN Service-Token je Route. Die Client-App verbindet mit
-#   cloudflared access tcp --hostname <adresse> --url 127.0.0.1:<port>  (+ Service-Token)
-# und startet das lokale Programm auf 127.0.0.1:<port>.
+# The client app wants to open RDP/VNC/SSH to an agent, but no port is reachable and
+# there is (yet) no VPN: the backend creates an "Agent via RMM server" route
+# (permanent forward RMM -> agent in the network module + tunnel address), protected with
+# an OWN service token per route. The client app connects with
+#   cloudflared access tcp --hostname <address> --url 127.0.0.1:<port>  (+ service token)
+# and starts the local program on 127.0.0.1:<port>.
 #
-# Lebensdauer je Agent + Protokoll (wie beim Relay im Explorer):
-#   "session"   bis Nutzungsende: weg, sobald keine Client-App mehr verbunden ist (Lease)
-#   10|30|60|120 Minuten nach dem Oeffnen (verlaengert sich nicht; laufende Nutzung bleibt)
-#   0           dauerhaft (Recht relay_unlimited bzw. c_relay_unlimited)
-# Leases: jede verbundene Client-App meldet sich alle 60 s (ping); nach 3 Minuten ohne
-# Meldung gilt die Nutzung als beendet.
+# Lifetime per agent + protocol (like the relay in the Explorer):
+#   "session"   until end of use: gone as soon as no client app is connected anymore (lease)
+#   10|30|60|120 minutes after opening (does not extend; ongoing use stays)
+#   0           permanent (permission relay_unlimited or c_relay_unlimited)
+# Leases: every connected client app checks in every 60 s (ping); after 3 minutes without
+# a check-in the use is considered ended.
 
 from __future__ import annotations
 
@@ -26,18 +26,18 @@ from app import db
 from . import store, sync
 
 LEASE_TIMEOUT = 180
-SESSION_GRACE = 90           # "bis Nutzungsende": so lange nach der letzten Nutzung noch offen
+SESSION_GRACE = 90           # "until end of use": how long it stays open after the last use
 _lock = threading.Lock()
 
 
 def ready() -> dict:
-    """Ist Fernzugriff ueber Cloudflare moeglich? -> {ok, reason, zone}"""
+    """Is remote access via Cloudflare possible? -> {ok, reason, zone}"""
     data = store.load()
     if not (data.get("account") or {}).get("id"):
-        return {"ok": False, "reason": "Cloudflare-Zugang ist nicht eingerichtet"}
+        return {"ok": False, "reason": "Cloudflare access is not set up"}
     zone = (data.get("remote") or {}).get("zone") or (data.get("zones") or [{}])[0].get("name")
     if not zone:
-        return {"ok": False, "reason": "Keine Zone für den Fernzugriff gewählt"}
+        return {"ok": False, "reason": "No zone selected for remote access"}
     return {"ok": True, "reason": "", "zone": zone}
 
 
@@ -51,7 +51,7 @@ def _hostname(client_id: str, proto: str, zone: str) -> str:
 
 
 def open_tunnel(user: dict, client_id: str, proto: str, port: int, target_host: str, lifetime) -> dict:
-    """Route anlegen/wiederverwenden, Lease vergeben. -> {hostname, lease, token_id, token_secret, expires, lifetime}"""
+    """Create/reuse a route, assign a lease. -> {hostname, lease, token_id, token_secret, expires, lifetime}"""
     rd = ready()
     if not rd["ok"]:
         raise ValueError(rd["reason"])
@@ -77,7 +77,7 @@ def open_tunnel(user: dict, client_id: str, proto: str, port: int, target_host: 
             rm = r.setdefault("remote", {"leases": {}})
             if r.get("ref") != ref:
                 r["ref"] = ref
-            # Lebensdauer: die laengere gewinnt (dauerhaft > Minuten > Nutzungsende)
+            # Lifetime: the longer one wins (permanent > minutes > end of use)
             cur = rm.get("lifetime", "session")
             rank = lambda v: 10**9 if v == 0 else (-1 if v == "session" else int(v))   # noqa: E731
             if rank(life) >= rank(cur) or rm.get("expires", 0) and rm["expires"] < now:
@@ -120,7 +120,7 @@ def ping(lease: str, user: dict) -> dict:
         return {"ok": True, "expires": r["remote"].get("expires") or 0}
     res = store.update(upd)
     if not res:
-        raise LookupError("Verbindung nicht (mehr) bekannt")
+        raise LookupError("Connection not (no longer) known")
     return res
 
 
@@ -139,7 +139,7 @@ def set_lifetime(rid: str, lifetime) -> dict:
     def upd(d):
         r = store.route(d, rid)
         if not r or "remote" not in r:
-            raise LookupError("Fernzugriff nicht gefunden")
+            raise LookupError("Remote access not found")
         r["remote"]["lifetime"] = life
         r["remote"]["expires"] = int(time.time() + life * 60) if isinstance(life, int) and life > 0 else 0
         return r["remote"]
@@ -147,7 +147,7 @@ def set_lifetime(rid: str, lifetime) -> dict:
 
 
 def due() -> list[str]:
-    """Routen, deren Zeit abgelaufen ist (ohne laufende Nutzung)."""
+    """Routes whose time has expired (without ongoing use)."""
     now = time.time()
     out = []
 

@@ -1,17 +1,17 @@
-# oidc_routes.py (Modul "cloudflare") - RMM als Login fuer Cloudflare Access (OpenID Connect)
+# oidc_routes.py (module "cloudflare") - RMM as a login for Cloudflare Access (OpenID Connect)
 # -------------------------------------------------------------------------------------------
-# Jede Route mit Schutz "RMM-Login" bekommt in Cloudflare einen EIGENEN OIDC-Login
-# (client_id = rmm-<route>), der hierher zeigt. Dadurch weiss das RMM bei der Anmeldung,
-# fuer WELCHE Route sie gilt, und prueft die erlaubten Benutzer/Gruppen der Route.
-# Angemeldet wird mit der echten Dashboard-Anmeldung (lokal oder AD/LDAP, Sperren, 2FA).
+# Every route with "RMM login" protection gets its OWN OIDC login in Cloudflare
+# (client_id = rmm-<route>) that points here. This lets the RMM know, on sign-in,
+# WHICH route it applies to, and it checks the route's allowed users/groups.
+# Sign-in uses the real dashboard login (local or AD/LDAP, lockouts, 2FA).
 #
 #   GET  /cf-oidc/{rid}/.well-known/openid-configuration
-#   GET  /cf-oidc/{rid}/authorize    Login-Seite (Benutzer, Passwort, Anmeldung über, 2FA)
-#   POST /cf-oidc/{rid}/authorize    Login pruefen -> Code an Cloudflare zurueck
+#   GET  /cf-oidc/{rid}/authorize    login page (user, password, sign-in via, 2FA)
+#   POST /cf-oidc/{rid}/authorize    check the login -> return a code to Cloudflare
 #   POST /cf-oidc/{rid}/token        Code -> id_token (RS256) + access_token
-#   GET  /cf-oidc/{rid}/jwks         oeffentlicher Schluessel
+#   GET  /cf-oidc/{rid}/jwks         public key
 #   GET  /cf-oidc/{rid}/userinfo
-# Diese Adressen sind oeffentlich (Cloudflare ruft /token und /jwks direkt ab).
+# These addresses are public (Cloudflare fetches /token and /jwks directly).
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ _pending: dict[str, dict] = {}        # 2FA-Zwischenstand -> {username, password
 _tokens: dict[str, dict] = {}         # access_token -> {user_id, rid, exp}
 
 
-# ------------------------------------------------------------------ Schluessel
+# ------------------------------------------------------------------ keys
 def _key():
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
@@ -66,7 +66,7 @@ def _route(rid: str) -> tuple[dict, dict]:
     data = store.load()
     r = store.route(data, rid)
     if not r or r.get("access") != "rmm" or not (r.get("oidc") or {}).get("client_id"):
-        raise LookupError("Unbekannte Anmeldung")
+        raise LookupError("Unknown login")
     return data, r
 
 
@@ -98,7 +98,7 @@ def _email(user: dict, data: dict) -> str:
     return f"{user['username']}@{host}"
 
 
-# ------------------------------------------------------------------ Anmeldung (echte Dashboard-Anmeldung)
+# ------------------------------------------------------------------ login (real dashboard login)
 async def _login(username: str, password: str, realm: str, code: str, ip: str) -> tuple[int, dict | None, str]:
     app = modules._api
     body = json.dumps({"username": username, "password": password, "realm": realm or "local",
@@ -129,9 +129,9 @@ async def _login(username: str, password: str, realm: str, code: str, ip: str) -
     except ValueError:
         data = {}
     if status != 200:
-        return status, None, str(data.get("detail") or "Anmeldung fehlgeschlagen")
+        return status, None, str(data.get("detail") or "Login failed")
     user = db.get_user_by_id((data.get("user") or {}).get("id", ""))
-    return (200, user, "") if user else (401, None, "Anmeldung fehlgeschlagen")
+    return (200, user, "") if user else (401, None, "Login failed")
 
 
 def _realms() -> list[dict]:
@@ -146,17 +146,17 @@ def _page(title: str, params: dict, error: str = "", step: str = "login", pendin
     e = html.escape
     hidden = "".join(f'<input type="hidden" name="{e(k)}" value="{e(str(v))}">' for k, v in params.items())
     realms = _realms()
-    realm_sel = (f'<label>Anmeldung über<select name="realm"><option value="local">Lokales Konto</option>'
+    realm_sel = (f'<label>Sign in via<select name="realm"><option value="local">Local account</option>'
                  + "".join(f'<option value="{e(r["id"])}">{e(r["name"])}</option>' for r in realms)
                  + "</select></label>") if realms else ""
-    fields = (f'''<label>Benutzername<input name="username" autocomplete="username" required autofocus value="{e(username)}"></label>
-      <label>Passwort<input name="password" type="password" autocomplete="current-password" required></label>{realm_sel}'''
+    fields = (f'''<label>Username<input name="username" autocomplete="username" required autofocus value="{e(username)}"></label>
+      <label>Password<input name="password" type="password" autocomplete="current-password" required></label>{realm_sel}'''
               if step == "login" else
               f'''<input type="hidden" name="pending" value="{e(pending)}">
-      <p class="sub">Bestätigungscode aus der Authenticator-App (oder ein Backup-Code)</p>
+      <p class="sub">Confirmation code from the authenticator app (or a backup code)</p>
       <label>Code<input name="code" inputmode="numeric" autocomplete="one-time-code" required autofocus></label>''')
-    body = f'''<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Anmelden – BYTERA RMM</title><style>
+    body = f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign in – BYTERA RMM</title><style>
 :root{{color-scheme:dark}}body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
 background:#0b1220;font:14px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#e6edf6}}
 form{{width:min(360px,calc(100vw - 32px));background:#121c2e;border:1px solid #24324a;border-radius:14px;padding:24px;box-shadow:0 20px 50px rgba(0,0,0,.45)}}
@@ -166,8 +166,8 @@ height:38px;padding:0 10px;border-radius:8px;border:1px solid #2b3b57;background
 button{{width:100%;height:40px;border:0;border-radius:8px;background:#2dd4bf;color:#05211d;font-weight:700;font-size:14px;cursor:pointer;margin-top:6px}}
 .err{{background:#3b1520;border:1px solid #7f1d2d;color:#fecdd3;padding:8px 10px;border-radius:8px;font-size:12.5px;margin-bottom:12px}}
 .acc{{color:#2dd4bf}}</style></head><body><form method="post">
-<h1>BYTERA <span class="acc">RMM</span></h1><p class="sub">Anmelden für <b>{e(title)}</b></p>
-{f'<div class="err">{e(error)}</div>' if error else ""}{fields}{hidden}<button type="submit">Anmelden</button></form></body></html>'''
+<h1>BYTERA <span class="acc">RMM</span></h1><p class="sub">Sign in for <b>{e(title)}</b></p>
+{f'<div class="err">{e(error)}</div>' if error else ""}{fields}{hidden}<button type="submit">Sign in</button></form></body></html>'''
     return HTMLResponse(body, headers={"Cache-Control": "no-store", "X-Frame-Options": "DENY",
                                        "Referrer-Policy": "no-referrer"})
 
@@ -211,9 +211,9 @@ def authorize_page(rid: str, request: Request):
     try:
         data, r = _route(rid)
     except LookupError:
-        return HTMLResponse("Unbekannte Anmeldung", 404)
+        return HTMLResponse("Unknown login", 404)
     if q.get("client_id") != r["oidc"]["client_id"] or not _redirect_ok(data, q.get("redirect_uri", "")):
-        return HTMLResponse("Ungültige Anfrage (client_id / redirect_uri)", 400)
+        return HTMLResponse("Invalid request (client_id / redirect_uri)", 400)
     return _page(r.get("hostname") or r["name"], {k: q[k] for k in _PARAMS if k in q})
 
 
@@ -225,15 +225,15 @@ async def authorize_post(rid: str, request: Request):
     try:
         data, r = _route(rid)
     except LookupError:
-        return HTMLResponse("Unbekannte Anmeldung", 404)
+        return HTMLResponse("Unknown login", 404)
     if params.get("client_id") != r["oidc"]["client_id"] or not _redirect_ok(data, params.get("redirect_uri", "")):
-        return HTMLResponse("Ungültige Anfrage (client_id / redirect_uri)", 400)
+        return HTMLResponse("Invalid request (client_id / redirect_uri)", 400)
     title = r.get("hostname") or r["name"]
     ip = (request.headers.get("cf-connecting-ip") or (request.client.host if request.client else "")).strip()
     if form.get("pending"):
         p = _pending.pop(form["pending"], None)
         if not p:
-            return _page(title, params, "Die Anmeldung ist abgelaufen – bitte erneut anmelden.")
+            return _page(title, params, "The login has expired – please sign in again.")
         username, password, realm, code = p["username"], p["password"], p["realm"], (form.get("code") or "").strip()
     else:
         username, password = (form.get("username") or "").strip(), form.get("password") or ""
@@ -243,12 +243,12 @@ async def authorize_post(rid: str, request: Request):
         if detail == "2fa_required" or (code and "2fa" in detail.lower()) or "code" in detail.lower():
             tok = secrets.token_urlsafe(24)
             _pending[tok] = {"username": username, "password": password, "realm": realm, "exp": time.time() + 300}
-            return _page(title, params, "" if not code else "Code ungültig – bitte erneut eingeben.", "code", tok)
-        return _page(title, params, detail if status in (401, 403, 423, 429) else "Anmeldung fehlgeschlagen",
+            return _page(title, params, "" if not code else "Invalid code – please enter it again.", "code", tok)
+        return _page(title, params, detail if status in (401, 403, 423, 429) else "Login failed",
                      username=username)
     if not _allowed(r, user):
         db.add_audit_entry(user["username"], "cloudflare.access_denied", details=title)
-        return _page(title, params, "Dein Konto ist für diese Adresse nicht freigegeben.")
+        return _page(title, params, "Your account is not allowed for this address.")
     c = secrets.token_urlsafe(32)
     _codes[c] = {"rid": rid, "user_id": user["id"], "nonce": params.get("nonce", ""),
                  "challenge": params.get("code_challenge", ""), "method": params.get("code_challenge_method", "plain"),

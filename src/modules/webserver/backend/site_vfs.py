@@ -1,8 +1,8 @@
-# site_vfs.py (Modul "webserver") - Bereich "Websites" im Relay/Explorer/Netzlaufwerk
+# site_vfs.py (module "webserver") - the "Websites" area in the relay/Explorer/network drive
 # ---------------------------------------------------------------------------------
-# Wurzel: je eine Website, an der der Benutzer mitarbeiten darf (Mitglied oder
-# manage_websites). Darunter der Ordner der Website (= src der Website).
-# Gleiche Schnittstelle wie spaces/vfs.py, damit relay_storage beide gleich behandelt:
+# Root: one entry per website the user may work on (member or manage_websites).
+# Below it the website's folder (= the website's src).
+# Same interface as spaces/vfs.py so relay_storage treats both the same:
 #   listdir stat file_path read write mkdir delete move   (user, parts)
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ def write(user, parts: list[str], data: bytes) -> None:
 def mkdir(user, parts: list[str]) -> None:
     clean = [p for p in parts if p not in ("", ".")]
     if len(clean) == 1:
-        raise PermissionError("Neue Websites legst du in der App „Webserver“ an")
+        raise PermissionError("Create new websites in the \"Webserver\" app")
     s, root, rest = _split(user, parts)
     webhost.mkdir(root, rest)
 
@@ -82,7 +82,7 @@ def mkdir(user, parts: list[str]) -> None:
 def delete(user, parts: list[str]) -> None:
     s, root, rest = _split(user, parts)
     if not rest:
-        raise PermissionError("Ganze Websites löschst du in der App „Webserver“")
+        raise PermissionError("Delete whole websites in the \"Webserver\" app")
     webhost.delete(root, rest)
 
 
@@ -90,7 +90,7 @@ def move(user, src: list[str], dst: list[str]) -> None:
     s1, root1, rest1 = _split(user, src)
     s2, root2, rest2 = _split(user, dst)
     if s1["name"] != s2["name"]:
-        raise PermissionError("Verschieben zwischen Websites ist nicht möglich")
+        raise PermissionError("Moving between websites is not possible")
     if not rest1 or not rest2:
-        raise PermissionError("Websites umbenennen geht in der App „Webserver“")
+        raise PermissionError("Rename websites in the \"Webserver\" app")
     webhost.move(root1, rest1, rest2)

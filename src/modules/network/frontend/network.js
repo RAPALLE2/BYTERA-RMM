@@ -1,14 +1,14 @@
 // apps/network.js
 // ---------------
-// Netzwerk-Scanner. Das Ziel kann angegeben werden als
-//   192.168.1.      -> ein /24 (254 Adressen)
-//   10.10           -> ein /16, also 256 x 254 Adressen
-//   10.10.0.0/16    -> beliebiges CIDR (ab /8)
-//   leer            -> eigenes Subnetz
-// Der Scan laeuft als BACKEND-JOB (app/bgjobs.py): Diese Seite startet ihn nur
-// und zeigt live an, was das Backend meldet. Neu laden, ein anderes Fenster oder
-// ein anderer Benutzer sehen denselben Scan; das Ergebnis haelt das Backend.
-// Der ⚡ Speed-Up verteilt die /24-Blöcke auf mehrere parallele Worker.
+// Network scanner. The target can be given as
+//   192.168.1.      -> a /24 (254 addresses)
+//   10.10           -> a /16, i.e. 256 x 254 addresses
+//   10.10.0.0/16    -> any CIDR (from /8)
+//   empty           -> own subnet
+// The scan runs as a BACKEND JOB (app/bgjobs.py): this page only starts it and
+// shows live what the backend reports. Reloading, another window or another user
+// see the same scan; the backend holds the result.
+// The Speed-Up distributes the /24 blocks across multiple parallel workers.
 
 import { nodeHint } from "/js/app/nodechoice.js";
 import { api } from "/js/app/api.js";
@@ -17,14 +17,15 @@ import { openWindow } from "/js/app/windowmanager.js";
 import { registerCleanup } from "/js/app/windowmanager.js";
 import { moduleRequest } from "/js/app/modules.js";
 import { watchJobs, cancelJob, jobDuration } from "/js/app/bgjobs.js";
+import { icon } from "./icons.js";
 
-// Auswahl "Backend oder Node" fuellen (Nodes nur mit nachgeladenem Node-Modul "network")
+// Fill the "backend or node" choice (nodes only with the loaded node module "network")
 function fillVia(sel, preset = "") {
   api.nodeChoices("network").then((r) => {
     for (const n of r.nodes || []) {
       const o = document.createElement("option");
       o.value = n.id; o.disabled = !n.active;
-      o.textContent = `🖧 Node ${n.name}${nodeHint(n)}`;
+      o.textContent = `Node ${n.name}${nodeHint(n)}`;
       sel.appendChild(o);
     }
     if (preset) sel.value = preset;
@@ -33,14 +34,14 @@ function fillVia(sel, preset = "") {
 import { t } from "/js/app/i18n.js";
 
 const SPEEDS = {
-  normal: { label: "🐢 Normal", hint: t("u_schont_netz_und_cpu") },
-  fast:   { label: "⚡ Speed-Up", hint: "8 Subnetze gleichzeitig – empfohlen" },
-  turbo:  { label: "🚀 Turbo", hint: "24 Subnetze parallel (max. 512 Pings gleichzeitig)" },
+  normal: { label: `${icon("gauge", 14)} Normal`, hint: t("u_schont_netz_und_cpu") },
+  fast:   { label: `${icon("bolt", 14)} Speed-Up`, hint: "8 subnets at once – recommended" },
+  turbo:  { label: `${icon("rocket", 14)} Turbo`, hint: "24 subnets in parallel (max. 512 pings at once)" },
 };
 
 export function renderNetwork(body, win) {
   let speed = "fast";
-  let job = null;            // aktueller Scan-Job der gewaehlten Quelle (vom Backend)
+  let job = null;            // current scan job of the selected source (from the backend)
   let stopWatch = null;
 
   body.innerHTML = `
@@ -52,9 +53,9 @@ export function renderNetwork(body, win) {
           ${Object.entries(SPEEDS).map(([k, v]) =>
             `<button class="btn net-speed" data-speed="${k}" title="${esc(v.hint)}">${v.label}</button>`).join("")}
         </div>
-        <select id="net-via" title="Von wo aus scannen?"><option value="">🖥 Vom Backend</option></select>
-        <button class="btn-primary" id="net-scan">🔍 Scannen</button>
-        <button class="btn" id="net-stop" style="display:none">✋ ${t("cancel")}</button>
+        <select id="net-via" title="Where to scan from?"><option value="">From the backend</option></select>
+        <button class="btn-primary" id="net-scan">${icon("search", 14)} Scan</button>
+        <button class="btn" id="net-stop" style="display:none">${icon("stop", 14)} ${t("cancel")}</button>
       </div>
       <div id="net-status" style="padding:6px 10px;font-size:12px;color:var(--subtext)"></div>
       <div id="net-progress" style="display:none;padding:0 10px 6px">
@@ -81,7 +82,7 @@ export function renderNetwork(body, win) {
   const barEl = body.querySelector("#net-bar");
   const tbody = body.querySelector("#net-body");
 
-  // ---- Geschwindigkeit wählen ----
+  // ---- choose speed ----
   function drawSpeeds() {
     body.querySelectorAll(".net-speed").forEach((b) => {
       const on = b.dataset.speed === speed;
@@ -93,7 +94,7 @@ export function renderNetwork(body, win) {
     b.addEventListener("click", () => { speed = b.dataset.speed; drawSpeeds(); showPreview(); }));
   drawSpeeds();
 
-  // ---- Vorschau: wie groß wird der Scan? ----
+  // ---- preview: how large will the scan be? ----
   let previewTimer = null;
   async function showPreview() {
     if (job?.running) return;
@@ -112,22 +113,22 @@ export function renderNetwork(body, win) {
       }
     }, 250);
   }
-  // Grobe Schätzung: Adressen / effektive Nebenläufigkeit * Ping-Timeout.
-  // Das Backend deckelt die Gesamtzahl gleichzeitiger Pings (MAX_TOTAL_PINGS),
-  // damit nicht tausende Systemprozesse gleichzeitig laufen - die Schätzung
-  // muss dieselbe Obergrenze berücksichtigen, sonst verspricht sie zu viel.
+  // Rough estimate: addresses / effective concurrency * ping timeout.
+  // The backend caps the total number of concurrent pings (MAX_TOTAL_PINGS)
+  // so that thousands of system processes do not run at once - the estimate
+  // must respect the same upper bound, otherwise it promises too much.
   const MAX_PAR = 512;
   function estimate(hosts, sp) {
     const par = Math.min({ normal: 64, fast: 8 * 96, turbo: 24 * 128 }[sp] || 64, MAX_PAR);
     const sec = Math.max(2, Math.round((hosts / par) * 1.1));
-    if (sec < 90) return `${sec} Sekunden`;
-    if (sec < 5400) return `${Math.round(sec / 60)} Minuten`;
-    return `${(sec / 3600).toFixed(1)} Stunden`;
+    if (sec < 90) return `${sec} seconds`;
+    if (sec < 5400) return `${Math.round(sec / 60)} minutes`;
+    return `${(sec / 3600).toFixed(1)} hours`;
   }
   subnetInput.addEventListener("input", showPreview);
   subnetInput.addEventListener("keydown", (e) => { if (e.key === "Enter") scan(); });
 
-  // ---- Scan starten / verfolgen (Backend-Job) ----
+  // ---- start / track scan (backend job) ----
   async function scan() {
     if (job?.running) return;
     scanBtn.disabled = true;
@@ -137,7 +138,7 @@ export function renderNetwork(body, win) {
       if (target) q.set("target", target);
       if (viaSel.value) q.set("via", viaSel.value);
       const r = await moduleRequest(`/api/network/scan/job?${q}`, { method: "POST" });
-      if (r.attached) window.notify?.(`Auf dieser Quelle läuft bereits ein Scan (von ${r.by}) – er wird angezeigt.`, "info");
+      if (r.attached) window.notify?.(`A scan is already running on this source (by ${r.by}) – it is being shown.`, "info");
       job = r; showJob();
       tbody.innerHTML = `<tr><td colspan="4" style="color:var(--subtext)">${t("nw_scanning")}</td></tr>`;
     } catch (e) {
@@ -163,8 +164,8 @@ export function renderNetwork(body, win) {
         + `${(pr.done_hosts || 0).toLocaleString()}/${(pr.total_hosts || 0).toLocaleString()} ${t("nw_addresses")} `
         + `(${(job.pct || 0).toFixed(1)} %) · ${t("nw_found", { n: pr.found || 0 })}`
         + (pr.max_parallel ? ` · ${t("nw_parallel", { n: pr.max_parallel })}` : "")
-        + (job.by ? ` · gestartet von ${job.by}` : "")
-        + (job.cancel_requested ? " · wird abgebrochen …" : "");
+        + (job.by ? ` · started by ${job.by}` : "")
+        + (job.cancel_requested ? " · cancelling …" : "");
       return;
     }
     if (job.status === "error") {
@@ -183,7 +184,7 @@ export function renderNetwork(body, win) {
       + ` · ${new Date(job.finished).toLocaleString()}${job.by ? ", " + job.by : ""}`;
   }
 
-  // Quelle beobachten: laufender oder zuletzt beendeter Scan; sonst letztes Ergebnis
+  // Watch the source: running or last finished scan; otherwise the last result
   function watchSource() {
     stopWatch?.();
     job = null;
@@ -227,21 +228,21 @@ export function renderNetwork(body, win) {
         <td>${esc(d.ip)}</td>
         <td>${esc(d.hostname || "–")}</td>
         <td style="color:var(--subtext);font-family:monospace;font-size:11px">${esc(d.mac || "–")}</td>
-        <td><button class="btn" data-portscan="${esc(d.ip)}">Portscan</button></td>
+        <td><button class="btn" data-portscan="${esc(d.ip)}">Port scan</button></td>
       </tr>`).join("");
 
-    // Portscan-Button öffnet das Portscan-Programm mit schon eingetragener IP.
+    // The port-scan button opens the port-scan program with the IP already filled in.
     tbody.querySelectorAll("[data-portscan]").forEach((btn) =>
       btn.addEventListener("click", () => {
         const ip = btn.dataset.portscan;
         openWindow({
           key: `portscan-${ip}`, appId: "portscan",
-          title: `Portscan — ${ip}`, props: { ip, via: viaSel.value }, w: 560, h: 480,
+          title: `Port scan — ${ip}`, props: { ip, via: viaSel.value }, w: 560, h: 480,
         });
       }));
   }
 
-  // Beim Öffnen: laufenden/letzten Scan der Quelle zeigen (vom Backend)
+  // On open: show the running/last scan of the source (from the backend)
   watchSource();
 
   if (win?.key) registerCleanup(win.key, () => { stopWatch?.(); clearTimeout(previewTimer); });

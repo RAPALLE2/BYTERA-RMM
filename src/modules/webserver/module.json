@@ -3,9 +3,9 @@
   "id": "webserver",
   "name": "Webserver",
   "version": "1.0.0",
-  "description": "Mehrere Websites direkt aus dem RMM ausliefern: jede unter rmm.url.de/<name>, mit eigenem Ordner (bearbeitbar in der App, im Explorer/Relay unter „Websites“ und per Netzlaufwerk) und eigenen Rechten für Benutzer und Gruppen. Dient auch dem Deployment-Server als Hosting-Grundlage. Websites können auch Weiterleitungen sein (Reverse-Proxy, z. B. für Docker-Container).",
+  "description": "Serve multiple websites directly from the RMM: each under rmm.url.de/<name>, with its own folder (editable in the app, in the Explorer/relay under \"Websites\" and via a network drive) and its own permissions for users and groups. Also serves as the hosting base for the deployment server. Websites can also be forwards (reverse proxy, e.g. for Docker containers).",
   "author": "BYTERA",
-  "category": "Verteilung",
+  "category": "netzwerk",
   "icon": "🌍",
   "requires": [],
   "pip": [

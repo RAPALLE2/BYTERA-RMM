@@ -1,19 +1,19 @@
 """
 routers/network_routes.py
 ----------------------------
-REST-Schnittstelle für den LAN-Scan (Network Center / Toolbox-Netzwerkscanner).
+REST interface for the LAN scan (Network Center / toolbox network scanner).
 
-Endpunkte:
-  GET /api/network/scan              -> neuen Scan starten (optional ?subnet=192.168.5.)
-  GET /api/network/scan/last         -> letztes Scan-Ergebnis
-  GET /api/network/portscan?ip=...   -> Portscan einer einzelnen IP
-Ueberall optional ?via=<Node-ID>: Scan laeuft dann IM NETZ DER NODE (Node-Modul "network",
-muss auf der Node nachgeladen sein). Job-IDs von Node-Scans: "n.<node>.<job>".
+Endpoints:
+  GET /api/network/scan              -> start a new scan (optional ?subnet=192.168.5.)
+  GET /api/network/scan/last         -> last scan result
+  GET /api/network/portscan?ip=...   -> port scan of a single IP
+Everywhere optional ?via=<node ID>: the scan then runs IN THE NODE'S NETWORK (node module
+"network", must be loaded on the node). Job IDs of node scans: "n.<node>.<job>".
 
 BACKEND-JOBS (Grundregel: Aufgaben laufen nie in der Browser-Sitzung):
   POST /api/network/scan/job            LAN-Scan als Backend-Job (?target=&speed=&via=)
   POST /api/network/portscan/job        Portscan als Backend-Job (?ip=&mode=&ports=&via=)
-  GET  /api/network/scan/last?source=   letztes fertiges Scan-Ergebnis der Quelle
+  GET  /api/network/scan/last?source=   last finished scan result of the source
 Fortschritt, Ergebnis und Abbruch ueber /api/bgjobs (kind "network.scan" bzw.
 "network.portscan"), live per Socket "bgjob:update". Neu laden oder ein anderer
 Benutzer sehen denselben Job; das Ergebnis haelt das Backend.
@@ -40,7 +40,7 @@ async def _node(user: dict, via: str, op: str, data: dict, timeout: float = 60):
     from app import node_manager
     from app.auth import can_access_client
     if not can_access_client(user, via):
-        raise HTTPException(404, "Node nicht gefunden")
+        raise HTTPException(404, "Node not found")
     try:
         node_manager.require_module(via, "network")
         return await node_manager.command(via, op, data, timeout=timeout)
@@ -54,20 +54,20 @@ def _split_job(job_id: str) -> tuple[str, str]:
         return node, jid
     return "", job_id
 
-# Einfacher In-Memory-Zwischenspeicher für das letzte Scan-Ergebnis.
+# Simple in-memory cache for the last scan result.
 _last_scan: dict = {"at": None, "devices": []}
-_last_by_source: dict[str, dict] = {}     # Quelle ("backend"/Node-ID) -> letztes fertiges Ergebnis
+_last_by_source: dict[str, dict] = {}     # source ("backend"/node ID) -> last finished result
 _scan_in_progress = False
 
 
 @router.get("/scan")
 async def run_scan(subnet: str | None = None, user: dict = Depends(get_current_user)):
-    """Startet einen Netzwerk-Scan. Optional ein bestimmtes Subnetz (z.B. '192.168.5.')."""
+    """Starts a network scan. Optionally a specific subnet (e.g. '192.168.5.')."""
     require_perm(user, "network_scan")
     global _scan_in_progress, _last_scan
 
     if _scan_in_progress:
-        raise HTTPException(409, "Es läuft bereits ein Scan")
+        raise HTTPException(409, "A scan is already running")
 
     _scan_in_progress = True
     try:
@@ -79,12 +79,12 @@ async def run_scan(subnet: str | None = None, user: dict = Depends(get_current_u
 
 
 # ------------------------------------------------------------------
-# Job-basierter Scan (große Netze wie 10.10 = /16, mit Fortschritt)
+# Job-based scan (large networks like 10.10 = /16, with progress)
 # ------------------------------------------------------------------
 
 @router.get("/scan/preview")
 def scan_preview(target: str | None = None, user: dict = Depends(get_current_user)):
-    """Prüft die Ziel-Angabe und meldet, wie groß der Scan würde."""
+    """Checks the target spec and reports how large the scan would be."""
     require_perm(user, "network_scan")
     try:
         prefixes, label = parse_scan_target(target)
@@ -98,14 +98,14 @@ def scan_preview(target: str | None = None, user: dict = Depends(get_current_use
 async def scan_start(target: str | None = None, speed: str = "normal", via: str = "",
                      user: dict = Depends(get_current_user)):
     """
-    Startet einen Scan im Hintergrund und liefert sofort die Job-ID.
-      target: "192.168.1.", "10.10" (= /16), "10.10.0.0/16", leer = eigenes Netz
-      speed:  normal | fast | turbo  (Speed-Up verteilt die /24-Blöcke auf
-              mehrere parallele Worker)
+    Starts a scan in the background and immediately returns the job ID.
+      target: "192.168.1.", "10.10" (= /16), "10.10.0.0/16", empty = own network
+      speed:  normal | fast | turbo  (Speed-Up distributes the /24 blocks across
+              several parallel workers)
     """
     require_perm(user, "network_scan")
     if speed not in SCAN_SPEEDS:
-        raise HTTPException(400, f"Unbekannte Geschwindigkeit (erlaubt: {', '.join(SCAN_SPEEDS)})")
+        raise HTTPException(400, f"Unknown speed (allowed: {', '.join(SCAN_SPEEDS)})")
     try:
         parse_scan_target(target)
     except ValueError as e:
@@ -119,14 +119,14 @@ async def scan_start(target: str | None = None, speed: str = "normal", via: str 
 
 @router.get("/scan/job/{job_id}")
 async def scan_job_status(job_id: str, user: dict = Depends(get_current_user)):
-    """Fortschritt + (bei Abschluss) gefundene Geräte."""
+    """Progress + (on completion) found devices."""
     require_perm(user, "network_scan")
     node, jid = _split_job(job_id)
     if node:
         return {**(await _node(user, node, "net-scan-status", {"job_id": jid})), "id": job_id, "via": node}
     job = get_scan_job(job_id)
     if not job:
-        raise HTTPException(404, "Scan-Job nicht gefunden (evtl. abgelaufen)")
+        raise HTTPException(404, "Scan job not found (may have expired)")
     return {k: v for k, v in job.items() if k != "cancel"}
 
 
@@ -146,18 +146,18 @@ def get_last_scan(source: str = "", user: dict = Depends(get_current_user)):
     require_perm(user, "network_scan")
     if source:
         if source != "backend" and not can_access_client(user, source):
-            raise HTTPException(404, "Quelle nicht gefunden")
+            raise HTTPException(404, "Source not found")
         return _last_by_source.get(source) or {"at": None, "devices": []}
     return _last_scan
 
 
 # ------------------------------------------------------------------
-# LAN-Scan + Portscan als BACKEND-JOB (app/bgjobs.py)
+# LAN scan + port scan as a BACKEND JOB (app/bgjobs.py)
 # ------------------------------------------------------------------
 def _check_node(user: dict, via: str) -> None:
     from app import node_manager
     if not can_access_client(user, via):
-        raise HTTPException(404, "Node nicht gefunden")
+        raise HTTPException(404, "Node not found")
     try:
         node_manager.require_module(via, "network")
     except node_manager.NodeError as e:
@@ -199,15 +199,15 @@ def _scan_runner(source: str, target: str | None, speed: str, via: str):
             try:
                 j = await status()
                 fails = 0
-            except Exception as e:            # Node kurz weg -> nicht sofort aufgeben
+            except Exception as e:            # node briefly gone -> do not give up immediately
                 fails += 1
                 if fails >= 15:
-                    raise RuntimeError(f"Node antwortet nicht mehr: {e}")
+                    raise RuntimeError(f"Node no longer responds: {e}")
                 await asyncio.sleep(2)
                 continue
             th, dh = j.get("total_hosts") or 0, j.get("done_hosts") or 0
             job.update(phase="scan", pct=(dh / th * 100) if th else 0,
-                       detail=f"{j.get('label', '')} · {dh:,}/{th:,} Adressen · {j.get('found', 0)} gefunden".replace(",", "."),
+                       detail=f"{j.get('label', '')} · {dh:,}/{th:,} addresses · {j.get('found', 0)} found".replace(",", "."),
                        label=j.get("label", ""), done_hosts=dh, total_hosts=th,
                        done_subnets=j.get("done_subnets", 0), total_subnets=j.get("total_subnets", 0),
                        found=j.get("found", 0), max_parallel=j.get("max_parallel"))
@@ -216,11 +216,11 @@ def _scan_runner(source: str, target: str | None, speed: str, via: str):
             await asyncio.sleep(0.7)
 
         if j["status"] == "error":
-            raise RuntimeError(j.get("error") or "Scan fehlgeschlagen")
+            raise RuntimeError(j.get("error") or "Scan failed")
         res = {"at": int(time.time() * 1000), "devices": j.get("devices") or [],
                "label": j.get("label", ""), "source": source, "subnet": target,
                "complete": j["status"] == "done"}
-        if j["status"] == "done":                 # Ergebnis haelt das BACKEND
+        if j["status"] == "done":                 # the BACKEND holds the result
             _last_by_source[source] = res
             if source == "backend":
                 global _last_scan
@@ -234,7 +234,7 @@ async def scan_job_start(target: str | None = None, speed: str = "fast", via: st
                          user: dict = Depends(get_current_user)):
     require_perm(user, "network_scan")
     if speed not in SCAN_SPEEDS:
-        raise HTTPException(400, f"Unbekannte Geschwindigkeit (erlaubt: {', '.join(SCAN_SPEEDS)})")
+        raise HTTPException(400, f"Unknown speed (allowed: {', '.join(SCAN_SPEEDS)})")
     try:
         _, label = parse_scan_target(target)
     except ValueError as e:
@@ -258,7 +258,7 @@ def _portscan_plan(mode: str, ports: str | None) -> tuple[list[int] | None, int,
     if mode == "custom":
         plist = parse_port_spec(ports or "")
         if not plist:
-            raise HTTPException(400, "Keine gültigen Ports angegeben.")
+            raise HTTPException(400, "No valid ports given.")
         return plist, (500 if len(plist) > 2000 else 200), 0.6
     return None, 100, 1.0                      # gaengige Ports
 
@@ -279,8 +279,8 @@ async def portscan_job_start(ip: str, mode: str = "standard", ports: str | None 
     async def runner(job: bgjobs.BgJob):
         from app import node_manager
         n = len(plist) if plist else None
-        job.update(phase="scan", detail=f"{ip}: {n:,} Ports werden geprüft".replace(",", ".")
-                   if n else f"{ip}: gängige Ports werden geprüft")
+        job.update(phase="scan", detail=f"{ip}: checking {n:,} ports".replace(",", ".")
+                   if n else f"{ip}: checking common ports")
         if via:
             r = await node_manager.command(via, "net-portscan",
                                            {"ip": ip, "ports": plist or [], "concurrency": conc, "timeout": tmo},
@@ -309,14 +309,14 @@ async def run_portscan(
     ip: str,
     mode: str = "standard",       # "standard" | "all" | "custom"
     ports: str | None = None,      # bei mode=custom: z.B. "22,80,8000-8100"
-    via: str = "",                 # Node-ID: Portscan aus dem Netz der Node
+    via: str = "",                 # node ID: port scan from the node's network
     user: dict = Depends(get_current_user),
 ):
     """
     Portscan einer IP.
-      - standard: gängige Ports (schnell)
-      - all:      alle Ports 1-65535 (dauert länger, höhere Nebenläufigkeit)
-      - custom:   frei angegebene Ports/Bereiche (Parameter 'ports')
+      - standard: common ports (fast)
+      - all:      all ports 1-65535 (takes longer, higher concurrency)
+      - custom:   freely given ports/ranges (parameter 'ports')
     """
     require_perm(user, "port_scan")
     mode = (mode or "standard").lower()
@@ -326,7 +326,7 @@ async def run_portscan(
         elif mode == "custom":
             plist = parse_port_spec(ports or "")
             if not plist:
-                raise HTTPException(400, "Keine gültigen Ports angegeben.")
+                raise HTTPException(400, "No valid ports given.")
             conc, tmo = (500 if len(plist) > 2000 else 200), 0.6
         else:
             plist, conc, tmo = [], 100, 1.0
@@ -340,10 +340,10 @@ async def run_portscan(
     elif mode == "custom":
         port_list = parse_port_spec(ports or "")
         if not port_list:
-            raise HTTPException(400, "Keine gültigen Ports angegeben.")
-        # Konservativer skalieren, je nach Anzahl der Ports.
+            raise HTTPException(400, "No valid ports given.")
+        # Scale more conservatively, depending on the number of ports.
         conc = 500 if len(port_list) > 2000 else 200
         open_ports = await scan_ports(ip, port_list, concurrency=conc, timeout=0.6)
     else:
-        open_ports = await scan_ports(ip)  # gängige Ports
+        open_ports = await scan_ports(ip)  # common ports
     return {"ip": ip, "mode": mode, "scanned": len(port_list) if mode != "standard" else None, "ports": open_ports}

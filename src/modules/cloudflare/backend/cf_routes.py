@@ -1,15 +1,15 @@
 # cf_routes.py (Modul "cloudflare") - Verwaltung (Recht manage_cloudflare)
 # ------------------------------------------------------------------------
-#   GET    /api/cloudflare/state            Einstellungen, Routen, Connector, Dienste, Nodes
-#   POST   /api/cloudflare/auth             {type: token|key, token|key, email} -> pruefen + Konten
+#   GET    /api/cloudflare/state            settings, routes, connector, services, nodes
+#   POST   /api/cloudflare/auth             {type: token|key, token|key, email} -> check + accounts
 #   POST   /api/cloudflare/account          {account_id, public_base} -> Zonen + Team-Domain
 #   POST   /api/cloudflare/refresh          Zonen/Team-Domain neu holen
-#   POST   /api/cloudflare/routes           Route anlegen/aendern (+ sofort abgleichen)
-#   DELETE /api/cloudflare/routes/{rid}     Route + alles in Cloudflare entfernen
-#   POST   /api/cloudflare/sync             alles neu abgleichen
+#   POST   /api/cloudflare/routes           create/modify a route (+ sync immediately)
+#   DELETE /api/cloudflare/routes/{rid}     remove the route + everything in Cloudflare
+#   POST   /api/cloudflare/sync             re-sync everything
 #   POST   /api/cloudflare/connector/{act}  start | stop | restart
-#   DELETE /api/cloudflare/nodes/{cid}      Node-Tunnel entfernen
-#   DELETE /api/cloudflare/all              ALLES entfernen (Routen, Tunnel, Zugang)
+#   DELETE /api/cloudflare/nodes/{cid}      remove the node tunnel
+#   DELETE /api/cloudflare/all              remove EVERYTHING (routes, tunnels, access)
 #   GET    /api/cloudflare/directory        Benutzer + Gruppen (Freigabe RMM-Login)
 
 from __future__ import annotations
@@ -80,15 +80,15 @@ class AuthBody(BaseModel):
 def set_auth(body: AuthBody, user: dict = Depends(get_current_user)):
     _perm(user)
     if body.type not in ("token", "key"):
-        raise HTTPException(400, "type: token oder key")
+        raise HTTPException(400, "type: token or key")
     secret = (body.token if body.type == "token" else body.key).strip()
     cur = store.load().get("auth") or {}
     if not secret:                          # leer = gespeichertes Geheimnis behalten
         secret = store.dec(cur.get("token_enc") if body.type == "token" else cur.get("key_enc"))
     if not secret:
-        raise HTTPException(400, "API-Token bzw. API-Key angeben")
+        raise HTTPException(400, "Give an API token or API key")
     if body.type == "key" and "@" not in body.email:
-        raise HTTPException(400, "Für den Global API Key wird die E-Mail des Cloudflare-Kontos gebraucht")
+        raise HTTPException(400, "The Global API Key needs the email of the Cloudflare account")
     auth = {"type": body.type, "email": body.email.strip(),
             ("token_enc" if body.type == "token" else "key_enc"): store.enc(secret)}
     try:
@@ -115,18 +115,18 @@ def _load_account(acc_id: str, public_base: str | None) -> dict:
     cf = Cf.from_store(data)
     accs = {a["id"]: a for a in cf.accounts()}
     if acc_id not in accs:
-        raise ValueError("Konto nicht gefunden")
+        raise ValueError("Account not found")
     zones = cf.zones(acc_id)
     team = cf.team_domain(acc_id)
 
     def upd(d):
         if (d.get("account") or {}).get("id") not in (None, acc_id) and d["routes"]:
-            raise ValueError("Es gibt noch Routen im bisherigen Konto – erst entfernen")
+            raise ValueError("There are still routes in the previous account – remove them first")
         d["account"], d["zones"], d["team_domain"] = accs[acc_id], zones, team
         if public_base is not None:
             pb = public_base.strip().rstrip("/")
             if pb and not pb.startswith("https://"):
-                raise ValueError("Öffentliche RMM-Adresse bitte mit https:// angeben")
+                raise ValueError("Please give the public RMM address with https://")
             d["public_base"] = pb
         return {"account": accs[acc_id], "zones": zones, "team_domain": team}
     return store.update(upd)
@@ -147,12 +147,12 @@ class RemoteBody(BaseModel):
 
 @router.post("/remote")
 def set_remote(body: RemoteBody, user: dict = Depends(get_current_user)):
-    """Zone fuer den Fernzugriff der Client-App (Adressen rmm-<proto>-<agent>.<zone>)."""
+    """Zone for the client-app remote access (addresses rmm-<proto>-<agent>.<zone>)."""
     _perm(user)
 
     def upd(d):
         if body.zone and body.zone not in [z["name"] for z in d.get("zones") or []]:
-            raise ValueError("Zone gehört nicht zu diesem Konto")
+            raise ValueError("Zone does not belong to this account")
         d["remote"] = {**(d.get("remote") or {}), "zone": body.zone}
     try:
         store.update(upd)
@@ -180,7 +180,7 @@ def refresh(user: dict = Depends(get_current_user)):
     _perm(user)
     acc = (store.load().get("account") or {}).get("id")
     if not acc:
-        raise HTTPException(409, "Noch kein Konto gewählt")
+        raise HTTPException(409, "No account selected yet")
     try:
         return _load_account(acc, None)
     except Exception as e:      # noqa: BLE001
@@ -207,7 +207,7 @@ KINDS = ("dashboard", "webdav", "sftp", "ftp", "console_ssh", "website", "docker
 @router.post("/routes")
 async def save_route(body: RouteBody, background: bool = False, user: dict = Depends(get_current_user)):
     """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
-    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    Progress + result in the task view. ?background=1 -> job immediately."""
     _perm(user)
     async def _work(job):
         job.update(phase='cloudflare.sync', detail="Cloudflare: Route speichern + abgleichen")
@@ -244,7 +244,7 @@ def _save_route_impl(body: RouteBody, user: dict = Depends(get_current_user)):
         r = store.update(upd)
     except Exception as e:      # noqa: BLE001
         _err(e)
-    # Alte Adresse aufraeumen (Adresse geaendert)
+    # Clean up the old address (address changed)
     od = (r.get("state") or {}).get("old_dns")
     if od and od.get("id"):
         try:
@@ -262,12 +262,12 @@ def _save_route_impl(body: RouteBody, user: dict = Depends(get_current_user)):
 @router.delete("/routes/{rid}")
 async def delete_route(rid: str, background: bool = False, user: dict = Depends(get_current_user)):
     """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
-    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    Progress + result in the task view. ?background=1 -> job immediately."""
     _perm(user)
     async def _work(job):
-        job.update(phase='cloudflare.sync', detail="Cloudflare: Route löschen + abgleichen")
+        job.update(phase='cloudflare.sync', detail="Cloudflare: delete route + sync")
         return await asyncio.to_thread(_delete_route_impl, rid=rid, user=user)
-    return await bgjobs.run('cloudflare.sync', None, title="Cloudflare: Route löschen + abgleichen", user=user, work=_work,
+    return await bgjobs.run('cloudflare.sync', None, title="Cloudflare: delete route + sync", user=user, work=_work,
                             background=background, perm='manage_cloudflare')
 
 
@@ -288,7 +288,7 @@ def _delete_route_impl(rid: str, user: dict = Depends(get_current_user)):
 @router.post("/sync")
 async def do_sync(background: bool = False, user: dict = Depends(get_current_user)):
     """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
-    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    Progress + result in the task view. ?background=1 -> job immediately."""
     _perm(user)
     async def _work(job):
         job.update(phase='cloudflare.sync', detail="Cloudflare: Abgleich")
@@ -308,7 +308,7 @@ def _do_sync_impl(user: dict = Depends(get_current_user)):
 @router.post("/connector/{act}")
 async def connector_act(act: str, background: bool = False, user: dict = Depends(get_current_user)):
     """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
-    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    Progress + result in the task view. ?background=1 -> job immediately."""
     _perm(user)
     async def _work(job):
         job.update(phase='cloudflare.connector', detail=f"Cloudflare-Connector: {act}")
@@ -324,7 +324,7 @@ def _connector_act_impl(act: str, user: dict = Depends(get_current_user)):
         connector.stop()
     elif act in ("start", "restart"):
         if not t.get("token_enc"):
-            raise HTTPException(409, "Es gibt noch keinen Tunnel – zuerst abgleichen bzw. eine Route anlegen")
+            raise HTTPException(409, "There is no tunnel yet – first sync or create a route")
         (connector.restart if act == "restart" else connector.start)(store.dec(t["token_enc"]))
     else:
         raise HTTPException(400, "start | stop | restart")
@@ -335,7 +335,7 @@ def _connector_act_impl(act: str, user: dict = Depends(get_current_user)):
 @router.delete("/nodes/{cid}")
 async def delete_node(cid: str, background: bool = False, user: dict = Depends(get_current_user)):
     """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
-    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    Progress + result in the task view. ?background=1 -> job immediately."""
     _perm(user)
     async def _work(job):
         job.update(phase='cloudflare.sync', detail="Cloudflare: Node-Tunnel entfernen")
@@ -356,7 +356,7 @@ def _delete_node_impl(cid: str, user: dict = Depends(get_current_user)):
 @router.delete("/all")
 async def delete_all(background: bool = False, user: dict = Depends(get_current_user)):
     """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
-    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    Progress + result in the task view. ?background=1 -> job immediately."""
     _perm(user)
     async def _work(job):
         job.update(phase='cloudflare.sync', detail="Cloudflare: alles entfernen")

@@ -1,16 +1,16 @@
-# services.py (Modul "cloudflare") - welche Dienste gibt es, und wohin zeigt der Tunnel?
+# services.py (module "cloudflare") - which services exist, and where does the tunnel point?
 # -------------------------------------------------------------------------------------
-# Die Ziele werden IMMER aus den tatsaechlich verwendeten Ports abgeleitet (beim Sync neu):
-#   dashboard / webdav  RMM-Port (app.config.PORT), WebDAV unter /dav/
-#   ftp / sftp          Modul "relay" teilt sich den RMM-Port (Weiche): Modus ftp|sftp
-#   console_ssh         Modul "console", Einstellung ssh_port (nur wenn ssh_enabled)
-#   website             Modul "webserver": rmm/<name>/ (Dateien oder Weiterleitung)
-#   docker              Modul "docker": Veroeffentlichung "path" (= Website) oder "port" (Host-Port)
-#   agent               RDP 3389 / SSH 22 / VNC 5900 (oder eigener Port) eines Agents
-#                       endpoint "server": dauerhafte Weiterleitung im Modul "network" (RMM -> Agent)
-#                       endpoint "node":   cloudflared auf einer Node im Netz des Agents
-#   custom              beliebige Adresse (http(s)://, tcp://, ssh://, rdp://)
-# cloudflared auf dem RMM-Server laeuft im selben System wie das Backend (127.0.0.1).
+# The targets are ALWAYS derived from the ports actually in use (fresh on each sync):
+#   dashboard / webdav  RMM port (app.config.PORT), WebDAV under /dav/
+#   ftp / sftp          the "relay" module shares the RMM port (switch): mode ftp|sftp
+#   console_ssh         "console" module, setting ssh_port (only if ssh_enabled)
+#   website             "webserver" module: rmm/<name>/ (files or forward)
+#   docker              "docker" module: publication "path" (= website) or "port" (host port)
+#   agent               RDP 3389 / SSH 22 / VNC 5900 (or own port) of an agent
+#                       endpoint "server": permanent forward in the "network" module (RMM -> agent)
+#                       endpoint "node":   cloudflared on a node in the agent network
+#   custom              any address (http(s)://, tcp://, ssh://, rdp://)
+# cloudflared on the RMM server runs on the same system as the backend (127.0.0.1).
 
 from __future__ import annotations
 
@@ -20,8 +20,8 @@ import struct
 from app import db, modules
 
 PROTO_PORT = {"rdp": 3389, "ssh": 22, "vnc": 5900}
-# Zugangsarten je Protokoll: http = Adresse im Browser; browser = Cloudflare rendert SSH/VNC im
-# Browser; client = cloudflared access auf dem PC; warp = privates Netz (WARP-Client)
+# Access modes per protocol: http = address in the browser; browser = Cloudflare renders SSH/VNC in the
+# browser; client = cloudflared access on the PC; warp = private network (WARP client)
 MODES = {"http": ["http", "warp"], "ssh": ["browser", "client", "warp"], "vnc": ["browser", "client", "warp"],
          "rdp": ["client", "warp"], "tcp": ["client", "warp"], "ftp": ["warp"]}
 
@@ -54,7 +54,7 @@ def docker_host() -> str:
 
 
 def own_ip() -> str:
-    """IP des RMM-Servers (fuer WARP-Routen auf Dienste des Servers selbst)."""
+    """IP of the RMM server (for WARP routes to services of the server itself)."""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("10.255.255.255", 1))
@@ -66,12 +66,12 @@ def own_ip() -> str:
 
 
 def catalog() -> dict:
-    """Alle derzeit genutzten Dienste - fuer \"Route hinzufuegen\" (Vorschlaege)."""
+    """All currently used services - for \"Add route\" (suggestions)."""
     port = rmm_port()
     out = [{"kind": "dashboard", "label": "RMM-Dashboard", "proto": "http", "port": port,
-            "hint": "Weboberfläche inkl. WebDAV (/dav/) und API"},
+            "hint": "Web interface incl. WebDAV (/dav/) and API"},
            {"kind": "webdav", "label": "WebDAV (Relay)", "proto": "http", "port": port,
-            "hint": "eigene Adresse nur für WebDAV-Laufwerke (/dav/)"}]
+            "hint": "own address only for WebDAV drives (/dav/)"}]
     if _on("relay"):
         try:
             mode = modules.use("relay", "ftp_relay").mode()
@@ -81,7 +81,7 @@ def catalog() -> dict:
             out.append({"kind": "sftp", "label": "SFTP (Relay)", "proto": "tcp", "port": port})
         elif mode == "ftp":
             out.append({"kind": "ftp", "label": "FTP (Relay)", "proto": "ftp", "port": port,
-                        "hint": "FTP geht nur über WARP (privates Netz) – lieber SFTP oder WebDAV nutzen"})
+                        "hint": "FTP only works via WARP (private network) – better use SFTP or WebDAV"})
     if _on("console"):
         st = modules.get_settings("console")
         if str(st.get("ssh_enabled", "no")) == "yes":
@@ -134,7 +134,7 @@ def proto_of(r: dict) -> str:
 
 
 def tunnel_key(r: dict) -> str:
-    """\"server\" oder \"node:<client_id>\" - welcher Tunnel/Connector bedient die Route?"""
+    """\"server\" or \"node:<client_id>\" - which tunnel/connector serves the route?"""
     if r["kind"] == "agent" and r.get("endpoint") == "node" and r.get("node_id"):
         return f"node:{r['node_id']}"
     return "server"
@@ -160,11 +160,11 @@ def origin(r: dict, forward_port: int | None = None) -> dict:
         pubs = {(p["stack"], p["pub"]): p for p in catalog()["docker"]}
         p = pubs.get((ref.get("stack"), ref.get("pub")))
         if not p:
-            raise ValueError("Docker-Veröffentlichung gibt es nicht mehr")
+            raise ValueError("Docker publication no longer exists")
         if p["mode"] == "path":
             return {"service": f"http://{lo}:{port}", "path": f"/{p['name']}/", "host": own_ip(), "port": port}
         if p.get("target", "local") != "local":
-            raise ValueError("Port-Veröffentlichungen auf Nodes bitte über eine Node-Route (eigene Adresse) tunneln")
+            raise ValueError("Tunnel port publications on nodes via a node route (own address)")
         return {"service": f"http://{docker_host()}:{p['public_port']}", "host": docker_host(),
                 "port": int(p["public_port"])}
     if k == "agent":
@@ -173,14 +173,14 @@ def origin(r: dict, forward_port: int | None = None) -> dict:
         scheme = {"rdp": "rdp", "ssh": "ssh", "vnc": "tcp"}[proto]
         if tunnel_key(r) == "server":
             if not forward_port:
-                raise ValueError("Weiterleitung zum Agent fehlt (Modul „Netzwerk“)")
+                raise ValueError("Forward to the agent is missing (Network module)")
             return {"service": f"{scheme}://{lo}:{forward_port}", "host": own_ip(), "port": forward_port}
         host = agent_lan_host(r)
         return {"service": f"{scheme}://{host}:{tport}", "host": host, "port": tport}
     if k == "custom":
         url = (ref.get("url") or "").strip()
         if not url or "://" not in url:
-            raise ValueError("Eigene Adresse im Format http://host:port, tcp://host:port, ssh://… angeben")
+            raise ValueError("Give a custom address in the format http://host:port, tcp://host:port, ssh://…")
         hp = url.split("://", 1)[1].split("/", 1)[0]
         h, _, p = hp.rpartition(":")
         return {"service": url, "host": h or hp, "port": int(p) if p.isdigit() else 0}
@@ -194,12 +194,12 @@ def agent_lan_host(r: dict) -> str:
     c = db.get_client(r["ref"].get("client_id", "")) or {}
     ip = (c.get("ip") or "").strip()
     if not ip:
-        raise ValueError("Für den Agent ist keine lokale IP bekannt – eigene Adresse angeben")
+        raise ValueError("No local IP known for the agent – give an own address")
     return ip
 
 
 def agent_target(r: dict) -> tuple[str, int]:
-    """Ziel der Weiterleitung aus Sicht des Agents (endpoint server)."""
+    """Target of the forward from the agent's point of view (endpoint server)."""
     ref = r.get("ref") or {}
     proto = ref.get("proto", "rdp")
     port = int(ref.get("port") or PROTO_PORT.get(proto, 3389))

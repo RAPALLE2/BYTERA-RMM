@@ -23,15 +23,15 @@ from app.auth import can_access_client, get_current_user, require_perm
 
 router = APIRouter()
 
-# Gaengige Dienste - die Oberflaeche bietet sie zur Auswahl an, damit
-# niemand Portnummern nachschlagen muss.
+# Common services - the UI offers them for selection so nobody has to look up
+# port numbers.
 PRESETS = [
-    {"name": "VNC", "port": 5900, "hint": "VNC-Betrachter auf diese Adresse richten"},
-    {"name": "RDP", "port": 3389, "hint": "Remotedesktop: Adresse eintragen"},
-    {"name": "SSH", "port": 22, "hint": "ssh -p <Port> benutzer@<Adresse>"},
-    {"name": "HTTP", "port": 80, "hint": "Im Browser oeffnen"},
-    {"name": "HTTPS", "port": 443, "hint": "Im Browser oeffnen"},
-    {"name": "SMB / Dateifreigabe", "port": 445, "hint": "\\\\\\\\<Adresse>\\\\Freigabe"},
+    {"name": "VNC", "port": 5900, "hint": "Point a VNC viewer at this address"},
+    {"name": "RDP", "port": 3389, "hint": "Remote Desktop: enter the address"},
+    {"name": "SSH", "port": 22, "hint": "ssh -p <port> user@<address>"},
+    {"name": "HTTP", "port": 80, "hint": "Open in the browser"},
+    {"name": "HTTPS", "port": 443, "hint": "Open in the browser"},
+    {"name": "SMB / file share", "port": 445, "hint": "\\\\\\\\<Adresse>\\\\Freigabe"},
 ]
 
 
@@ -41,8 +41,8 @@ class ForwardBody(BaseModel):
     target_host: str = "127.0.0.1"
     minutes: int = 240
     label: str = ""
-    # Herkunft einschraenken, z.B. "192.168.178.0/24". Leer = jeder, der das
-    # Backend erreicht.
+    # Restrict the origin, e.g. "192.168.178.0/24". Empty = anyone who can reach
+    # the backend.
     allow_from: str = ""
 
 
@@ -60,7 +60,7 @@ async def create_forward(body: ForwardBody,
                          user: dict = Depends(get_current_user)):
     require_perm(user, "c_portforward", body.client_id)
     if not 1 <= body.target_port <= 65535:
-        raise HTTPException(400, "Ungültiger Ziel-Port")
+        raise HTTPException(400, "Invalid target port")
     try:
         rec = await portforward.create(
             client_id=body.client_id, target_port=body.target_port,
@@ -84,7 +84,7 @@ async def delete_forward(forward_id: str,
                          user: dict = Depends(get_current_user)):
     rec = db.get_port_forward(forward_id)
     if not rec:
-        raise HTTPException(404, "Weiterleitung unbekannt")
+        raise HTTPException(404, "Forward unknown")
     require_perm(user, "c_portforward", rec["client_id"])
     await portforward.stop(forward_id)
     db.add_audit_entry(user["username"], "portforward.closed",
