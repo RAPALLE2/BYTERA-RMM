@@ -3150,6 +3150,8 @@ GLOBAL_PERM_KEYS = [
     "use_bmc",         # Modul "bmc": iLO/iDRAC ansehen und steuern
     "manage_bmc",      # Modul "bmc": BMC-Verbindungen anlegen/aendern
     "use_passwords",   # Modul "passwords": Passwort-Manager nutzen
+    "use_geotrack",    # Modul "geotrack": Standorte ansehen
+    "manage_geotrack", # Modul "geotrack": Tracking an/aus, Verlauf loeschen
     "manage_tenants",
     "use_tenants",
     "manage_dist",
@@ -3300,6 +3302,7 @@ _PERM_IMPLIES = {
     "use_guacamole": ["c_guacamole"],
     "manage_users": ["create_users", "see_permissions", "manage_permissions"],
     "manage_bmc": ["use_bmc"],
+    "manage_geotrack": ["use_geotrack"],
     # altes manage_clients deckte auch Notizen/Websites/Löschen/Power ab
     "manage_clients": ["c_delete", "c_power", "c_notes_view", "c_notes_edit",
                        "c_websites_view", "c_websites_edit", "set_warranty"],

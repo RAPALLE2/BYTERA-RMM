@@ -15,7 +15,7 @@ import { hasClientPerm, hasGlobalPerm, isAdmin } from "./state.js";
 import { formatBytes, formatUptime, esc, gradientDonutSvg, CPU_GRADIENT, RAM_GRADIENT, DISK_GRADIENT, interactiveChart, uiConfirm, uiPrompt, uiChoice } from "./utils.js";
 import { getHistoryRange, TIME_RANGES, seedHistory, hasSeeded } from "./metricshistory.js";
 import { openWindow } from "./windowmanager.js";
-import { isModuleOn, getClientActions, runActionHandlers } from "./modules.js";   // Optionale Modul-Funktionen (Guacamole-Knopf, Modul-Knöpfe)
+import { isModuleOn, getClientActions, getClientWidgets, runActionHandlers } from "./modules.js";   // Optionale Modul-Funktionen (Guacamole-Knopf, Modul-Knöpfe, Widgets)
 import { subjectPickerHtml, readSubjectPicker, initSubjectPicker } from "./subjectpicker.js";
 import { api } from "./api.js";
 import { renderDashboard } from "../feature/dashboard.js";
@@ -115,11 +115,24 @@ function renderClientView(el, clientId) {
       </span>
     </div>
     <div id="dash-layout-host"></div>
+    <div id="dash-module-widgets" style="display:flex;flex-wrap:wrap;gap:12px;margin-top:14px"></div>
   `;
 
   // Anpassbares Layout (Status/Aktionen/Übersicht-Ordner) rendern.
   renderClientLayout(el.querySelector("#dash-layout-host"),
                      el.querySelector("#dash-layout-toolbar"), client);
+
+  // Widgets aktiver Module (registerClientWidget), z.B. Standort-Karte.
+  const wHost = el.querySelector("#dash-module-widgets");
+  getClientWidgets().forEach((w) => {
+    let ok = false;
+    try { ok = w.match ? w.match(client) : true; } catch { ok = false; }
+    if (!ok) return;
+    const box = document.createElement("div");
+    box.style.cssText = "flex:1 1 320px;min-width:300px";
+    wHost.appendChild(box);
+    try { w.render(box, client); } catch (e) { box.innerHTML = `<div style="color:var(--danger);font-size:12px">Widget-Fehler: ${esc(e.message)}</div>`; }
+  });
 
   maybePromptDeviceType(client);
 }

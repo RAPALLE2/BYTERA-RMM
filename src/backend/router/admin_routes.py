@@ -159,6 +159,8 @@ PERM_LABELS = {
     "use_bmc": "iLO/iDRAC ansehen und steuern (Power, Konsole, Sensoren) – Modul „iLO / iDRAC“",
     "manage_bmc": "iLO/iDRAC-Verbindungen anlegen und bearbeiten – Modul „iLO / iDRAC“",
     "use_passwords": "Passwort-Manager nutzen (eigene & geteilte Tresore, Ende-zu-Ende) – Modul „Passwörter“",
+    "use_geotrack": "Gerätestandorte ansehen (Karte, Verlauf) – Modul „Standort-Tracker“",
+    "manage_geotrack": "Standort-Tracking je Gerät an/aus schalten, Verlauf löschen – Modul „Standort-Tracker“",
     "manage_tenants": "Mandanten verwalten (Backends verbinden, Freigaben) – Modul „Mandanten“",
     "use_tenants": "Mandanten öffnen und wechseln – Modul „Mandanten“",
     "manage_dist": "Verteilung verwalten (/dist: Ordner, Dateien, Freigaben)",

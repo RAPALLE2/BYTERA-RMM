@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "id": "geotrack",
+  "name": "Standort-Tracker",
+  "version": "1.0.0",
+  "description": "Ortet Agenten (Standard: Laptops, aber für jedes Gerät aktivierbar) und zeigt den Standort als Widget direkt beim Client sowie als Karte mit Verlauf. Quellen in dieser Reihenfolge: Betriebssystem-Standort, WLAN-BSSID (Google-Geolocation-API), IP-Geolocation. Intervall und Aufbewahrungsdauer einstellbar. Standortdaten sind sensibel – nur mit Recht sichtbar, Tracking je Gerät abschaltbar.",
+  "author": "BYTERA",
+  "category": "Betrieb",
+  "icon": "📍",
+  "requires": [],
+  "pip": ["httpx"],
+  "routers": [
+    { "module": "geotrack_routes" }
+  ],
+  "hooks": {
+    "startup": "on_startup",
+    "enable": "on_startup"
+  },
+  "entry": "module",
+  "init": {
+    "entry": "init.js",
+    "export": "init"
+  },
+  "apps": [
+    {
+      "id": "geotrack",
+      "label": "Standorte",
+      "icon": "📍",
+      "title": "Standort-Tracker",
+      "entry": "app.js",
+      "export": "renderGeo",
+      "w": 1000,
+      "h": 720,
+      "perm": "use_geotrack"
+    }
+  ],
+  "settings": [
+    { "key": "sources", "type": "string", "label": "Standortquellen (Reihenfolge, Komma)", "default": "os,wifi,ip",
+      "help": "Welche Quellen genutzt werden, beste zuerst: os (Betriebssystem), wifi (WLAN-BSSID via Google), ip (IP-Geolocation)." },
+    { "key": "interval_min", "type": "number", "label": "Ortungsintervall (Minuten)", "default": 30 },
+    { "key": "retention_days", "type": "number", "label": "Verlauf aufbewahren (Tage)", "default": 90 },
+    { "key": "google_api_key", "type": "string", "label": "Google-Geolocation-API-Key (für WLAN-Ortung)", "default": "" },
+    { "key": "ip_service", "type": "string", "label": "IP-Geolocation-Dienst (ip-api | ipinfo)", "default": "ip-api" },
+    { "key": "ipinfo_token", "type": "string", "label": "ipinfo.io Token (optional)", "default": "" }
+  ]
+}

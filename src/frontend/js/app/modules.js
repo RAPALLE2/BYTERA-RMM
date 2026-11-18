@@ -97,6 +97,21 @@ export function getClientActions() {
   return out;
 }
 
+// Module koennen ein eigenes Widget im Client-Panel zeigen (z.B. Standort-Karte):
+//   registerClientWidget("geotrack", { match(client)->bool, render(el, client) })
+// match entscheidet, ob das Widget fuer diesen Client erscheint; render baut es.
+const clientWidgets = new Map();
+export function registerClientWidget(mid, widget) {
+  const list = clientWidgets.get(mid) || [];
+  list.push(widget);
+  clientWidgets.set(mid, list);
+}
+export function getClientWidgets() {
+  const out = [];
+  for (const [mid, list] of clientWidgets) if (mods.has(mid)) list.forEach((w) => out.push({ mid, ...w }));
+  return out;
+}
+
 // Module koennen Knoepfe des Agent-Panels uebernehmen (z.B. Modul "client": in der
 // Client-App RDP/VNC/SSH extern oeffnen statt im Browser-Fenster):
 //   registerActionHandler("client", (action, client, ev) => true|false)

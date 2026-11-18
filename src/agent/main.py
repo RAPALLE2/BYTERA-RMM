@@ -3215,6 +3215,106 @@ def _diag_sample() -> str:
     return "MESSWERT " + " ".join(parts)
 
 
+def _geo_wifi():
+    """Umliegende WLAN-Access-Points (BSSID + Signal in %). Leise bei Fehlern."""
+    aps = []
+    try:
+        if IS_WINDOWS:
+            out = subprocess.run(["netsh", "wlan", "show", "networks", "mode=bssid"],
+                                 capture_output=True, text=True, timeout=12,
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+            cur_sig = None
+            for line in out.splitlines():
+                s = line.strip()
+                m = re.search(r"BSSID\s*\d+\s*:\s*([0-9A-Fa-f:]{17})", s)
+                if m:
+                    aps.append({"mac": m.group(1).lower(), "signal": -65})
+                    cur_sig = len(aps) - 1
+                elif cur_sig is not None:
+                    ms = re.search(r"Signal\s*:\s*(\d+)%", s)
+                    if ms:
+                        aps[cur_sig]["signal"] = int(int(ms.group(1)) / 2) - 100
+        elif sys.platform == "darwin":
+            ap = "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport"
+            out = subprocess.run([ap, "-s"], capture_output=True, text=True, timeout=12).stdout
+            for line in out.splitlines()[1:]:
+                m = re.search(r"([0-9a-fA-F:]{17})\s+(-?\d+)", line)
+                if m:
+                    aps.append({"mac": m.group(1).lower(), "signal": int(m.group(2))})
+        else:
+            out = subprocess.run(["nmcli", "-t", "-f", "BSSID,SIGNAL", "dev", "wifi"],
+                                 capture_output=True, text=True, timeout=12).stdout
+            for line in out.splitlines():
+                parts = line.replace("\\:", "§").split(":")
+                if not parts or len(parts[0].replace("§", ":")) < 17:
+                    continue
+                mac = parts[0].replace("§", ":").lower()
+                try:
+                    pct = int(parts[-1])
+                except ValueError:
+                    pct = 50
+                aps.append({"mac": mac, "signal": int(pct / 2) - 100})
+    except Exception:
+        pass
+    # Duplikate zusammenfassen
+    seen = {}
+    for a in aps:
+        if a["mac"] not in seen:
+            seen[a["mac"]] = a
+    return list(seen.values())[:30]
+
+
+def _geo_os():
+    """Betriebssystem-Standort (nur wenn vom Nutzer erlaubt). Windows: System.Device."""
+    try:
+        if IS_WINDOWS:
+            ps = ("$ErrorActionPreference='Stop';Add-Type -AssemblyName System.Device;"
+                  "$w=New-Object System.Device.Location.GeoCoordinateWatcher('High');"
+                  "$null=$w.TryStart($true,[TimeSpan]::FromSeconds(8));"
+                  "$c=$w.Position.Location;"
+                  "if($c.IsUnknown){'none'}else{\"$($c.Latitude),$($c.Longitude),$($c.HorizontalAccuracy)\"}")
+            out = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True,
+                                 timeout=15, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout.strip()
+            if out and out != "none" and "," in out:
+                lat, lon, acc = (out.split(",") + ["0"])[:3]
+                return {"lat": float(lat), "lon": float(lon), "accuracy": float(acc or 0)}
+    except Exception:
+        pass
+    return None
+
+
+def _geo_public_ip():
+    try:
+        import urllib.request
+        for url in ("https://api.ipify.org", "https://ifconfig.me/ip"):
+            try:
+                with urllib.request.urlopen(url, timeout=8) as r:
+                    ip = r.read().decode().strip()
+                    if ip and len(ip) <= 45:
+                        return ip
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None
+
+
+@sio.on("geo-locate", namespace="/agent")
+async def on_geo_locate(payload):
+    """Backend bittet um Standortdaten (WLAN-APs, OS-Standort, öffentliche IP)."""
+    rid = (payload or {}).get("requestId")
+    try:
+        wifi, os_loc, ip = await asyncio.gather(
+            asyncio.to_thread(_geo_wifi), asyncio.to_thread(_geo_os), asyncio.to_thread(_geo_public_ip))
+        result = {"requestId": rid, "wifi": wifi, "os": os_loc, "public_ip": ip}
+    except Exception as exc:
+        result = {"requestId": rid, "error": str(exc)}
+    try:
+        await sio.emit("geo-result", result, namespace="/agent")
+    except Exception:
+        pass
+
+
 @sio.on("diag-mode", namespace="/agent")
 async def on_diag_mode(payload):
     """Das Backend schaltet den Wartungsmodus ein oder aus."""
