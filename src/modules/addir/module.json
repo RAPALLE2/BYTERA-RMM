@@ -3,9 +3,9 @@
   "id": "addir",
   "name": "Active Directory",
   "version": "1.1.0",
-  "description": "Active Directory per LDAP verwalten: mehrere AD-Verbindungen, Benutzer anlegen/verschieben/bearbeiten, Passwörter setzen und zurücksetzen, aktivieren/sperren/entsperren, Ablaufdatum, Gruppen anlegen/verschieben/zuweisen, OUs anlegen/verschieben sowie Massen-Import per CSV. Verbundene ADs lassen sich im Modul „SSO“ direkt als Anmeldequelle wählen. Neu: DNS-Einträge der AD-integrierten Zonen bearbeiten (A, AAAA, CNAME, MX, TXT, SRV, NS, PTR) und Gruppenrichtlinien verwalten (anlegen, löschen, umbenennen, verknüpfen, Reihenfolge, erzwingen, Vererbung blockieren, Sicherheitsfilterung) sowie bearbeiten: ALLE Administrativen Vorlagen werden dynamisch aus den ADMX/ADML-Dateien der Domäne geladen, dazu eigene Registry-Werte und Sicherheitseinstellungen. Agentenlos per LDAP + SYSVOL - oder über eine BYTERA-Node auf dem Domänencontroller.",
+  "description": "Manage Active Directory over LDAP: multiple AD connections, create/move/edit users, set and reset passwords, enable/lock/unlock, expiry dates, create/move/assign groups, create/move OUs and bulk import via CSV. Connected ADs can be picked directly as a sign-in source in the \"SSO\" module. New: edit DNS records of AD-integrated zones (A, AAAA, CNAME, MX, TXT, SRV, NS, PTR) and manage Group Policy (create, delete, rename, link, order, enforce, block inheritance, security filtering) plus edit it: ALL administrative templates are loaded dynamically from the domain's ADMX/ADML files, along with custom registry values and security settings. Agentless via LDAP + SYSVOL - or through a BYTERA node on the domain controller.",
   "author": "BYTERA",
-  "category": "System",
+  "category": "sicherheit",
   "icon": "🗂️",
   "requires": [],
   "pip": [

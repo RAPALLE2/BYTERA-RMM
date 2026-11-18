@@ -80,5 +80,5 @@ def get(cid: str) -> dict | None:
 
 
 def public(c: dict) -> dict:
-    """Ohne Passwort - fuer die Oberflaeche / fuer SSO-Import."""
+    """Without password - for the UI / for SSO import."""
     return {k: v for k, v in c.items() if k != "bind_pw_enc"} | {"has_password": bool(c.get("bind_pw_enc"))}

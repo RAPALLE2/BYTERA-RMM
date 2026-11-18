@@ -1,18 +1,18 @@
 """
-adcore.py (Modul "addir") - DNS und Gruppenrichtlinien OHNE Agent/PowerShell.
+adcore.py (module "addir") - DNS and Group Policy WITHOUT an agent/PowerShell.
 
-Dieselbe Datei laeuft im BACKEND (LDAP + SYSVOL per SMB) und im NODE-Teil auf
-dem Domaenencontroller (LDAP lokal + SYSVOL als lokaler Ordner). Nur
-Standardbibliothek + ldap3.
+The same file runs in the BACKEND (LDAP + SYSVOL via SMB) and in the NODE part on
+the domain controller (LDAP locally + SYSVOL as a local folder). Standard library
++ ldap3 only.
 
-DNS:  AD-integrierte Zonen liegen als dnsZone/dnsNode-Objekte im AD; jeder
-      Eintrag ist ein binaerer dnsRecord-Wert (MS-DNSP 2.3.2.2). Der DNS-Dienst
-      uebernimmt Aenderungen beim naechsten AD-Abgleich (Standard ~3 Minuten).
-GPO:  groupPolicyContainer im AD (Name, Status, Version, Erweiterungen, Links
-      per gPLink) + Dateien in SYSVOL (GPT.INI, Registry.pol, GptTmpl.inf).
-      Alle "Administrativen Vorlagen" werden DYNAMISCH aus den ADMX/ADML-
-      Dateien der Domaene gelesen (Central Store in SYSVOL, sonst
-      C:\\Windows\\PolicyDefinitions des DC) - nichts ist fest einprogrammiert.
+DNS:  AD-integrated zones are stored as dnsZone/dnsNode objects in AD; each
+      record is a binary dnsRecord value (MS-DNSP 2.3.2.2). The DNS service
+      picks up changes at the next AD sync (default ~3 minutes).
+GPO:  groupPolicyContainer in AD (name, status, version, extensions, links
+      via gPLink) + files in SYSVOL (GPT.INI, Registry.pol, GptTmpl.inf).
+      All "administrative templates" are read DYNAMICALLY from the ADMX/ADML
+      files of the domain (central store in SYSVOL, otherwise
+      C:\\Windows\\PolicyDefinitions on the DC) - nothing is hard-coded.
 """
 
 from __future__ import annotations
@@ -169,7 +169,7 @@ def dns_encode(rtype: str, value: dict, ttl: int, serial: int) -> bytes:
         chunks = [txt[i:i + 255] for i in range(0, len(txt), 255)] or [b""]
         data = b"".join(bytes([len(c)]) + c for c in chunks)
     else:
-        raise CoreError(f"Record-Typ {rtype} wird nicht unterstützt")
+        raise CoreError(f"Record type {rtype} is not supported")
     head = struct.pack("<HHBBHI", len(data), DNS_TYPE_ID[t], 5, 0xF0, 0, serial)
     head += struct.pack(">I", int(ttl)) + struct.pack("<II", 0, 0)   # TTL big-endian, Reserved, TimeStamp=0 (statisch)
     return head + data
@@ -375,7 +375,7 @@ class AdmxCatalog:
             for cid in (f"{ns}:{nm}",):
                 if cid in self.categories:
                     return cid
-            for cid in self.categories:                 # Fallback: nur Name
+            for cid in self.categories:                 # fallback: name only
                 if cid.endswith(":" + nm):
                     return cid
         return ref
@@ -447,7 +447,7 @@ class AdmxCatalog:
                     else:
                         continue
                     elements.append(d)
-            # Beschriftungen aus der ADML-Praesentation
+            # labels from the ADML presentation
             labels, order = {}, []
             pref = p.get("presentation") or ""
             pnode = pres.get(pref[15:-1]) if pref.startswith("$(presentation.") else None
@@ -538,7 +538,7 @@ class AdmxCatalog:
 
     # ---------- Zustand schreiben ----------
     def touched(self, pol) -> list[tuple]:
-        """Alle (key, name)-Paare, die diese Richtlinie belegen kann."""
+        """All (key, name) pairs that this policy can occupy."""
         pairs = []
         if pol["valueName"]:
             pairs.append((pol["key"], pol["valueName"]))
@@ -556,7 +556,7 @@ class AdmxCatalog:
         return pairs
 
     def apply(self, pol, entries: list, state: str, values: dict) -> list:
-        """Gibt die neue Eintragsliste zurueck (andere Richtlinien bleiben unberuehrt)."""
+        """Returns the new list of entries (other policies remain untouched)."""
         drop = set()
         wild = set()
         for k, n in self.touched(pol):
@@ -603,17 +603,17 @@ class AdmxCatalog:
             elif k == "decimal":
                 if v in (None, ""):
                     if el["required"]:
-                        raise CoreError(f"„{el['label']}“ ist ein Pflichtfeld")
+                        raise CoreError(f"\"{el['label']}\" is a required field")
                     continue
                 n = int(v)
                 if n < el["min"] or n > el["max"]:
-                    raise CoreError(f"„{el['label']}“ muss zwischen {el['min']} und {el['max']} liegen")
+                    raise CoreError(f"\"{el['label']}\" must be between {el['min']} and {el['max']}")
                 put(el["key"], el["name"], ("REG_SZ", str(n)) if el["text"]
                     else ("REG_QWORD" if el.get("long") else "REG_DWORD", n))
             elif k == "text":
                 if v in (None, ""):
                     if el["required"]:
-                        raise CoreError(f"„{el['label']}“ ist ein Pflichtfeld")
+                        raise CoreError(f"\"{el['label']}\" is a required field")
                     continue
                 put(el["key"], el["name"], ("REG_EXPAND_SZ" if el["expand"] else "REG_SZ", str(v)[:el["maxlen"]]))
             elif k == "multiText":
@@ -650,13 +650,13 @@ class AdmxCatalog:
     def public_policy(self, pid) -> dict:
         p = self.policies.get(pid)
         if not p:
-            raise CoreError("Richtlinie nicht gefunden")
+            raise CoreError("Policy not found")
         clean = {k: v for k, v in p.items() if not k.startswith("_")}
         return clean
 
 
 # ======================================================================
-# Sicherheitsbeschreibung (nur DACL) - fuer die Sicherheitsfilterung
+# security descriptor (DACL only) - for security filtering
 # ======================================================================
 APPLY_GP = uuid.UUID("edacfd8f-ffb3-11d1-b41d-00a0c968f939").bytes_le
 READ_MASK = 0x20094                     # READ_CONTROL | LIST | READ_PROP | LIST_OBJECT
@@ -696,7 +696,7 @@ def sd_parse(sd: bytes) -> dict:
 def ace_info(ace: dict) -> dict:
     raw, t = ace["raw"], ace["type"]
     mask = struct.unpack("<I", raw[4:8])[0]
-    if t in (5, 6):                        # Objekt-ACE
+    if t in (5, 6):                        # object ACE
         oflags = struct.unpack("<I", raw[8:12])[0]
         off = 12
         otype = None
@@ -721,7 +721,7 @@ def _ace(atype, flags, mask, sid, otype=None) -> bytes:
 def sd_build(control: int, aces: list) -> bytes:
     acl_body = b"".join(a["raw"] for a in aces)
     acl = struct.pack("<BBHHH", 4, 0, 8 + len(acl_body), len(aces), 0) + acl_body
-    control = (control | 0x0004 | 0x8000) & ~0x0010            # DACL present, self-relative, kein SACL
+    control = (control | 0x0004 | 0x8000) & ~0x0010            # DACL present, self-relative, no SACL
     return struct.pack("<BBHIIII", 1, 0, control, 0, 0, 0, 20) + acl
 
 
@@ -745,9 +745,9 @@ def filter_set(sd: bytes, sid: str, apply: bool) -> bytes:
     for a in explicit:
         i = ace_info(a)
         if i["sid"] == sid and i["allow"] and i["otype"] == APPLY_GP:
-            continue                       # Apply-Recht dieses Prinzipals entfernen (wird ggf. neu gesetzt)
+            continue                       # remove this principal's Apply right (may be re-set)
         if not apply and i["sid"] == sid and sid != AUTH_USERS and i["allow"] and i["mask"] == READ_MASK:
-            continue                       # zugehoeriges Leserecht ebenfalls entfernen
+            continue                       # also remove the associated read right
         keep.append(a)
     if apply:
         has_read = any(ace_info(a)["sid"] == sid and ace_info(a)["allow"] and
@@ -800,7 +800,7 @@ class Core:
         try:
             ok = self.c.search(base, flt, search_scope=sc, attributes=attrs, controls=controls)
         except LDAPNoSuchObjectResult:
-            return []                          # Objekt/Basis existiert nicht
+            return []                          # object/base does not exist
         except LDAPException as exc:
             raise CoreError(f"LDAP-Suche fehlgeschlagen: {exc}") from None
         if not ok and self.c.result.get("result") not in (0, 32):
@@ -821,7 +821,7 @@ class Core:
 
     # ================================================ DNS
     def _zone_bases(self):
-        return [("Domäne", f"CN=MicrosoftDNS,DC=DomainDnsZones,{self.base}"),
+        return [("Domain", f"CN=MicrosoftDNS,DC=DomainDnsZones,{self.base}"),
                 ("Gesamtstruktur", f"CN=MicrosoftDNS,DC=ForestDnsZones,{self.root}"),
                 ("Legacy", f"CN=MicrosoftDNS,CN=System,{self.base}")]
 
@@ -840,7 +840,7 @@ class Core:
         for z in self.dns_zones():
             if z["name"].lower() == zone.lower():
                 return z["dn"]
-        raise CoreError(f"Zone {zone} nicht gefunden (nur AD-integrierte Zonen)")
+        raise CoreError(f"Zone {zone} not found (AD-integrated zones only)")
 
     def dns_records(self, zone: str) -> list:
         zdn = self._zone_dn(zone)
@@ -868,12 +868,12 @@ class Core:
         from ldap3.utils.dn import escape_rdn
         name = (name or "@").strip().rstrip(".")
         if not name or "," in name or "=" in name:
-            raise CoreError("Ungültiger Name")
+            raise CoreError("Invalid name")
         return f"DC={escape_rdn(name)},{zdn}"
 
     def dns_add(self, zone, name, rtype, value, ttl=3600):
         if rtype.upper() not in EDITABLE_TYPES:
-            raise CoreError(f"Typ {rtype} kann nicht bearbeitet werden")
+            raise CoreError(f"Type {rtype} cannot be edited")
         zdn = self._zone_dn(zone)
         raw = dns_encode(rtype, value, int(ttl), self._soa_serial(zdn))
         ndn = self._node_dn(name, zdn)
@@ -888,9 +888,9 @@ class Core:
                 existing = (ex[0].get("raw_attributes") or {}).get("dnsRecord", [])
                 if any(dns_decode(e)["value"] == dns_decode(raw)["value"] and dns_decode(e)["type"] == rtype.upper()
                        for e in existing):
-                    raise CoreError("Dieser Eintrag existiert bereits")
+                    raise CoreError("This record already exists")
                 if rtype.upper() == "CNAME" or any(dns_decode(e)["type"] == "CNAME" for e in existing):
-                    raise CoreError("Ein CNAME darf nicht neben anderen Einträgen desselben Namens stehen")
+                    raise CoreError("A CNAME cannot coexist with other records of the same name")
                 self._check(self.c.modify(ndn, {"dnsRecord": [(self.l3.MODIFY_ADD, [raw])]}), "Eintrag anlegen")
         else:
             self._check(self.c.add(ndn, ["top", "dnsNode"], {"dnsRecord": [raw]}), "Eintrag anlegen")
@@ -902,10 +902,10 @@ class Core:
         old = base64.b64decode(rid)
         rtype = dns_decode(old)["type"]
         if rtype not in EDITABLE_TYPES:
-            raise CoreError(f"Typ {rtype} kann nicht bearbeitet werden")
+            raise CoreError(f"Type {rtype} cannot be edited")
         new = dns_encode(rtype, value, int(ttl), self._soa_serial(zdn))
         self._check(self.c.modify(ndn, {"dnsRecord": [(self.l3.MODIFY_DELETE, [old]),
-                                                      (self.l3.MODIFY_ADD, [new])]}), "Eintrag ändern")
+                                                      (self.l3.MODIFY_ADD, [new])]}), "modify record")
         return dns_decode(new)
 
     def dns_delete(self, zone, name, rid):
@@ -913,13 +913,13 @@ class Core:
         ndn = self._node_dn(name, zdn)
         old = base64.b64decode(rid)
         if dns_decode(old)["type"] == "SOA":
-            raise CoreError("Der SOA-Eintrag kann nicht gelöscht werden")
+            raise CoreError("The SOA record cannot be deleted")
         ex = self._search(ndn, "(objectClass=dnsNode)", ["dnsRecord"], "BASE")
         vals = (ex[0].get("raw_attributes") or {}).get("dnsRecord", []) if ex else []
         if len(vals) <= 1:
-            self._check(self.c.delete(ndn), "Eintrag löschen")
+            self._check(self.c.delete(ndn), "delete record")
         else:
-            self._check(self.c.modify(ndn, {"dnsRecord": [(self.l3.MODIFY_DELETE, [old])]}), "Eintrag löschen")
+            self._check(self.c.modify(ndn, {"dnsRecord": [(self.l3.MODIFY_DELETE, [old])]}), "delete record")
         return {"ok": True}
 
     # ================================================ GPO: Verwaltung
@@ -989,7 +989,7 @@ class Core:
         r = self._search(f"CN={guid},{self.pol_base}", "(objectClass=groupPolicyContainer)",
                          ["displayName", "versionNumber", "gPCMachineExtensionNames", "gPCUserExtensionNames", "flags"], "BASE")
         if not r:
-            raise CoreError("GPO nicht gefunden")
+            raise CoreError("GPO not found")
         return {"dn": r[0]["dn"], "guid": guid, "name": self._a(r[0], "displayName", guid),
                 "version": int(self._a(r[0], "versionNumber", 0) or 0),
                 "mext": self._a(r[0], "gPCMachineExtensionNames", "") or "",
@@ -1031,7 +1031,7 @@ class Core:
             if any(l["guid"] == g["guid"] for l in t["links"]):
                 self.gpo_unlink(g["guid"], t["dn"])
         for r in sorted(self._search(g["dn"], "(objectClass=*)", ["cn"]), key=lambda x: -len(x["dn"])):
-            self._check(self.c.delete(r["dn"]), "GPO löschen")
+            self._check(self.c.delete(r["dn"]), "delete GPO")
         self.fs.rmtree(f"Policies/{g['guid']}")
         return {"ok": True}
 
@@ -1049,21 +1049,21 @@ class Core:
     def _set_gplink(self, target_dn, entries):
         val = self._build_gplink(entries)
         op = [(self.l3.MODIFY_REPLACE, [val])] if val else [(self.l3.MODIFY_REPLACE, [])]
-        self._check(self.c.modify(target_dn, {"gPLink": op}), "Verknüpfung ändern")
+        self._check(self.c.modify(target_dn, {"gPLink": op}), "modify link")
 
     def _links_of(self, target_dn):
         r = self._search(target_dn, "(objectClass=*)", ["gPLink"], "BASE")
         if not r:
-            raise CoreError("Ziel nicht gefunden")
+            raise CoreError("Target not found")
         return self._parse_gplink(self._a(r[0], "gPLink", "") or "")
 
     def gpo_link(self, guid, target_dn, enabled=True, enforced=False):
         g = self._gpo(guid)
         ls = self._links_of(target_dn)
         if any(l["guid"] == g["guid"] for l in ls):
-            raise CoreError("GPO ist mit diesem Ziel bereits verknüpft")
+            raise CoreError("The GPO is already linked to this target")
         opt = (0 if enabled else 1) | (2 if enforced else 0)
-        # Neue Verknuepfung bekommt - wie in der GPMC - die niedrigste Prioritaet
+        # a new link gets - as in the GPMC - the lowest priority
         # (= vorne im gPLink-String; Verknuepfungsreihenfolge 1 steht hinten).
         self._set_gplink(target_dn, [{"dn": g["dn"], "opt": opt}] + ls)
         return {"ok": True}
@@ -1078,7 +1078,7 @@ class Core:
         ls = self._links_of(target_dn)
         cur = next((l for l in ls if l["guid"] == guid), None)
         if not cur:
-            raise CoreError("Verknüpfung nicht gefunden")
+            raise CoreError("Link not found")
         if enabled is not None:
             cur["opt"] = (cur["opt"] & ~1) | (0 if enabled else 1)
         if enforced is not None:
@@ -1092,7 +1092,7 @@ class Core:
 
     def gpo_block(self, target_dn, block: bool):
         self._check(self.c.modify(target_dn, {"gPOptions": [(self.l3.MODIFY_REPLACE, [1 if block else 0])]}),
-                    "Vererbung ändern")
+                    "change inheritance")
         return {"ok": True}
 
     # ------------------------------------------------ Sicherheitsfilterung
@@ -1102,7 +1102,7 @@ class Core:
                          controls=security_descriptor_control(sdflags=0x04))
         sd = (r[0].get("raw_attributes") or {}).get("nTSecurityDescriptor", [b""])[0] if r else b""
         if not sd:
-            raise CoreError("Sicherheitsbeschreibung nicht lesbar (Rechte des Bind-Benutzers?)")
+            raise CoreError("Security descriptor not readable (bind user permissions?)")
         return sd
 
     def _sid_name(self, sid):
@@ -1127,11 +1127,11 @@ class Core:
             r = self._search(self.base, f"(sAMAccountName={escape_filter_chars(principal)})", ["objectSid"])
             raw = (r[0].get("raw_attributes") or {}).get("objectSid", [b""])[0] if r else b""
             if not raw:
-                raise CoreError(f"„{principal}“ nicht gefunden")
+                raise CoreError(f"\"{principal}\" not found")
             sid = sid_to_str(raw)
         new = filter_set(self._sd(g["dn"]), sid, apply)
         self._check(self.c.modify(g["dn"], {"nTSecurityDescriptor": [(self.l3.MODIFY_REPLACE, [new])]},
-                                  controls=security_descriptor_control(sdflags=0x04)), "Sicherheitsfilter ändern")
+                                  controls=security_descriptor_control(sdflags=0x04)), "change security filter")
         return self.gpo_filter(guid)
 
     # ------------------------------------------------ Versionen/Erweiterungen
@@ -1147,7 +1147,7 @@ class Core:
         ext = ext_merge(g["uext"] if side == "User" else g["mext"], cse, tool)
         self._gpt_ini(g["guid"], nv)
         self._check(self.c.modify(g["dn"], {"versionNumber": [(self.l3.MODIFY_REPLACE, [nv])],
-                                            attr: [(self.l3.MODIFY_REPLACE, [ext])]}), "Version erhöhen")
+                                            attr: [(self.l3.MODIFY_REPLACE, [ext])]}), "bump version")
         g["version"] = nv
 
     # ------------------------------------------------ Registry.pol
@@ -1164,9 +1164,9 @@ class Core:
 
     def registry_set(self, guid, side, key, name, typ, value, delete=False):
         if side not in ("Machine", "User"):
-            raise CoreError("Bereich muss Machine oder User sein")
+            raise CoreError("Scope must be Machine or User")
         if not delete and typ not in REG:
-            raise CoreError("Ungültiger Registry-Typ")
+            raise CoreError("Invalid registry type")
         g = self._gpo(guid)
         ents = [e for e in self._pol(g["guid"], side)
                 if not (e["key"].lower() == key.lower() and e["name"].lower() == name.lower())]
@@ -1196,17 +1196,17 @@ class Core:
         g = self._gpo(guid)
         pol = cat.policies.get(pid)
         if not pol:
-            raise CoreError("Richtlinie nicht gefunden")
+            raise CoreError("Policy not found")
         states = {side: cat.state(pol, self._pol(g["guid"], side)) for side in self._sides(pol)}
         return {"policy": cat.public_policy(pid), "states": states}
 
     def admx_set(self, guid, pid, side, state, values) -> dict:
         if state not in ("enabled", "disabled", "not_configured"):
-            raise CoreError("Ungültiger Zustand")
+            raise CoreError("Invalid state")
         cat = self.catalog()
         pol = cat.policies.get(pid)
         if not pol or side not in self._sides(pol):
-            raise CoreError("Richtlinie/Bereich ungültig")
+            raise CoreError("Invalid policy/scope")
         g = self._gpo(guid)
         ents = cat.apply(pol, self._pol(g["guid"], side), state, values or {})
         self._pol_write(g, side, ents)
@@ -1301,7 +1301,7 @@ class Core:
             raise CoreError(f"Unbekannte Operation {op}")
         try:
             return getattr(self, op)(**(args or {}))
-        except LDAPException as exc:          # raise_exceptions=True der Verbindung
+        except LDAPException as exc:          # raise_exceptions=True on the connection
             raise CoreError(f"LDAP: {exc}") from None
         except TypeError as exc:
-            raise CoreError(f"Ungültige Parameter für {op}: {exc}") from None
+            raise CoreError(f"Invalid parameters for {op}: {exc}") from None

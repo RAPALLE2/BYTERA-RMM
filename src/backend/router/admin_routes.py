@@ -155,7 +155,7 @@ PERM_LABELS = {
     "manage_cloudflare": "Cloudflare Tunnel verwalten (Zugang, Tunnel, Routen, Freigaben – Modul „Cloudflare Tunnel“)",
     "manage_headless_screen": "Virtuellen Bildschirm (headless) installieren/entfernen – Modul „Headless-Bildschirm“",
     "manage_canary": "IP-Tracker und Canary-Tokens verwalten – Modul „Canary & IP-Tracker“",
-    "manage_ad": "Active Directory verwalten (Benutzer, Gruppen, OUs, Passwörter) – Modul „Active Directory“",
+    "manage_ad": "Manage Active Directory (users, groups, OUs, passwords) - \"Active Directory\" module",
     "use_bmc": "View and control iLO/iDRAC (power, console, sensors) – module “iLO / iDRAC”",
     "manage_bmc": "Create and edit iLO/iDRAC connections – module “iLO / iDRAC”",
     "use_passwords": "Passwort-Manager nutzen (eigene & geteilte Tresore, Ende-zu-Ende) – Modul „Passwörter“",

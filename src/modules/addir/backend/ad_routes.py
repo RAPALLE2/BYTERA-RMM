@@ -1,27 +1,27 @@
-# ad_routes.py (Modul "addir") - Verwaltung (Recht manage_ad)
+# ad_routes.py (module "addir") - management (permission manage_ad)
 # -----------------------------------------------------------
-# Verbindungen:
+# Connections:
 #   GET/POST            /api/ad/connections
 #   PUT/DELETE          /api/ad/connections/{id}
 #   POST                /api/ad/connections/{id}/test
-#   GET                 /api/ad/connections/for-sso      (ohne Passwort, fuer SSO-Import)
-# Lesen (je Verbindung):
-#   GET  /api/ad/{id}/tree                                OUs/Container
+#   GET                 /api/ad/connections/for-sso      (without password, for SSO import)
+# Reading (per connection):
+#   GET  /api/ad/{id}/tree                                OUs/containers
 #   GET  /api/ad/{id}/search?kind=user|group|ou|computer&q=&base=
-#   GET  /api/ad/{id}/object?dn=                          ein Objekt (alle Attribute)
+#   GET  /api/ad/{id}/object?dn=                          one object (all attributes)
 #   GET  /api/ad/{id}/group-members?dn=
-# Benutzer:
-#   POST /api/ad/{id}/users                                anlegen
-#   POST /api/ad/{id}/users/bulk                           CSV/Massen-Import
-#   PATCH /api/ad/{id}/object                              Attribute aendern {dn, attrs}
+# Users:
+#   POST /api/ad/{id}/users                                create
+#   POST /api/ad/{id}/users/bulk                           CSV/bulk import
+#   PATCH /api/ad/{id}/object                              modify attributes {dn, attrs}
 #   POST /api/ad/{id}/move                                 {dn, new_parent?, new_cn?}
 #   POST /api/ad/{id}/user/enable | /unlock | /expiry | /password
 #   DELETE /api/ad/{id}/object?dn=
-# Gruppen:
-#   POST /api/ad/{id}/groups                               anlegen
+# Groups:
+#   POST /api/ad/{id}/groups                               create
 #   POST /api/ad/{id}/group/member                         {group_dn, member_dn, add}
 # OUs:
-#   POST /api/ad/{id}/ous                                  anlegen
+#   POST /api/ad/{id}/ous                                  create
 from __future__ import annotations
 
 import time
@@ -77,7 +77,7 @@ def list_connections(user: dict = Depends(get_current_user)):
 
 @router.get("/connections/for-sso")
 def connections_for_sso(user: dict = Depends(get_current_user)):
-    """Fuer das SSO-Modul: verbundene ADs zur Auswahl (ohne Passwort)."""
+    """For the SSO module: connected ADs to choose from (without password)."""
     require_perm(user, "manage_sso")
     return {"connections": [{"id": c["id"], "name": c["name"], "server": c.get("server"),
                              "base_dn": c.get("base_dn"), "bind_user": c.get("bind_user"),
@@ -103,16 +103,16 @@ async def create_connection(body: ConnBody, background: bool = False, user: dict
     Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
     _perm(user)
     async def _work(job):
-        job.update(phase='ad.task', detail="Active Directory: Verbindung anlegen + prüfen")
+        job.update(phase='ad.task', detail="Active Directory: create + test connection")
         return await asyncio.to_thread(_create_connection_impl, body=body, user=user)
-    return await bgjobs.run('ad.task', None, title="Active Directory: Verbindung anlegen + prüfen", user=user, work=_work,
+    return await bgjobs.run('ad.task', None, title="Active Directory: create + test connection", user=user, work=_work,
                             background=background, perm='manage_ad')
 
 
 def _create_connection_impl(body: ConnBody, user: dict = Depends(get_current_user)):
     _perm(user)
     if not body.name.strip() or not body.server.strip() or not body.base_dn.strip():
-        raise HTTPException(400, "Name, Server und Basis-DN sind nötig")
+        raise HTTPException(400, "Name, server and base DN are required")
 
     def upd(d):
         cid = store.new_id()
@@ -131,9 +131,9 @@ async def update_connection(cid: str, body: ConnBody, background: bool = False, 
     Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
     _perm(user)
     async def _work(job):
-        job.update(phase='ad.task', detail="Active Directory: Verbindung speichern + prüfen")
+        job.update(phase='ad.task', detail="Active Directory: save + test connection")
         return await asyncio.to_thread(_update_connection_impl, cid=cid, body=body, user=user)
-    return await bgjobs.run('ad.task', None, title="Active Directory: Verbindung speichern + prüfen", user=user, work=_work,
+    return await bgjobs.run('ad.task', None, title="Active Directory: save + test connection", user=user, work=_work,
                             background=background, perm='manage_ad')
 
 
@@ -197,7 +197,7 @@ async def test_new(body: TestNewBody, background: bool = False, user: dict = Dep
 
 
 def _test_new_impl(body: TestNewBody, user: dict = Depends(get_current_user)):
-    """Verbindung testen, bevor sie gespeichert ist."""
+    """Test a connection before it is saved."""
     _perm(user)
     c = {}
     _apply(body, c, keep_pw=False)
@@ -268,7 +268,7 @@ def group_members(cid: str, dn: str, user: dict = Depends(get_current_user)):
         _err(e)
 
 
-# ====================================================== Benutzer
+# ====================================================== Users
 class UserBody(BaseModel):
     ou_dn: str
     sam: str
@@ -283,16 +283,16 @@ async def create_user(cid: str, body: UserBody, background: bool = False, user: 
     Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
     _perm(user)
     async def _work(job):
-        job.update(phase='ad.task', detail=f"Active Directory: Benutzer „{body.sam}“ anlegen")
+        job.update(phase='ad.task', detail=f"Active Directory: create user \"{body.sam}\"")
         return await asyncio.to_thread(_create_user_impl, cid=cid, body=body, user=user)
-    return await bgjobs.run('ad.task', None, title=f"Active Directory: Benutzer „{body.sam}“ anlegen", user=user, work=_work,
+    return await bgjobs.run('ad.task', None, title=f"Active Directory: create user \"{body.sam}\"", user=user, work=_work,
                             background=background, perm='manage_ad')
 
 
 def _create_user_impl(cid: str, body: UserBody, user: dict = Depends(get_current_user)):
     _perm(user)
     if not body.sam.strip() or not body.ou_dn.strip():
-        raise HTTPException(400, "Benutzername (sAMAccountName) und Ziel-OU sind nötig")
+        raise HTTPException(400, "User name (sAMAccountName) and target OU are required")
     try:
         with _ad(cid) as ad:
             dn = ad.create_user(body.ou_dn, body.sam, body.fields or {}, body.password, body.enabled)
@@ -326,7 +326,7 @@ def _bulk_users_impl(cid: str, body: BulkBody, user: dict = Depends(get_current_
     import io
     rows = list(csv.DictReader(io.StringIO(body.csv.strip()), skipinitialspace=True))
     if not rows:
-        raise HTTPException(400, "Keine Zeilen (Kopfzeile nötig: sam,displayName,givenName,sn,mail,password)")
+        raise HTTPException(400, "No rows (a header is required: sam,displayName,givenName,sn,mail,password)")
     created, errors = [], []
     try:
         with _ad(cid) as ad:
@@ -448,7 +448,7 @@ def user_password(cid: str, body: PwBody, user: dict = Depends(get_current_user)
     try:
         with _ad(cid) as ad:
             ad.set_password(body.dn, body.password, body.must_change)
-        _audit(user, "user_password", body.dn)      # das Passwort selbst wird NICHT protokolliert
+        _audit(user, "user_password", body.dn)      # the password itself is NOT logged
         return {"ok": True}
     except AdError as e:
         _err(e)
@@ -467,7 +467,7 @@ class GroupBody(BaseModel):
 def create_group(cid: str, body: GroupBody, user: dict = Depends(get_current_user)):
     _perm(user)
     if not body.name.strip() or not body.ou_dn.strip():
-        raise HTTPException(400, "Gruppenname und Ziel-OU sind nötig")
+        raise HTTPException(400, "Group name and target OU are required")
     try:
         with _ad(cid) as ad:
             dn = ad.create_group(body.ou_dn, body.name.strip(), body.scope, body.security, body.description)
@@ -510,7 +510,7 @@ class OuBody(BaseModel):
 def create_ou(cid: str, body: OuBody, user: dict = Depends(get_current_user)):
     _perm(user)
     if not body.name.strip() or not body.parent_dn.strip():
-        raise HTTPException(400, "OU-Name und übergeordnetes Objekt sind nötig")
+        raise HTTPException(400, "OU name and parent object are required")
     try:
         with _ad(cid) as ad:
             dn = ad.create_ou(body.parent_dn, body.name.strip(), body.description)

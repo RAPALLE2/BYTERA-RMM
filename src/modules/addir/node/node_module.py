@@ -1,13 +1,13 @@
-# node_module.py (Node-Teil von Modul "addir") - DNS & Gruppenrichtlinien vom DC aus
+# node_module.py (node part of module "addir") - DNS & Group Policy from the DC
 # -------------------------------------------------------------------------------
-# Gedacht fuer eine BYTERA-Node AUF dem Domaenencontroller (oder im selben LAN):
-#   * LDAP geht an den angegebenen Server (Standard: localhost)
-#   * SYSVOL wird - wenn vorhanden - direkt als lokaler Ordner benutzt
-#     (C:\Windows\SYSVOL\sysvol\<domaene>), sonst per SMB
-#   * ADMX-Vorlagen: Central Store in SYSVOL, sonst C:\Windows\PolicyDefinitions
-# Dieselbe Logik wie im Backend (adcore.py liegt in diesem Ordner).
+# Intended for a BYTERA node ON the domain controller (or in the same LAN):
+#   * LDAP goes to the given server (default: localhost)
+#   * SYSVOL is - when available - used directly as a local folder
+#     (C:\Windows\SYSVOL\sysvol\<domain>), otherwise via SMB
+#   * ADMX templates: central store in SYSVOL, otherwise C:\Windows\PolicyDefinitions
+# Same logic as in the backend (adcore.py sits in this folder).
 #
-#   "ad-call" {conn: {...}, op, args} -> Ergebnis der Kern-Operation
+#   "ad-call" {conn: {...}, op, args} -> result of the core operation
 import importlib.util
 import os
 import subprocess
@@ -42,7 +42,7 @@ def _ensure_libs(need_smb: bool):
         r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", *missing],
                            capture_output=True, text=True, timeout=600)
         if r.returncode != 0:
-            raise RuntimeError(f"Python-Pakete {', '.join(missing)} ließen sich nicht installieren: {r.stderr[-300:]}")
+            raise RuntimeError(f"Could not install Python packages {', '.join(missing)}: {r.stderr[-300:]}")
 
 
 def _local_sysvol(domain: str):
@@ -76,7 +76,7 @@ def ad_call(ctx, data: dict):
         c.open()
         c.start_tls()
     if not c.bind():
-        raise RuntimeError("Anmeldung am AD fehlgeschlagen (Bind-Benutzer/Passwort prüfen)")
+        raise RuntimeError("AD login failed (check the bind user/password)")
     try:
         if sysvol:
             fs = core.LocalFs(sysvol)

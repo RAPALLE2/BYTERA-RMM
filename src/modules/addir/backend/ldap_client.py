@@ -28,7 +28,7 @@ def _ldap():
         from ldap3.utils.dn import escape_rdn, safe_dn
         return ldap3, LDAPException, escape_filter_chars, escape_rdn, safe_dn
     except ImportError:
-        raise AdError("Das Paket 'ldap3' fehlt. Modul neu aktivieren oder 'pip install ldap3' ausführen.")
+        raise AdError("The 'ldap3' package is missing. Re-enable the module or run 'pip install ldap3'.")
 
 
 # AD userAccountControl-Flags
@@ -99,7 +99,7 @@ class Ad:
                 self._conn.open()
                 self._conn.start_tls()
             if not self._conn.bind():
-                raise AdError("Anmeldung am AD fehlgeschlagen (Bind-Benutzer/Passwort prüfen).")
+                raise AdError("AD login failed (check the bind user/password).")
             self.encrypted = bool(use_ssl or self.c.get("start_tls"))
         except LDAPException as e:
             raise AdError(f"Verbindung zum AD fehlgeschlagen: {e}") from None
@@ -115,7 +115,7 @@ class Ad:
     # --------------------------------------------------------- Helfer
     def _require_pw_channel(self):
         if self.c.get("pw_requires_tls", True) and not self.encrypted:
-            raise AdError("Passwort-Änderungen brauchen eine verschlüsselte Verbindung (LDAPS/StartTLS). "
+            raise AdError("Password changes require an encrypted connection (LDAPS/StartTLS). "
                           "In den Verbindungs-Einstellungen aktivieren oder (nur Test) die Pflicht abschalten.")
 
     def _search(self, base, flt, attrs=("*",), scope=None):
@@ -339,7 +339,7 @@ class Ad:
             else:
                 mod[k] = [(ldap3.MODIFY_REPLACE, [v])]
         if mod:
-            self._do("Attribute ändern", lambda: self._conn.modify(dn, mod))
+            self._do("modify attributes", lambda: self._conn.modify(dn, mod))
 
     def rename_move(self, dn: str, new_parent: str | None = None, new_cn: str | None = None) -> str:
         ldap3, _, esc, erdn, _ = _ldap()
@@ -350,7 +350,7 @@ class Ad:
         return f"{rdn},{parent}"
 
     def delete(self, dn: str) -> None:
-        self._do("Löschen", lambda: self._conn.delete(dn))
+        self._do("delete", lambda: self._conn.delete(dn))
 
     def set_enabled(self, dn: str, enabled: bool) -> None:
         cur = self.get_by_dn(dn, ("userAccountControl",)) or {}
@@ -405,7 +405,7 @@ class Ad:
 
     def add_member(self, group_dn: str, member_dn: str) -> None:
         ldap3, *_ = _ldap()
-        self._do("Mitglied hinzufügen",
+        self._do("add member",
                  lambda: self._conn.modify(group_dn, {"member": [(ldap3.MODIFY_ADD, [member_dn])]}))
 
     def remove_member(self, group_dn: str, member_dn: str) -> None:

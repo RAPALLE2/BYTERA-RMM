@@ -1,13 +1,13 @@
-# gpodns_routes.py (Modul "addir") - DNS-Einträge und Gruppenrichtlinien (Recht manage_ad)
+# gpodns_routes.py (module "addir") - DNS records and Group Policy (permission manage_ad)
 # ----------------------------------------------------------------------------------------
-# Agentenlos: LDAP (vorhandene AD-Verbindung) + SYSVOL per SMB mit demselben Konto.
-# Alternativ ueber eine BYTERA-NODE auf dem Domaenencontroller (Node-Teil "addir"):
-# dann laeuft alles dort (LDAP lokal, SYSVOL als Ordner, ADMX aus C:\Windows).
-# Die Logik steckt in node/adcore.py - EINE Datei fuer Backend und Node.
+# Agentless: LDAP (existing AD connection) + SYSVOL via SMB with the same account.
+# Alternatively through a BYTERA NODE on the domain controller (node part "addir"):
+# then everything runs there (LDAP locally, SYSVOL as a folder, ADMX from C:\Windows).
+# The logic lives in node/adcore.py - ONE file for backend and node.
 #
-#   GET  /api/ad/{id}/exec            Ausfuehrungsweg + verfuegbare Nodes
-#   PUT  /api/ad/{id}/exec            {via: "" (Backend) | node-client-id}
-#   POST /api/ad/{id}/core/{op}       Operation des Kerns (DNS, GPO, ADMX, Registry ...)
+#   GET  /api/ad/{id}/exec            execution path + available nodes
+#   PUT  /api/ad/{id}/exec            {via: "" (backend) | node-client-id}
+#   POST /api/ad/{id}/core/{op}       core operation (DNS, GPO, ADMX, registry ...)
 from __future__ import annotations
 
 import asyncio
@@ -29,7 +29,7 @@ _spec = importlib.util.spec_from_file_location(
 adcore = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(adcore)
 
-# Operationen, die etwas veraendern (-> Audit-Log)
+# Operations that change something (-> audit log)
 WRITE_OPS = {"dns_add", "dns_update", "dns_delete", "gpo_create", "gpo_delete", "gpo_rename", "gpo_status",
              "gpo_link", "gpo_unlink", "gpo_link_set", "gpo_block", "gpo_filter_set", "registry_set",
              "admx_set", "security_set"}
@@ -55,7 +55,7 @@ def _host(conn: dict) -> str:
 
 
 def _smb_user(ad, conn: dict) -> str:
-    """SMB braucht DOMAENE\\user oder user@domaene - aus dem Bind-Benutzer ableiten."""
+    """SMB needs DOMAIN\\user or user@domain - derive it from the bind user."""
     u = (conn.get("bind_user") or "").strip()
     if "\\" in u or "@" in u or not u:
         return u
