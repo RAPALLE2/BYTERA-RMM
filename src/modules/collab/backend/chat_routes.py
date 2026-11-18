@@ -176,7 +176,7 @@ async def create_conversation(body: CreateConversationBody,
         if not body.user_id or not db.get_user_by_id(body.user_id):
             raise HTTPException(400, "Gesprächspartner nicht gefunden")
         if body.user_id == user["id"]:
-            raise HTTPException(400, "Selbstgespräche sind nicht vorgesehen 🙂")
+            raise HTTPException(400, "Selbstgespräche sind nicht vorgesehen")
         # Bestehendes DM-Paar wiederverwenden
         row = _conn().execute(
             "SELECT c.id FROM chat_conversations c"

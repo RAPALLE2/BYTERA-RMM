@@ -1,13 +1,13 @@
 """
 routers/admin_routes.py
 ------------------------
-Sammel-Router für die Verwaltungs-Features:
+Collection router for the administration features:
   - Gruppen & Rollen (Rechte-System)
   - Realms (Verzeichnis-Anbindung / Active Directory - Konfiguration)
   - Webhooks (Benachrichtigungen, Discord/Custom)
   - Automationen (geplante Befehle)
 
-Diese Endpunkte sind Admin-geschützt.
+These endpoints are admin-protected.
 """
 
 import json
@@ -37,7 +37,7 @@ class GroupBody(BaseModel):
 
 @router.get("/permissions")
 def list_permissions(user: dict = Depends(get_current_user)):
-    """Liste aller verfügbaren Rechte-Schlüssel (für die Checkbox-UI)."""
+    """List of all available permission keys (for the checkbox UI)."""
     return {"permissions": db.ALL_PERMISSIONS}
 
 
@@ -108,32 +108,32 @@ def get_user_groups(user_id: str, user: dict = Depends(get_current_user)):
 
 
 # ==================================================================
-# Feingranulare Rechte (tri-state Grants) für die Permissions-App
+# Fine-grained permissions (tri-state grants) for the permissions app
 # ==================================================================
-# Labels für die Frontend-Anzeige. Der Resolver kennt die Semantik.
+# Labels for the frontend display. The resolver knows the semantics.
 PERM_LABELS = {
-    # --- Global / universell ---
-    "admin": "Full Admin (Vollzugriff)",
-    "login": "Anmelden",
-    "see_dashboard": "Dashboard sehen",
-    "customize_dashboard": "Dashboard anpassen",
-    "restore_session": "Zuletzt geöffnete Sachen wiederherstellen",
-    "edit_profile_name": "Profilname ändern",
-    "access_clients": "Clients sehen/zugreifen",
-    "see_replay": "Aufzeichnungen sehen",
-    "delete_replay": "Aufzeichnungen löschen",
-    "see_audit": "Audit-Log sehen",
-    "see_source": "Source ansehen",
-    "edit_source": "Source bearbeiten",
-    "delete_source": "Source löschen (Datenbank/Explorer)",
-    "manage_branding": "Branding ändern",
+    # --- Global / universal ---
+    "admin": "Full admin (full access)",
+    "login": "Sign in",
+    "see_dashboard": "See dashboard",
+    "customize_dashboard": "Customize dashboard",
+    "restore_session": "Restore recently opened items",
+    "edit_profile_name": "Change profile name",
+    "access_clients": "See/access clients",
+    "see_replay": "See recordings",
+    "delete_replay": "Delete recordings",
+    "see_audit": "See audit log",
+    "see_source": "View source",
+    "edit_source": "Edit source",
+    "delete_source": "Delete source (database/explorer)",
+    "manage_branding": "Change branding",
     "manage_sso": "Change SSO",
-    "see_settings": "Einstellungen ansehen",
-    "manage_settings": "Standard-Einstellungen ändern",
-    "admin_settings": "Admin-Einstellungen (IP/Port, Server-Update, DB, Neustart)",
-    "screen_silent": "Remote-Bildschirm ohne Anfrage (Silent-Modus)",
-    "c_screen_silent": "Remote-Bildschirm ohne Anfrage",
-    "set_warranty": "Garantie-Datum setzen",
+    "see_settings": "View settings",
+    "manage_settings": "Change default settings",
+    "admin_settings": "Admin settings (IP/port, server update, DB, restart)",
+    "screen_silent": "Remote screen without a request (silent mode)",
+    "c_screen_silent": "Remote screen without a request",
+    "set_warranty": "Set warranty date",
     "ticket_read": "Read tickets",
     "ticket_create": "Create tickets",
     "ticket_edit": "Edit tickets",
@@ -141,107 +141,107 @@ PERM_LABELS = {
     "ticket_assign": "Assign tickets",
     "ticket_resolve": "Mark tickets as resolved",
     "ticket_delete": "Delete tickets",
-    "see_permissions": "Rechte & Gruppen sehen",
-    "manage_permissions": "Rechte & Gruppen bearbeiten",
-    "manage_modules": "Module verwalten (aktivieren, deaktivieren, Einstellungen)",
-    "get_user_space": "Eigenen Space benutzen (auch Notizheft, Bilder in Chat/Tickets, Musik)",
-    "use_public_space": "Public Spaces benutzen",
-    "see_all_spaces": "Alle Spaces sehen (lesen)",
-    "edit_all_spaces": "Alle Spaces bearbeiten und verwalten",
-    "manage_deployment": "Deployment-Server verwalten (Seite, Dateien, Relay-Bereich „Deployment“)",
-    "use_api": "REST-API benutzen (/api/v1) – je Aufruf zusätzlich das passende Recht",
+    "see_permissions": "See permissions & groups",
+    "manage_permissions": "Edit permissions & groups",
+    "manage_modules": "Manage modules (enable, disable, settings)",
+    "get_user_space": "Use your own space (incl. notebook, images in chat/tickets, music)",
+    "use_public_space": "Use public spaces",
+    "see_all_spaces": "See all spaces (read)",
+    "edit_all_spaces": "Edit and manage all spaces",
+    "manage_deployment": "Manage deployment server (page, files, relay area \"Deployment\")",
+    "use_api": "Use the REST API (/api/v1) - plus the matching permission per call",
     "manage_websites": "Manage websites (create, delete, edit all - \"Webserver\" module)",
-    "manage_docker": "Docker verwalten (Stacks anlegen, alle Container, Images, Volumes, Netzwerke – Modul „Docker“)",
+    "manage_docker": "Manage Docker (create stacks, all containers, images, volumes, networks - \"Docker\" module)",
     "manage_cloudflare": "Manage Cloudflare Tunnel (access, tunnels, routes, sharing - \"Cloudflare Tunnel\" module)",
-    "manage_headless_screen": "Virtuellen Bildschirm (headless) installieren/entfernen – Modul „Headless-Bildschirm“",
-    "manage_canary": "IP-Tracker und Canary-Tokens verwalten – Modul „Canary & IP-Tracker“",
+    "manage_headless_screen": "Install/remove a virtual (headless) screen - \"Headless screen\" module",
+    "manage_canary": "Manage IP tracker and canary tokens - \"Canary & IP tracker\" module",
     "manage_ad": "Manage Active Directory (users, groups, OUs, passwords) - \"Active Directory\" module",
-    "use_bmc": "View and control iLO/iDRAC (power, console, sensors) – module “iLO / iDRAC”",
-    "manage_bmc": "Create and edit iLO/iDRAC connections – module “iLO / iDRAC”",
-    "use_passwords": "Passwort-Manager nutzen (eigene & geteilte Tresore, Ende-zu-Ende) – Modul „Passwörter“",
-    "use_geotrack": "View device locations (map, history) – module “Location Tracker”",
-    "manage_geotrack": "Toggle location tracking per device, clear history – module “Location Tracker”",
+    "use_bmc": "View and control iLO/iDRAC (power, console, sensors) – module \"iLO / iDRAC\"",
+    "manage_bmc": "Create and edit iLO/iDRAC connections – module \"iLO / iDRAC\"",
+    "use_passwords": "Use the password manager (own & shared vaults, end-to-end) - \"Passwords\" module",
+    "use_geotrack": "View device locations (map, history) – module \"Location Tracker\"",
+    "manage_geotrack": "Toggle location tracking per device, clear history – module \"Location Tracker\"",
     "manage_tenants": "Manage tenants (connect backends, sharing) - \"Tenants\" module",
     "use_tenants": "Open and switch tenants - \"Tenants\" module",
-    "manage_dist": "Verteilung verwalten (/dist: Ordner, Dateien, Freigaben)",
-    "manage_temp_usb": "Digitalen USB-Stick verwalten (temp-usb: Bereiche, Dateien, an Geräte anhängen)",
-    "use_browser": "Server-Browser benutzen (Webseiten über den Server laden, VPN-Zugang)",
-    "use_console": "RMM-Konsole benutzen (SSH, Dashboard, Client-App) – je Befehl zusätzlich das passende Recht",
-    "create_users": "Benutzer erstellen",
+    "manage_dist": "Manage distribution (/dist: folders, files, shares)",
+    "manage_temp_usb": "Manage the digital USB stick (temp-usb: areas, files, attach to devices)",
+    "use_browser": "Use the server browser (load websites via the server, VPN access)",
+    "use_console": "Use the RMM console (SSH, dashboard, client app) - plus the matching permission per command",
+    "create_users": "Create users",
     "network_scan": "Network scan",
     "port_scan": "Port scan",
-    "bulk_shell": "Bulk Remote-Shell",
-    "use_scripts": "Skripte benutzen",
-    "create_scripts": "Skripte erstellen",
-    "automation": "Automationen",
-    "manage_hierarchy": "Tenants/Locations/Ordner verwalten",
-    "play_games": "Spiele spielen",
-    "use_media": "Audio-Player & Medien-Bibliothek",
-    "share_media": "Medien für alle bereitstellen (Uploads, Links, Listen)",
-    "manage_favorites": "Favoritenliste bearbeiten",
-    "use_relay": "Relay benutzen",
-    "use_chat": "Chat benutzen",
-    "use_todos": "Todo-Liste benutzen (privat)",
+    "bulk_shell": "Bulk remote shell",
+    "use_scripts": "Use scripts",
+    "create_scripts": "Create scripts",
+    "automation": "Automations",
+    "manage_hierarchy": "Manage tenants/locations/folders",
+    "play_games": "Play games",
+    "use_media": "Audio player & media library",
+    "share_media": "Provide media for everyone (uploads, links, lists)",
+    "manage_favorites": "Edit the favorites list",
+    "use_relay": "Use relay",
+    "use_chat": "Use chat",
+    "use_todos": "Use the todo list (private)",
     "manage_privacy": "Privacy: retention periods, access, erasure (GDPR)",
-    "patching": "Updates sehen und installieren",
-    "manage_patching": "Auto-Patch-Regeln festlegen",
-    "see_inventory": "Inventar ansehen",
-    "manage_inventory": "Inventar verwalten (Geräte, Besitzer, Lager)",
-    "super_admin": "⭐ Super-Admin (alle Rechte)",
-    "add_client": "Clients hinzufügen (Enrollment)",
-    "see_org": "Organigramm ansehen",
-    "manage_org": "Organigramm bearbeiten (Über-/Unterstellung, Arbeitsbereich)",
-    "use_calendar": "Kalender benutzen",
-    "manage_calendar": "Kalender: Termine für alle anlegen",
-    "relay_unlimited": "Relay unbegrenzt (keine Auto-Schließzeit)",
-    "use_vpn": "VPN benutzen (Tunnel ausstellen)",
-    "vpn_unlimited": "VPN unbegrenzt (Tunnel ohne Ablaufzeit)",
-    # --- Pro Client ---
-    "manage_clients": "Bearbeiten",
-    "manage_agent": "Aktualisieren (Agent-Update)",
-    "c_delete": "Löschen",
-    "c_screen": "Remote-Bildschirm (Steuern)",
-    "c_screen_view": "Remote-Bildschirm (nur ansehen)",
+    "patching": "See and install updates",
+    "manage_patching": "Define auto-patch rules",
+    "see_inventory": "View inventory",
+    "manage_inventory": "Manage inventory (devices, owners, stock)",
+    "super_admin": "Super admin (all permissions)",
+    "add_client": "Add clients (enrollment)",
+    "see_org": "View org chart",
+    "manage_org": "Edit org chart (reporting lines, workspace)",
+    "use_calendar": "Use calendar",
+    "manage_calendar": "Calendar: create events for everyone",
+    "relay_unlimited": "Relay unlimited (no auto-close time)",
+    "use_vpn": "Use VPN (issue tunnels)",
+    "vpn_unlimited": "VPN unlimited (tunnels without expiry)",
+    # --- Per client ---
+    "manage_clients": "Edit",
+    "manage_agent": "Update (agent update)",
+    "c_delete": "Delete",
+    "c_screen": "Remote screen (control)",
+    "c_screen_view": "Remote screen (view only)",
     "c_terminal": "Terminal",
-    "c_terminal_console": "Terminal (nur Agent-Konsole)",
+    "c_terminal_console": "Terminal (agent console only)",
     "c_guacamole": "Guacamole",
-    "c_power": "Herunterfahren/Neustarten",
-    "c_registry": "Registry bearbeiten (Windows)",
-    "c_win_update": "Windows-Automatik-Updates steuern (Windows)",
-    "c_explorer_view": "Datei-Explorer sehen",
-    "c_explorer_edit": "Datei-Explorer bearbeiten",
-    "c_taskmanager_view": "Task-Manager sehen",
-    "c_taskmanager_kill": "Prozess beenden",
-    "c_relay": "Relay starten",
-    "c_relay_unlimited": "Relay unbegrenzt",
-    "c_vpn": "VPN-Tunnel ausstellen",
-    "c_vpn_unlimited": "VPN-Tunnel ohne Ablaufzeit",
-    "c_portforward": "Port-Weiterleitung auf diesen Client einrichten",
-    "manage_nodes": "Node verwalten (installieren, Docker, Node-Module)",
-    "pve_access": "Proxmox: Dashboard sehen",
-    "pve_vms_all": "Proxmox: alle VMs",
-    "pve_lxc_all": "Proxmox: alle LXC-Container",
-    "pve_power": "Proxmox: Gäste starten/stoppen",
-    "pve_console": "Proxmox: Konsole öffnen",
-    "pve_snapshot": "Proxmox: Snapshots",
-    "pve_backup": "Proxmox: Backups",
-    "pve_config": "Proxmox: Konfiguration ändern",
-    "pve_storage": "Proxmox: Storage",
-    "pve_users": "Proxmox: Benutzer & Rechte",
-    "pve_nodes": "Proxmox: Nodes & Aufgaben",
-    "pve_api": "Proxmox: beliebige API-Aufrufe (API-Explorer)",
-    "pve_manage": "Proxmox: Verbindung & Gast-Freigaben verwalten",
-    "c_notes_view": "Notizen sehen",
-    "c_notes_edit": "Notizen bearbeiten",
-    "c_websites_view": "Websites sehen",
-    "c_websites_edit": "Websites bearbeiten",
-    # --- Alt-Keys (nur Anzeige bei bereits gespeicherten Grants) ---
-    "use_guacamole": "Guacamole (alt)",
-    "use_terminal": "Terminal (alt)",
-    "use_screen": "Remote-Bildschirm (alt)",
-    "use_explorer": "Datei-Explorer (alt)",
-    "use_taskmanager": "Task-Manager (alt)",
-    "manage_users": "Benutzer verwalten (alt)",
+    "c_power": "Shut down/restart",
+    "c_registry": "Edit registry (Windows)",
+    "c_win_update": "Control Windows automatic updates (Windows)",
+    "c_explorer_view": "See file explorer",
+    "c_explorer_edit": "Edit file explorer",
+    "c_taskmanager_view": "See task manager",
+    "c_taskmanager_kill": "Kill process",
+    "c_relay": "Start relay",
+    "c_relay_unlimited": "Relay unlimited",
+    "c_vpn": "Issue VPN tunnel",
+    "c_vpn_unlimited": "VPN tunnel without expiry",
+    "c_portforward": "Set up port forwarding to this client",
+    "manage_nodes": "Manage node (install, Docker, node modules)",
+    "pve_access": "Proxmox: see dashboard",
+    "pve_vms_all": "Proxmox: all VMs",
+    "pve_lxc_all": "Proxmox: all LXC containers",
+    "pve_power": "Proxmox: start/stop guests",
+    "pve_console": "Proxmox: open console",
+    "pve_snapshot": "Proxmox: snapshots",
+    "pve_backup": "Proxmox: backups",
+    "pve_config": "Proxmox: change configuration",
+    "pve_storage": "Proxmox: storage",
+    "pve_users": "Proxmox: users & permissions",
+    "pve_nodes": "Proxmox: nodes & tasks",
+    "pve_api": "Proxmox: arbitrary API calls (API explorer)",
+    "pve_manage": "Proxmox: manage connection & guest shares",
+    "c_notes_view": "See notes",
+    "c_notes_edit": "Edit notes",
+    "c_websites_view": "See websites",
+    "c_websites_edit": "Edit websites",
+    # --- Legacy keys (display only for already stored grants) ---
+    "use_guacamole": "Guacamole (legacy)",
+    "use_terminal": "Terminal (legacy)",
+    "use_screen": "Remote screen (legacy)",
+    "use_explorer": "File explorer (legacy)",
+    "use_taskmanager": "Task manager (legacy)",
+    "manage_users": "Manage users (legacy)",
 }
 
 
@@ -255,7 +255,7 @@ def _pve_clients() -> list[str]:
 
 @router.get("/permission-catalog")
 def permission_catalog(user: dict = Depends(get_current_user)):
-    """Liefert die Rechte-Schlüssel (global + client) inkl. Labels fürs Frontend."""
+    """Returns the permission keys (global + client) incl. labels for the frontend."""
     require_perm(user, "see_permissions")
     return {
         "labels": PERM_LABELS,
@@ -264,7 +264,7 @@ def permission_catalog(user: dict = Depends(get_current_user)):
         # Implikationen (Quelle -> abgedeckte Rechte): Das Frontend nutzt sie,
         # um beim Erlauben eines Rechts die Basis-Rechte automatisch mitzusetzen.
         "implies": db.perm_implies_map(),
-        # Pseudo-Client-Scope, dessen Client-Rechte für JEDEN Client gelten.
+        # Pseudo client scope whose client permissions apply to EVERY client.
         "default_client_scope": db.DEFAULT_CLIENT_SCOPE,
         # Modul "proxmox": Bereich "Standard-Proxmox" + Agenten mit verbundenem Proxmox
         "default_pve_scope": db.DEFAULT_PVE_SCOPE,
@@ -327,17 +327,17 @@ def put_grants(subject_type: str, subject_id: str, body: GrantsBody,
 @router.post("/restart")
 async def restart_backend(user: dict = Depends(get_current_user)):
     """
-    Startet den Backend-Prozess neu (re-exec des laufenden Python-Prozesses).
-    Läuft das Backend unter einem Prozess-Manager (systemd o.ä.) mit Auto-Restart,
-    genügt alternativ ein sauberer Exit - re-exec funktioniert aber in beiden
-    Fällen. Antwortet SOFORT und startet ~1 s später neu, damit die Antwort noch
-    beim Client ankommt.
+    Restarts the backend process (re-exec of the running Python process).
+    If the backend runs under a process manager (systemd etc.) with auto-restart,
+    a clean exit is sufficient as an alternative - but re-exec works in both
+    cases. Responds IMMEDIATELY and restarts ~1 s later, so the response still
+    reaches the client.
     """
-    # Neu starten darf, wer Einstellungen ändern darf: 'admin_settings'
-    # (Server-/Systemeinstellungen) ODER 'manage_settings' (Standard-
-    # Einstellungen). Grund: Änderungen an FTP/SFTP wirken erst nach einem
-    # Neustart - wer sie setzen darf, muss sie auch anwenden können.
-    # Vollwertige Administratoren haben ohnehin alle Rechte.
+    # Anyone allowed to change settings may restart: 'admin_settings'
+    # (server/system settings) OR 'manage_settings' (default settings).
+    # Reason: changes to FTP/SFTP only take effect after a restart - whoever
+    # may set them must also be able to apply them.
+    # Full administrators have all permissions anyway.
     if not (user_has_permission(user, "admin_settings")
             or user_has_permission(user, "manage_settings")):
         raise HTTPException(403, "Fehlendes Recht: admin_settings/manage_settings")
@@ -388,12 +388,11 @@ async def restart_backend(user: dict = Depends(get_current_user)):
 @router.post("/stop")
 async def stop_backend(user: dict = Depends(get_current_user)):
     """
-    STOPPT den Backend-Prozess (sauberer Exit, Code 0). Achtung: Läuft das
-    Backend unter einem Prozess-Manager mit Auto-Restart (systemd
-    Restart=always), startet der Manager es sofort wieder - dann muss der
-    Dienst dort gestoppt werden. Vor dem Beenden wird noch der finale
-    Datenbank-Sync ausgeführt (externer DB-Modus). Antwortet SOFORT und
-    beendet sich ~1 s später.
+    STOPS the backend process (clean exit, code 0). Note: if the backend runs
+    under a process manager with auto-restart (systemd Restart=always), the
+    manager starts it again immediately - then the service must be stopped
+    there. Before shutting down, the final database sync is still performed
+    (external DB mode). Responds IMMEDIATELY and exits ~1 s later.
     """
     require_perm(user, "admin_settings")
     db.add_audit_entry(user["username"], "backend.stop")
@@ -427,7 +426,7 @@ async def stop_backend(user: dict = Depends(get_current_user)):
 # die Embed-Farbe bestimmt. Die Farben entsprechen denen im Frontend
 # (siehe notify.js: info/success/warn/error).
 
-# Level -> Discord-Embed-Farbe (dezimal). Hex aus dem Frontend übernommen.
+# Level -> Discord embed color (decimal). Hex taken from the frontend.
 LEVEL_COLORS = {
     "info":    0x4DA6FF,
     "success": 0x3ECF8E,
@@ -437,15 +436,6 @@ LEVEL_COLORS = {
     "danger":  0xFF4D6D,
 }
 
-# Level -> Emoji für den head (rein kosmetisch).
-LEVEL_EMOJI = {
-    "info":    "ℹ️",
-    "success": "✅",
-    "warn":    "⚠️",
-    "warning": "⚠️",
-    "error":   "🚨",
-    "danger":  "🚨",
-}
 
 
 def _normalize_level(level: str | None) -> str:
@@ -466,11 +456,11 @@ def build_notification(
     timestamp: int | None = None,
 ) -> dict:
     """
-    Baut ein einheitliches Notification-Objekt. 'head' und 'body' werden
-    - falls nicht explizit übergeben - automatisch aus den Kontextdaten
-    zusammengesetzt, sodass eine Notification IMMER head + body hat.
+    Builds a uniform notification object. 'head' and 'body' are - if not
+    passed explicitly - assembled automatically from the context data, so a
+    notification ALWAYS has head + body.
 
-    timestamp: Millisekunden seit Epoch (default: jetzt).
+    timestamp: milliseconds since epoch (default: now).
     """
     level = _normalize_level(level)
     service = service or "System"
@@ -479,9 +469,9 @@ def build_notification(
     location = location or "—"
     ts = timestamp if timestamp is not None else int(time.time() * 1000)
 
-    # head: kurze Zusammenfassung, z.B. "🚨 Disk Space – SRV-01"
+    # head: short summary, e.g. "Disk Space - SRV-01"
     if not head:
-        head = f"{LEVEL_EMOJI.get(level, 'ℹ️')} {service} – {client}"
+        head = f"{service} - {client}"
     # body: die eigentliche Nachricht
     if not body:
         body = message
@@ -532,39 +522,39 @@ class SettingsBody(BaseModel):
     guac_record_scale: float | None = None
     guacd_host: str | None = None
     guacd_port: int | None = None
-    # Automatisches Agent-Update ("1" = an, "0" = aus; pro Client übersteuerbar)
+    # Automatic agent update ("1" = on, "0" = off; overridable per client)
     agent_auto_update: str | None = None
-    # Auto-Update auch für Clients, die offline waren, sobald sie sich wieder
-    # verbinden ("1" = an, Standard).
+    # Auto-update also for clients that were offline, as soon as they
+    # reconnect ("1" = on, default).
     agent_auto_update_offline: str | None = None
-    # Blackbox "letzter Stand": Agents melden alle X Minuten Desktop-Screenshot,
-    # Metrik-Deltas und Log-Schwanz, damit man nach einem Offline-Gehen den
-    # letzten Zustand sehen kann ("1" = an; Intervall in Minuten).
+    # Blackbox "last state": agents report a desktop screenshot, metric deltas
+    # and a log tail every X minutes, so the last state can be seen after a
+    # client goes offline ("1" = on; interval in minutes).
     blackbox_enabled: str | None = None
     blackbox_interval_min: int | None = None
-    # Spotify-Integration: Client-ID einer (vom Admin registrierten) Spotify-App.
-    # Damit können sich Benutzer im Audio Player per OAuth (PKCE, ohne Secret)
-    # anmelden und mit Premium volle Titel abspielen.
+    # Spotify integration: client ID of a Spotify app (registered by the admin).
+    # It lets users sign in in the audio player via OAuth (PKCE, no secret)
+    # and play full tracks with Premium.
     spotify_client_id: str | None = None
     # Server-Selbst-Update (Settings -> Update)
     server_auto_update: str | None = None            # "1" | "0"
     server_auto_update_channel: str | None = None    # "commit" | "full" | "any"
-    # Oberflaechen-Design fuer Benutzer ohne eigene Wahl (neue Benutzer):
-    # "futuristic" (Desktop mit Fenstern) | "standard" (klassisch: Navigation links, Tabs)
+    # UI design for users without their own choice (new users):
+    # "futuristic" (desktop with windows) | "standard" (classic: navigation left, tabs)
     default_design: str | None = None
-    # --- VPN (WireGuard-kompatibel) ---
-    # Port und Netz sind bewusst STRINGS: leer bedeutet "Standard verwenden",
-    # und das liesse sich mit int nicht ausdrücken.
+    # --- VPN (WireGuard-compatible) ---
+    # Port and network are deliberately STRINGS: empty means "use default",
+    # and that could not be expressed with int.
 
 
-# Diese Schlüssel gelten als ADMIN-Einstellungen (IP/Port, Server-Update,
-# guacd-Adresse). Alles andere sind "Standard-Einstellungen" (manage_settings).
+# These keys count as ADMIN settings (IP/port, server update, guacd address).
+# Everything else is "default settings" (manage_settings).
 ADMIN_SETTING_KEYS = {
     "server_host", "server_domain", "server_backend_port", "server_frontend_port",
     "server_url", "server_auto_update", "server_auto_update_channel",
     "guacd_host", "guacd_port",
-    # Host-Sperre steuert, wer den Dienst überhaupt erreicht - klar
-    # Admin-Sache, nicht 'manage_settings'.
+    # The host lock controls who can reach the service at all - clearly
+    # an admin matter, not 'manage_settings'.
     "host_lock_enabled", "host_lock_scope", "host_lock_extra",
     "host_lock_trust_proxy",
     # Der VPN-Endpunkt oeffnet einen Port nach aussen und bestimmt, wer ins
@@ -592,8 +582,8 @@ def get_settings(user: dict = Depends(get_current_user)):
 @router.put("/settings")
 def update_settings(body: SettingsBody, user: dict = Depends(get_current_user)):
     changed = body.model_dump(exclude_none=True)
-    # Pro Schlüssel das passende Recht verlangen: Admin-Keys brauchen
-    # 'admin_settings', alle übrigen 'manage_settings'.
+    # Require the matching permission per key: admin keys need
+    # 'admin_settings', all others 'manage_settings'.
     if any(k in ADMIN_SETTING_KEYS for k in changed):
         require_perm(user, "admin_settings")
     if any(k not in ADMIN_SETTING_KEYS for k in changed):
@@ -610,24 +600,24 @@ def update_settings(body: SettingsBody, user: dict = Depends(get_current_user)):
 # ---------------------------------------------------------------------------
 # Branding: Logos/Bilder per Upload ersetzen
 # ---------------------------------------------------------------------------
-# Die Dateien liegen im Frontend-Ordner (werden von StaticFiles ausgeliefert).
-# Upload als ROHER Request-Body (kein multipart) - so brauchen wir keine
-# zusätzliche Abhängigkeit (python-multipart) und der Fetch im Frontend
-# bleibt ein Einzeiler (body: file).
+# The files live in the frontend folder (served by StaticFiles).
+# Upload as a RAW request body (no multipart) - this way we need no extra
+# dependency (python-multipart) and the fetch in the frontend stays a
+# one-liner (body: file).
 
 from pathlib import Path as _Path
 
 from app.paths import BRANDING_DIR as _IMAGES_DIR
-# Hochgeladene Branding-Dateien landen in einem SCHREIBBAREN Datenordner neben
-# der Datenbank (das gebündelte frontend/images ist in vielen Deployments
-# read-only, z.B. per Container-Image oder nginx). Beim Ausliefern wird zuerst
-# hier gesucht, dann im gebündelten Default.
-_BRANDING_STORE = _IMAGES_DIR   # Uploads ersetzen direkt die Dateien in frontend/image
+# Uploaded branding files land in a WRITABLE data folder next to the
+# database (the bundled frontend/images is read-only in many deployments,
+# e.g. via a container image or nginx). When serving, this location is
+# searched first, then the bundled default.
+_BRANDING_STORE = _IMAGES_DIR   # uploads directly replace the files in frontend/image
 
 
 def branding_path(name: str):
-    """Pfad zu einem Bild: bevorzugt der Upload-Store, sonst das gebündelte
-    Default aus frontend/images. Gibt None zurück, wenn nichts existiert."""
+    """Path to an image: prefers the upload store, otherwise the bundled
+    default from frontend/images. Returns None if nothing exists."""
     if not name or "/" in name or "\\" in name or ".." in name:
         return None
     up = _BRANDING_STORE / name
@@ -636,23 +626,23 @@ def branding_path(name: str):
     d = _IMAGES_DIR / name
     return d if d.is_file() else None
 
-# Whitelist: Slot-Name -> (Dateiname, erlaubte Magic-Bytes, Beschreibung)
+# Whitelist: slot name -> (file name, allowed magic bytes, description)
 _PNG = (b"\x89PNG\r\n\x1a\n",)
 _JPG = (b"\xff\xd8\xff",)
-_ICO = (b"\x00\x00\x01\x00", b"\x89PNG\r\n\x1a\n")  # .ico oder PNG-als-Favicon
+_ICO = (b"\x00\x00\x01\x00", b"\x89PNG\r\n\x1a\n")  # .ico or PNG-as-favicon
 BRANDING_SLOTS: dict[str, dict] = {
-    "logo_r.png":   {"magic": _PNG, "label": "Logo klein (Topbar + Browser-Icon)"},
-    "logo.png":     {"magic": _PNG, "label": "Logo Standard"},
-    "logo_big.png": {"magic": _PNG, "label": "Logo groß"},
-    "login-bg.jpg": {"magic": _JPG, "label": "Login-Hintergrundbild"},
+    "logo_r.png":   {"magic": _PNG, "label": "Logo small (topbar + browser icon)"},
+    "logo.png":     {"magic": _PNG, "label": "Logo default"},
+    "logo_big.png": {"magic": _PNG, "label": "Logo large"},
+    "login-bg.jpg": {"magic": _JPG, "label": "Login background image"},
     "favicon.ico":  {"magic": _ICO, "label": "Favicon (.ico)"},
 }
-_MAX_BRANDING_BYTES = 8 * 1024 * 1024  # 8 MB reichen für jedes Logo/Hintergrundbild
+_MAX_BRANDING_BYTES = 8 * 1024 * 1024  # 8 MB is enough for any logo/background image
 
 
 @router.get("/branding")
 def list_branding(user: dict = Depends(get_current_user)):
-    """Listet alle austauschbaren Branding-Dateien inkl. Änderungszeit (Cache-Busting)."""
+    """Lists all replaceable branding files incl. modification time (cache busting)."""
     require_perm(user, "manage_branding")
     slots = []
     for name, meta in BRANDING_SLOTS.items():
@@ -670,10 +660,10 @@ def list_branding(user: dict = Depends(get_current_user)):
 @router.post("/branding/{name}")
 async def upload_branding(name: str, request: Request, user: dict = Depends(get_current_user)):
     """
-    Ersetzt eine Branding-Datei. Body = rohe Bilddaten (kein multipart).
-    Akzeptiert ALLE gängigen Bildformate und konvertiert serverseitig (Pillow)
-    ins Ziel-Format des Slots (PNG/JPEG/ICO). Nur Whitelist-Dateinamen,
-    Größenlimit, atomares Ersetzen - die alte Datei bleibt bei Fehlern intakt.
+    Replaces a branding file. Body = raw image data (no multipart).
+    Accepts ALL common image formats and converts server-side (Pillow) into
+    the slot's target format (PNG/JPEG/ICO). Only whitelisted file names,
+    a size limit, atomic replacement - the old file stays intact on errors.
     """
     require_perm(user, "manage_branding")
     slot = BRANDING_SLOTS.get(name)
@@ -684,18 +674,18 @@ async def upload_branding(name: str, request: Request, user: dict = Depends(get_
     if not data:
         raise HTTPException(400, "Leerer Upload")
     if len(data) > _MAX_BRANDING_BYTES:
-        raise HTTPException(413, "Datei zu groß (max. 8 MB)")
+        raise HTTPException(413, "File too large (max. 8 MB)")
 
-    # ALLE Bildformate akzeptieren (PNG, JPEG, WebP, GIF, BMP, ICO, TIFF, ...)
-    # und serverseitig ins Ziel-Format des Slots konvertieren. Die frühere
-    # Magic-Byte-Prüfung lehnte Dateien teils fälschlich ab - jetzt entscheidet
-    # Pillow, ob es ein lesbares Bild ist, und die Konvertierung garantiert
-    # das korrekte Format auf der Platte.
+    # Accept ALL image formats (PNG, JPEG, WebP, GIF, BMP, ICO, TIFF, ...)
+    # and convert server-side into the slot's target format. The earlier
+    # magic-byte check sometimes rejected files wrongly - now Pillow decides
+    # whether it is a readable image, and the conversion guarantees the
+    # correct format on disk.
     try:
         from PIL import Image
     except ImportError:
-        raise HTTPException(500, "Pillow ist nicht installiert - bitte Backend-"
-                                 "Abhängigkeiten aktualisieren (requirements.txt).")
+        raise HTTPException(500, "Pillow is not installed - please update the "
+                                 "backend dependencies (requirements.txt).")
     import io as _io
     try:
         img = Image.open(_io.BytesIO(data))
@@ -710,7 +700,7 @@ async def upload_branding(name: str, request: Request, user: dict = Depends(get_
         if target_ext == "png":
             img.convert("RGBA").save(out, format="PNG", optimize=True)
         elif target_ext in ("jpg", "jpeg"):
-            # JPEG kann kein Alpha: transparente Bereiche auf Weiß legen.
+            # JPEG has no alpha: place transparent areas on white.
             if "A" in img.getbands():
                 rgba = img.convert("RGBA")
                 base = Image.new("RGB", rgba.size, (255, 255, 255))
@@ -723,7 +713,7 @@ async def upload_branding(name: str, request: Request, user: dict = Depends(get_
             sizes = [(s, s) for s in (16, 32, 48, 64) if s <= max(ic.size)] or [(16, 16)]
             ic.save(out, format="ICO", sizes=sizes)
         else:
-            # Unbekannter Slot-Typ: Original unverändert speichern.
+            # Unknown slot type: save the original unchanged.
             out.write(data)
     except Exception as e:
         raise HTTPException(400, f"Konvertierung nach {target_ext.upper()} "
@@ -752,24 +742,24 @@ async def upload_branding(name: str, request: Request, user: dict = Depends(get_
 
 
 # ------------------------------------------------------------------
-# Standard-Layouts (Dashboard-Widgets & Client-Panels) für ALLE Nutzer
+# Default layouts (dashboard widgets & client panels) for ALL users
 # ------------------------------------------------------------------
-# Ein Admin kann sein aktuelles Layout als organisationsweiten Standard
-# speichern. Jeder Nutzer bekommt diesen Standard, sobald er noch kein eigenes
-# Layout hat ODER wenn er in der Oberfläche bewusst "auf Standard zurücksetzen"
-# klickt. Bestehende eigene Layouts bleiben unangetastet - man kann also
-# weiterarbeiten. Gespeichert wird als JSON im settings-KV-Store.
+# An admin can save their current layout as the organization-wide default.
+# Every user gets this default as long as they have no layout of their own
+# OR when they deliberately click "reset to default" in the UI. Existing own
+# layouts stay untouched - so one can keep working. Stored as JSON in the
+# settings KV store.
 
 class DefaultLayoutBody(BaseModel):
-    kind: str            # "dash" (Client-Panels) | "fleet" (Dashboard-Widgets)
-    layout: dict | list  # das komplette Layout-Objekt bzw. die Widget-Liste
+    kind: str            # "dash" (client panels) | "fleet" (dashboard widgets)
+    layout: dict | list  # the complete layout object or the widget list
 
 
 _LAYOUT_SETTING_KEYS = {
     "dash": "default_layout_dash",
     "fleet": "default_layout_fleet",
-    # Organisationsweite Layout-Profil-PRESETS für die Client-Ansicht
-    # (Settings -> Profil "Physisch"/"VMs"/"LXCs"; vom Admin überschreibbar).
+    # Organization-wide layout profile PRESETS for the client view
+    # (Settings -> profile "Physical"/"VMs"/"LXCs"; overridable by the admin).
     "dash_profile_physical": "default_layout_dash_profile_physical",
     "dash_profile_vm": "default_layout_dash_profile_vm",
     "dash_profile_lxc": "default_layout_dash_profile_lxc",
@@ -779,9 +769,9 @@ _LAYOUT_SETTING_KEYS = {
 @router.get("/default-layouts")
 def get_default_layouts(user: dict = Depends(get_current_user)):
     """
-    Liefert die organisationsweiten Standard-Layouts (oder null, falls keiner
-    gesetzt ist). Für JEDEN eingeloggten Nutzer lesbar - das Frontend braucht
-    sie beim ersten Start und beim Zurücksetzen.
+    Returns the organization-wide default layouts (or null if none is set).
+    Readable for EVERY logged-in user - the frontend needs them on first
+    start and when resetting.
     """
     out = {}
     for kind, key in _LAYOUT_SETTING_KEYS.items():
@@ -802,7 +792,7 @@ def set_default_layout(body: DefaultLayoutBody, user: dict = Depends(get_current
     require_admin(user)
     key = _LAYOUT_SETTING_KEYS.get(body.kind)
     if not key:
-        raise HTTPException(400, "Ungültige Layout-Art (dash|fleet)")
+        raise HTTPException(400, "Invalid layout type (dash|fleet)")
     db.set_setting(key, json.dumps(body.layout))
     db.add_audit_entry(user["username"], "settings.default_layout_set", target=body.kind)
     return {"ok": True, "kind": body.kind}
@@ -814,7 +804,7 @@ def clear_default_layout(kind: str, user: dict = Depends(get_current_user)):
     require_admin(user)
     key = _LAYOUT_SETTING_KEYS.get(kind)
     if not key:
-        raise HTTPException(400, "Ungültige Layout-Art (dash|fleet)")
+        raise HTTPException(400, "Invalid layout type (dash|fleet)")
     db.set_setting(key, "")
     db.add_audit_entry(user["username"], "settings.default_layout_cleared", target=kind)
     return {"ok": True, "kind": kind}

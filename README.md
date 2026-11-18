@@ -87,57 +87,57 @@ which address it is bound to, and which settings are locked.
 
 
 
-### VPN (WireGuard) – Voraussetzungen je Betriebsart
+### VPN (WireGuard) – requirements per mode
 
-Das VPN benutzt bevorzugt **wireguard-go**, die Referenzumsetzung der
-WireGuard-Entwickler. Sie läuft vollständig im Userspace und braucht **kein
-Kernelmodul** – wichtig auf NAS-Systemen, denn WireGuard kam erst mit Linux
-5.6 in den Kernel. Fehlt eine Voraussetzung, fällt das Backend automatisch
-auf seine eingebaute Umsetzung zurück und sagt das im Protokoll sowie in der
-VPN-App. Es bricht nichts ab.
+The VPN prefers **wireguard-go**, the reference implementation by the
+WireGuard developers. It runs entirely in userspace and needs **no kernel
+module** – important on NAS systems, since WireGuard only landed in the Linux
+kernel with 5.6. If a prerequisite is missing, the backend automatically falls
+back to its built-in implementation and says so in the log and in the VPN app.
+Nothing aborts.
 
-**Docker (empfohlen)** – alles ist vorbereitet:
+**Docker (recommended)** – everything is prepared:
 
 ```bash
-sudo modprobe tun          # einmalig, falls /dev/net/tun fehlt
-echo tun | sudo tee -a /etc/modules   # damit es einen Neustart übersteht
+sudo modprobe tun          # once, if /dev/net/tun is missing
+echo tun | sudo tee -a /etc/modules   # so it survives a reboot
 docker compose up -d --build
 ```
 
-Das Image bringt `wireguard-go` und `wireguard-tools` mit; `NET_ADMIN` und
-`/dev/net/tun` sind in `docker-compose.yml` bereits eingetragen.
-Auf **Synology/QNAP** ist das Modul vorhanden, nach einem Neustart aber oft
-nicht geladen – dann `modprobe tun` in den Aufgabenplaner eintragen
-(Auslöser: Hochfahren, Benutzer: root).
+The image ships `wireguard-go` and `wireguard-tools`; `NET_ADMIN` and
+`/dev/net/tun` are already set in `docker-compose.yml`.
+On **Synology/QNAP** the module is present but often not loaded after a reboot
+– in that case add `modprobe tun` to the task scheduler
+(trigger: boot-up, user: root).
 
-**Linux ohne Docker:**
+**Linux without Docker:**
 
 ```bash
 sudo apt install wireguard-go wireguard-tools iproute2
 sudo modprobe tun
 ```
 
-Das Backend braucht `CAP_NET_ADMIN`. Als Dienst genügt dafür:
+The backend needs `CAP_NET_ADMIN`. As a service this is enough:
 
 ```ini
 [Service]
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 ```
 
-**Windows:** Der automatische Aufbau ist dort noch nicht umgesetzt. Das
-Backend läuft normal, das VPN benutzt dann die eingebaute Umsetzung. Wer
-WireGuard unter Windows produktiv braucht, richtet die ausgestellte
-`.conf` mit dem offiziellen Client als Dienst ein:
+**Windows:** automatic setup is not implemented there yet. The backend runs
+normally, and the VPN then uses the built-in implementation. If you need
+WireGuard on Windows in production, set up the issued `.conf` with the official
+client as a service:
 
 ```
-wireguard.exe /installtunnelservice C:\Pfad\zur\datei.conf
+wireguard.exe /installtunnelservice C:\path\to\file.conf
 ```
 
-**Ohne all das** funktioniert weiterhin die **Port-Weiterleitung**
-(Knopf „🔀 Port" beim Client). Sie macht einen Dienst des Geräts über den
-Server erreichbar, läuft über die bestehende Agenten-Verbindung und braucht
-weder Treiber noch offene Ports beim Kunden – für VNC, RDP, SSH und
-Weboberflächen ist das meist der einfachere Weg.
+**Without any of this**, **port forwarding** still works (the "Port" button on
+the client). It makes a service on the device reachable via the server, runs
+over the existing agent connection and needs neither drivers nor open ports at
+the customer – for VNC, RDP, SSH and web interfaces this is usually the simpler
+way.
 
 ## Support & Feedback
 

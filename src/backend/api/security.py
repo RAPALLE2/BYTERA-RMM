@@ -80,13 +80,13 @@ def verify_secure_token(code: str) -> tuple[dict, dict]:
     try:
         signed = _fernet().decrypt(code.encode()).decode()
     except (InvalidToken, ValueError):
-        raise HTTPException(401, "API-Code ungültig")
+        raise HTTPException(401, "API code invalid")
     try:
         payload = jwt.decode(signed, _api_key(), algorithms=["HS256"])
     except jwt.ExpiredSignatureError:
         raise HTTPException(401, "API-Code abgelaufen - bitte neu anmelden")
     except jwt.InvalidTokenError:
-        raise HTTPException(401, "API-Code ungültig")
+        raise HTTPException(401, "API code invalid")
     row = store.get_token(payload.get("jti", ""))
     if not row or row["kind"] != "secure" or not hmac.compare_digest(row["token_hash"], store.sha(code)):
         raise HTTPException(401, "API-Code unbekannt")
@@ -112,7 +112,7 @@ def open_session(user: dict, ip: str) -> dict:
 def verify_session(sid: str, ip: str) -> tuple[dict, dict]:
     row = store.find_by_hash(store.sha(sid))
     if not row or row["kind"] != "session" or row["revoked"]:
-        raise HTTPException(401, "Keine gültige API-Sitzung - bitte anmelden (POST /api/v1/auth/login)")
+        raise HTTPException(401, "No valid API session - please sign in (POST /api/v1/auth/login)")
     if row["expires"] and row["expires"] < store.now():
         raise HTTPException(401, "API-Sitzung abgelaufen - bitte neu anmelden")
     user = db.get_user_by_id(row["user_id"])
@@ -141,7 +141,7 @@ def resolve(request: Request) -> dict:
         name = (store.setting("service_user") or "").strip()
         user = db.get_user_by_username(name) if name else None
         if not user:
-            raise HTTPException(503, "Modus „ohne Benutzer“: In den API-Einstellungen ist kein API-Benutzer gewählt")
+            raise HTTPException(503, "\"Without user\" mode: no API user is selected in the API settings")
     elif mode == "user":
         sid = request.headers.get("x-api-session") or request.cookies.get(SESSION_COOKIE) or ""
         if not sid:

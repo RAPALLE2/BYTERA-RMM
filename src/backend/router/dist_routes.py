@@ -48,7 +48,7 @@ def _sz(n: int) -> str:
     return f"{f:.1f} GB"
 
 
-_PAGE = """<!doctype html><html lang="de"><head><meta charset="utf-8">
+_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{title}</title>
 <style>:root{{color-scheme:dark light}}body{{margin:0;font:15px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
 background:#0b1220;color:#e6edf6}}@media(prefers-color-scheme:light){{body{{background:#f5f7fb;color:#10233f}}}}
@@ -72,17 +72,17 @@ def _render(title: str, body: str) -> HTMLResponse:
 def dist_index():
     pub = [f for f in store.folders() if f["public"]]
     if not pub:
-        rows = '<p class="empty">Keine öffentlichen Bereiche.</p>'
+        rows = '<p class="empty">No public areas.</p>'
     else:
         rows = "".join(
-            f'<a class="card" href="/dist/{html.escape(f["name"])}"><span class="i">📦</span>'
+            f'<a class="card" href="/dist/{html.escape(f["name"])}"><span class="i"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96 12 12.01l8.73-5.05"/><path d="M12 22.08V12"/></svg></span>'
             f'<span class="t"><b>{html.escape(f["label"])}</b>'
-            f'<span class="m">{f["files"]} Datei(en) · {_sz(f["size"])}</span></span>'
-            f'<span class="dl">Öffnen</span></a>' for f in pub)
+            f'<span class="m">{f["files"]} file(s) · {_sz(f["size"])}</span></span>'
+            f'<span class="dl">Open</span></a>' for f in pub)
     return _render("BYTERA RMM · Downloads", rows)
 
 
-# Alte Adresse /dist/enrollment/... -> /dist/enroll/... (Ordner wurde umbenannt)
+# Old address /dist/enrollment/... -> /dist/enroll/... (folder was renamed)
 @router.get("/dist/enrollment", include_in_schema=False)
 @router.get("/dist/enrollment/", include_in_schema=False)
 def _dist_enrollment_old():
@@ -104,13 +104,13 @@ def dist_folder(folder: str):
     m = store.meta(folder)
     items = store.listdir(folder)
     if not items:
-        body = '<div class="bc"><a href="/dist">← Downloads</a></div><p class="empty">Dieser Bereich ist noch leer.</p>'
+        body = '<div class="bc"><a href="/dist">← Downloads</a></div><p class="empty">This area is still empty.</p>'
     else:
         rows = "".join(
             f'<a class="card" href="/dist/{html.escape(folder)}/{html.escape(it["name"])}">'
-            f'<span class="i">📄</span><span class="t"><b>{html.escape(it["name"])}</b>'
+            f'<span class="i"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg></span><span class="t"><b>{html.escape(it["name"])}</b>'
             f'<span class="m">{_sz(it["size"])} · {time.strftime("%d.%m.%Y", time.localtime(it["mtime"]))}</span></span>'
-            f'<span class="dl">⬇ Laden</span></a>' for it in items)
+            f'<span class="dl"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg> Download</span></a>' for it in items)
         body = f'<div class="bc"><a href="/dist">← Downloads</a></div>{rows}'
     return _render(m["label"], body)
 
@@ -164,7 +164,7 @@ class FolderBody(BaseModel):
 def api_create(body: FolderBody, user: dict = Depends(get_current_user)):
     _perm(user)
     if not store.valid_name(body.name):
-        raise HTTPException(400, "Ungültiger Ordnername")
+        raise HTTPException(400, "Invalid folder name")
     if not store.create_folder(body.name, body.label, body.public):
         raise HTTPException(400, "Konnte nicht angelegt werden")
     db.add_audit_entry(user["username"], "dist.folder_created", details=body.name)
@@ -189,7 +189,7 @@ def api_meta(name: str, body: MetaBody, user: dict = Depends(get_current_user)):
 def api_delete(name: str, user: dict = Depends(get_current_user)):
     _perm(user)
     if not store.delete_folder(name):
-        raise HTTPException(400, "Kern-Ordner können nicht gelöscht werden")
+        raise HTTPException(400, "Core folders cannot be deleted")
     db.add_audit_entry(user["username"], "dist.folder_deleted", details=name)
     return {"ok": True}
 

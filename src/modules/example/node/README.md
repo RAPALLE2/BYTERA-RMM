@@ -1,9 +1,9 @@
-# Node-Teil des Beispiel-Moduls
+# Node part of the example module
 
-Dieser Ordner wird vom Backend an eine **Node** geschickt, wenn das Modul `example` aktiv ist und im
-Backend-Teil (oder über die API `POST /api/nodes/<client>/modules/example`) `deploy` aufgerufen wird.
+This folder is sent by the backend to a **node** when the `example` module is active and `deploy` is
+called in the backend part (or via the API `POST /api/nodes/<client>/modules/example`).
 
-* `module.json` → Abschnitt `node` beschreibt, **wie** die Node das Modul ausführt (`kind: compose` oder `python`).
-* `docker-compose.yml` → wird mit `docker compose -p rmm-example up -d` gestartet.
+* `module.json` → the `node` section describes **how** the node runs the module (`kind: compose` or `python`).
+* `docker-compose.yml` → started with `docker compose -p rmm-example up -d`.
 
-Mehr dazu: `src/modules/backend/example/GUIDE.md`, Abschnitt „Node-Teil“.
+More on this: `src/modules/backend/example/GUIDE.md`, section "Node part".

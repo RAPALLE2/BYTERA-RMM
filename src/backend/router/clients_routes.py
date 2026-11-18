@@ -1,15 +1,15 @@
 """
 routers/clients_routes.py
 ----------------------------
-Alles rund um die verwalteten Geräte (Clients) selbst.
+Everything about the managed devices (clients) themselves.
 
 Endpunkte:
   GET    /api/clients                 -> alle Clients + Online-Status + Live-Metriken
   GET    /api/clients/{id}            -> ein einzelner Client
   PUT    /api/clients/{id}            -> Client bearbeiten (Edit-Dialog:
                                           Tenant/Location/Name/Farbe/aktiv/...)
-  DELETE /api/clients/{id}            -> Client löschen
-  POST   /api/clients/{id}/exec       -> Shell-Befehl auf dem Client ausführen (Terminal)
+  DELETE /api/clients/{id}            -> delete client
+  POST   /api/clients/{id}/exec       -> run a shell command on the client (terminal)
   POST   /api/clients/bulk-exec       -> Shell-Befehl auf MEHREREN Clients gleichzeitig
   GET    /api/clients/{id}/fs         -> Ordnerinhalt auf dem Client auflisten (File Station)
 """
@@ -31,8 +31,8 @@ from app.sockets import state, request_exec, request_fs_list, request_proc_list,
 
 
 def _require_client_perm(user: dict, client_id: str, perm: str) -> None:
-    """Prüft ein client-bezogenes Recht; wirft 404 statt 403, wenn der Client
-    für den Benutzer gar nicht sichtbar ist (versteckte Clients bleiben verborgen)."""
+    """Checks a client-related permission; raises 404 instead of 403 if the
+    client is not visible to the user at all (hidden clients stay hidden)."""
     if not can_access_client(user, client_id):
         raise HTTPException(404, "Client nicht gefunden")
     require_perm(user, perm, client_id)
@@ -44,7 +44,7 @@ router = APIRouter(prefix="/api/clients", tags=["clients"])
 # Client-Websites (Quick Access + Favoriten + Uptime-Monitoring)
 # ==================================================================
 
-# Erlaubte Benachrichtigungs-Modi für das Uptime-Monitoring:
+# Allowed notification modes for uptime monitoring:
 #   'up'     -> Benachrichtigung, wenn ein Scan ERFOLGREICH war (bei Statuswechsel)
 #   'down'   -> Benachrichtigung, wenn ein Scan FEHLGESCHLAGEN ist (bei Statuswechsel)
 #   'always' -> Benachrichtigung nach JEDEM Scan (Erfolg und Fehler)
@@ -89,7 +89,7 @@ def _validate_open_mode(mode: str | None) -> None:
 @router.get("/websites/favorites")
 def get_favorite_websites(user: dict = Depends(get_current_user)):
     """Alle als Favorit angehefteten Websites - gefiltert auf Clients,
-    die der Benutzer überhaupt sehen darf."""
+    that the user is allowed to see at all."""
     favs = db.list_favorite_websites()
     visible = visible_client_ids(user, [w["client_id"] for w in favs])
     return [w for w in favs if w["client_id"] in visible]
@@ -195,9 +195,9 @@ def get_screen_history(client_id: str, user: dict = Depends(get_current_user)):
 def get_client_metrics_history(client_id: str, hours: int = 0,
                                user: dict = Depends(get_current_user)):
     """
-    Liefert die gespeicherte Metrik-Historie eines Clients. Das Frontend nutzt
-    das, um die Graphen nach einem Seiten-Neuladen sofort mit Verlaufsdaten zu
-    füllen, statt bei 0 anzufangen.
+    Returns the stored metric history of a client. The frontend uses it to
+    fill the graphs with history data immediately after a page reload, instead
+    of starting from 0.
 
     Zeitfenster: 'hours' aus der Anfrage, sonst die eingestellte
     Aufbewahrungsdauer, sonst das Standardfenster der Datenbankschicht
@@ -226,7 +226,7 @@ def get_client_metrics_history(client_id: str, hours: int = 0,
 
 class ExecBody(BaseModel):
     command: str
-    session: str | None = None   # Terminal-Session (für persistentes Arbeitsverzeichnis)
+    session: str | None = None   # terminal session (for a persistent working directory)
     shell: str = "auto"          # 'cmd' | 'powershell' | 'auto'
     elevated: bool = False       # als Administrator (nur Windows)
 
@@ -244,16 +244,16 @@ class UpdateClientBody(BaseModel):
     parent_client_id: str | None = None
     color: str | None = None
     notes: str | None = None
-    status_override: str | None = None   # z.B. "maintenance" oder null zum Zurücksetzen
+    status_override: str | None = None   # e.g. "maintenance" or null to reset
     active: bool | None = None
     # WICHTIG: fehlte bisher! Pydantic verwirft unbekannte Felder - dadurch
-    # wurde eine im Edit-Dialog gewählte VM/LXC-Einstufung NIE gespeichert und
-    # der Dialog zeigte nach jedem Neuladen wieder "Physisches Gerät".
+    # a VM/LXC classification chosen in the edit dialog was NEVER saved and
+    # the dialog showed "Physical device" again after every reload.
     device_type: str | None = None       # physical | vm | lxc
     # Automatisches Agent-Update pro Client: 'global' (folgt den Settings),
     # 'on' (immer) oder 'off' (nie).
     auto_update: str | None = None
-    # Bestätigung der Gerätetyp-Auto-Erkennung (1 = Nutzer hat entschieden)
+    # Confirmation of the device-type auto-detection (1 = user has decided)
     device_type_ack: int | None = None
     # Icon in sidebar/panel/topology ('' = automatic from the detected kind)
     icon_type: str | None = None
@@ -261,9 +261,9 @@ class UpdateClientBody(BaseModel):
     fav_dir: str | None = None
     # Garantie-Ende (Unix-ms). 0/None = keine Garantie hinterlegt.
     warranty_until: int | None = None
-    # 1 = essentielles/kritisches Gerät: Icon wird bei Offline ROT statt grau.
+    # 1 = essential/critical device: the icon turns RED instead of gray when offline.
     essential: int | None = None
-    # Kurzname für die Anzeige (leer = Hostname) und freie Tags (kommagetrennt).
+    # Short name for display (empty = hostname) and free tags (comma-separated).
     short_name: str | None = None
     tags: str | None = None
 
@@ -281,9 +281,9 @@ def _with_live_state(c: dict) -> dict:
 def get_clients(user: dict = Depends(get_current_user)):
     clients = db.list_clients()
     visible = visible_client_ids(user, [c["id"] for c in clients])
-    # Hostnamen-Map über ALLE Clients (auch unsichtbare): Eine VM/LXC, deren
-    # physischer Host für den Benutzer nicht sichtbar ist, wird im Frontend in
-    # einem Pseudo-Ordner mit dem Namen des Hosts dargestellt - dafür braucht
+    # Hostname map over ALL clients (including invisible ones): a VM/LXC whose
+    # physical host is not visible to the user is shown in the frontend in a
+    # pseudo-folder with the name of the host - for that we need
     # das Frontend den Host-Namen, auch wenn der Host selbst gefiltert wird.
     name_by_id = {c["id"]: c.get("hostname") for c in clients}
     out = []
@@ -310,12 +310,12 @@ def update_client(client_id: str, body: UpdateClientBody, user: dict = Depends(g
     if not db.get_client(client_id):
         raise HTTPException(404, "Client nicht gefunden")
 
-    # Nur die tatsächlich mitgeschickten Felder übernehmen
+    # Apply only the fields actually sent
     fields = body.model_dump(exclude_unset=True)
 
     # Rechte: Das Garantie-Datum hat ein EIGENES Recht ('set_warranty'), damit
     # es z.B. der Einkauf/das Lager pflegen kann, ohne den Client sonst
-    # bearbeiten zu dürfen. Alle übrigen Felder brauchen weiterhin
+    # to edit. All other fields still require
     # 'manage_clients' (das 'set_warranty' automatisch mit abdeckt).
     if "warranty_until" in fields:
         _require_client_perm(user, client_id, "set_warranty")
@@ -324,13 +324,13 @@ def update_client(client_id: str, body: UpdateClientBody, user: dict = Depends(g
     if "active" in fields:
         fields["active"] = int(fields["active"])  # SQLite kennt kein echtes Bool
     if "device_type" in fields and fields["device_type"] not in ("physical", "vm", "lxc", None):
-        raise HTTPException(400, "Ungültiger Gerätetyp (physical|vm|lxc)")
+        raise HTTPException(400, "Invalid device type (physical|vm|lxc)")
     if "icon_type" in fields:
         fields["icon_type"] = fields["icon_type"] or ""
         if fields["icon_type"] and fields["icon_type"] not in db.ICON_TYPES:
             raise HTTPException(400, "Invalid icon type")
     if "auto_update" in fields and fields["auto_update"] not in ("global", "on", "off", None):
-        raise HTTPException(400, "Ungültiger Auto-Update-Modus (global|on|off)")
+        raise HTTPException(400, "Invalid auto-update mode (global|on|off)")
     if fields.get("auto_update") is None and "auto_update" in fields:
         fields["auto_update"] = "global"
 
@@ -358,13 +358,13 @@ async def exec_on_client(client_id: str, body: ExecBody, background: bool = Fals
     Neuladen oder Schliessen des Fensters bricht ihn nicht ab, das Ergebnis
     bleibt in der Aufgaben-Anzeige. ?background=1 -> Job sofort zurueck."""
     _require_client_perm(user, client_id, "c_terminal")
-    # Jeder ausgeführte Befehl landet im Audit-Log (wie gewünscht: "wer hat wann was gemacht")
+    # Every executed command lands in the audit log (as desired: "who did what and when")
     _mode = f"[{body.shell}{'/admin' if body.elevated else ''}] " if body.shell != "auto" or body.elevated else ""
     db.add_audit_entry(user["username"], "terminal.exec", target=client_id, details=_mode + body.command)
     first = (body.command.strip().splitlines() or [""])[0][:60]
 
     async def work(job):
-        job.update(phase="exec", detail=f"läuft auf {_hostname(client_id)}")
+        job.update(phase="exec", detail=f"running on {_hostname(client_id)}")
         job.log(f"$ {body.command[:2000]}")
         try:
             result = await request_exec(client_id, body.command, session=body.session,
@@ -388,11 +388,11 @@ async def exec_on_client(client_id: str, body: ExecBody, background: bool = Fals
 @router.post("/bulk-exec")
 async def bulk_exec(body: BulkExecBody, background: bool = False, user: dict = Depends(get_current_user)):
     """
-    Führt denselben Befehl auf mehreren Clients gleichzeitig aus (Bulk Terminal).
+    Runs the same command on several clients at once (bulk terminal).
     Alle Anfragen laufen parallel (asyncio.gather), das Ergebnis ist eine
     Zuordnung Client-ID -> Ergebnis (oder Fehlermeldung, falls einer offline ist).
     """
-    # Globales Recht für die Bulk-Shell nötig …
+    # Global permission required for the bulk shell ...
     require_perm(user, "bulk_shell")
     # … und pro Ziel-Client das Terminal-Recht (Rest wird verworfen).
     allowed_ids = [cid for cid in body.client_ids
@@ -471,9 +471,9 @@ async def kill_client_process(client_id: str, body: KillBody, user: dict = Depen
 @router.get("/{client_id}/fs/read")
 async def read_client_file(client_id: str, path: str, user: dict = Depends(get_current_user)):
     """
-    Liest eine Datei vom Client und gibt sie base64-kodiert zurück.
-    Das Frontend baut daraus einen Download. (Für kleinere Dateien gedacht;
-    der Agent begrenzt die Größe auf 25 MB.)
+    Reads a file from the client and returns it base64-encoded.
+    The frontend turns it into a download. (Intended for smaller files;
+    the agent limits the size to 25 MB.)
     """
     _require_client_perm(user, client_id, "c_explorer_view")
     try:
@@ -485,7 +485,7 @@ async def read_client_file(client_id: str, path: str, user: dict = Depends(get_c
 
 
 # ------------------------------------------------------------------
-# Schreibende Datei-Operationen auf einem Client (Upload/Ordner/Löschen/…)
+# Writing file operations on a client (upload/folder/delete/...)
 # Alle brauchen das Recht "use_explorer".
 # ------------------------------------------------------------------
 
@@ -505,7 +505,7 @@ class FsRenameBody(BaseModel):
 
 @router.post("/{client_id}/fs/write")
 async def write_client_file(client_id: str, body: FsWriteBody, user: dict = Depends(get_current_user)):
-    """Lädt eine Datei hoch oder schreibt eine editierte Datei zurück."""
+    """Uploads a file or writes back an edited file."""
     _require_client_perm(user, client_id, "c_explorer_edit")
     try:
         result = await request_fs_op(client_id, "fs-write", {"path": body.path, "data": body.data})
@@ -601,10 +601,10 @@ async def update_client_agent(client_id: str, wait: bool = False, background: bo
     return await bgjobs.respond(job, new, False)
 
 
-_STAGE_TEXT = {"sent": "Befehl gesendet", "received": "Agent hat den Befehl empfangen",
-               "launched": "Update-Skript läuft, Agent startet neu",
-               "launched-fallback": "Update-Skript läuft (Ausweichweg)",
-               "updated": "aktualisiert", "error": "Fehler"}
+_STAGE_TEXT = {"sent": "command sent", "received": "agent received the command",
+               "launched": "update script running, agent restarting",
+               "launched-fallback": "update script running (fallback path)",
+               "updated": "updated", "error": "error"}
 
 
 def _agent_update_runner(client_id: str):
@@ -617,7 +617,7 @@ def _agent_update_runner(client_id: str):
             uj = state.update_jobs.get(client_id) or {}
             if uj.get("updated"):
                 v = uj.get("version") or (db.get_client(client_id) or {}).get("agent_version") or ""
-                job.log(f"Agent meldet sich zurück{(' mit Version ' + v) if v else ''}")
+                job.log(f"agent reports back{(' with version ' + v) if v else ''}")
                 return {"ok": True, "updated": True, "version": v,
                         "version_before": uj.get("version_before", "")}
             stage = uj.get("stage") or "sent"
@@ -660,7 +660,7 @@ def update_client_agent_status(client_id: str, user: dict = Depends(get_current_
 
 class UpdateAllBody(BaseModel):
     # Offline-Clients zum Update vormerken: Sie werden aktualisiert, sobald
-    # sie sich das nächste Mal mit dem Backend verbinden.
+    # they connect to the backend the next time.
     include_offline: bool = False
 
 
@@ -668,30 +668,30 @@ class UpdateAllBody(BaseModel):
 async def update_all_agents(body: UpdateAllBody | None = None, background: bool = False,
                             user: dict = Depends(get_current_user)):
     """
-    Löst ein Agent-Update für ALLE aktuell verbundenen Clients aus, die der
-    Benutzer verwalten darf. Bewusst „fire-and-forget": Es wird nicht auf die
-    einzelnen Bestätigungen gewartet (das würde bei vielen Clients zu lange
-    dauern) – jeder Agent aktualisiert sich selbst und verbindet neu.
+    Triggers an agent update for ALL currently connected clients the user is
+    allowed to manage. Deliberately "fire-and-forget": it does not wait for the
+    individual confirmations (that would take too long with many clients) -
+    each agent updates itself and reconnects.
 
-    Mit include_offline=true werden Offline-Clients zusätzlich VORGEMERKT
-    (pending_agent_update): Sie bekommen das Update automatisch, sobald sie
-    wieder online sind (siehe sockets.on_register).
+    With include_offline=true, offline clients are additionally EARMARKED
+    (pending_agent_update): they get the update automatically as soon as they
+    are online again (see sockets.on_register).
 
-    Sobald ALLE angestoßenen Clients wieder verbunden sind, bekommen die
-    Dashboards automatisch eine Benachrichtigung (Hintergrund-Task).
+    As soon as ALL triggered clients are reconnected, the dashboards
+    automatically get a notification (background task).
     """
     include_offline = bool(body and body.include_offline)
     all_clients = db.list_clients()
     visible = visible_client_ids(user, [c["id"] for c in all_clients])
 
-    # Zuerst nur SAMMELN, wer drankommt - noch nichts auslösen.
+    # First only COLLECT who is affected - do not trigger anything yet.
     targets: list[str] = []
     offline, no_perm, queued = 0, 0, 0
     for c in all_clients:
         cid = c["id"]
         if cid not in visible:
             continue
-        # Nur Clients mit Verwaltungsrecht anfassen (still überspringen).
+        # Touch only clients with management permission (skip silently).
         if not user_has_permission(user, "manage_agent", cid):
             no_perm += 1
             continue
@@ -709,26 +709,25 @@ async def update_all_agents(body: UpdateAllBody | None = None, background: bool 
 
     # Gestaffelt ausrollen, NICHT alle auf einmal.
     #
-    # Warum: Ein "update-agent" löst beim Agenten weit mehr aus als ein
-    # kurzes Signal. Er lädt update.sh bzw. update.ps1 und danach die neue
+    # Why: an "update-agent" triggers far more on the agent than a short
+    # signal. It downloads update.sh or update.ps1 and then the new
     # agent.py von genau diesem Backend, beendet sich und verbindet neu.
-    # Passiert das bei allen Geräten in derselben Sekunde, bekommt der
-    # Server gleichzeitig: N Downloads, N Verbindungsabbrüche und kurz
-    # darauf N Anmeldungen - während im Browser jemand das Dashboard neu
-    # lädt. Genau diese Kombination stand im Log: Der Server war ein paar
-    # Sekunden beschäftigt, der Healthcheck lief in sein 5-Sekunden-Limit
-    # und Cloudflare in seinen Zeitüberlauf.
+    # If this happens on all devices in the same second, the server gets
+    # simultaneously: N downloads, N disconnects and shortly after N sign-ins
+    # - while someone reloads the dashboard in the browser. Exactly this
+    # combination was in the log: the server was busy for a few seconds, the
+    # health check ran into its 5-second limit and Cloudflare into its timeout.
     #
-    # Die Aufnahme-Schleuse in sockets.py entschärft nur die Rückkehr. Das
+    # The admission gate in sockets.py only eases the return. That
     # Losschicken muss hier gebremst werden - vorher entsteht die Welle.
     out = {"ok": True, "triggered": len(targets), "offline": offline,
            "queued_offline": queued, "skipped_no_permission": no_perm}
     if targets:
         # Ausrollen + Warten auf die Rueckkehr als BACKEND-JOB (Aufgaben-Anzeige)
         async def work(job):
-            job.update(phase="rollout", pct=0, detail=f"0/{len(targets)} angestoßen", total=len(targets))
+            job.update(phase="rollout", pct=0, detail=f"0/{len(targets)} triggered", total=len(targets))
             return await _rollout_agent_updates(targets, user["username"], job)
-        job, _ = bgjobs.start("agent.update_all", "all", title=f"Agent-Update für {len(targets)} Clients",
+        job, _ = bgjobs.start("agent.update_all", "all", title=f"Agent update for {len(targets)} clients",
                               user=user, runner=work, meta={"clients": targets, "summary": out})
         out["job_id"] = job.id
         if background:
@@ -737,8 +736,8 @@ async def update_all_agents(body: UpdateAllBody | None = None, background: bool 
 
 
 # Wie viele Agenten gleichzeitig aktualisiert werden und wie lange danach
-# gewartet wird. Über Umgebungsvariablen anpassbar, damit man auf kräftiger
-# Hardware aufdrehen kann, ohne Code zu ändern.
+# is waited. Adjustable via environment variables, so one can turn it up on
+# powerful hardware without changing code.
 def _rollout_settings() -> tuple[int, float]:
     import os
     try:
@@ -754,42 +753,42 @@ def _rollout_settings() -> tuple[int, float]:
 
 async def _rollout_agent_updates(client_ids: list[str], username: str, job=None) -> dict:
     """
-    Schickt das Update in kleinen Wellen los und wartet dazwischen.
+    Sends the update out in small waves and waits in between.
 
-    Der Aufruf kehrt sofort zurück; das Ausrollen läuft im Hintergrund.
-    Deshalb meldet die Oberfläche "geplant" und nicht "erledigt" - bei 50
-    Geräten dauert der Durchlauf mehrere Minuten, und das ist Absicht.
+    The call returns immediately; the rollout runs in the background.
+    That is why the UI reports "scheduled" and not "done" - with 50 devices
+    the run takes several minutes, and that is intentional.
     """
     batch_size, pause = _rollout_settings()
     triggered: list[str] = []
-    print(f"[update] Rollout für {len(client_ids)} Agenten "
+    print(f"[update] Rollout for {len(client_ids)} agents "
           f"({batch_size} gleichzeitig, {pause:.0f}s Pause)")
 
     total = len(client_ids)
     for start in range(0, len(client_ids), batch_size):
         if job and job.cancelled:
-            job.log("Abgebrochen - restliche Clients werden nicht mehr angestoßen")
+            job.log("Cancelled - remaining clients are no longer triggered")
             break
         chunk = client_ids[start:start + batch_size]
         for cid in chunk:
             if not state.is_online(cid):
                 if job:
-                    job.log(f"{_hostname(cid)}: inzwischen offline - übersprungen")
-                continue   # zwischenzeitlich weg - der Rest läuft weiter
-            # Alte Bestätigung verwerfen, damit nur der NEUE Reconnect zählt.
+                    job.log(f"{_hostname(cid)}: offline in the meantime - skipped")
+                continue   # gone in the meantime - the rest continues
+            # Discard the old confirmation, so only the NEW reconnect counts.
             state.update_confirmed.pop(cid, None)
             try:
                 if await send_to_agent(cid, "update-agent", {}):
                     triggered.append(cid)
                     if job:
-                        job.log(f"{_hostname(cid)}: Update angestoßen")
+                        job.log(f"{_hostname(cid)}: update triggered")
             except Exception as e:
                 print(f"[update] {cid} nicht erreicht: {e}")
                 if job:
                     job.log(f"{_hostname(cid)}: nicht erreicht ({e})")
         if job:
             n = min(start + batch_size, total)
-            job.update(pct=n / total * 50, detail=f"{n}/{total} angestoßen (je {batch_size}, {pause:.0f}s Pause)")
+            job.update(pct=n / total * 50, detail=f"{n}/{total} triggered ({batch_size} each, {pause:.0f}s pause)")
         if start + batch_size < len(client_ids):
             await asyncio.sleep(pause)
 
@@ -800,15 +799,15 @@ async def _rollout_agent_updates(client_ids: list[str], username: str, job=None)
 
 async def _await_agents_reconnect(client_ids: list[str], username: str,
                                   timeout_seconds: float = 300.0, job=None) -> dict:
-    """Wartet, bis alle per Massen-Update angestoßenen Agents ihren Neustart
-    durchlaufen haben, und benachrichtigt dann alle Dashboards.
+    """Waits until all agents triggered by the mass update have gone through
+    their restart, and then notifies all dashboards.
 
-    WICHTIG: Beim Auslösen sind die Clients noch verbunden. Ein Client gilt erst
-    dann als „wieder verbunden", wenn er ZUERST offline gegangen (Update-Neustart)
-    und DANACH wieder online ist. Das zuverlässigste Signal dafür ist
-    `state.update_confirmed` (wird nur beim Reconnect NACH einem Update gesetzt).
-    Zusätzlich beobachten wir den Offline→Online-Übergang direkt, falls ein Agent
-    kein `updated`-Flag meldet."""
+    IMPORTANT: at trigger time the clients are still connected. A client only
+    counts as "reconnected" once it has FIRST gone offline (update restart)
+    and THEN come online again. The most reliable signal for this is
+    `state.update_confirmed` (set only on the reconnect AFTER an update).
+    Additionally we watch the offline->online transition directly, in case an
+    agent reports no `updated` flag."""
     # Phase 1: auf das Offline-Gehen warten. Phase 2: auf das erneute Online-Sein.
     waiting_offline = set(client_ids)   # muss erst weg (Update-Neustart)
     waiting_online = set()              # war offline, muss wieder kommen
@@ -819,7 +818,7 @@ async def _await_agents_reconnect(client_ids: list[str], username: str,
         await asyncio.sleep(1.0)
 
         # Phase 1: Clients, die (a) offline gegangen sind -> Phase 2, oder
-        # (b) sich bereits per Update-Reconnect zurückgemeldet haben -> fertig.
+        # (b) have already reported back via update reconnect -> done.
         for cid in list(waiting_offline):
             if cid in state.update_confirmed:
                 # Hat den kompletten Zyklus schon durchlaufen (offline+online).
@@ -830,7 +829,7 @@ async def _await_agents_reconnect(client_ids: list[str], username: str,
                 waiting_offline.discard(cid)
                 waiting_online.add(cid)
 
-        # Phase 2: auf die Rückkehr warten (Update-Reconnect ODER wieder online).
+        # Phase 2: wait for the return (update reconnect OR online again).
         for cid in list(waiting_online):
             if cid in state.update_confirmed or state.is_online(cid):
                 state.update_confirmed.pop(cid, None)
@@ -845,20 +844,20 @@ async def _await_agents_reconnect(client_ids: list[str], username: str,
     missing = waiting_offline | waiting_online
     reconnected = total - len(missing)
     if not missing:
-        message = (f"✅ Agent-Update abgeschlossen: alle {total} Clients sind "
-                   f"wieder verbunden.")
+        message = (f"Agent update completed: all {total} clients are "
+                   f"reconnected.")
         level = "success"
         db.add_audit_entry(username, "agent.update_all_completed",
-                           details=f"alle {total} Clients wieder verbunden")
+                           details=f"all {total} clients reconnected")
     else:
-        # Namen der noch fehlenden Clients (max. ein paar) für die Meldung.
+        # Names of the still-missing clients (a few at most) for the message.
         missing_names = []
         for cid in list(missing)[:5]:
             c = db.get_client(cid)
             missing_names.append((c or {}).get("hostname") or cid)
-        extra = "" if len(missing) <= 5 else f" (+{len(missing) - 5} weitere)"
-        message = (f"⚠️ Agent-Update: {reconnected} von {total} Clients wieder "
-                   f"verbunden. Nicht zurückgemeldet: {', '.join(missing_names)}{extra}.")
+        extra = "" if len(missing) <= 5 else f" (+{len(missing) - 5} more)"
+        message = (f"Agent update: {reconnected} of {total} clients "
+                   f"reconnected. Did not report back: {', '.join(missing_names)}{extra}.")
         level = "warning"
         db.add_audit_entry(username, "agent.update_all_completed",
                            details=f"{reconnected}/{total} wieder verbunden")
@@ -878,11 +877,11 @@ async def _await_agents_reconnect(client_ids: list[str], username: str,
 async def uninstall_client_agent(client_id: str, background: bool = False,
                                  user: dict = Depends(get_current_user)):
     """
-    Deinstalliert den Agenten vollständig und entfernt den Client aus dem
-    Dashboard - aber NUR, wenn er wirklich verschwindet. Ablauf:
+    Uninstalls the agent completely and removes the client from the
+    dashboard - but ONLY if it really disappears. Flow:
 
-      1. Uninstall-Befehl an den Agenten schicken (stoppt den Dienst und löscht
-         ALLE Agent-Daten auf dem Client, siehe agent.py / uninstall.sh|ps1).
+      1. Send the uninstall command to the agent (stops the service and deletes
+         ALL agent data on the client, see agent.py / uninstall.sh|ps1).
       2. Bis zu 60 Sekunden warten, bis der Client wirklich offline geht
          (= der Agent-Prozess ist beendet, die Socket-Verbindung getrennt).
       3a. Geht er in dieser Zeit offline -> Client aus der Datenbank entfernen
@@ -896,15 +895,15 @@ async def uninstall_client_agent(client_id: str, background: bool = False,
     if not client:
         raise HTTPException(404, "Client nicht gefunden")
 
-    # Der Agent muss verbunden sein, damit er den Uninstall-Befehl empfangen und
-    # ausführen kann. Einen bereits offline/toten Client entfernt man über den
-    # normalen "Löschen"-Button im Bearbeiten-Dialog.
+    # The agent must be connected so it can receive and execute the uninstall
+    # command. An already offline/dead client is removed via the normal
+    # "Delete" button in the edit dialog.
     if not state.is_online(client_id):
         raise HTTPException(
             409,
-            "Der Agent ist nicht verbunden. Eine Fern-Deinstallation ist nur bei "
-            "verbundenem Agent möglich. Einen bereits offline Client kannst du über "
-            "'Bearbeiten → Löschen' aus dem Dashboard entfernen.",
+            "The agent is not connected. A remote uninstall is only possible "
+            "with a connected agent. An already offline client can be removed via "
+            "'Edit -> Delete' from the dashboard.",
         )
 
     async def work(job):
@@ -917,7 +916,7 @@ async def uninstall_client_agent(client_id: str, background: bool = False,
 
 
 async def _uninstall_work(job, client_id: str, client: dict, user: dict):
-    # 1. Uninstall anstoßen
+    # 1. Trigger the uninstall
     job.update(phase="send", detail="Deinstallations-Auftrag wird gesendet")
     ok = await send_to_agent(client_id, "uninstall-agent", {})
     if not ok:
@@ -925,7 +924,7 @@ async def _uninstall_work(job, client_id: str, client: dict, user: dict):
     db.add_audit_entry(user["username"], "agent.uninstall_triggered", target=client_id,
                        details=client.get("hostname"))
 
-    # 2. Auf "offline" warten (max. 60 s, alle 2 s prüfen).
+    # 2. Wait for "offline" (max. 60 s, check every 2 s).
     job.update(phase="wait", detail="warte, bis der Agent offline geht (max. 60 s)")
     deadline = time.monotonic() + 60.0
     while time.monotonic() < deadline:
@@ -935,7 +934,7 @@ async def _uninstall_work(job, client_id: str, client: dict, user: dict):
             db.delete_client(client_id)
             db.add_audit_entry(user["username"], "agent.uninstalled", target=client_id,
                                details=client.get("hostname"))
-            # Alle Dashboards über die geänderte Client-Liste informieren.
+            # Inform all dashboards about the changed client list.
             from app.sockets import sio
             await sio.emit("clients:changed", namespace="/dashboard")
             return {"ok": True, "removed": True, "hostname": client.get("hostname")}
@@ -945,20 +944,20 @@ async def _uninstall_work(job, client_id: str, client: dict, user: dict):
                        details=client.get("hostname"))
     raise HTTPException(
         504,
-        "Der Agent ist nicht innerhalb von 60 Sekunden offline gegangen. "
-        "Die Deinstallation ist möglicherweise fehlgeschlagen - der Client wurde "
-        "NICHT aus dem Dashboard entfernt. Bitte den Client prüfen und ggf. erneut versuchen.",
+        "The agent did not go offline within 60 seconds. "
+        "The uninstall may have failed - the client was NOT removed from the "
+        "dashboard. Please check the client and try again if necessary.",
     )
 
 
 @router.get("/{client_id}/rdp-file")
 def get_rdp_file(client_id: str, user: dict = Depends(get_current_user)):
     """
-    Erzeugt eine .rdp-Datei mit der IP-Adresse des Clients. Der Benutzer öffnet
-    sie, woraufhin sich der native Windows-RDP-Client (mstsc) verbindet.
+    Creates a .rdp file with the IP address of the client. The user opens it,
+    whereupon the native Windows RDP client (mstsc) connects.
 
-    Das ist der zuverlässige Weg für headless VMs: RDP erzeugt selbst eine
-    Grafiksitzung, die man dann fernsteuern kann - im Gegensatz zu unserem
+    This is the reliable way for headless VMs: RDP creates its own graphics
+    session that can then be remote-controlled - unlike our
     Bildschirm-Streaming, das eine bereits vorhandene Sitzung voraussetzt.
     """
     client = db.get_client(client_id)
@@ -968,10 +967,10 @@ def get_rdp_file(client_id: str, user: dict = Depends(get_current_user)):
 
     host = client.get("ip")
     if not host:
-        raise HTTPException(400, "Keine IP-Adresse für diesen Client bekannt")
+        raise HTTPException(400, "No IP address known for this client")
 
-    # Minimale, gängige .rdp-Konfiguration. Der Benutzer gibt beim Verbinden
-    # selbst Anmeldedaten ein (wir speichern keine Passwörter in der Datei).
+    # Minimal, common .rdp configuration. The user enters credentials when
+    # connecting (we store no passwords in the file).
     rdp_content = "\r\n".join([
         "screen mode id:i:2",              # Vollbild
         "use multimon:i:0",
@@ -1097,7 +1096,7 @@ async def client_blackbox_shot(client_id: str, user: dict = Depends(get_current_
 
 
 # ------------------------------------------------------------------
-# TEMPORÄRER BENUTZER mit Einmal-Passwort (Linux + Windows).
+# TEMPORARY USER with a one-time password (Linux + Windows).
 # Das Passwort erzeugt der AGENT und es wird hier nur durchgereicht -
 # weder gespeichert noch geloggt (Audit nur Benutzername + Verfall).
 # ------------------------------------------------------------------
@@ -1111,7 +1110,7 @@ async def client_tempuser(client_id: str, body: TempUserBody,
                           user: dict = Depends(get_current_user)):
     _perm(user, "use_terminal", client_id)
     if body.expiry not in ("1h", "2h", "4h", "24h", "logoff", "never"):
-        raise HTTPException(400, "Ungültiger Verfall")
+        raise HTTPException(400, "Invalid expiry")
     from app.sockets import request_tempuser
     try:
         res = await request_tempuser(client_id, body.expiry)
@@ -1144,7 +1143,7 @@ class MaintenanceBody(BaseModel):
 async def _set_maint(client_id: str, duration: str, user: dict) -> dict:
     _perm(user, "edit_clients", client_id)
     if duration != "off" and duration not in _MAINT_MIN:
-        raise HTTPException(400, "Ungültige Dauer")
+        raise HTTPException(400, "Invalid duration")
     await db.call(db.set_maintenance, client_id,
                   None if duration == "off" else _MAINT_MIN[duration])
     db.add_audit_entry(user.get("username"), "client.maintenance", client_id,

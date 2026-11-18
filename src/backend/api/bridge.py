@@ -25,9 +25,9 @@ async def forward(request: Request, user: dict | None, method: str, path: str, q
                   body: bytes | None = None, content_type: str | None = None) -> Response:
     """Dashboard-Route `path` (z.B. "/api/clients") als `user` aufrufen und die Antwort zurueckgeben."""
     if not path.startswith("/api/") or path.startswith(BLOCKED_PREFIXES):
-        raise HTTPException(400, f"Pfad nicht über die API erreichbar: {path}")
+        raise HTTPException(400, f"Path not reachable via the API: {path}")
     if ".." in path.split("/"):
-        raise HTTPException(400, "Ungültiger Pfad")
+        raise HTTPException(400, "Invalid path")
     app = request.scope.get("app")
     if app is None:
         raise HTTPException(500, "Interne Anwendung nicht erreichbar")

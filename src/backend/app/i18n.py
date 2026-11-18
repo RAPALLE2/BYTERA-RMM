@@ -1,41 +1,39 @@
 # backend/app/i18n.py
 # -------------------
-# Sprachumschaltung fuer das Backend (Deutsch/Englisch).
+# Language switching for the backend (German/English).
 #
-# WARUM ein eigenes Modul und nicht einfach englische Texte?
-# Das Backend erzeugt Texte, die an DREI verschiedenen Stellen landen, und die
-# haben unterschiedliche "Zielsprachen":
+# WHY a dedicated module and not simply English texts?
+# The backend produces texts that end up in THREE different places, and they
+# have different "target languages":
 #
-#   1. Fehlermeldungen an das Dashboard (HTTPException-detail)
-#      -> Sprache des ANFRAGENDEN BENUTZERS (users.language in der Datenbank).
-#         Zwei Personen mit verschiedenen Spracheinstellungen koennen dieselbe
-#         Aktion ausloesen und muessen jeweils ihre Sprache sehen.
+#   1. Error messages to the dashboard (HTTPException detail)
+#      -> language of the REQUESTING USER (users.language in the database).
+#         Two people with different language settings can trigger the same
+#         action and must each see their own language.
 #
-#   2. Server-Logs ([run], [screen], [relay] ...)
-#      -> SERVER-Sprache. Ein Log hat keinen Benutzer; es liest der Betreiber.
-#         Steuerbar ueber die Einstellung `server_language` bzw. die
-#         Umgebungsvariable RMM_LANG. Voreinstellung: de.
+#   2. Server logs ([run], [screen], [relay] ...)
+#      -> SERVER language. A log has no user; the operator reads it.
+#         Controlled via the `server_language` setting or the
+#         RMM_LANG environment variable. Default: en.
 #
-#   3. Installations-Skripte (install.ps1 / install.sh / update.*)
-#      -> Sprache aus dem ?lang=-Parameter des Abrufs. Das Skript laeuft
-#         spaeter auf einem fremden Rechner, wo es weder Benutzer noch
-#         Servereinstellung gibt - die Sprache muss also beim Erzeugen
-#         feststehen.
+#   3. Installation scripts (install.ps1 / install.sh / update.*)
+#      -> language from the ?lang= parameter of the request. The script runs
+#         later on a foreign machine, where there is neither a user nor a
+#         server setting - so the language must be fixed at generation time.
 #
-# Der Aufbau ist bewusst derselbe wie im Frontend (frontend/js/i18n.js):
-# flache Schluessel, {platzhalter} in geschweiften Klammern, DE als
-# Rueckfallebene. Fehlt ein Schluessel, wird der Schluesselname zurueckgegeben -
-# das faellt beim Testen sofort auf, statt still einen leeren Text zu zeigen.
+# The structure is deliberately the same as in the frontend (frontend/js/i18n.js):
+# flat keys, {placeholder} in curly braces, EN as the fallback level.
+# If a key is missing, the key name is returned - that is noticed
+# immediately when testing, instead of silently showing empty text.
 
 from __future__ import annotations
 
 import os
 
-# Unterstuetzte Sprachen. Bei Erweiterung: LANGS ergaenzen und in TEXTS einen
-# weiteren Block anlegen - fehlende Schluessel fallen automatisch auf EN zurueck.
-# Standard ist Englisch (Server-Texte, Skripte, neue Benutzer); Deutsch ist
-# eine Uebersetzung, die pro Benutzer bzw. per Einstellung server_language
-# gewaehlt werden kann.
+# Supported languages. To extend: add to LANGS and create another block in
+# TEXTS - missing keys automatically fall back to EN.
+# The default is English (server texts, scripts, new users); German is a
+# translation that can be chosen per user or via the server_language setting.
 LANGS = ("de", "en")
 DEFAULT_LANG = "en"
 
@@ -99,7 +97,7 @@ def t(key: str, lang: str | None = None, **params) -> str:
 
 TEXTS: dict[str, dict[str, str]] = {
     "de": {
-        # ---- Rechte / Zugriff ----
+        # ---- Permissions / access ----
         "err_forbidden": "Keine Berechtigung für diese Aktion.",
         "err_no_client_access": "Kein Zugriff auf diesen Client.",
         "err_admin_only": "Nur Administratoren dürfen das.",
@@ -110,16 +108,16 @@ TEXTS: dict[str, dict[str, str]] = {
         "err_bad_request": "Ungültige Anfrage.",
         "err_login_failed": "Benutzername oder Passwort falsch.",
         "err_locked": "Zu viele Fehlversuche. Bitte später erneut versuchen.",
-        # ---- Remote-Bildschirm ----
+        # ---- Remote screen ----
         "screen_no_permission": "Dir fehlt die Berechtigung für den Remote-Bildschirm.",
         "screen_silent_used": "Silent-Modus genutzt – keine Abfrage am Gerät.",
-        # ---- Relay / Dateien ----
+        # ---- Relay / files ----
         "relay_not_shared": "Für diesen Client ist das Relay nicht freigegeben.",
         "relay_off": "Der Datei-Zugang ist am Server abgeschaltet.",
-        # ---- Agent-Update ----
+        # ---- Agent update ----
         "upd_triggered": "Update für {n} Client(s) ausgelöst.",
         "upd_none_online": "Kein passender Client online.",
-        # ---- Server-Logs ----
+        # ---- Server logs ----
         "log_relay_mode": "Datei-Zugang am Relay: {mode}",
         "log_backend_start": "Backend gestartet auf {url}",
         "log_db_mode": "Datenbank: {mode}",
@@ -127,7 +125,7 @@ TEXTS: dict[str, dict[str, str]] = {
         "log_agent_disconnected": "Agent getrennt: {name}",
         "log_screen_start": "Bildschirm-Start für {name}: {mode}",
         "log_update_all": "Agent-Update für {n} Client(s) ausgelöst.",
-        # ---- Installations-Skripte (Ausgaben auf dem Zielrechner) ----
+        # ---- Installation scripts (output on the target machine) ----
         "ins_title": "BYTERA RMM – Agent installieren",
         "ins_upd_title": "BYTERA RMM – Agent NEU AUSROLLEN",
         "ins_downloading": "Lade neueste Agent-Version...",
@@ -201,23 +199,22 @@ TEXTS: dict[str, dict[str, str]] = {
 }
 
 # ---------------------------------------------------------------------------
-# Uebersetzung der Fehlertexte BEIM AUSGANG
+# Translation of the error texts ON THE WAY OUT
 # ---------------------------------------------------------------------------
-# Im Backend stehen ueber 200 HTTPException-Texte verstreut in ~30 Dateien.
-# Jede einzelne Stelle umzubauen haette bedeutet, ueberall den anfragenden
-# Benutzer durchzureichen - viel Aenderung an Code, der heute funktioniert,
-# und entsprechend viel Gelegenheit, etwas kaputtzumachen.
+# The backend has over 200 HTTPException texts scattered across ~30 files.
+# Rebuilding every single place would have meant passing the requesting user
+# through everywhere - a lot of change to code that works today, and
+# correspondingly many chances to break something.
 #
-# Stattdessen bleibt der deutsche Text im Code stehen und dient als
-# SCHLUESSEL. Ein zentraler Ausnahme-Handler (siehe main.py) uebersetzt ihn
-# kurz vor dem Senden in die Sprache des Benutzers. Vorteile:
-#   - eine Stelle statt 200,
-#   - unbekannte Texte werden unveraendert durchgereicht (nichts geht kaputt),
-#   - neue Meldungen funktionieren sofort auf Deutsch und koennen spaeter
-#     nachgetragen werden.
+# Instead the German text stays in the code and serves as the KEY. A central
+# exception handler (see main.py) translates it into the user's language just
+# before sending. Advantages:
+#   - one place instead of 200,
+#   - unknown texts are passed through unchanged (nothing breaks),
+#   - new messages work immediately in German and can be added later.
 #
-# Der Abgleich ist bewusst exakt (nach Normalisierung von Leerraum). Eine
-# unscharfe Suche wuerde frueher oder spaeter den falschen Satz ersetzen.
+# The matching is deliberately exact (after whitespace normalization). A
+# fuzzy search would sooner or later replace the wrong sentence.
 
 _ERROR_EN = {
     "Client nicht gefunden": "Client not found",
@@ -260,11 +257,11 @@ _ERROR_EN = {
     "Nur Administratoren": "Administrators only",
     "Falsches Passwort": "Wrong password",
     "Benutzername oder Passwort falsch": "Wrong username or password",
-    # ---- Nachtrag: die restlichen Fehlertexte aus den Routern ----
-    # Ermittelt mit einem Suchlauf ueber alle HTTPException-Aufrufe im Backend,
-    # damit nichts vergessen wird. Teiltexte (Meldungen, die zur Laufzeit noch
-    # etwas anhaengen) sind hier NICHT eingetragen - der Abgleich ist exakt,
-    # ein halber Treffer wuerde den Rest des Satzes deutsch stehen lassen.
+    # ---- Addendum: the remaining error texts from the routers ----
+    # Determined with a scan over all HTTPException calls in the backend, so
+    # that nothing is forgotten. Partial texts (messages that append something
+    # at runtime) are NOT listed here - the matching is exact, a half match
+    # would leave the rest of the sentence in German.
     "AI-API lieferte keine verwertbare Antwort": "The AI API returned no usable answer",
     "API-Key fehlt": "API key is missing",
     "API-URL muss mit http(s):// beginnen": "The API URL has to start with http(s)://",
@@ -346,7 +343,7 @@ _ERROR_EN = {
     "Projekt-Wurzel kann nicht gelöscht werden": "The project root cannot be deleted",
     "Quelle nicht gefunden": "Source not found",
     "Scan-Job nicht gefunden (evtl. abgelaufen)": "Scan job not found (it may have expired)",
-    "Selbstgespräche sind nicht vorgesehen 🙂": "Talking to yourself is not supported 🙂",
+    "Selbstgespräche sind nicht vorgesehen": "Talking to yourself is not supported",
     "Spalte nicht gefunden": "Column not found",
     "Spalten-Definition fehlt": "Column definition is missing",
     "Standard-Kategorien können nicht gelöscht werden": "Default categories cannot be deleted",
@@ -376,10 +373,10 @@ _ERROR_EN = {
     "Zwei-Faktor-Anmeldung ist nicht aktiv": "Two-factor authentication is not active",
     "src/backend/app/build_installers.py nicht gefunden": "src/backend/app/build_installers.py not found",
     "trigger und channel sind erforderlich": "trigger and channel are required",
-    # ---- Mehrzeilig im Quelltext zusammengesetzte Meldungen ----
-    # Der Abgleich normalisiert Leerraum ("  ".join(split())), deshalb passt
-    # hier der VOLLSTAENDIGE Satz, obwohl er im Code auf mehrere Zeilen
-    # verteilt ist.
+    # ---- Messages assembled across multiple lines in the source ----
+    # The matching normalizes whitespace ("  ".join(split())), so the
+    # COMPLETE sentence matches here, even though it is split across several
+    # lines in the code.
     "monitor_notify muss 'up', 'down' oder 'always' sein":
         "monitor_notify has to be 'up', 'down' or 'always'",
     "open_mode muss 'external' oder 'internal' sein":

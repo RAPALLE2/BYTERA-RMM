@@ -1,7 +1,7 @@
-# Cloudflare Tunnel – Node-Teil
+# Cloudflare Tunnel – node part
 
-Wird vom Modul „Cloudflare Tunnel“ automatisch auf eine Node verteilt, sobald eine Route
-„RDP/SSH/VNC zu einem Agent“ mit *Tunnel endet auf einer Node* angelegt wird.
-Jede Node bekommt einen eigenen Cloudflare-Tunnel (`rmm-node-…`); der Connector läuft als
-Container `rmm-cloudflared` mit `network_mode: host`, damit er die Geräte im Netz der Node erreicht.
-Nichts von Hand einstellen – Token und Routen pflegt das Modul.
+Automatically distributed to a node by the "Cloudflare Tunnel" module as soon as a route
+"RDP/SSH/VNC to an agent" with *tunnel ends on a node* is created.
+Each node gets its own Cloudflare tunnel (`rmm-node-…`); the connector runs as a
+container `rmm-cloudflared` with `network_mode: host` so it can reach the devices in the node's network.
+Nothing to configure by hand – the module maintains the token and routes.

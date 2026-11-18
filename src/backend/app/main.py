@@ -10,8 +10,8 @@ Anwendung, die mit einem einzigen Befehl gestartet wird:
                           "frontend"-Ordner, unter der Wurzel "/"
 
 Das bedeutet: du brauchst NUR diesen einen Python-Prozess zu starten
-(siehe run.py) - kein separater Webserver, kein Node/npm nötig, um das
-Dashboard im Browser zu sehen. Öffne einfach http://localhost:4000
+(see run.py) - no separate web server, no Node/npm needed to view the
+dashboard in the browser. Just open http://localhost:4000
 """
 
 from pathlib import Path
@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app import db
 from app import loghub as _loghub
-_loghub.install()  # idempotent: fängt Backend-Ausgabe ab (falls nicht via run.py)
+_loghub.install()  # idempotent: captures backend output (if not started via run.py)
 from app.config import CORS_ORIGIN
 from app.sockets import sio
 # Der Import selbst ist die erste Gefahrenstelle: Eine einzige Datei mit
@@ -68,9 +68,9 @@ def _import_router(name):
                folge="Dieser Bereich fehlt, das Backend startet trotzdem")
         return None
 
-# 1) Datenbank initialisieren (legt Tabellen an, erzeugt admin/admin falls nötig)
+# 1) Initialize the database (creates tables, creates admin/admin if needed)
 # Vorher: Ist der externe Datenbank-Modus aktiv, den Stand von extern laden
-# (danach laufen init_db-Migrationen ganz normal über den geladenen Stand).
+# (afterwards init_db migrations run normally on the loaded state).
 from app import rebrand as _rebrand
 _rebrand.before_db()        # Umbenennung RAPALLE.net -> BYTERA: Container/dbconfig nachziehen
 from app import dbsync as _dbsync
@@ -93,7 +93,7 @@ except Exception as _e:
 
 # (Aufbewahrungsfristen: siehe Modul 'privacy')
 
-# 2) FastAPI-App erstellen und alle Routen-Module einhängen
+# 2) Create the FastAPI app and mount all route modules
 api = FastAPI(title="BYTERA RMM Backend")
 
 # Modul-Manager: findet module.json, laedt aktivierte Module im Startup-Event.
@@ -113,16 +113,16 @@ from app import node_manager as _node_manager   # registriert den Socket.IO-Name
 # Stirbt der Prozess mitten in einer Anfrage, taucht sie dort also nie auf.
 #
 # Diese Middleware schreibt deshalb:
-#   * jede Anfrage, die ungewöhnlich lange dauert (mit Dauer und Pfad),
-#   * jede Ausnahme mit vollständigem Stacktrace,
-#   * und sie hält fest, welche Anfragen GERADE laufen. Der Loop-Wächter
+#   * every request that takes unusually long (with duration and path),
+#   * every exception with a full stack trace,
+#   * and it records which requests are running RIGHT NOW. The loop guard
 #     nimmt diese Liste in seinen Stack-Abzug auf.
 import time as _t
 import traceback as _traceback
 from starlette.middleware.base import BaseHTTPMiddleware as _BaseMW
 from starlette.responses import JSONResponse as _JSONResp
 
-# Ab dieser Dauer gilt eine Anfrage als auffällig langsam.
+# From this duration on, a request counts as suspiciously slow.
 import os as _os_env
 
 try:
@@ -178,9 +178,9 @@ class _RequestWatch(_BaseMW):
 
 api.add_middleware(_RequestWatch)
 
-# Host-Sperre: Zugriff nur über die in den Einstellungen hinterlegten
-# Adressen. Steht ganz vorne, damit unerlaubte Hosts nicht einmal
-# CORS-Header zu sehen bekommen. Standardmäßig ausgeschaltet.
+# Host lock: access only via the addresses stored in the settings.
+# Placed right at the front so that disallowed hosts do not even get
+# to see CORS headers. Off by default.
 from app.hostlock import HostLockMiddleware as _HostLock
 api.add_middleware(_HostLock)
 
@@ -296,19 +296,19 @@ if migration_routes is not None:
 
 
 # ------------------------------------------------------------------
-# Versionen: Single Source of Truth sind die version.txt-Dateien
-# (backend/version.txt und agent/version.txt). Grundlage für das
-# spätere Auto-Update: Agents/Frontends vergleichen ihre Version
-# gegen /api/version und aktualisieren sich bei Abweichung.
+# Versions: the single source of truth are the version.txt files
+# (backend/version.txt and agent/version.txt). Basis for the
+# later auto-update: agents/frontends compare their version
+# against /api/version and update themselves on a mismatch.
 # ------------------------------------------------------------------
 from app.paths import (
     PROJECT_ROOT as _PROJECT_ROOT, FRONTEND_DIR, BACKEND_VERSION_FILE as _BACKEND_VERSION_FILE,
     AGENT_VERSION_FILE as _AGENT_VERSION_FILE_MAIN,
 )
 
-# Eindeutige ID DIESES Backend-Prozesses. Ändert sich bei jedem (Neu-)Start.
-# Das Frontend pollt sie und lädt sich neu, sobald sie sich ändert -> nach
-# einem Backend-Restart aktualisiert sich die Webconsole von selbst.
+# Unique ID of THIS backend process. Changes on every (re)start.
+# The frontend polls it and reloads as soon as it changes -> after
+# a backend restart the web console refreshes on its own.
 import uuid as _uuid
 BOOT_ID = _uuid.uuid4().hex
 
@@ -332,17 +332,17 @@ def get_agent_version() -> str:
 @api.get("/api/health")
 async def health_check():
     """
-    Gesundheitsprüfung - bewusst das Billigste, was geht.
+    Health check - deliberately the cheapest thing possible.
 
-    Hier wird NICHTS angefasst: keine Datenbank, keine Datei, kein
-    Netzwerk. Der Endpunkt beantwortet genau eine Frage - "läuft die
-    Ereignisschleife noch?" -, und die soll er auch dann beantworten
-    können, wenn der Server gerade unter Volllast steht.
+    NOTHING is touched here: no database, no file, no network. The
+    endpoint answers exactly one question - "is the event loop still
+    running?" - and it should be able to answer that even when the
+    server is currently under full load.
 
-    Frühere Fassung las bei jedem Aufruf version.txt von der Platte. Das
-    ist harmlos, solange nichts los ist, und genau der Tropfen zu viel,
-    wenn Docker mitten in einem Massen-Update alle fünf Sekunden anklopft.
-    Die Version steht weiterhin unter /api/version.
+    An earlier version read version.txt from disk on every call. That
+    is harmless while nothing is going on, and exactly the straw too
+    much when Docker knocks every five seconds during a mass update.
+    The version is still available under /api/version.
     """
     return {"ok": True, "name": "BYTERA RMM"}
 
@@ -350,8 +350,8 @@ async def health_check():
 @api.get("/api/version")
 async def versions():
     """
-    Zentrale Versionsauskunft (kein Auth - enthält keine Geheimnisse):
-    Backend- und Agent-Version aus den jeweiligen version.txt-Dateien.
+    Central version info (no auth - contains no secrets):
+    backend and agent version from the respective version.txt files.
     'boot_id' identifiziert den laufenden Prozess (Auto-Reload nach Restart).
     """
     return {"backend": get_backend_version(), "agent": get_agent_version(), "boot_id": BOOT_ID}
@@ -369,53 +369,53 @@ from fastapi import Request as _Request
 @api.get("/api/server-address")
 async def server_address(request: _Request):
     """
-    Liefert die "beste" öffentlich erreichbare Basis-URL des Backends - für
-    Dinge wie den Explorer-Relay (Netzlaufwerk-URL) und Install-Befehle.
+    Returns the "best" publicly reachable base URL of the backend - for
+    things like the Explorer relay (network-drive URL) and install commands.
 
-    Priorität:
-      1. server_url  (vollständige, manuell gesetzte URL, z.B. https://rmm.firma.de)
-      2. server_domain bzw. server_host + server_backend_port
-      3. Fallback: Host aus der aufgerufenen Anfrage (request), ersetzt aber
-         'localhost'/'127.0.0.1' NICHT durch sich selbst - stattdessen wird der
-         Host-Header genutzt, damit die Adresse für ENTFERNTE Rechner stimmt.
+    Priority:
+      1. server_url  (full, manually set URL, e.g. https://rmm.company.com)
+      2. server_domain or server_host + server_backend_port
+      3. Fallback: host from the incoming request, but does NOT replace
+         'localhost'/'127.0.0.1' by itself - instead the Host header is
+         used so the address is correct for REMOTE machines.
 
-    Das Frontend soll diese URL statt 'localhost' anzeigen, da ein
-    Netzlaufwerk auf einem ANDEREN PC 'localhost' nie erreichen kann.
+    The frontend should show this URL instead of 'localhost', because a
+    network drive on ANOTHER PC can never reach 'localhost'.
     """
-    # 1) Komplette URL gesetzt?
+    # 1) Full URL set?
     server_url = (db.get_setting("server_url") or "").strip()
     if server_url:
-        # Sicherstellen, dass ein Schema vorhanden ist - sonst wird die Adresse
-        # im Browser als RELATIVER Pfad interpretiert (führte zu /<ip>/dav 404).
+        # Make sure a scheme is present - otherwise the address is
+        # interpreted as a RELATIVE path in the browser (led to /<ip>/dav 404).
         if not server_url.lower().startswith(("http://", "https://")):
             server_url = f"{request.url.scheme}://{server_url}"
         return {"base_url": server_url.rstrip("/"), "source": "server_url",
                 "backend_port": (db.get_setting("server_backend_port") or "4000").strip()}
 
-    # 2) Domain/Host + Port aus den Einstellungen
+    # 2) Domain/host + port from the settings
     domain = (db.get_setting("server_domain") or "").strip()
     host = (db.get_setting("server_host") or "").strip()
     backend_port = (db.get_setting("server_backend_port") or "4000").strip()
 
     chosen = domain or host
-    # Falls versehentlich mit Schema eingetragen (z.B. "http://10.0.0.1"),
-    # das Schema entfernen - wir setzen es selbst.
+    # If accidentally entered with a scheme (e.g. "http://10.0.0.1"),
+    # strip the scheme - we set it ourselves.
     chosen = chosen.replace("https://", "").replace("http://", "").strip("/")
     scheme = request.url.scheme or "http"
     if chosen:
-        # Bei Standard-Ports keinen Port anhängen
+        # Do not append a port for standard ports
         if (scheme == "http" and backend_port == "80") or (scheme == "https" and backend_port == "443"):
             base = f"{scheme}://{chosen}"
         else:
             base = f"{scheme}://{chosen}:{backend_port}"
         return {"base_url": base, "source": "settings", "backend_port": backend_port}
 
-    # 3) Fallback: Host-Header der Anfrage (funktioniert für den aufrufenden
-    #    Browser). Ist das 'localhost'/'127.0.0.1' (Dashboard lokal geöffnet),
-    #    wird stattdessen die automatisch erkannte LAN-IP des Backends
-    #    eingesetzt (config.HOST) - so ist die Adresse IMMER dynamisch aus
-    #    einer Variablen befüllt und für ENTFERNTE Rechner gültig, nie ein
-    #    hartes 'localhost'.
+    # 3) Fallback: Host header of the request (works for the calling
+    #    browser). If that is 'localhost'/'127.0.0.1' (dashboard opened
+    #    locally), the automatically detected LAN IP of the backend is
+    #    used instead (config.HOST) - so the address is ALWAYS filled
+    #    dynamically from a variable and valid for REMOTE machines, never
+    #    a hard-coded 'localhost'.
     host_header = request.headers.get("host") or request.url.netloc
     host_only = host_header.split(":")[0]
     is_localhost = host_only in ("localhost", "127.0.0.1", "::1")
@@ -432,9 +432,9 @@ async def server_address(request: _Request):
 
 
 # ------------------------------------------------------------------
-# Automation-Engine: prüft jede Minute, ob geplante Automationen fällig
-# sind, und führt deren Befehl auf den Ziel-Clients aus. Läuft als
-# Hintergrund-Task im selben Prozess.
+# Automation engine: checks every minute whether scheduled automations are
+# due and runs their command on the target clients. Runs as a
+# background task in the same process.
 # ------------------------------------------------------------------
 import asyncio as _asyncio
 import time as _time
@@ -443,16 +443,16 @@ import time as _time
 
 
 # ------------------------------------------------------------------
-# Uptime-Monitor: prüft die an Clients gebundenen Websites (client_websites
-# mit monitor_enabled=1) im jeweils konfigurierten Intervall per HTTP-Request.
-# Je nach monitor_notify wird benachrichtigt:
-#   'up'     -> nur wenn ein Scan erfolgreich war  (beim Statuswechsel down->up
-#               bzw. beim allerersten erfolgreichen Scan)
-#   'down'   -> nur wenn ein Scan fehlgeschlagen ist (beim Statuswechsel up->down
-#               bzw. beim allerersten fehlgeschlagenen Scan)
-#   'always' -> nach JEDEM Scan (Erfolg und Fehler)
-# Benachrichtigt wird über ALLE konfigurierten Webhooks UND als normale
-# In-App-Notification (Socket-Event "notify" an alle Dashboards).
+# Uptime monitor: checks the websites bound to clients (client_websites
+# with monitor_enabled=1) at the configured interval via HTTP request.
+# Depending on monitor_notify it notifies:
+#   'up'     -> only when a scan succeeded  (on status change down->up
+#               or on the very first successful scan)
+#   'down'   -> only when a scan failed (on status change up->down
+#               or on the very first failed scan)
+#   'always' -> after EVERY scan (success and failure)
+# Notification goes through ALL configured webhooks AND as a normal
+# in-app notification (socket event "notify" to all dashboards).
 # ------------------------------------------------------------------
 import urllib.request as _urlreq
 import urllib.error as _urlerr
@@ -461,8 +461,8 @@ from router.admin_routes import build_notification as _build_notification
 
 
 def _check_website(url: str) -> tuple[bool, str | None]:
-    """Ruft die URL auf (synchron, läuft via to_thread). 2xx/3xx = up.
-    Rückgabe: (ok, fehlermeldung)."""
+    """Calls the URL (synchronous, runs via to_thread). 2xx/3xx = up.
+    Returns: (ok, error_message)."""
     req = _urlreq.Request(url, headers={"User-Agent": "BYTERA-RMM-UptimeMonitor/1.0"})
     try:
         with _urlreq.urlopen(req, timeout=15) as resp:
@@ -491,13 +491,13 @@ async def _notify_uptime(site: dict, ok: bool, error: str | None) -> None:
         pass
 
     if ok:
-        head = f"✅ Website erreichbar – {site['name']}"
-        body_txt = f"{site['url']} hat auf den Uptime-Scan geantwortet (UP)."
+        head = f"Website reachable - {site['name']}"
+        body_txt = f"{site['url']} responded to the uptime scan (UP)."
         level = "success"
     else:
-        head = f"🚨 Website nicht erreichbar – {site['name']}"
-        body_txt = f"{site['url']} hat auf den Uptime-Scan NICHT geantwortet (DOWN)." \
-                   + (f" Fehler: {error}" if error else "")
+        head = f"Website not reachable - {site['name']}"
+        body_txt = f"{site['url']} did NOT respond to the uptime scan (DOWN)." \
+                   + (f" Error: {error}" if error else "")
         level = "error"
 
     notification = _build_notification(
@@ -545,16 +545,16 @@ async def _uptime_monitor_engine():
                 interval_ms = max(10, int(site["monitor_interval_seconds"] or 300)) * 1000
                 last = site["last_checked"] or 0
                 if now_ms - last < interval_ms:
-                    continue  # noch nicht fällig
+                    continue  # not due yet
 
                 ok, error = await _asyncio.to_thread(_check_website, site["url"])
                 new_status = "up" if ok else "down"
-                prev_status = site["last_status"]   # None = noch nie geprüft
+                prev_status = site["last_status"]   # None = never checked
                 await db.call(db.set_website_check_result, site["id"],
                               new_status, error)
 
                 mode = site["monitor_notify"] or "down"
-                changed = prev_status != new_status  # inkl. allererstem Scan
+                changed = prev_status != new_status  # incl. very first scan
                 should_notify = (
                     mode == "always"
                     or (mode == "up" and ok and changed)
@@ -563,7 +563,7 @@ async def _uptime_monitor_engine():
                 if should_notify:
                     await _notify_uptime(site, ok, error)
 
-                # Dashboards über neuen Status informieren (Panel aktualisiert Ampel)
+                # Inform dashboards about the new status (panel updates the indicator)
                 try:
                     await sio.emit("website:status", {
                         "id": site["id"], "client_id": site["client_id"],
@@ -572,8 +572,8 @@ async def _uptime_monitor_engine():
                 except Exception:
                     pass
         except Exception as e:
-            print(f"[uptime] Engine-Fehler: {e}")
-        await _asyncio.sleep(5)  # alle 5 Sekunden prüfen, welche Scans fällig sind
+            print(f"[uptime] Engine error: {e}")
+        await _asyncio.sleep(5)  # check every 5 seconds which scans are due
 
 
 @api.on_event("startup")
@@ -605,19 +605,19 @@ async def _start_background_tasks():
         await _modules.load_enabled()
     except Exception as _e:
         print(f"[module] Laden uebersprungen: {_e}")
-    # Wurde der Backend-Prozess zuvor durch einen Absturz beendet und von run.py
-    # automatisch neu gestartet, wird das hier – nach erfolgreichem Hochfahren –
-    # im Audit-Log vermerkt (Gegenstück zu 'backend.crash').
+    # If the backend process was previously ended by a crash and automatically
+    # restarted by run.py, this is recorded here - after a successful startup -
+    # recorded in the audit log (counterpart to 'backend.crash').
     try:
         if db.get_setting("backend_crash_pending", "0") == "1":
             db.add_audit_entry("system", "backend.restarted",
-                               details="Automatischer Neustart nach Absturz")
+                               details="Automatic restart after a crash")
             db.set_setting("backend_crash_pending", "0")
     except Exception as e:
-        print(f"[startup] Crash-Recovery-Audit fehlgeschlagen: {e}")
-    # Diagnose einhängen und den Wartungsmodus fortsetzen, falls er vor
-    # einem Neustart aktiv war. Das steht bewusst GANZ VORN: Alles, was
-    # danach schiefgeht, soll bereits im Log landen.
+        print(f"[startup] Crash recovery audit failed: {e}")
+    # Hook in diagnostics and resume maintenance mode if it was active
+    # before a restart. This is deliberately placed RIGHT AT THE FRONT:
+    # everything that goes wrong afterwards should already land in the log.
     from app import diagnostics as _diag
     _diag.install()
     _diag.report_previous_shutdown()
@@ -638,7 +638,7 @@ async def _start_background_tasks():
     _supervise("tabellen-groesse", _diag.table_size_watch)
 
     _supervise("uptime-monitor", _uptime_monitor_engine)
-    # Garantie-Prüfschleife: laeuft jetzt im Modul "notify" (ctx.spawn)
+    # Warranty check loop: now runs in the "notify" module (ctx.spawn)
     _supervise("server-auto-update", _server_auto_update_engine)
     _supervise("db-sync", _db_sync_engine)
     # Wartungsmodus: abgelaufene Zeitfenster beenden und an Agents melden.
@@ -655,23 +655,23 @@ async def _start_background_tasks():
 
 
 # ----------------------------------------------------------------------
-# Aufseher für Hintergrundaufgaben
+# Supervisor for background tasks
 # ----------------------------------------------------------------------
-# Bisher wurde jede Schleife mit create_task() gestartet. Wirft so eine
-# Schleife eine Ausnahme, ist sie WEG - lautlos. Das Backend läuft dann
-# scheinbar weiter, aber Automatisierung, Uptime-Prüfung oder Patching
-# passieren nicht mehr. Genau das sieht von aussen aus wie "das Backend
-# spinnt" oder "es stürzt ab".
+# Until now every loop was started with create_task(). If such a loop
+# throws an exception, it is GONE - silently. The backend then seems to
+# keep running, but automation, uptime checks or patching no longer
+# happen. From the outside that looks exactly like "the backend is acting
+# up" or "it crashes".
 #
-# Der Aufseher fängt die Ausnahme, schreibt sie ins Log und startet die
-# Schleife neu - mit wachsendem Abstand, damit eine dauerhaft kaputte
-# Schleife nicht in einer Endlosschleife die Maschine auslastet.
+# The supervisor catches the exception, writes it to the log and restarts
+# the loop - with a growing delay, so that a permanently broken loop does
+# not max out the machine in an endless loop.
 
 _TASKS: dict = {}
 
 
 def _supervise(name: str, factory) -> None:
-    """Startet eine Hintergrundschleife, die sich nach einem Fehler erholt."""
+    """Starts a background loop that recovers after an error."""
 
     async def runner():
         delay = 2.0
@@ -679,20 +679,20 @@ def _supervise(name: str, factory) -> None:
             started = _time.time()
             try:
                 await factory()
-                # Normal beendet: die Schleife war endlich gemeint.
-                print(f"[aufseher] '{name}' regulär beendet")
+                # Ended normally: the loop was meant to be finite.
+                print(f"[supervisor] '{name}' ended normally")
                 return
             except _asyncio.CancelledError:
                 raise
             except Exception as exc:
                 from app.errors import report as _report, Codes as _Codes
-                _report(_Codes.TASK_LOOP, exc, f"Hintergrundschleife '{name}'",
-                        lief=f"{_time.time() - started:.0f}s")
-                # Lief die Aufgabe lange, war es vermutlich ein Einzelfall -
-                # dann sofort wieder mit kurzem Abstand starten. Stirbt sie
-                # dagegen immer gleich neu, wird der Abstand grösser.
+                _report(_Codes.TASK_LOOP, exc, f"background loop '{name}'",
+                        ran=f"{_time.time() - started:.0f}s")
+                # If the task ran for a long time it was probably a one-off -
+                # then restart immediately with a short delay. If it keeps
+                # dying right away, the delay grows.
                 delay = 2.0 if _time.time() - started > 120 else min(delay * 2, 300.0)
-                print(f"[aufseher] '{name}' startet in {delay:.0f}s neu")
+                print(f"[supervisor] '{name}' restarts in {delay:.0f}s")
                 await _asyncio.sleep(delay)
 
     _TASKS[name] = _asyncio.create_task(runner(), name=f"supervised:{name}")
@@ -701,37 +701,37 @@ def _supervise(name: str, factory) -> None:
 
 
 async def _db_sync_engine():
-    """Spiegelt die lokale DB alle 60 s in die externe DB (nur bei Änderungen)."""
+    """Mirrors the local DB to the external DB every 60 s (only on changes)."""
     while True:
         await _asyncio.sleep(60)
         try:
             loop = _asyncio.get_event_loop()
             await loop.run_in_executor(None, _dbsync.periodic_sync)
         except Exception as e:
-            print(f"[dbsync] Engine-Fehler: {e}")
+            print(f"[dbsync] Engine error: {e}")
 
 
 @api.on_event("shutdown")
 async def _final_db_sync():
-    """Beim Herunterfahren letzten Stand in die externe DB schreiben."""
+    """On shutdown, write the last state to the external DB."""
     try:
         from app import bgjobs as _bgjobs
         _bgjobs.shutdown()
     except Exception as e:
-        print(f"[bgjobs] Shutdown fehlgeschlagen: {e}")
+        print(f"[bgjobs] Shutdown failed: {e}")
     try:
         await _modules.shutdown_all()
     except Exception as e:
-        print(f"[module] Shutdown fehlgeschlagen: {e}")
+        print(f"[module] Shutdown failed: {e}")
     try:
         _dbsync.periodic_sync()
     except Exception as e:
-        print(f"[dbsync] Finaler Sync fehlgeschlagen: {e}")
+        print(f"[dbsync] Final sync failed: {e}")
 
 
 async def _server_auto_update_engine():
-    """Prüft periodisch (alle 30 min), ob ein Server-Auto-Update ansteht."""
-    await _asyncio.sleep(60)   # dem Backend erst Zeit zum Hochfahren geben
+    """Checks periodically (every 30 min) whether a server auto-update is due."""
+    await _asyncio.sleep(60)   # give the backend time to start up first
     while True:
         try:
             await update_routes.auto_update_tick()
@@ -740,15 +740,15 @@ async def _server_auto_update_engine():
         await _asyncio.sleep(1800)
 
 
-# 3) Frontend-Ordner als statische Dateien einhängen.
-#    Wichtig: das muss NACH den API-Routen passieren, sonst würden die
-#    statischen Dateien alle Anfragen "wegschnappen" bevor die API sie sieht.
-# FRONTEND_DIR kommt aus app/paths.py (src/frontend)
+# 3) Mount the frontend folder as static files.
+#    Important: this must happen AFTER the API routes, otherwise the
+#    static files would "snatch" all requests before the API sees them.
+# FRONTEND_DIR comes from app/paths.py (src/frontend)
 
-# Bilder (inkl. hochgeladenes Branding) VOR dem Catch-all-Mount ausliefern:
-# zuerst aus dem schreibbaren Upload-Store, sonst aus dem gebündelten
-# frontend/image. So sind ersetzte Logos sofort sichtbar, auch wenn der
-# frontend-Ordner read-only ist.
+# Serve images (incl. uploaded branding) BEFORE the catch-all mount:
+# first from the writable upload store, otherwise from the bundled
+# frontend/image. This way replaced logos are visible immediately, even
+# if the frontend folder is read-only.
 from fastapi.responses import FileResponse as _FileResponse
 from fastapi import HTTPException as _HTTPException
 from fastapi import Depends as _Depends
@@ -760,32 +760,31 @@ from router.admin_routes import branding_path as _branding_path
 async def _serve_image(name: str):
     p = _branding_path(name)
     if p is None:
-        raise _HTTPException(status_code=404, detail="Bild nicht gefunden")
-    # no-cache: Browser MUSS revalidieren (Last-Modified/ETag kommen von
-    # FileResponse). Ohne diesen Header cachen Browser Bilder heuristisch
-    # stundenlang - ersetzte Branding-Logos erschienen dann nicht ("Bild
-    # lädt nicht"), obwohl der Upload längst gespeichert war.
+        raise _HTTPException(status_code=404, detail="Image not found")
+    # no-cache: the browser MUST revalidate (Last-Modified/ETag come from
+    # FileResponse). Without this header browsers cache images heuristically
+    # for hours - replaced branding logos then did not appear ("image does
+    # not load"), although the upload had long been saved.
     return _FileResponse(str(p), headers={"Cache-Control": "no-cache"})
 
 
 @api.get("/api/frontend-version")
 async def _frontend_version(user: dict = _Depends(_current_user)):
     """
-    Was liegt WIRKLICH im frontend-Ordner dieses Servers?
+    What is REALLY in the frontend folder of this server?
 
-    Trennt zwei Fälle, die im Browser identisch aussehen und schon einmal
-    eine ganze Fehlersuche gekostet haben:
+    Separates two cases that look identical in the browser and have already
+    cost a whole debugging session once:
 
-      * Die Datei auf der Platte ist noch die alte -> das Deployment ist
-        nicht angekommen. Die hier gemeldete Prüfsumme ändert sich dann
-        nicht, egal wie oft man neu lädt.
-      * Die Datei ist neu, der Browser bekommt sie aber nicht -> es cacht
-        etwas dazwischen (Browser selbst, nginx, Cloudflare).
+      * The file on disk is still the old one -> the deployment did not
+        arrive. The checksum reported here then does not change, no matter
+        how often you reload.
+      * The file is new but the browser does not get it -> something caches
+        in between (the browser itself, nginx, Cloudflare).
 
-    Vergleich: diesen Endpunkt aufrufen und die gemeldete Prüfsumme mit der
-    vergleichen, die der Browser tatsächlich geladen hat (Entwicklertools ->
-    Netzwerk -> die .js-Datei ansehen). Stimmen sie nicht überein, cacht
-    etwas dazwischen.
+    Comparison: call this endpoint and compare the reported checksum with
+    the one the browser actually loaded (developer tools -> Network -> look
+    at the .js file). If they do not match, something caches in between.
     """
     import hashlib
     watched = ["js/app.js", "js/api.js", "js/i18n.js", "js/apps/webbrowser.js"]
@@ -798,8 +797,8 @@ async def _frontend_version(user: dict = _Depends(_current_user)):
                 "sha256": hashlib.sha256(data).hexdigest()[:16],
                 "bytes": len(data),
                 "mtime": int(p.stat().st_mtime),
-                # Handfestes Merkmal statt blosser Prüfsumme: enthält die
-                # Datei noch Code des ausgebauten Seitenproxys?
+                # A concrete marker instead of a mere checksum: does the
+                # file still contain code of the removed page proxy?
                 "has_webproxy": b"webproxy" in data,
             }
         except OSError as e:
@@ -914,8 +913,8 @@ except Exception as _e:
 api.mount("/", _RevalidatingStatic(directory=FRONTEND_DIR, html=True), name="frontend")
 
 
-# 4) Socket.IO und FastAPI zu einer einzigen ASGI-Anwendung zusammenfügen.
-#    "socket_app" ist das, was uvicorn am Ende tatsächlich startet (siehe run.py).
+# 4) Combine Socket.IO and FastAPI into a single ASGI application.
+#    "socket_app" is what uvicorn actually starts in the end (see run.py).
 socket_app = socketio.ASGIApp(sio, other_asgi_app=api, socketio_path="socket.io")
 
 

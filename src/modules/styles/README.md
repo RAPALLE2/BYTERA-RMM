@@ -1,38 +1,38 @@
-# Modul „Styles“
+# "Styles" module
 
-Weitere Oberflächen für BYTERA RMM. Der **Standard „Futuristisch“** (Desktop mit
-Fenstern, Startmenü, Widgets) steckt im Core und braucht dieses Modul nicht.
-Alles andere kommt von hier:
+Additional interfaces for BYTERA RMM. The **default "Futuristic"** (desktop with
+windows, start menu, widgets) is built into the core and does not need this
+module. Everything else comes from here:
 
-| Style          | ID             | Ordner                  | Aufbau                                                        |
+| Style          | ID             | Folder                  | Structure                                                     |
 |----------------|----------------|-------------------------|---------------------------------------------------------------|
-| Classic        | `standard`     | `styles/classic/`       | flach, Navigation links mit den Apps des Startmenüs, Apps als Tabs, Dashboard bleibt |
-| Classic Hard   | `classic_hard` | `styles/classic_hard/`  | wie Proxmox: Baum links, rechts Kategorien mit fester Ansicht, keine Widgets |
+| Classic        | `standard`     | `styles/classic/`       | flat, navigation on the left with the start menu apps, apps as tabs, dashboard stays |
+| Classic Hard   | `classic_hard` | `styles/classic_hard/`  | like Proxmox: tree on the left, categories with a fixed view on the right, no widgets |
 
-Jeder Benutzer wählt seinen Style im **Profil → Oberfläche**. Den Standard für
-neue Benutzer legt der Admin unter **Einstellungen → Allgemein → Oberfläche**
-fest. Ist das Modul aus, gilt für alle Futuristisch – die gespeicherte Wahl
-bleibt erhalten und greift wieder, sobald das Modul an ist.
+Each user picks their style in **Profile → Interface**. The admin sets the default
+for new users under **Settings → General → Interface**. When the module is off,
+everyone gets Futuristic – the stored choice is kept and takes effect again as
+soon as the module is on.
 
 ---
 
-## Aufbau
+## Structure
 
 ```
 src/modules/styles/
 ├── module.json
-├── README.md                ← diese Datei
+├── README.md                ← this file
 ├── backend/
 │   ├── module.py
-│   ├── registry.py          ← liest frontend/styles/*/style.json
+│   ├── registry.py          ← reads frontend/styles/*/style.json
 │   └── styles_routes.py     ← GET /api/styles
 └── frontend/
-    ├── styles.js            ← lädt nach dem Login den Style des Benutzers
-    ├── engine/              ← Layout-Engines, die Styles benutzen können
-    │   ├── classic.js       ← Navigation links + Tabs + Statusleiste
-    │   ├── classicview.js   ← Proxmox-Ansicht (Kategorien statt Widgets)
+    ├── styles.js            ← loads the user's style after login
+    ├── engine/              ← layout engines that styles can use
+    │   ├── classic.js       ← navigation on the left + tabs + status bar
+    │   ├── classicview.js   ← Proxmox view (categories instead of widgets)
     │   └── layout.css
-    └── styles/              ← HIER LIEGEN DIE STYLES – ein Ordner je Style
+    └── styles/              ← THE STYLES LIVE HERE – one folder per style
         ├── classic/
         │   ├── style.json
         │   └── style.css
@@ -43,48 +43,48 @@ src/modules/styles/
 
 ---
 
-## Eigenen Style hinzufügen
+## Add your own style
 
-1. Ordner anlegen: `src/modules/styles/frontend/styles/<mein-style>/`
-2. Darin eine `style.json` und eine CSS-Datei ablegen (Beispiel unten).
-3. Fertig – der Style erscheint **sofort** im Profil zur Auswahl, ohne Neustart.
-   (Browser ggf. einmal mit Strg+F5 neu laden.)
+1. Create a folder: `src/modules/styles/frontend/styles/<my-style>/`
+2. Put a `style.json` and a CSS file in it (example below).
+3. Done – the style appears **immediately** in the profile for selection, without a restart.
+   (Reload the browser once with Ctrl+F5 if needed.)
 
 ### `style.json`
 
 ```json
 {
-  "id": "nacht",
-  "name": "Nachtblau",
-  "description": "Dunkles Blau, große Schrift.",
+  "id": "night",
+  "name": "Night blue",
+  "description": "Dark blue, large font.",
   "order": 50,
-  "bodyClass": "style-nacht",
+  "bodyClass": "style-night",
   "layout": "none",
   "css": ["style.css"],
   "js": "style.js"
 }
 ```
 
-| Feld          | Pflicht | Bedeutung |
-|---------------|---------|-----------|
-| `id`          | nein    | Eindeutige ID (Kleinbuchstaben, Ziffern, `-`, `_`). Ohne Angabe = Ordnername. `futuristic` ist reserviert. |
-| `name`        | ja      | Name in der Auswahl. |
-| `description` | nein    | Kurzbeschreibung (erscheint hinter dem Namen). |
-| `order`       | nein    | Reihenfolge in der Auswahl (kleiner = weiter oben, Standard 100). |
-| `bodyClass`   | nein    | CSS-Klasse(n) für `<body>`, solange der Style aktiv ist. Standard: `style-<id>`. |
-| `layout`      | nein    | `none` = Bedienung wie Futuristisch, nur anderes Aussehen (Standard) · `classic` = Navigation links + Tabs · `classic-hard` = wie Proxmox. |
-| `css`         | nein    | Liste von CSS-Dateien, relativ zum Style-Ordner. Auch fremde Styles lassen sich mitbenutzen, z. B. `"../classic/style.css"`. |
-| `js`          | nein    | Optionales Script (ES-Modul) mit `export async function apply(ctx)` – für alles, was CSS allein nicht kann. |
+| Field         | Required | Meaning |
+|---------------|----------|---------|
+| `id`          | no       | Unique ID (lowercase letters, digits, `-`, `_`). Without it = folder name. `futuristic` is reserved. |
+| `name`        | yes      | Name in the selection. |
+| `description` | no       | Short description (appears after the name). |
+| `order`       | no       | Order in the selection (smaller = higher up, default 100). |
+| `bodyClass`   | no       | CSS class(es) for `<body>` while the style is active. Default: `style-<id>`. |
+| `layout`      | no       | `none` = operation like Futuristic, only a different look (default) · `classic` = navigation on the left + tabs · `classic-hard` = like Proxmox. |
+| `css`         | no       | List of CSS files, relative to the style folder. Other styles can be reused too, e.g. `"../classic/style.css"`. |
+| `js`          | no       | Optional script (ES module) with `export async function apply(ctx)` – for anything CSS alone cannot do. |
 
-Zusätzlich gilt während der Style aktiv ist immer `body[data-style="<id>"]` – damit
-lassen sich Regeln auch ohne eigene `bodyClass` gezielt setzen.
+In addition, while the style is active, `body[data-style="<id>"]` always applies – so
+rules can be targeted even without a custom `bodyClass`.
 
-### `style.css` – Beispiel
+### `style.css` – example
 
-Am einfachsten überschreibt man die Farb-Variablen der Oberfläche:
+The easiest way is to override the color variables of the interface:
 
 ```css
-body.style-nacht {
+body.style-night {
   --bg: #0b1220;
   --panel: #111a2e;
   --panel-2: #16223b;
@@ -93,49 +93,47 @@ body.style-nacht {
   --subtext: #8ea0c8;
   font-size: 15px;
 }
-body.style-nacht .rmm-window { border-radius: 2px; }
+body.style-night .rmm-window { border-radius: 2px; }
 ```
 
-Wichtige Variablen: `--bg`, `--panel`, `--panel-2`, `--border`, `--text`,
-`--subtext`, `--accent` / `--accent-rgb` (Akzentfarbe aus dem Profil),
-`--online`, `--warn`, `--danger`. Hell/Dunkel: zusätzlich `body.theme-light`.
+Important variables: `--bg`, `--panel`, `--panel-2`, `--border`, `--text`,
+`--subtext`, `--accent` / `--accent-rgb` (accent color from the profile),
+`--online`, `--warn`, `--danger`. Light/dark: additionally `body.theme-light`.
 
 ### `style.js` – optional
 
 ```js
 // ctx = { style, base, module, req }
-//   base = URL des Style-Ordners (für eigene Bilder/Dateien)
-//   req  = authentifizierte Anfragen ans Backend, z. B. await req("/api/clients")
+//   base = URL of the style folder (for your own images/files)
+//   req  = authenticated requests to the backend, e.g. await req("/api/clients")
 export async function apply(ctx) {
   const logo = document.querySelector(".topbar-title");
   if (logo) logo.title = `Style: ${ctx.style.name}`;
 }
 ```
 
-Für tiefere Eingriffe stellt der Core Andockstellen bereit
-(`/js/app/styles.js`):
+For deeper changes the core provides hooks (`/js/app/styles.js`):
 
-| Funktion                       | Wofür |
-|--------------------------------|-------|
-| `setMainContentRenderer(fn)`   | Hauptbereich (Dashboard/Auswahl) selbst zeichnen – `fn(el)`, Rückgabe `false` = Core zeichnet |
-| `onMetrics(fn)`                | Neue Live-Werte eines Clients – `fn(clientId)` |
-| `onWindowsChanged(fn)`         | Fensterliste hat sich geändert |
+| Function                       | For what |
+|--------------------------------|----------|
+| `setMainContentRenderer(fn)`   | Draw the main area (dashboard/selection) yourself – `fn(el)`, return `false` = the core draws |
+| `onMetrics(fn)`                | New live values of a client – `fn(clientId)` |
+| `onWindowsChanged(fn)`         | The window list has changed |
 
 ```js
 import { setMainContentRenderer } from "/js/app/styles.js";
 export async function apply() {
-  setMainContentRenderer((el) => { el.innerHTML = "<h1>Mein Dashboard</h1>"; return true; });
+  setMainContentRenderer((el) => { el.innerHTML = "<h1>My dashboard</h1>"; return true; });
 }
 ```
 
 ---
 
-## Sicherheit / Fehler
+## Safety / errors
 
-* Schlägt ein Style beim Laden fehl (kaputtes CSS-Pfad, Fehler im Script), fällt
-  die Oberfläche automatisch auf **Futuristisch** zurück und zeigt eine Meldung –
-  sie bleibt bedienbar.
-* Eine fehlerhafte `style.json` wird übersprungen (Hinweis im Backend-Log),
-  die übrigen Styles bleiben wählbar.
-* Styles sind normale Frontend-Dateien des Moduls und werden nur ausgeliefert,
-  solange das Modul aktiv ist. Keine Zugangsdaten o. Ä. in Style-Dateien ablegen.
+* If a style fails to load (broken CSS path, error in the script), the interface
+  automatically falls back to **Futuristic** and shows a message – it stays usable.
+* A faulty `style.json` is skipped (note in the backend log), the remaining styles
+  stay selectable.
+* Styles are normal frontend files of the module and are only served while the
+  module is active. Do not store credentials or similar in style files.

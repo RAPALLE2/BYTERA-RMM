@@ -1,142 +1,142 @@
 # BYTERA RMM Client
 
-Das RMM-Dashboard als eigene App für **Windows 10/11, Linux und Android** – ohne Abhängigkeiten für den Benutzer.
-Die fertigen Pakete liegen in `release/` und werden vom Modul **„Client-App“** angeboten
-(Profil → *Client-App & Geräte*), genau wie die Agent-Installation:
+The RMM dashboard as a standalone app for **Windows 10/11, Linux and Android** – with no dependencies for the user.
+The ready-made packages live in `release/` and are offered by the **"Client app" module**
+(Profile → *Client app & devices*), just like the agent installation:
 
-| Weg | Windows 10/11 | Linux | Android 6+ |
+| Way | Windows 10/11 | Linux | Android 6+ |
 |---|---|---|---|
-| **Befehl** | `irm <server>/client-dist/install.ps1 \| iex` (PowerShell) oder `install.cmd` (CMD) | `curl -fsSL <server>/client-dist/install.sh \| sh` | – |
-| **Paket** | `.zip` (exe zum Entpacken) | `.tar.gz`, `.tgz`, `.tar` (mit `install.sh`) | – |
-| **Datei** | `.exe` (startet direkt), `.msi` (Installation, GPO/Intune) | `.deb` (Debian/Ubuntu), `.rpm` (Fedora/RHEL/openSUSE), `.pkg.tar.xz` (Arch) | `.apk` |
+| **Command** | `irm <server>/client-dist/install.ps1 \| iex` (PowerShell) or `install.cmd` (CMD) | `curl -fsSL <server>/client-dist/install.sh \| sh` | – |
+| **Package** | `.zip` (exe to extract) | `.tar.gz`, `.tgz`, `.tar` (with `install.sh`) | – |
+| **File** | `.exe` (runs directly), `.msi` (installation, GPO/Intune) | `.deb` (Debian/Ubuntu), `.rpm` (Fedora/RHEL/openSUSE), `.pkg.tar.xz` (Arch) | `.apk` |
 
-Die Befehle laden das passende Paket, legen Startmenü-/Desktop-Verknüpfungen an und tragen die
-Server-Adresse gleich ein – man muss sich nur noch anmelden.
+The commands download the matching package, create start menu/desktop shortcuts and enter the
+server address right away – you only have to sign in.
 
-## Funktionen
+## Features
 
 | | Windows | Linux | Android |
 |---|---|---|---|
-| Dashboard als App-Fenster („kleiner Browser“) | Edge im App-Modus (immer vorhanden) | Chromium/Chrome/Edge/Brave im App-Modus, sonst Firefox | eingebaute WebView |
-| Anmeldung speichern (Gerätetoken, kein Passwort) | Windows-Anmeldeinformationen | Schlüsselbund (`secret-tool`), sonst Datei (0600) | privater App-Speicher |
-| 2FA / SSO (AD) | ✅ | ✅ | ✅ |
-| Relay als Laufwerk | Netzlaufwerk (`net use`, WebDAV) | Dateimanager (`gio mount`) | – (Android erlaubt das nicht; Explorer im Dashboard) |
-| Remote-Shell im eigenen Fenster | ✅ | ✅ | im App-Fenster |
-| Fernbild per Remotedesktop / VNC | mstsc / VNC-Viewer | FreeRDP/Remmina / vncviewer | „Remote Desktop“ / bVNC |
-| Fernbild-Ziel wählbar (Gateway, lokale IP, letzte, eigene + Port) | ✅ | ✅ | ✅ |
-| Autostart | ✅ | ✅ | – |
-| Gerät abmelden (Profil → Meine Geräte) | sofort | sofort | sofort |
-| WireGuard-VPN (Modul „VPN“) | vollautomatisch: Tunnel anlegen, verbinden, bei Ablauf löschen (WireGuard für Windows, UAC-Abfrage) | vollautomatisch (wireguard-tools, pkexec) | QR-Code/Datei aus der VPN-App in die WireGuard-App |
+| Dashboard as an app window ("small browser") | Edge in app mode (always available) | Chromium/Chrome/Edge/Brave in app mode, otherwise Firefox | built-in WebView |
+| Remember login (device token, no password) | Windows Credential Manager | keyring (`secret-tool`), otherwise a file (0600) | private app storage |
+| 2FA / SSO (AD) | Yes | Yes | Yes |
+| Relay as a drive | network drive (`net use`, WebDAV) | file manager (`gio mount`) | – (Android does not allow this; Explorer in the dashboard) |
+| Remote shell in its own window | Yes | Yes | in the app window |
+| Remote screen via Remote Desktop / VNC | mstsc / VNC viewer | FreeRDP/Remmina / vncviewer | "Remote Desktop" / bVNC |
+| Remote-screen target selectable (gateway, local IP, last, custom + port) | Yes | Yes | Yes |
+| Autostart | Yes | Yes | – |
+| Sign out device (Profile → My devices) | immediately | immediately | immediately |
+| WireGuard VPN ("VPN" module) | fully automatic: create tunnel, connect, delete on expiry (WireGuard for Windows, UAC prompt) | fully automatic (wireguard-tools, pkexec) | QR code/file from the VPN app into the WireGuard app |
 
 ## Updates
-- **Automatisch:** Nach dem Anmelden prüft die App, ob auf dem Server eine neuere Version liegt, und installiert sie
-  (Häkchen „Automatisch aktualisieren“, Standard an). Android fragt nach und lädt die neue APK über den Browser.
-- **Von Hand:** Knopf „Nach Updates suchen“ (Android: Menü).
-- Die App erkennt ihre Installationsart selbst: einzelne `.exe` (Austausch + Neustart), `.msi` unter „Programme“
-  (stilles MSI-Update), `.deb`/`.rpm`/`.pkg.tar.xz` (Admin-Abfrage per `pkexec`: apt / dnf·zypper·yum / pacman),
-  `.tar.gz` (Dateien ersetzen, ohne Admin).
-  Installierte Pakete enthalten dafür die Datei `.bytera-install`; ein Start aus dem Quellcode bekommt **keine** Auto-Updates.
+- **Automatic:** after signing in, the app checks whether a newer version is on the server and installs it
+  (checkbox "Update automatically", on by default). Android asks and downloads the new APK via the browser.
+- **Manual:** button "Check for updates" (Android: menu).
+- The app detects its own installation type: single `.exe` (replace + restart), `.msi` under "Programs"
+  (silent MSI update), `.deb`/`.rpm`/`.pkg.tar.xz` (admin prompt via `pkexec`: apt / dnf·zypper·yum / pacman),
+  `.tar.gz` (replace files, without admin).
+  For this, installed packages contain the file `.bytera-install`; a start from the source gets **no** auto-updates.
 
-## Aus dem Dashboard extern öffnen (ab 1.4)
-Läuft das Dashboard im Fenster der Client-App, öffnen **Terminal** und **Remote-Bildschirm** eines Agents die passende
-Software lokal: Remotedesktop (mstsc/xfreerdp), VNC-Viewer, SSH-Client im Terminal oder das RMM-Terminal im eigenen
-App-Fenster. Im normalen Browser bleibt alles wie bisher (Web-Variante). Profil → „Client-App & Geräte“: standardmäßig
-extern, im Browser oder jedes Mal fragen; Umschalt+Klick zeigt immer die Auswahl.
-- Ziel: lokale IP + Standard-Port, eigene Adresse/Port, RMM-Gateway oder **über RMM (Cloudflare-Tunnel)** – dann legt
-  das Backend (Modul „Cloudflare Tunnel“ + „Netzwerk“) eine Tunnel-Adresse mit eigenem Service-Token an und leitet zum
-  Agent weiter; die App verbindet per `cloudflared access tcp` (lädt cloudflared einmalig selbst) auf `127.0.0.1`.
-  Offen: bis Nutzungsende, 10/30/60/120 Minuten oder dauerhaft (Recht „Relay unbegrenzt“).
-- Technik: Link-Schema `bytera-rmm://launch?s=<server>&t=<startschein>` (Windows: HKCU\Software\Classes, Linux:
-  `x-scheme-handler/bytera-rmm`). Der Startschein gilt 2 Minuten, einmal, nur für den angemeldeten Benutzer –
-  fremde Seiten können so nichts starten. Android: JS-Brücke `RMM.launch(schein)` (ohne Tunnel).
+## Open externally from the dashboard (from 1.4)
+When the dashboard runs in the client app window, an agent's **Terminal** and **Remote screen** open the matching
+software locally: Remote Desktop (mstsc/xfreerdp), VNC viewer, SSH client in the terminal, or the RMM terminal in its own
+app window. In a normal browser everything stays as before (web variant). Profile → "Client app & devices": externally by
+default, in the browser, or ask every time; Shift+click always shows the choice.
+- Target: local IP + default port, custom address/port, RMM gateway or **via RMM (Cloudflare tunnel)** – then the
+  backend ("Cloudflare Tunnel" + "Network" modules) creates a tunnel address with its own service token and forwards to the
+  agent; the app connects via `cloudflared access tcp` (downloads cloudflared once itself) on `127.0.0.1`.
+  Open: until end of use, 10/30/60/120 minutes or permanent (permission "Relay unlimited").
+- Mechanics: link scheme `bytera-rmm://launch?s=<server>&t=<launch-ticket>` (Windows: HKCU\Software\Classes, Linux:
+  `x-scheme-handler/bytera-rmm`). The launch ticket is valid for 2 minutes, once, only for the signed-in user –
+  so external pages cannot start anything. Android: JS bridge `RMM.launch(ticket)` (without a tunnel).
 
-## Pakete auf dem Server bauen (wie die Agent-Pakete)
-*Module → Client-App → Einstellungen → „Client-Pakete bauen“* baut alles direkt aus `src/client` und legt die Pakete
-nach `backend/storage/client/` (Vorrang vor den mitgelieferten, übersteht Server-Updates). Vorher wählst du:
-**Version beibehalten** (vorhandene Pakete dieser Version werden überschrieben – installierte Apps aktualisieren sich dann nicht)
-oder **neue Version** (ältere Pakete werden entfernt, installierte Apps holen sich das Update automatisch). Live-Log und „Stopp“ inklusive.
+## Build packages on the server (like the agent packages)
+*Modules → Client app → Settings → "Build client packages"* builds everything directly from `src/client` and puts the
+packages into `backend/storage/client/` (takes precedence over the shipped ones, survives server updates). Beforehand you choose:
+**Keep version** (existing packages of this version are overwritten – installed apps then do not update)
+or **new version** (older packages are removed, installed apps fetch the update automatically). Live log and "Stop" included.
 
-**Docker-Betrieb (alle Formate):** Beim Aktivieren des Moduls legt das RMM einmalig das Bau-Image
-`bytera/rmm-client-builder:<kennung>` an (Ubuntu 24.04 + Wine + Windows-Python mit PyInstaller + wixl + rpmbuild + JDK 17 +
-Android-Werkzeugen, ca. 1,5–2 GB; Fortschritt in den Modul-Einstellungen). Gebaut wird je Knopfdruck in einem Wegwerf-Container
-ohne Netzwerk. Das RMM-Image selbst bleibt klein; Modul aus → Bau-Image wird entfernt. Fehlt das Image (z. B. nach
-`docker image prune`), legt das Modul es beim nächsten Start neu an; „Neu vorbereiten“ erzwingt es.
-Voraussetzung: Docker-Socket im RMM-Container (`/var/run/docker.sock`, steht so in `docker-compose.yml`).
+**Docker operation (all formats):** when the module is enabled, the RMM creates the build image once,
+`bytera/rmm-client-builder:<tag>` (Ubuntu 24.04 + Wine + Windows Python with PyInstaller + wixl + rpmbuild + JDK 17 +
+Android tools, about 1.5–2 GB; progress in the module settings). Each build runs in a throwaway container
+without network. The RMM image itself stays small; module off → the build image is removed. If the image is missing (e.g. after
+`docker image prune`), the module recreates it on the next start; "Re-prepare" forces it.
+Requirement: the Docker socket in the RMM container (`/var/run/docker.sock`, set like this in `docker-compose.yml`).
 
-**Ohne Docker (nativ):** Linux baut `.deb/.tar/.tar.gz/.tgz/.pkg.tar.xz` (+ `.rpm`, `.exe/.msi`, `.apk`, wenn die Werkzeuge
-installiert sind), Windows zusätzlich `.exe/.zip/.msi` (PyInstaller per pip und WiX als Download holt das Modul beim Aktivieren).
+**Without Docker (native):** Linux builds `.deb/.tar/.tar.gz/.tgz/.pkg.tar.xz` (+ `.rpm`, `.exe/.msi`, `.apk` if the tools
+are installed), Windows additionally `.exe/.zip/.msi` (PyInstaller via pip and WiX as a download are fetched by the module on enable).
 
-Von Hand: `python3 src/client/build_installers.py [--targets exe,msi,…] [--out DIR] [--set-version 1.2.3]`.
+Manually: `python3 src/client/build_installers.py [--targets exe,msi,…] [--out DIR] [--set-version 1.2.3]`.
 
-## RMM-Konsole
-Knopf **„RMM-Konsole“** (Android: Menü) öffnet die Kommandozeile des RMM (Modul „RMM-Konsole“, Recht „RMM-Konsole benutzen“):
-Geräte, Live-Metriken (`top`, btop-ähnlich), Terminal auf Geräten (`shell`), Befehle (`exec`), Prozesse, Neustart/Herunterfahren,
-Agent neu starten, Dateien, Docker – mit Tab-Vervollständigung. Dieselbe Konsole gibt es per SSH (`ssh <benutzer>@<server> -p 2222`)
-und im Dashboard.
+## RMM console
+The **"RMM console"** button (Android: menu) opens the RMM command line ("RMM console" module, "Use RMM console" permission):
+devices, live metrics (`top`, btop-like), terminal on devices (`shell`), commands (`exec`), processes, restart/shutdown,
+restart agent, files, Docker – with tab completion. The same console is available via SSH (`ssh <user>@<server> -p 2222`)
+and in the dashboard.
 
-## Kontrollfenster
-- Jede länger laufende Aktion zeigt unten eine Ladeleiste mit **„■ Stopp“** (bricht Befehle/Downloads ab).
-- **„Fenster schließen, wenn Dashboard aufgeht“:** schließt das Kontrollfenster 4 s nach dem Öffnen des Dashboards –
-  mit Knopf „Offen lassen“.
+## Control window
+- Every longer-running action shows a progress bar at the bottom with **"Stop"** (aborts commands/downloads).
+- **"Close window when the dashboard opens":** closes the control window 4 s after the dashboard opens –
+  with a "Keep open" button.
 
-## Fernbild: wohin verbinden?
-Nach der Gerätewahl fragt die App, wohin verbunden wird – vorgewählt ist die gespeicherte Voreinstellung,
-sonst die **lokale IP des Geräts**:
+## Remote screen: where to connect?
+After choosing the device, the app asks where to connect – the stored default is preselected,
+otherwise the **local IP of the device**:
 
-| Ziel | Port |
+| Target | Port |
 |---|---|
-| **RMM-Gateway** – der Server leitet weiter, erreichbar nur von deiner IP (braucht Modul „Netzwerk“ + laufenden Agenten) | automatisch |
-| **Lokale IP des Geräts** – wie vom Agenten gemeldet (gleiches Netz / VPN ins Firmennetz) | Standard (3389 / 5900) oder eigener |
-| **Letzte Verbindung** – genau wie beim letzten Mal | wie beim letzten Mal |
-| **Eigene Adresse** – IP oder Name (VPN, Portfreigabe, DNS) | Standard oder eigener |
+| **RMM gateway** – the server forwards, reachable only from your IP (needs the "Network" module + a running agent) | automatic |
+| **Local IP of the device** – as reported by the agent (same network / VPN into the company network) | default (3389 / 5900) or custom |
+| **Last connection** – exactly like last time | like last time |
+| **Custom address** – IP or name (VPN, port forward, DNS) | default or custom |
 
-„Als Standard für dieses Gerät merken“ speichert die Wahl **pro Benutzer und Zielgerät** (und getrennt für RDP/VNC) auf
-dem Server – sie gilt damit auf allen Geräten, auf denen du die App nutzt. Für direkte Verbindungen muss der Agent nicht
-online sein, deshalb zeigt die Auswahl beim Fernbild auch Offline-Geräte.
+"Remember as the default for this device" stores the choice **per user and target device** (and separately for RDP/VNC) on
+the server – so it applies on all devices where you use the app. Direct connections do not need the agent to be
+online, which is why the remote-screen selection also shows offline devices.
 
-## Aufbau
+## Structure
 
 ```
 src/client/
-├── build_installers.py   baut ALLE Pakete (exe, zip, msi, deb, rpm, pkg, tar, tgz, apk) – wie src/backend/app/build_installers.py beim Agenten
-├── desktop/              Windows + Linux: reines Python (nur Standardbibliothek, Oberfläche tkinter)
-│   ├── bytera-client.py         Startdatei
+├── build_installers.py   builds ALL packages (exe, zip, msi, deb, rpm, pkg, tar, tgz, apk) – like src/backend/app/build_installers.py for the agent
+├── desktop/              Windows + Linux: pure Python (standard library only, tkinter UI)
+│   ├── bytera-client.py         entry file
 │   └── bytera_client/           api.py, store.py, secrets_store.py, browser.py, features.py, autostart.py, gui.py
-├── android/              native Android-App (Java, WebView) - AndroidManifest.xml, src/, assets/login.html, res/
-│   └── signing/          dauerhafter Signier-Schlüssel (Updates müssen gleich signiert sein!)
-├── resources/            Programm-Symbole (aus dem RMM-Logo)
-├── release/              FERTIGE PAKETE (werden ausgeliefert)
-└── tests/test_logic.py   Tests (+ optional gegen ein laufendes Backend)
+├── android/              native Android app (Java, WebView) - AndroidManifest.xml, src/, assets/login.html, res/
+│   └── signing/          permanent signing key (updates must be signed the same way!)
+├── resources/            program icons (from the RMM logo)
+├── release/              READY PACKAGES (these are shipped)
+└── tests/test_logic.py   tests (+ optionally against a running backend)
 ```
 
-## Neu bauen
+## Rebuild
 
-Auf einem Linux-Bausystem (z. B. Ubuntu 24.04) – baut alles, was mit den vorhandenen Werkzeugen geht:
+On a Linux build system (e.g. Ubuntu 24.04) – builds everything the installed tools allow:
 
 ```bash
 sudo apt install wine64 wixl openjdk-17-jdk-headless android-sdk-platform-23 aapt apksigner zipalign dalvik-exchange
-# Windows-Python mit PyInstaller für Wine (einmalig), z.B. nach /opt/winpy:
+# Windows Python with PyInstaller for Wine (once), e.g. to /opt/winpy:
 #   https://github.com/astral-sh/python-build-standalone  (…-x86_64-pc-windows-msvc-install_only.tar.gz)
 #   wine64 /opt/winpy/python/python.exe -m pip install pyinstaller
-python3 src/client/build_installers.py                 # alles
-python3 src/client/build_installers.py --targets deb,tar,apk   # nur einzelne
+python3 src/client/build_installers.py                 # everything
+python3 src/client/build_installers.py --targets deb,tar,apk   # only individual ones
 ```
 
-Auf **Windows** lassen sich `.exe`, `.zip` (und mit wixl/WiX `.msi`) direkt bauen:
+On **Windows**, `.exe`, `.zip` (and with wixl/WiX `.msi`) can be built directly:
 `py -m pip install pyinstaller && py src\client\build_installers.py --targets exe,zip`.
-Alternativ baut der GitHub-Workflow **„Client-App bauen“** (Actions) alle Pakete automatisch.
+Alternatively, the GitHub workflow **"Build client app"** (Actions) builds all packages automatically.
 
-Version ändern: `desktop/bytera_client/__init__.py` (`__version__`). Android übernimmt sie beim Bauen.
+Change the version: `desktop/bytera_client/__init__.py` (`__version__`). Android picks it up when building.
 
 Tests: `cd src/client && python3 -m pytest tests`
-(gegen ein Backend zusätzlich `RMM_TEST_SERVER=… RMM_TEST_USER=… RMM_TEST_PASS=…`).
+(against a backend additionally `RMM_TEST_SERVER=… RMM_TEST_USER=… RMM_TEST_PASS=…`).
 
-## Hinweise
-- **Windows SmartScreen:** Die `.exe`/`.msi` sind nicht mit einem gekauften Code-Signing-Zertifikat signiert –
-  beim ersten Start „Weitere Informationen → Trotzdem ausführen“.
-- **Windows + HTTP:** Netzlaufwerke über WebDAV verbindet Windows standardmäßig nur per HTTPS
-  (sonst `BasicAuthLevel = 2` unter `HKLM\SYSTEM\CurrentControlSet\Services\WebClient\Parameters`).
-- **Android:** Installation aus „unbekannten Quellen“ erlauben. Der Signier-Schlüssel liegt in
-  `android/signing/` – nicht verlieren und nicht ändern, sonst lassen sich Updates nicht über alte Versionen installieren.
-- **Linux:** braucht `python3` und `python3-tk` (die `.deb` und der Befehl installieren sie mit);
-  für das Laufwerk `gio` (bei GNOME/KDE/XFCE vorhanden).
+## Notes
+- **Windows SmartScreen:** the `.exe`/`.msi` are not signed with a purchased code-signing certificate –
+  on first start "More info → Run anyway".
+- **Windows + HTTP:** by default Windows connects WebDAV network drives only over HTTPS
+  (otherwise `BasicAuthLevel = 2` under `HKLM\SYSTEM\CurrentControlSet\Services\WebClient\Parameters`).
+- **Android:** allow installation from "unknown sources". The signing key is in
+  `android/signing/` – do not lose it and do not change it, otherwise updates cannot be installed over old versions.
+- **Linux:** needs `python3` and `python3-tk` (the `.deb` and the command install them with it);
+  for the drive `gio` (present on GNOME/KDE/XFCE).

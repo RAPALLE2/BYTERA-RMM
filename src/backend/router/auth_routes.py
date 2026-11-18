@@ -3,12 +3,12 @@ routers/auth_routes.py
 -----------------------
 Alles rund um Login und das eigene Benutzerprofil.
 
-Endpunkte:
-  POST /api/auth/login            -> Anmelden, liefert JWT-Token zurück
-  POST /api/auth/change-password  -> eigenes Passwort ändern (auch für den
-                                      Pflicht-Wechsel beim ersten Login)
-  GET  /api/auth/me               -> Infos zum aktuell eingeloggten User
-  PUT  /api/auth/profile          -> eigenen Anzeigenamen/Sprache/Theme ändern
+Endpoints:
+  POST /api/auth/login            -> sign in, returns a JWT token
+  POST /api/auth/change-password  -> change your own password (also for the
+                                      mandatory change on first login)
+  GET  /api/auth/me               -> info about the currently logged-in user
+  PUT  /api/auth/profile          -> change your own display name/language/theme
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -52,8 +52,8 @@ class ProfileBody(BaseModel):
 
 
 def _auth_realm_of(user) -> str | None:
-    """Realm-ID des Users (AD/LDAP/SSO) oder None bei lokalem Konto.
-    Funktioniert für dict UND sqlite3.Row."""
+    """Realm ID of the user (AD/LDAP/SSO) or None for a local account.
+    Works for dict AND sqlite3.Row."""
     try:
         return user["auth_realm"] if "auth_realm" in user.keys() else None
     except Exception:
@@ -61,7 +61,7 @@ def _auth_realm_of(user) -> str | None:
 
 
 def _public_user(user: dict) -> dict:
-    """Gibt nur die Felder zurück, die das Frontend sehen darf (kein Passwort-Hash!)."""
+    """Returns only the fields the frontend is allowed to see (no password hash!)."""
     return {
         "id": user["id"],
         "username": user["username"],
@@ -69,20 +69,20 @@ def _public_user(user: dict) -> dict:
         "role": user["role"],
         "must_change_pw": bool(user["must_change_pw"]),
         "is_admin": is_super_admin(user),
-        # Woher kommt der Vollzugriff? "role" = Rolle admin (wie beim Anlegen),
-        # "permission" = über das Recht 'super_admin' vergeben, sonst None.
+        # Where does full access come from? "role" = admin role (as on creation),
+        # "permission" = granted via the 'super_admin' permission, otherwise None.
         "admin_via": ("role" if user["role"] == "admin"
                       else ("permission" if is_super_admin(user) else None)),
         "language": user["language"],
         "theme": user["theme"],
         "accent": user["accent"] if "accent" in user.keys() else "teal",
-        # Oberflaechen-Design: design = was gilt, design_choice = eigene Wahl ("" = Standard)
+        # UI design: design = what applies, design_choice = own choice ("" = default)
         "design": db.effective_design(user),
         "design_choice": (user["design"] if "design" in user.keys() else "") or "",
         "default_design": db.get_setting("default_design", "futuristic") or "futuristic",
         "email": (user["email"] if "email" in user.keys() else None) or "",
-        # Realm-ID (AD/LDAP/SSO) oder null bei lokalem Konto - das Frontend
-        # blendet damit u.a. die Passwort-ändern-Funktion aus.
+        # Realm ID (AD/LDAP/SSO) or null for a local account - the frontend
+        # uses it to hide the change-password function, among other things.
         "auth_realm": _auth_realm_of(user),
     }
 
@@ -107,9 +107,9 @@ def language_strings(code: str):
 @router.get("/realms")
 def public_realms():
     """
-    Öffentliche Liste der Anmelde-Realms für das Dropdown im Login-Fenster.
-    Enthält nur id + name (keine Geheimnisse). "local" wird im Frontend ergänzt.
-    Ohne aktives Modul "sso" gibt es keine Verzeichnis-Anmeldung -> leere Liste.
+    Public list of sign-in realms for the dropdown in the login window.
+    Contains only id + name (no secrets). "local" is added in the frontend.
+    Without the active "sso" module there is no directory login -> empty list.
     """
     from app.auth import sso_enabled
     if not sso_enabled():
@@ -157,8 +157,8 @@ async def login(body: LoginBody, request: Request = None):
             from router.admin_routes import build_notification
             await notifier.fire_event("login_failed",
                 notification=build_notification(
-                    f"Fehlgeschlagene Anmeldung für '{body.username}'.",
-                    head="🚫 Fehlgeschlagene Anmeldung",
+                    f"Failed sign-in for '{body.username}'.",
+                    head="Failed sign-in",
                     service="Auth", level="warn"),
                 dedupe_key=f"login_failed:{body.username}")
         except Exception:
@@ -198,29 +198,29 @@ async def login(body: LoginBody, request: Request = None):
                                details=f"ip:{client_ip}")
             raise HTTPException(401, "Der Einmalcode ist falsch oder abgelaufen")
 
-    # Rechteprüfung: wer nicht das Recht 'login' hat (und kein Super-Admin ist),
-    # darf sich trotz korrektem Passwort NICHT anmelden.
+    # Permission check: anyone without the 'login' permission (and not a super admin)
+    # may NOT sign in, even with a correct password.
     if not user_has_permission(user, "login"):
-        db.add_audit_entry(user["username"], "login.denied", details="fehlendes Recht 'login'")
-        raise HTTPException(403, "Keine Berechtigung zur Anmeldung an diesem System")
+        db.add_audit_entry(user["username"], "login.denied", details="missing 'login' permission")
+        raise HTTPException(403, "No permission to sign in to this system")
 
     security_policy.note_success(body.username, client_ip)
     db.add_audit_entry(user["username"], "login.success",
                        details=f"realm:{body.realm}, ip:{client_ip}")
-    # Benachrichtigungs-Regel: Benutzer-Anmeldung
+    # Notification rule: user sign-in
     try:
         from app import notifier
         from router.admin_routes import build_notification
         await notifier.fire_event("user_login",
             notification=build_notification(
-                f"{user['username']} hat sich am Dashboard angemeldet.",
-                head=f"🔑 Anmeldung – {user['username']}",
+                f"{user['username']} signed in to the dashboard.",
+                head=f"Sign-in - {user['username']}",
                 service="Auth", level="info"),
             dedupe_key=f"user_login:{user['username']}")
     except Exception:
         pass
-    # HA1 fürs Netzlaufwerk (Digest) aus dem Klartext-Passwort ableiten und ablegen,
-    # damit sich der Nutzer am Relay mit seinem normalen Passwort anmelden kann.
+    # Derive and store the HA1 for the network drive (digest) from the plaintext
+    # password, so the user can sign in to the relay with their normal password.
     try:
         db.store_relay_secret(user["id"], body.password)
     except Exception:
@@ -231,31 +231,31 @@ async def login(body: LoginBody, request: Request = None):
 
 @router.post("/change-password")
 def change_password(body: ChangePasswordBody, user: dict = Depends(get_current_user)):
-    # Verzeichnis-Benutzer (AD/LDAP/SSO, erkennbar an auth_realm) haben KEIN
-    # lokales Passwort - der Hash ist nur ein Platzhalter. Eine "Änderung"
-    # würde ein lokales Schatten-Passwort erzeugen, das am Verzeichnis vorbei
-    # zum Login taugt. Deshalb hart blocken; geändert wird im AD/LDAP selbst.
+    # Directory users (AD/LDAP/SSO, recognizable by auth_realm) have NO local
+    # password - the hash is only a placeholder. A "change" would create a
+    # local shadow password that works for login bypassing the directory.
+    # So block it hard; it is changed in AD/LDAP itself.
     if _auth_realm_of(user):
-        raise HTTPException(403, "Passwort wird zentral im Verzeichnis (AD/LDAP/SSO) verwaltet und kann hier nicht geändert werden")
-    # API-Konten (Modul "api") haben kein Passwort, sondern einen API-Schluessel.
+        raise HTTPException(403, "The password is managed centrally in the directory (AD/LDAP/SSO) and cannot be changed here")
+    # API accounts (module "api") have no password, but an API key instead.
     if user.get("role") == "api":
-        raise HTTPException(403, "API-Konten haben kein Passwort – stattdessen einen API-Schlüssel (Modul „REST-API“)")
-    # Beim allerersten Pflicht-Passwortwechsel ist current_password="admin" (o.ä.) zu prüfen
+        raise HTTPException(403, "API accounts have no password - use an API key instead (module \"REST API\")")
+    # On the very first mandatory password change, current_password="admin" (or similar) must be checked
     if not verify_password(body.current_password, user["password_hash"]):
-        raise HTTPException(400, "Aktuelles Passwort ist falsch")
-    # Passwort-Richtlinie serverseitig durchsetzen (BSI ORP.4.A8/A22).
-    # Die feste Grenze von 8 Zeichen reicht dafuer nicht aus; die geltenden
-    # Werte stehen in den Einstellungen und sind dokumentiert.
+        raise HTTPException(400, "Current password is wrong")
+    # Enforce the password policy on the server side (BSI ORP.4.A8/A22).
+    # The fixed limit of 8 characters is not enough for this; the applicable
+    # values are in the settings and are documented.
     from app import security_policy
     problems = security_policy.check_password(body.new_password, user["username"])
     if problems:
         raise HTTPException(
-            400, "Das Passwort erfüllt die Richtlinie nicht: " + "; ".join(problems))
+            400, "The password does not meet the policy: " + "; ".join(problems))
     if body.new_password == body.current_password:
-        raise HTTPException(400, "Das neue Passwort muss sich vom alten unterscheiden")
+        raise HTTPException(400, "The new password must differ from the old one")
 
     db.update_user_password(user["id"], hash_password(body.new_password), must_change_pw=False)
-    # HA1 fürs Netzlaufwerk mit dem neuen Passwort aktualisieren.
+    # Update the HA1 for the network drive with the new password.
     try:
         db.store_relay_secret(user["id"], body.new_password)
     except Exception:
@@ -272,9 +272,9 @@ def me(user: dict = Depends(get_current_user)):
 @router.get("/effective")
 def my_effective_permissions(user: dict = Depends(get_current_user)):
     """
-    Effektive Rechte des eingeloggten Benutzers für das Frontend-Gating:
+    Effective permissions of the logged-in user for frontend gating:
     { admin, global: {perm: bool}, clients: { client_id: {perm: bool} } }.
-    Enthält nur sichtbare Clients.
+    Contains only visible clients.
     """
     all_ids = [c["id"] for c in db.list_clients()]
     return effective_permissions(user, all_ids)
@@ -335,10 +335,10 @@ def patch_ui_prefs(body: UiPrefsPatchBody, user: dict = Depends(get_current_user
 
 
 # ------------------------------------------------------------------
-# Silent-Modus für den Remote-Bildschirm (einmalig): Die NÄCHSTE Sitzung
-# startet ohne Zustimmungs-Dialog am Gerät, danach schaltet sich der Modus
-# automatisch wieder aus. Benötigt das Recht 'screen_silent' (global) oder
-# 'c_screen_silent' auf mindestens einem sichtbaren Client.
+# Silent mode for the remote screen (one-off): the NEXT session starts
+# without a consent dialog on the device, afterwards the mode switches
+# off again automatically. Requires the 'screen_silent' permission (global)
+# or 'c_screen_silent' on at least one visible client.
 # ------------------------------------------------------------------
 
 def _may_use_silent_screen(user: dict) -> bool:
@@ -364,23 +364,22 @@ def get_silent_screen(user: dict = Depends(get_current_user)):
 
 # ------------------------------------------------------------------
 # Spotify-Integration: Jeder eingeloggte Benutzer darf die Client-ID der
-# (vom Admin in den Einstellungen hinterlegten) Spotify-App lesen - sie ist
-# kein Geheimnis (steht in jeder OAuth-URL). Der Login läuft komplett im
-# Browser per Authorization Code + PKCE, es gibt KEIN Client-Secret.
+# Read the Spotify app (configured by the admin in the settings) - it is
+# not a secret (it is in every OAuth URL). The login runs entirely in the
+# browser via authorization code + PKCE, there is NO client secret.
 # ------------------------------------------------------------------
 
 @router.get("/spotify-config")
 def spotify_config(user: dict = Depends(get_current_user)):
-    # Die Redirect-URI wird NICHT separat gepflegt, sondern aus der
-    # "Vollständigen URL" (Einstellungen → Allgemein → server_url) abgeleitet.
-    # Damit gibt es genau EINE Stelle, an der die öffentliche Adresse steht.
-    # Ist dort nichts hinterlegt, nimmt das Frontend die Adresse, unter der
-    # das Dashboard gerade geöffnet ist.
-    # WICHTIG: Spotify vergleicht ZEICHENGENAU. Deshalb wird die eingetragene
-    # URL exakt so weitergegeben, wie sie hinterlegt ist - lediglich mehrfache
-    # Schrägstriche am Ende werden auf einen reduziert. Würden wir hier einen
-    # Schrägstrich erzwingen, passte es nicht mehr zu einem Spotify-Eintrag
-    # ohne Schrägstrich (und umgekehrt) -> "Not matching configuration".
+    # The redirect URI is NOT maintained separately but derived from the
+    # "full URL" (Settings -> General -> server_url). This way there is exactly
+    # ONE place that holds the public address. If nothing is set there, the
+    # frontend uses the address under which the dashboard is currently open.
+    # IMPORTANT: Spotify compares CHARACTER-EXACT. Therefore the configured
+    # URL is passed on exactly as stored - only multiple trailing slashes are
+    # reduced to one. If we forced a trailing slash here, it would no longer
+    # match a Spotify entry without a slash (and vice versa) -> "Not matching
+    # configuration".
     base = (db.get_setting("server_url", "") or "").strip()
     if base.endswith("/"):
         base = base.rstrip("/") + "/"
@@ -393,7 +392,7 @@ def spotify_config(user: dict = Depends(get_current_user)):
 @router.put("/silent-screen")
 def put_silent_screen(body: SilentScreenBody, user: dict = Depends(get_current_user)):
     if body.enabled and not _may_use_silent_screen(user):
-        raise HTTPException(403, "Keine Berechtigung für den Remote-Bildschirm ohne Anfrage")
+        raise HTTPException(403, "No permission for the remote screen without a request")
     db.set_user_silent_screen(user["id"], body.enabled)
     db.add_audit_entry(user["username"],
                        "screen.silent_" + ("armed" if body.enabled else "disarmed"))
@@ -402,8 +401,8 @@ def put_silent_screen(body: SilentScreenBody, user: dict = Depends(get_current_u
 
 @router.put("/profile")
 def update_profile(body: ProfileBody, user: dict = Depends(get_current_user)):
-    # Anzeigename nur ändern, wenn das Recht 'edit_profile_name' vorliegt.
-    # Sprache/Theme/Akzent sind persönliche Darstellung und bleiben immer erlaubt.
+    # Change the display name only if the 'edit_profile_name' permission is present.
+    # Language/theme/accent are personal presentation and always remain allowed.
     new_name = body.display_name
     if (new_name is not None and new_name != user.get("display_name")
             and not (is_super_admin(user) or user_has_permission(user, "edit_profile_name"))):
@@ -414,10 +413,10 @@ def update_profile(body: ProfileBody, user: dict = Depends(get_current_user)):
         if email:
             import re as _re
             if not _re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
-                raise HTTPException(400, "Ungültige E-Mail-Adresse")
+                raise HTTPException(400, "Invalid e-mail address")
             other = db.get_user_by_email(email)
             if other and other["id"] != user["id"]:
-                raise HTTPException(400, "Diese E-Mail-Adresse wird bereits verwendet")
+                raise HTTPException(400, "This e-mail address is already in use")
     db.update_user_profile(user["id"], new_name, body.language, body.theme, body.accent, email=email,
                            design=body.design)
     return _public_user(db.get_user_by_id(user["id"]))
@@ -426,10 +425,9 @@ def update_profile(body: ProfileBody, user: dict = Depends(get_current_user)):
 @router.get("/password-policy")
 def password_policy():
     """
-    Die geltende Passwort-Richtlinie - ohne Anmeldung abrufbar, weil sie schon
-    beim erzwungenen ersten Passwortwechsel gebraucht wird. Sie verrät nichts
-    Schützenswertes, sondern nur die Regeln, die ohnehin beim Speichern
-    greifen.
+    The applicable password policy - retrievable without signing in, because it
+    is already needed during the enforced first password change. It reveals
+    nothing worth protecting, only the rules that apply when saving anyway.
     """
     from app import security_policy
     return {"policy": security_policy.policy(),
@@ -476,37 +474,36 @@ def _confirm_identity(user: dict, password: str = "", code: str = "") -> None:
     """
     from app import totp as _totp
 
-    # 1) Code aus der Authenticator-App - funktioniert fuer beide Kontoarten
-    #    und ist der stärkere Nachweis, weil er das Geraet voraussetzt.
+    # 1) Code from the authenticator app - works for both account types
+    #    and is the stronger proof, because it requires the device.
     if code and user.get("totp_secret"):
         if _totp.verify(user["totp_secret"], code, user_key=str(user["id"])):
             return
         used, rest = _totp.use_backup_code(user.get("totp_backup") or "", code)
         if used:
             db.set_user_totp(user["id"], backup=rest)
-            # Auch im uebergebenen Objekt nachziehen: Es stammt aus der
-            # Anmeldung und wuerde sonst innerhalb desselben Aufrufs noch den
-            # alten Stand zeigen - der Code liesse sich dann ein zweites Mal
-            # verwenden.
+            # Update the passed object too: it comes from the sign-in and
+            # would otherwise still show the old state within the same call -
+            # the code could then be used a second time.
             user["totp_backup"] = rest
             return
 
     realm = user.get("auth_realm")
     if realm:
-        # 2a) Verzeichnis-Konto: Passwort dort pruefen lassen.
+        # 2a) Directory account: have the password checked there.
         if password:
             try:
                 if authenticate_realm(user["username"], password, realm):
                     return
             except Exception:
-                pass          # Verzeichnis nicht erreichbar -> unten Fehler
+                pass          # directory not reachable -> error below
         raise HTTPException(
             400,
-            "Bestätigung fehlgeschlagen. Dieses Konto wird über ein Verzeichnis "
-            "(AD/LDAP/SSO) verwaltet - bitte das Verzeichnis-Passwort eingeben "
-            "oder stattdessen einen aktuellen Code aus der Authenticator-App.")
+            "Confirmation failed. This account is managed via a directory "
+            "(AD/LDAP/SSO) - please enter the directory password or instead a "
+            "current code from the authenticator app.")
 
-    # 2b) Lokales Konto
+    # 2b) Local account
     if password and user.get("password_hash") and verify_password(password, user["password_hash"]):
         return
     raise HTTPException(400, "Passwort oder Code stimmt nicht.")
@@ -550,10 +547,10 @@ def totp_activate(body: TotpCodeBody, user: dict = Depends(get_current_user)):
     from app import totp as _totp
     secret = user.get("totp_secret")
     if not secret:
-        raise HTTPException(400, "Bitte zuerst die Einrichtung starten.")
+        raise HTTPException(400, "Please start the setup first.")
     if not _totp.verify(secret, body.code, user_key=str(user["id"])):
-        raise HTTPException(400, "Der Code stimmt nicht. Uhrzeit des Geräts prüfen "
-                                 "und den aktuellen Code aus der App eingeben.")
+        raise HTTPException(400, "The code is wrong. Check the device time "
+                                 "and enter the current code from the app.")
     codes = _totp.new_backup_codes()
     db.set_user_totp(user["id"], enabled=True, backup=_totp.hash_backup_codes(codes))
     db.add_audit_entry(user["username"], "2fa.enabled")

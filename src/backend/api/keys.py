@@ -186,7 +186,7 @@ def accounts() -> list[dict]:
         iv = rotation_interval()
         nxt = None
         if k:
-            nxt = "beim nächsten Login" if rotation_due(k) else (k["created"] + iv if iv else None)
+            nxt = "at next login" if rotation_due(k) else (k["created"] + iv if iv else None)
         out.append({"id": u["id"], "username": u["username"], "display_name": u.get("display_name") or "",
                     "key_active": bool(k), "key_created": k["created"] if k else None,
                     "key_last_used": k["last_used"] if k else None, "key_last_ip": k["last_ip"] if k else "",

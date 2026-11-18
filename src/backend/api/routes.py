@@ -78,7 +78,7 @@ def api_user(request: Request) -> dict:
 def status(request: Request):
     mode = store.setting("mode") or "secure"
     request.state.api_mode = mode
-    how = {"open": "Keine Anmeldung nötig - Aufrufe laufen als der eingestellte API-Benutzer.",
+    how = {"open": "No sign-in required - calls run as the configured API user.",
            "user": "POST /api/v1/auth/login, danach Cookie rmm_api_session oder Header X-API-Session mitschicken.",
            "secure": "POST /api/v1/auth/login, danach bei jeder Anfrage 'Authorization: Bearer <token>' mitschicken."}
     return {"api": "BYTERA RMM REST-API", "version": API_VERSION, "mode": mode, "how_to": how.get(mode),
@@ -100,7 +100,7 @@ async def login(request: Request):
         raise HTTPException(400, "JSON erwartet: {username, password}")
     request.state.api_login_name = str(body.get("username") or "")[:80]
     if mode == "open":
-        return {"mode": "open", "detail": "Im Modus „ohne Benutzer“ ist keine Anmeldung nötig."}
+        return {"mode": "open", "detail": "In the \"without user\" mode no sign-in is required."}
     candidate = db.get_user_by_username(str(body.get("username") or "").strip())
     key_info: dict = {}
     if keys.is_api_account(candidate) or body.get("api_key"):
@@ -110,12 +110,12 @@ async def login(request: Request):
         if keys.may_rotate(user) and keys.rotation_due(krow):
             new_key, old_until = keys.rotate_on_login(user)
             key_info = {"api_key_rotated": True, "new_api_key": new_key, "old_api_key_valid_until": old_until,
-                        "key_notice": "Der API-Schlüssel wurde rotiert. Bitte den neuen Schlüssel (new_api_key) speichern – "
+                        "key_notice": "The API key was rotated. Please save the new key (new_api_key) - "
                                       "der bisherige gilt nur noch bis old_api_key_valid_until."}
-            db.add_audit_entry(user["username"], "api.key_auto_rotated", details=f"alter Schlüssel bis {old_until}")
+            db.add_audit_entry(user["username"], "api.key_auto_rotated", details=f"old key until {old_until}")
         elif krow.get("valid_until"):
             key_info = {"api_key_replaced": True, "old_api_key_valid_until": krow["valid_until"],
-                        "key_notice": "Dieser API-Schlüssel wurde bereits ersetzt und läuft bald ab – bitte den neuen Schlüssel verwenden."}
+                        "key_notice": "This API key was already replaced and expires soon - please use the new key."}
     else:
         inner = {k: body.get(k) for k in ("username", "password", "realm", "code") if body.get(k) is not None}
         inner.setdefault("realm", "local")
@@ -170,16 +170,16 @@ async def me(request: Request, user: dict = Depends(api_user)):
 SHORTCUTS: list[tuple[str, tuple[str, ...], str, str]] = [
     # (v1-Pfad, Methoden, Dashboard-Pfad, Beschreibung)
     ("/users", ("GET", "POST"), "/api/users", "Benutzer auflisten / anlegen"),
-    ("/users/{user_id}", ("DELETE",), "/api/users/{user_id}", "Benutzer löschen"),
+    ("/users/{user_id}", ("DELETE",), "/api/users/{user_id}", "Delete user"),
     ("/users/{user_id}/groups", ("GET", "PUT"), "/api/admin/users/{user_id}/groups", "Gruppen eines Benutzers"),
     ("/groups", ("GET", "POST"), "/api/admin/groups", "Gruppen auflisten / anlegen"),
-    ("/groups/{group_id}", ("PUT", "DELETE"), "/api/admin/groups/{group_id}", "Gruppe ändern / löschen"),
+    ("/groups/{group_id}", ("PUT", "DELETE"), "/api/admin/groups/{group_id}", "Change / delete group"),
     ("/permissions", ("GET",), "/api/admin/permission-catalog", "Rechte-Katalog"),
     ("/permissions/{subject_type}/{subject_id}", ("GET", "PUT"), "/api/admin/grants/{subject_type}/{subject_id}",
      "Rechte (Grants) eines Benutzers/einer Gruppe lesen / setzen"),
     ("/clients", ("GET",), "/api/clients", "Clients (Agenten) auflisten"),
-    ("/clients/{client_id}", ("GET", "PUT", "DELETE"), "/api/clients/{client_id}", "Client lesen / ändern / löschen"),
-    ("/clients/{client_id}/exec", ("POST",), "/api/clients/{client_id}/exec", "Befehl auf dem Client ausführen"),
+    ("/clients/{client_id}", ("GET", "PUT", "DELETE"), "/api/clients/{client_id}", "Read / change / delete client"),
+    ("/clients/{client_id}/exec", ("POST",), "/api/clients/{client_id}/exec", "Run command on the client"),
     ("/clients/{client_id}/processes", ("GET",), "/api/clients/{client_id}/processes", "Prozesse"),
     ("/clients/{client_id}/processes/kill", ("POST",), "/api/clients/{client_id}/processes/kill", "Prozess beenden"),
     ("/clients/{client_id}/files", ("GET",), "/api/clients/{client_id}/fs", "Dateien auflisten (?path=)"),
@@ -207,7 +207,7 @@ SHORTCUTS: list[tuple[str, tuple[str, ...], str, str]] = [
      "Node-Modul bereitstellen / entfernen"),
     ("/audit", ("GET",), "/api/audit", "Audit-Protokoll"),
     ("/system/update", ("GET",), "/api/admin/update/info", "Server-Update: Stand"),
-    ("/system/update", ("POST",), "/api/admin/update/run", "Server-Update ausführen"),
+    ("/system/update", ("POST",), "/api/admin/update/run", "Run server update"),
     ("/system/restart", ("POST",), "/api/admin/restart", "Backend neu starten"),
 ]
 
@@ -291,7 +291,7 @@ def rotate_all_keys(user: dict = Depends(get_current_user)):
     (der alte gilt danach noch die Uebergangszeit)."""
     _manage_accounts(user)
     n = keys.force_rotation_all()
-    db.add_audit_entry(user["username"], "api.keys_rotate_all", details=f"{n} Schlüssel fällig gestellt")
+    db.add_audit_entry(user["username"], "api.keys_rotate_all", details=f"{n} keys marked due")
     return {"ok": True, "due": n}
 
 
