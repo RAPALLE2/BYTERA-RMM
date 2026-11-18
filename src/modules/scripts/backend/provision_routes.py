@@ -1,13 +1,13 @@
-# provision_routes.py (Modul "scripts", Teilfunktion "provision") - Clients einrichten
+# provision_routes.py (module "scripts", feature "provision") - provision clients
 # ------------------------------------------------------------------------------------
-#   GET    /api/scripts/provision/catalog           Optionen fuer die Oberflaeche + Standardwerte
-#   GET    /api/scripts/provision/presets           alle Presets
-#   POST   /api/scripts/provision/presets           Preset anlegen   (create_scripts)
-#   PUT    /api/scripts/provision/presets/{id}      Preset aendern   (create_scripts)
-#   DELETE /api/scripts/provision/presets/{id}      Preset loeschen  (create_scripts)
-#   POST   /api/scripts/provision/render            Skript-Vorschau  {os, config}
-#   GET    /api/scripts/provision/presets/{id}/file Skript herunterladen (zum manuellen Ausfuehren)
-#   POST   /api/scripts/provision/run               ausrollen (Backend-Job; pro Client c_terminal)
+#   GET    /api/scripts/provision/catalog           options for the UI + default values
+#   GET    /api/scripts/provision/presets           all presets
+#   POST   /api/scripts/provision/presets           create a preset  (create_scripts)
+#   PUT    /api/scripts/provision/presets/{id}      edit a preset    (create_scripts)
+#   DELETE /api/scripts/provision/presets/{id}      delete a preset  (create_scripts)
+#   POST   /api/scripts/provision/render            script preview   {os, config}
+#   GET    /api/scripts/provision/presets/{id}/file download the script (to run manually)
+#   POST   /api/scripts/provision/run               roll out (backend job; c_terminal per client)
 from __future__ import annotations
 
 import asyncio
@@ -94,7 +94,7 @@ def download(pid: str, user: dict = Depends(get_current_user)):
     require_perm(user, "use_scripts")
     p = pv.get_preset(pid)
     if not p:
-        raise HTTPException(404, "Preset nicht gefunden")
+        raise HTTPException(404, "Preset not found")
     script = pv.render(p["os"], p["config"])
     win = p["os"] == "windows"
     data = (b"\xef\xbb\xbf" + script.encode("utf-8")) if win else script.encode("utf-8")
@@ -108,7 +108,7 @@ class RunBody(BaseModel):
     client_ids: list[str]
     preset_windows: str | None = None      # Preset fuer Windows-Clients
     preset_linux: str | None = None        # Preset fuer Linux-Clients
-    queue_offline: bool = True             # Offline-Clients in die Warteschlange
+    queue_offline: bool = True             # queue offline clients
 
 
 @router.post("/run")
@@ -117,10 +117,10 @@ async def run(body: RunBody, background: bool = False, user: dict = Depends(get_
     presets = {"windows": pv.get_preset(body.preset_windows) if body.preset_windows else None,
                "linux": pv.get_preset(body.preset_linux) if body.preset_linux else None}
     if not presets["windows"] and not presets["linux"]:
-        raise HTTPException(400, "Kein Preset gewählt")
+        raise HTTPException(400, "No preset selected")
     for k, p in presets.items():
         if p and p["os"] != k:
-            raise HTTPException(400, f"Preset „{p['name']}“ ist nicht für {k}")
+            raise HTTPException(400, f"Preset '{p['name']}' is not for {k}")
     from app.sockets import state
     targets, skipped, queued = [], [], []
     for cid in dict.fromkeys(body.client_ids):
@@ -128,12 +128,12 @@ async def run(body: RunBody, background: bool = False, user: dict = Depends(get_
         if not c:
             continue
         if not user_has_permission(user, "c_terminal", cid):
-            skipped.append(f"{c.get('hostname') or cid}: keine Berechtigung")
+            skipped.append(f"{c.get('hostname') or cid}: no permission")
             continue
         os_ = pv.client_os(c)
         p = presets[os_]
         if not p:
-            skipped.append(f"{c.get('hostname')}: kein {os_}-Preset gewählt")
+            skipped.append(f"{c.get('hostname')}: no {os_} preset selected")
             continue
         if not state.is_online(cid):
             if body.queue_offline:
@@ -147,9 +147,9 @@ async def run(body: RunBody, background: bool = False, user: dict = Depends(get_
     if not targets:
         msg = []
         if queued:
-            msg.append(f"In Warteschlange (offline): {', '.join(queued)}")
+            msg.append(f"Queued (offline): {', '.join(queued)}")
         if skipped:
-            msg.append("Übersprungen: " + "; ".join(skipped))
+            msg.append("Skipped: " + "; ".join(skipped))
         if queued:
             return {"result": {"queued": queued, "skipped": skipped, "results": {}}, "message": " · ".join(msg)}
         raise HTTPException(400, " · ".join(msg) or "Keine passenden Clients")
@@ -161,15 +161,15 @@ async def run(body: RunBody, background: bool = False, user: dict = Depends(get_
         stat = {"done": 0, "ok": 0, "failed": 0}
         steps: dict = {}
         for q in queued:
-            job.log(f"{q}: offline – in die Warteschlange gestellt")
+            job.log(f"{q}: offline - queued")
         for s in skipped:
-            job.log(f"übersprungen: {s}")
+            job.log(f"skipped: {s}")
         sem = asyncio.Semaphore(20)
 
         def refresh():
             fr = [steps.get(cid, 0.0) for cid, _, _ in targets]
             job.update(pct=sum(fr) / max(1, total) * 100,
-                       detail=f"{stat['done']}/{total} fertig · {stat['ok']} ok · {stat['failed']} Fehler", **stat)
+                       detail=f"{stat['done']}/{total} done · {stat['ok']} ok · {stat['failed']} failed", **stat)
 
         async def one(cid, os_, p):
             host = _host(cid)
@@ -186,14 +186,14 @@ async def run(body: RunBody, background: bool = False, user: dict = Depends(get_
             steps[cid] = 1.0
             if res.get("ok"):
                 stat["ok"] += 1
-                job.log(f"{host}: ✓ fertig ({res.get('errors', 0)} Warnungen){' – startet neu' if res.get('reboot') else ''}")
+                job.log(f"{host}: \u2713 done ({res.get('errors', 0)} warnings){' - rebooting' if res.get('reboot') else ''}")
             else:
                 stat["failed"] += 1
                 job.log(f"{host}: ✗ {res.get('error')}")
             refresh()
             return cid, res
 
-        job.update(phase="provision", pct=0, detail=f"0/{total} fertig", total=total, **stat)
+        job.update(phase="provision", pct=0, detail=f"0/{total} done", total=total, **stat)
         results = dict(await asyncio.gather(*(one(*t) for t in targets)))
         return {"results": results, "queued": queued, "skipped": skipped}
 

@@ -1,19 +1,19 @@
 """
-provision.py (Modul "scripts", Teilfunktion "provision") - Clients einrichten.
+provision.py (module "scripts", feature "provision") - provision clients.
 
-Eine Art "unattended.xml als externes Skript": In der Oberflaeche stellt man
-ein, was passieren soll (Debloat, Effizienz, Standard-Apps, Updates, eigene
-Befehle ...), speichert das als PRESET und rollt es auf beliebig viele Clients
-aus. Erzeugt wird daraus ein eigenstaendiges Skript:
+A kind of "unattended.xml as an external script": in the UI you configure what
+should happen (debloat, efficiency, standard apps, updates, custom commands ...),
+save it as a PRESET and roll it out to any number of clients. From that a
+self-contained script is generated:
 
-  Windows: PowerShell (provision_win.ps1 + eingebettete JSON-Konfiguration)
-  Linux:   Bash       (provision_linux.sh + Variablenkopf)
+  Windows: PowerShell (provision_win.ps1 + embedded JSON configuration)
+  Linux:   Bash       (provision_linux.sh + variable header)
 
-Ausfuehrung OHNE Agent-Aenderung: Das Skript wird per normalem exec auf den
-Client geschrieben und ENTKOPPELT gestartet (Windows: geplante Aufgabe als
-SYSTEM, Linux: systemd-run bzw. setsid). Danach fragt das Backend alle paar
-Sekunden status.json + neue Log-Zeilen ab. So sind auch Laeufe von mehreren
-Stunden moeglich, und ein Agent-Neustart (z.B. durch Updates) bricht nichts ab.
+Execution WITHOUT an agent change: the script is written to the client via a
+normal exec and started DETACHED (Windows: scheduled task as SYSTEM, Linux:
+systemd-run or setsid). The backend then polls status.json + new log lines every
+few seconds. This allows runs of several hours, and an agent restart (e.g. from
+updates) does not abort anything.
 """
 
 from __future__ import annotations
@@ -40,23 +40,23 @@ LIN_DIR = "/var/lib/bytera-provision"
 TASK = "BYTERA-Provision"
 
 # ======================================================================
-# KATALOG - Grundlage fuer die Oberflaeche (alles hier, nichts doppelt im JS)
+# CATALOG - basis for the UI (everything here, nothing duplicated in the JS)
 # ======================================================================
-WIN_APPX = [  # (Paketname, Anzeige, standardmaessig entfernen)
+WIN_APPX = [  # (package name, label, remove by default)
     ("Microsoft.BingNews", "Microsoft News", True),
-    ("Microsoft.BingWeather", "Wetter", True),
+    ("Microsoft.BingWeather", "Weather", True),
     ("Clipchamp.Clipchamp", "Clipchamp", True),
-    ("Microsoft.GetHelp", "Hilfe anfordern", True),
-    ("Microsoft.Getstarted", "Tipps", True),
+    ("Microsoft.GetHelp", "Get Help", True),
+    ("Microsoft.Getstarted", "Tips", True),
     ("Microsoft.MicrosoftSolitaireCollection", "Solitaire Collection", True),
-    ("Microsoft.People", "Kontakte", True),
+    ("Microsoft.People", "People", True),
     ("Microsoft.PowerAutomateDesktop", "Power Automate", True),
     ("Microsoft.Todos", "Microsoft To Do", True),
     ("Microsoft.WindowsFeedbackHub", "Feedback-Hub", True),
-    ("Microsoft.WindowsMaps", "Karten", True),
-    ("Microsoft.ZuneMusic", "Medienwiedergabe / Groove", False),
-    ("Microsoft.ZuneVideo", "Filme & TV", True),
-    ("Microsoft.YourPhone", "Smartphone-Link", True),
+    ("Microsoft.WindowsMaps", "Maps", True),
+    ("Microsoft.ZuneMusic", "Media Player / Groove", False),
+    ("Microsoft.ZuneVideo", "Movies & TV", True),
+    ("Microsoft.YourPhone", "Phone Link", True),
     ("Microsoft.MicrosoftOfficeHub", "Office-Hub / Microsoft 365", True),
     ("Microsoft.OutlookForWindows", "Outlook (neu)", False),
     ("MSTeams", "Teams (privat)", True),
@@ -66,152 +66,152 @@ WIN_APPX = [  # (Paketname, Anzeige, standardmaessig entfernen)
     ("Microsoft.XboxGamingOverlay", "Xbox Game Bar", True),
     ("Microsoft.XboxApp", "Xbox Console Companion", True),
     ("Microsoft.Xbox.TCUI", "Xbox TCUI", True),
-    ("Microsoft.XboxSpeechToTextOverlay", "Xbox Sprachüberlagerung", True),
+    ("Microsoft.XboxSpeechToTextOverlay", "Xbox Speech-to-Text Overlay", True),
     ("Microsoft.Windows.DevHome", "Dev Home", True),
     ("MicrosoftCorporationII.MicrosoftFamily", "Family Safety", True),
-    ("MicrosoftCorporationII.QuickAssist", "Remotehilfe (Quick Assist)", False),
+    ("MicrosoftCorporationII.QuickAssist", "Remote help (Quick Assist)", False),
     ("Microsoft.SkypeApp", "Skype", True),
-    ("Microsoft.MixedReality.Portal", "Mixed Reality-Portal", True),
+    ("Microsoft.MixedReality.Portal", "Mixed Reality Portal", True),
     ("Microsoft.Microsoft3DViewer", "3D-Viewer", True),
     ("Microsoft.MSPaint", "Paint 3D", True),
     ("Microsoft.Office.OneNote", "OneNote (App)", False),
     ("Microsoft.Wallet", "Wallet", True),
-    ("Microsoft.windowscommunicationsapps", "Mail & Kalender (alt)", False),
-    ("Microsoft.WindowsAlarms", "Uhr / Wecker", False),
-    ("Microsoft.WindowsSoundRecorder", "Sprachrekorder", False),
-    ("Microsoft.MicrosoftStickyNotes", "Kurznotizen", False),
+    ("Microsoft.windowscommunicationsapps", "Mail & Calendar (old)", False),
+    ("Microsoft.WindowsAlarms", "Clock / Alarms", False),
+    ("Microsoft.WindowsSoundRecorder", "Sound Recorder", False),
+    ("Microsoft.MicrosoftStickyNotes", "Sticky Notes", False),
 ]
 
-WIN_TWEAKS = [  # (id, Anzeige, Standard)
-    ("telemetry", "Telemetrie auf Minimum + Dienst DiagTrack aus", True),
-    ("consumer", "Werbung, App-Vorschläge & automatisch installierte Apps aus", True),
-    ("bing", "Bing-/Websuche im Startmenü aus", True),
-    ("copilot", "Copilot aus", True),
-    ("recall", "Recall / KI-Analyse aus", True),
-    ("widgets", "Widgets (Neuigkeiten & Interessen) aus", True),
-    ("chat", "Chat-Symbol in der Taskleiste aus", True),
-    ("lockscreen_tips", "Tipps & Werbung auf dem Sperrbildschirm aus", True),
-    ("edge_firstrun", "Edge-Ersteinrichtung überspringen", True),
-    ("file_ext", "Dateiendungen anzeigen", True),
-    ("hidden_files", "Versteckte Dateien anzeigen", False),
-    ("taskbar_left", "Taskleiste links ausrichten", False),
-    ("classic_menu", "Klassisches Kontextmenü (Windows 11)", False),
-    ("gamedvr", "Game DVR / Aufnahme im Hintergrund aus", True),
-    ("darkmode", "Dunkles Design", False),
+WIN_TWEAKS = [  # (id, label, default)
+    ("telemetry", "Telemetry to minimum + disable DiagTrack service", True),
+    ("consumer", "Disable ads, app suggestions & auto-installed apps", True),
+    ("bing", "Disable Bing/web search in the Start menu", True),
+    ("copilot", "Disable Copilot", True),
+    ("recall", "Disable Recall / AI analysis", True),
+    ("widgets", "Disable widgets (news & interests)", True),
+    ("chat", "Hide the chat icon in the taskbar", True),
+    ("lockscreen_tips", "Disable tips & ads on the lock screen", True),
+    ("edge_firstrun", "Skip Edge first-run setup", True),
+    ("file_ext", "Show file extensions", True),
+    ("hidden_files", "Show hidden files", False),
+    ("taskbar_left", "Align the taskbar to the left", False),
+    ("classic_menu", "Classic context menu (Windows 11)", False),
+    ("gamedvr", "Disable Game DVR / background recording", True),
+    ("darkmode", "Dark theme", False),
 ]
 
 WIN_EFFICIENCY = [
-    ("fast_startup_off", "Schnellstart aus (sauberer Neustart, weniger Probleme)", True),
-    ("hibernate_off", "Ruhezustand-Datei entfernen (spart Speicherplatz)", False),
-    ("visual_perf", "Visuelle Effekte auf Leistung", False),
-    ("transparency_off", "Transparenz aus", False),
-    ("startup_delay_off", "Autostart-Verzögerung aus", True),
-    ("background_apps_off", "Store-Apps im Hintergrund aus", True),
-    ("cleanup", "Aufräumen: Temp-Dateien + Komponentenspeicher (DISM)", True),
+    ("fast_startup_off", "Disable fast startup (clean reboot, fewer issues)", True),
+    ("hibernate_off", "Remove the hibernation file (saves disk space)", False),
+    ("visual_perf", "Visual effects set to performance", False),
+    ("transparency_off", "Disable transparency", False),
+    ("startup_delay_off", "Disable startup delay", True),
+    ("background_apps_off", "Disable background Store apps", True),
+    ("cleanup", "Clean up: temp files + component store (DISM)", True),
 ]
 
-# Win11Debloat - nur Schalter aus der offiziellen CLI-Doku (Wiki "Command-line Interface")
+# Win11Debloat - only switches from the official CLI docs (wiki "Command-line Interface")
 W11D_PARAMS = [
-    ("RemoveApps", "Standard-App-Auswahl entfernen", True),
-    ("RemoveGamingApps", "Xbox-App & Game Bar entfernen", False),
-    ("RemoveHPApps", "HP-Apps entfernen", False),
-    ("DisableTelemetry", "Telemetrie & Tracking aus", True),
-    ("DisableSuggestions", "Tipps & Vorschläge aus", True),
-    ("DisableLockscreenTips", "Sperrbildschirm-Tipps aus", True),
-    ("DisableBing", "Bing-Suche & Cortana aus", True),
-    ("DisableCopilot", "Copilot aus", True),
-    ("DisableRecall", "Recall aus", True),
-    ("DisableEdgeAds", "Edge-Werbung aus", True),
-    ("DisableSettings365Ads", "Microsoft 365-Werbung in Einstellungen aus", True),
-    ("DisableStartRecommended", "Empfohlen im Startmenü aus", False),
-    ("DisableWidgets", "Widgets aus", True),
-    ("HideChat", "Chat ausblenden", True),
-    ("HideTaskview", "Aktive Anwendungen-Knopf ausblenden", False),
-    ("TaskbarAlignLeft", "Taskleiste links", False),
-    ("RevertContextMenu", "Klassisches Kontextmenü", False),
-    ("ShowKnownFileExt", "Dateiendungen anzeigen", True),
-    ("ShowHiddenFolders", "Versteckte Ordner anzeigen", False),
-    ("ExplorerToThisPC", "Explorer öffnet „Dieser PC“", False),
-    ("DisableDVR", "Xbox Game DVR aus", True),
-    ("DisableFastStartup", "Schnellstart aus", False),
-    ("EnableDarkMode", "Dunkles Design", False),
-    ("DisableAnimations", "Animationen aus", False),
-    ("EnableEndTask", "„Task beenden“ in der Taskleiste", True),
-    ("CreateRestorePoint", "Wiederherstellungspunkt vorher", False),
+    ("RemoveApps", "Remove the default app selection", True),
+    ("RemoveGamingApps", "Remove Xbox app & Game Bar", False),
+    ("RemoveHPApps", "Remove HP apps", False),
+    ("DisableTelemetry", "Disable telemetry & tracking", True),
+    ("DisableSuggestions", "Disable tips & suggestions", True),
+    ("DisableLockscreenTips", "Disable lock-screen tips", True),
+    ("DisableBing", "Disable Bing search & Cortana", True),
+    ("DisableCopilot", "Disable Copilot", True),
+    ("DisableRecall", "Disable Recall", True),
+    ("DisableEdgeAds", "Disable Edge ads", True),
+    ("DisableSettings365Ads", "Disable Microsoft 365 ads in Settings", True),
+    ("DisableStartRecommended", "Disable Recommended in the Start menu", False),
+    ("DisableWidgets", "Disable widgets", True),
+    ("HideChat", "Hide chat", True),
+    ("HideTaskview", "Hide the Task View button", False),
+    ("TaskbarAlignLeft", "Taskbar on the left", False),
+    ("RevertContextMenu", "Classic context menu", False),
+    ("ShowKnownFileExt", "Show file extensions", True),
+    ("ShowHiddenFolders", "Show hidden folders", False),
+    ("ExplorerToThisPC", "Explorer opens 'This PC'", False),
+    ("DisableDVR", "Disable Xbox Game DVR", True),
+    ("DisableFastStartup", "Disable fast startup", False),
+    ("EnableDarkMode", "Dark theme", False),
+    ("DisableAnimations", "Disable animations", False),
+    ("EnableEndTask", "'End task' in the taskbar", True),
+    ("CreateRestorePoint", "Create a restore point first", False),
 ]
 
-# Standard-Apps: winget-ID / Chocolatey-Paket / Ninite-Kürzel ("" = dort nicht verfügbar)
+# Standard apps: winget ID / Chocolatey package / Ninite slug ("" = not available there)
 WIN_APPS = [
     ("chrome", "Google Chrome", "Browser", "Google.Chrome", "googlechrome", "chrome"),
     ("firefox", "Mozilla Firefox", "Browser", "Mozilla.Firefox", "firefox", "firefox"),
-    ("thunderbird", "Thunderbird", "Kommunikation", "Mozilla.Thunderbird", "thunderbird", "thunderbird"),
-    ("zoom", "Zoom", "Kommunikation", "Zoom.Zoom", "zoom", "zoom"),
-    ("teams", "Microsoft Teams (Arbeit)", "Kommunikation", "Microsoft.Teams", "", ""),
-    ("7zip", "7-Zip", "Werkzeuge", "7zip.7zip", "7zip", "7zip"),
-    ("notepadpp", "Notepad++", "Werkzeuge", "Notepad++.Notepad++", "notepadplusplus", "notepadplusplus"),
-    ("everything", "Everything (Suche)", "Werkzeuge", "voidtools.Everything", "everything", "everything"),
-    ("windirstat", "WinDirStat", "Werkzeuge", "WinDirStat.WinDirStat", "windirstat", "windirstat"),
-    ("greenshot", "Greenshot", "Werkzeuge", "Greenshot.Greenshot", "greenshot", "greenshot"),
-    ("powertoys", "PowerToys", "Werkzeuge", "Microsoft.PowerToys", "powertoys", ""),
-    ("keepass", "KeePass", "Werkzeuge", "DominikReichl.KeePass", "keepass", "keepass2"),
-    ("vlc", "VLC media player", "Medien", "VideoLAN.VLC", "vlc", "vlc"),
-    ("gimp", "GIMP", "Medien", "GIMP.GIMP", "gimp", "gimp"),
+    ("thunderbird", "Thunderbird", "Communication", "Mozilla.Thunderbird", "thunderbird", "thunderbird"),
+    ("zoom", "Zoom", "Communication", "Zoom.Zoom", "zoom", "zoom"),
+    ("teams", "Microsoft Teams (Arbeit)", "Communication", "Microsoft.Teams", "", ""),
+    ("7zip", "7-Zip", "Tools", "7zip.7zip", "7zip", "7zip"),
+    ("notepadpp", "Notepad++", "Tools", "Notepad++.Notepad++", "notepadplusplus", "notepadplusplus"),
+    ("everything", "Everything (search)", "Tools", "voidtools.Everything", "everything", "everything"),
+    ("windirstat", "WinDirStat", "Tools", "WinDirStat.WinDirStat", "windirstat", "windirstat"),
+    ("greenshot", "Greenshot", "Tools", "Greenshot.Greenshot", "greenshot", "greenshot"),
+    ("powertoys", "PowerToys", "Tools", "Microsoft.PowerToys", "powertoys", ""),
+    ("keepass", "KeePass", "Tools", "DominikReichl.KeePass", "keepass", "keepass2"),
+    ("vlc", "VLC media player", "Media", "VideoLAN.VLC", "vlc", "vlc"),
+    ("gimp", "GIMP", "Media", "GIMP.GIMP", "gimp", "gimp"),
     ("libreoffice", "LibreOffice", "Office", "TheDocumentFoundation.LibreOffice", "libreoffice-fresh", "libreoffice"),
     ("acrobat", "Adobe Acrobat Reader", "Office", "Adobe.Acrobat.Reader.64-bit", "adobereader", ""),
     ("sumatra", "SumatraPDF", "Office", "SumatraPDF.SumatraPDF", "sumatrapdf", "sumatrapdf"),
     ("foxit", "Foxit PDF Reader", "Office", "Foxit.FoxitReader", "foxitreader", "foxit"),
-    ("vscode", "Visual Studio Code", "Entwicklung", "Microsoft.VisualStudioCode", "vscode", "vscode"),
-    ("git", "Git", "Entwicklung", "Git.Git", "git", ""),
+    ("vscode", "Visual Studio Code", "Development", "Microsoft.VisualStudioCode", "vscode", "vscode"),
+    ("git", "Git", "Development", "Git.Git", "git", ""),
     ("putty", "PuTTY", "Admin", "PuTTY.PuTTY", "putty", "putty"),
     ("winscp", "WinSCP", "Admin", "WinSCP.WinSCP", "winscp", "winscp"),
     ("filezilla", "FileZilla", "Admin", "TimKosse.FileZilla.Client", "filezilla", "filezilla"),
     ("teamviewer", "TeamViewer", "Admin", "TeamViewer.TeamViewer", "teamviewer", "teamviewer15"),
     ("anydesk", "AnyDesk", "Admin", "AnyDesk.AnyDesk", "anydesk", ""),
-    ("vcredist", "Visual C++ Runtime 2015+", "Laufzeiten", "Microsoft.VCRedist.2015+.x64", "vcredist140", ""),
-    ("dotnet8", ".NET 8 Desktop Runtime", "Laufzeiten", "Microsoft.DotNet.DesktopRuntime.8", "dotnet-8.0-desktopruntime", ""),
-    ("java", "Java 21 (Temurin JRE)", "Laufzeiten", "EclipseAdoptium.Temurin.21.JRE", "temurin21jre", ""),
+    ("vcredist", "Visual C++ Runtime 2015+", "Runtimes", "Microsoft.VCRedist.2015+.x64", "vcredist140", ""),
+    ("dotnet8", ".NET 8 Desktop Runtime", "Runtimes", "Microsoft.DotNet.DesktopRuntime.8", "dotnet-8.0-desktopruntime", ""),
+    ("java", "Java 21 (Temurin JRE)", "Runtimes", "EclipseAdoptium.Temurin.21.JRE", "temurin21jre", ""),
 ]
 
-# Linux-Pakete: (id, Anzeige, Gruppe, Standard, {Paketfamilie: Name})
+# Linux packages: (id, label, group, default, {package family: name})
 _S = lambda n: {"apt": n, "dnf": n, "zypper": n, "pacman": n, "apk": n}
 LIN_PKGS = [
-    ("curl", "curl", "Basis", True, _S("curl")),
-    ("wget", "wget", "Basis", True, _S("wget")),
-    ("ca", "CA-Zertifikate", "Basis", True, _S("ca-certificates")),
-    ("gnupg", "GnuPG", "Basis", True, {"apt": "gnupg", "dnf": "gnupg2", "zypper": "gpg2", "pacman": "gnupg", "apk": "gnupg"}),
-    ("unzip", "zip / unzip", "Basis", True, {"apt": "zip unzip", "dnf": "zip unzip", "zypper": "zip unzip", "pacman": "zip unzip", "apk": "zip unzip"}),
-    ("sudo", "sudo", "Basis", True, _S("sudo")),
+    ("curl", "curl", "Base", True, _S("curl")),
+    ("wget", "wget", "Base", True, _S("wget")),
+    ("ca", "CA certificates", "Base", True, _S("ca-certificates")),
+    ("gnupg", "GnuPG", "Base", True, {"apt": "gnupg", "dnf": "gnupg2", "zypper": "gpg2", "pacman": "gnupg", "apk": "gnupg"}),
+    ("unzip", "zip / unzip", "Base", True, {"apt": "zip unzip", "dnf": "zip unzip", "zypper": "zip unzip", "pacman": "zip unzip", "apk": "zip unzip"}),
+    ("sudo", "sudo", "Base", True, _S("sudo")),
     ("nano", "nano", "Editor", True, _S("nano")),
     ("vim", "vim", "Editor", False, {"apt": "vim", "dnf": "vim-enhanced", "zypper": "vim", "pacman": "vim", "apk": "vim"}),
-    ("htop", "htop", "Diagnose", True, _S("htop")),
-    ("btop", "btop", "Diagnose", False, _S("btop")),
-    ("ncdu", "ncdu", "Diagnose", True, _S("ncdu")),
-    ("tree", "tree", "Diagnose", False, _S("tree")),
-    ("jq", "jq", "Diagnose", True, _S("jq")),
-    ("lsof", "lsof", "Diagnose", False, _S("lsof")),
-    ("net", "net-tools (ifconfig …)", "Netzwerk", True, {"apt": "net-tools", "dnf": "net-tools", "zypper": "net-tools", "pacman": "net-tools", "apk": "net-tools"}),
-    ("dns", "DNS-Werkzeuge (dig)", "Netzwerk", True, {"apt": "dnsutils", "dnf": "bind-utils", "zypper": "bind-utils", "pacman": "bind", "apk": "bind-tools"}),
-    ("iputils", "ping / traceroute", "Netzwerk", True, {"apt": "iputils-ping traceroute", "dnf": "iputils traceroute", "zypper": "iputils traceroute", "pacman": "iputils traceroute", "apk": "iputils"}),
-    ("rsync", "rsync", "Netzwerk", True, _S("rsync")),
-    ("ssh", "OpenSSH-Server", "Dienste", False, {"apt": "openssh-server", "dnf": "openssh-server", "zypper": "openssh-server", "pacman": "openssh", "apk": "openssh"}),
-    ("chrony", "chrony (Zeitsync)", "Dienste", False, _S("chrony")),
-    ("git", "git", "Entwicklung", True, _S("git")),
-    ("tmux", "tmux", "Entwicklung", False, _S("tmux")),
-    ("build", "Compiler (build-essential)", "Entwicklung", False, {"apt": "build-essential", "dnf": "gcc gcc-c++ make", "zypper": "gcc gcc-c++ make", "pacman": "base-devel", "apk": "build-base"}),
-    ("python", "Python 3 + pip", "Entwicklung", False, {"apt": "python3 python3-pip python3-venv", "dnf": "python3 python3-pip", "zypper": "python3 python3-pip", "pacman": "python python-pip", "apk": "python3 py3-pip"}),
+    ("htop", "htop", "Diagnostics", True, _S("htop")),
+    ("btop", "btop", "Diagnostics", False, _S("btop")),
+    ("ncdu", "ncdu", "Diagnostics", True, _S("ncdu")),
+    ("tree", "tree", "Diagnostics", False, _S("tree")),
+    ("jq", "jq", "Diagnostics", True, _S("jq")),
+    ("lsof", "lsof", "Diagnostics", False, _S("lsof")),
+    ("net", "net-tools (ifconfig …)", "Network", True, {"apt": "net-tools", "dnf": "net-tools", "zypper": "net-tools", "pacman": "net-tools", "apk": "net-tools"}),
+    ("dns", "DNS tools (dig)", "Network", True, {"apt": "dnsutils", "dnf": "bind-utils", "zypper": "bind-utils", "pacman": "bind", "apk": "bind-tools"}),
+    ("iputils", "ping / traceroute", "Network", True, {"apt": "iputils-ping traceroute", "dnf": "iputils traceroute", "zypper": "iputils traceroute", "pacman": "iputils traceroute", "apk": "iputils"}),
+    ("rsync", "rsync", "Network", True, _S("rsync")),
+    ("ssh", "OpenSSH server", "Services", False, {"apt": "openssh-server", "dnf": "openssh-server", "zypper": "openssh-server", "pacman": "openssh", "apk": "openssh"}),
+    ("chrony", "chrony (time sync)", "Services", False, _S("chrony")),
+    ("git", "git", "Development", True, _S("git")),
+    ("tmux", "tmux", "Development", False, _S("tmux")),
+    ("build", "Compiler (build-essential)", "Development", False, {"apt": "build-essential", "dnf": "gcc gcc-c++ make", "zypper": "gcc gcc-c++ make", "pacman": "base-devel", "apk": "build-base"}),
+    ("python", "Python 3 + pip", "Development", False, {"apt": "python3 python3-pip python3-venv", "dnf": "python3 python3-pip", "zypper": "python3 python3-pip", "pacman": "python python-pip", "apk": "python3 py3-pip"}),
 ]
 
 LIN_OPTIONS = [
-    ("upgrade", "Paketlisten aktualisieren + alle Pakete aktualisieren", True),
-    ("full_upgrade", "Vollständiges Upgrade (dist-upgrade, inkl. neuer Abhängigkeiten)", True),
-    ("autoremove", "Nicht mehr benötigte Pakete entfernen + Cache leeren", True),
-    ("guest_agent", "Gast-Agent installieren, wenn VM erkannt (qemu-guest-agent / open-vm-tools)", True),
-    ("auto_updates", "Automatische Sicherheitsupdates einschalten", True),
-    ("ntp", "Zeitsynchronisation (NTP) einschalten", True),
-    ("ufw", "Firewall (ufw/firewalld) an, SSH erlaubt", False),
-    ("fail2ban", "fail2ban installieren & starten", False),
-    ("ssh_harden", "SSH: root nur mit Schlüssel, keine leeren Passwörter", False),
-    ("docker", "Docker (offizielles Installationsskript)", False),
+    ("upgrade", "Update package lists + upgrade all packages", True),
+    ("full_upgrade", "Full upgrade (dist-upgrade, incl. new dependencies)", True),
+    ("autoremove", "Remove no-longer-needed packages + clear cache", True),
+    ("guest_agent", "Install guest agent if a VM is detected (qemu-guest-agent / open-vm-tools)", True),
+    ("auto_updates", "Enable automatic security updates", True),
+    ("ntp", "Enable time synchronization (NTP)", True),
+    ("ufw", "Firewall (ufw/firewalld) on, SSH allowed", False),
+    ("fail2ban", "Install & start fail2ban", False),
+    ("ssh_harden", "SSH: root via key only, no empty passwords", False),
+    ("docker", "Docker (official install script)", False),
 ]
 
 
@@ -262,7 +262,7 @@ def defaults(os_: str) -> dict:
 
 
 # ======================================================================
-# Bereinigen / Pruefen der Konfiguration
+# Normalize / validate the configuration
 # ======================================================================
 _WORD = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+\-]*$")
 _PARAM = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
@@ -285,7 +285,7 @@ def _words(v, what) -> list:
         if not x:
             continue
         if not _WORD.match(x) or len(x) > 120:
-            raise ProvisionError(f"{what}: ungültiger Eintrag „{x}“")
+            raise ProvisionError(f"{what}: invalid entry '{x}'")
         out.append(x)
     return list(dict.fromkeys(out))
 
@@ -312,7 +312,7 @@ def normalize(os_: str, cfg: dict) -> dict:
         extra = _words(c["w11d"]["extra"], "Win11Debloat-Schalter")
         bad = [x for x in extra if not _PARAM.match(x.lstrip("-"))]
         if bad:
-            raise ProvisionError(f"Win11Debloat: ungültiger Schalter {bad[0]}")
+            raise ProvisionError(f"Win11Debloat: invalid switch {bad[0]}")
         c["w11d"]["extra"] = [x.lstrip("-") for x in extra]
         if c["w11d"]["target"] not in ("default", "default_and_users", "users"):
             c["w11d"]["target"] = "default_and_users"
@@ -320,7 +320,7 @@ def normalize(os_: str, cfg: dict) -> dict:
             try:
                 json.loads(c["optimizer"]["template"] or "{}")
             except json.JSONDecodeError as exc:
-                raise ProvisionError(f"Optimizer-Vorlage ist kein gültiges JSON: {exc}")
+                raise ProvisionError(f"Optimizer template is not valid JSON: {exc}")
         if c["apps"]["engine"] not in ("winget", "choco", "ninite"):
             c["apps"]["engine"] = "winget"
         c["apps"]["ids"] = [a for a in c["apps"]["ids"] if a in {x[0] for x in WIN_APPS}]
@@ -329,32 +329,32 @@ def normalize(os_: str, cfg: dict) -> dict:
         c["features"]["disable"] = _words(c["features"]["disable"], "Windows-Features")
         name = str(c["general"].get("computer_name") or "").strip()
         if name and not re.match(r"^[A-Za-z0-9\-{}]{1,40}$", name):
-            raise ProvisionError("Computername: nur Buchstaben, Ziffern, - und {SERIAL}")
+            raise ProvisionError("Computer name: letters, digits, - and {SERIAL} only")
         c["general"]["computer_name"] = name
         tz = str(c["general"].get("timezone") or "")
         if tz and not re.match(r"^[A-Za-z0-9 .+\-()]{1,60}$", tz):
-            raise ProvisionError("Ungültige Zeitzone")
+            raise ProvisionError("Invalid time zone")
     else:
         c["options"] = [o for o in c["options"] if o in {a for a, *_ in LIN_OPTIONS}]
         c["packages"] = [p for p in c["packages"] if p in {a for a, *_ in LIN_PKGS}]
         c["packages_custom"] = _words(c["packages_custom"], "Eigene Pakete")
         hn = str(c["general"].get("hostname") or "").strip()
         if hn and not re.match(r"^[A-Za-z0-9\-{}]{1,63}$", hn):
-            raise ProvisionError("Hostname: nur Buchstaben, Ziffern, - und {SERIAL}")
+            raise ProvisionError("Hostname: letters, digits, - and {SERIAL} only")
         c["general"]["hostname"] = hn
         tz = str(c["general"].get("timezone") or "")
         if tz and not re.match(r"^[A-Za-z0-9_+\-/]{1,60}$", tz):
-            raise ProvisionError("Ungültige Zeitzone (z.B. Europe/Berlin)")
+            raise ProvisionError("Invalid time zone (e.g. Europe/Berlin)")
     for k in ("pre", "post"):
         c["custom"][k] = str(c["custom"].get(k) or "")[:50000]
     return c
 
 
 # ======================================================================
-# Skript erzeugen
+# Generate the script
 # ======================================================================
 def _win_steps(c) -> int:
-    n = 3  # Vorbereitung, Abschluss, Aufraeumen der Hives
+    n = 3  # preparation, finalize, clean up the hives
     n += bool(c["general"]["restore_point"]) + bool(c["general"]["computer_name"] or c["general"]["timezone"])
     n += bool(c["custom"]["pre"].strip()) + bool(c["debloat"]["appx"] or c["debloat"]["appx_custom"])
     n += bool(c["debloat"]["onedrive"]) + bool(c["debloat"]["tweaks"]) + bool(c["w11d"]["enabled"])
@@ -372,7 +372,7 @@ def render(os_: str, cfg: dict) -> str:
         c["_steps"] = _win_steps(c)
         c["_generated"] = time.strftime("%Y-%m-%d %H:%M:%S")
         tpl = (HERE / "provision_win.ps1").read_text(encoding="utf-8")
-        blob = json.dumps(c, ensure_ascii=True)           # eine Zeile -> sicher im Here-String
+        blob = json.dumps(c, ensure_ascii=True)           # one line -> safe inside the here-string
         return tpl.replace("__BYTERA_CONFIG__", blob)
     # ---------- Linux: Variablenkopf
     fam = {}
@@ -438,7 +438,7 @@ def save_preset(pid: str | None, name: str, os_: str, description: str, config: 
     with _lock:
         d = _load()
         if pid and pid not in d["presets"]:
-            raise ProvisionError("Preset nicht gefunden")
+            raise ProvisionError("Preset not found")
         pid = pid or uuid.uuid4().hex[:12]
         old = d["presets"].get(pid, {})
         d["presets"][pid] = {"id": pid, "name": name[:100], "os": os_, "description": (description or "")[:500],
@@ -457,14 +457,14 @@ def delete_preset(pid: str) -> None:
 
 
 # ======================================================================
-# Ausfuehrung auf einem Client
+# Execution on a client
 # ======================================================================
 def client_os(client: dict) -> str:
     return "windows" if "win" in str(client.get("platform") or "").lower() else "linux"
 
 
 def _launch_cmd(os_: str, script: str) -> tuple[str, str]:
-    """(Befehl, Shell) - schreibt das Skript auf den Client und startet es entkoppelt."""
+    """(command, shell) - writes the script to the client and starts it detached."""
     if os_ == "windows":
         b64 = base64.b64encode(b"\xef\xbb\xbf" + script.encode("utf-8")).decode()   # BOM -> PS 5.1 liest UTF-8
         lines = [f'>>"%D%\\run.b64" echo {b64[i:i + 4000]}' for i in range(0, len(b64), 4000)]
@@ -530,7 +530,7 @@ def _parse_poll(out: str) -> tuple[dict | None, list]:
 
 async def run_on_client(client_id: str, os_: str, script: str, log, *, progress=None, cancelled=None,
                         timeout: float = 8 * 3600, poll: float = 8.0) -> dict:
-    """Startet das Skript und verfolgt es bis zum Ende. log(str) bekommt jede Zeile."""
+    """Starts the script and follows it to the end. log(str) receives each line."""
     from app.sockets import request_exec
 
     cmd, shell = _launch_cmd(os_, script)
@@ -541,7 +541,7 @@ async def run_on_client(client_id: str, os_: str, script: str, log, *, progress=
     out = (r.get("stdout") or "") + (r.get("stderr") or "")
     if "STARTED" not in out:
         return {"ok": False, "error": f"Start fehlgeschlagen (Exit {r.get('code')}): {out.strip()[-600:]}"}
-    log("Skript übertragen und gestartet")
+    log("Script transferred and started")
     seen, started, last_change, offline_since = 0, time.time(), time.time(), None
     state = {}
     while True:
@@ -549,13 +549,13 @@ async def run_on_client(client_id: str, os_: str, script: str, log, *, progress=
             try:
                 c2, sh2 = _stop_cmd(os_)
                 await request_exec(client_id, c2, timeout_seconds=30, shell=sh2)
-                log("Abgebrochen – Ausführung auf dem Client beendet")
+                log("Cancelled - execution on the client stopped")
             except Exception:
-                log("Abgebrochen – Client nicht erreichbar, läuft dort evtl. weiter")
+                log("Cancelled - client unreachable, may keep running there")
             return {"ok": False, "error": "abgebrochen", **state}
         await asyncio.sleep(poll)
         if time.time() - started > timeout:
-            return {"ok": False, "error": f"Zeitüberschreitung nach {int(timeout / 3600)} h", **state}
+            return {"ok": False, "error": f"Timeout after {int(timeout / 3600)} h", **state}
         pc, psh = _poll_cmd(os_, seen)
         try:
             r = await request_exec(client_id, pc, timeout_seconds=45, shell=psh)
@@ -563,7 +563,7 @@ async def run_on_client(client_id: str, os_: str, script: str, log, *, progress=
         except Exception as exc:
             offline_since = offline_since or time.time()
             if time.time() - offline_since > 1800:
-                return {"ok": False, "error": f"Client seit 30 Min. nicht erreichbar ({exc})", **state}
+                return {"ok": False, "error": f"Client unreachable for 30 min ({exc})", **state}
             continue
         st, lines = _parse_poll(r.get("stdout") or "")
         for ln in lines:
@@ -573,7 +573,7 @@ async def run_on_client(client_id: str, os_: str, script: str, log, *, progress=
             last_change = time.time()
         if st is None:
             if time.time() - started > 300 and seen == 0:
-                return {"ok": False, "error": "Skript hat nach 5 Min. noch nicht begonnen"}
+                return {"ok": False, "error": "Script did not start within 5 min"}
             continue
         state = {"step": st.get("step"), "errors": int(st.get("errors") or 0)}
         if progress:
@@ -591,11 +591,11 @@ async def run_on_client(client_id: str, os_: str, script: str, log, *, progress=
             return {"ok": ok, "errors": state["errors"], "reboot": bool(st.get("reboot")),
                     "error": None if ok else (st.get("step") or "fehlgeschlagen")}
         if time.time() - last_change > 3 * 3600:
-            return {"ok": False, "error": "Seit 3 Stunden keine Ausgabe mehr", **state}
+            return {"ok": False, "error": "No output for 3 hours", **state}
 
 
 async def queue_run(client_id: str, payload: dict) -> dict:
-    """Offline-Warteschlange (Core, kind "mod:scripts:provision")."""
+    """Offline queue (core, kind "mod:scripts:provision")."""
     lines: list = []
     try:
         script = render(payload["os"], payload.get("config") or {})

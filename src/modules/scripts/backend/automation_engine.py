@@ -1,8 +1,8 @@
-"""Automation-Engine: fuehrt faellige geplante Befehle auf den Ziel-Clients aus.
+"""Automation engine: runs due scheduled commands on the target clients.
 
-Jeder Durchlauf einer Automation laeuft als BACKEND-JOB (app/bgjobs.py, Art
-"automation.run") - er erscheint live in der Aufgaben-Anzeige, mit Fortschritt
-je Client und Log; Ergebnis/Verlauf stehen zusaetzlich wie bisher in der DB.
+Each run of an automation runs as a BACKEND JOB (app/bgjobs.py, kind
+"automation.run") - it appears live in the task view, with per-client progress
+and a log; the result/history are additionally kept in the DB as before.
 """
 import asyncio as _asyncio
 import uuid as _uuid
@@ -13,12 +13,12 @@ from app.sockets import request_exec as _request_exec
 
 async def _run_automation(job, auto: dict) -> dict:
     client_ids = [c for c in (auto["client_ids"] or "").split(",") if c]
-    run_id = _uuid.uuid4().hex   # gruppiert diesen Durchlauf
+    run_id = _uuid.uuid4().hex   # groups this run
     total, ok_n, fail_n = len(client_ids), 0, 0
-    job.update(phase="exec", pct=0, detail=f"0/{total} Clients", total=total)
+    job.update(phase="exec", pct=0, detail=f"0/{total} clients", total=total)
     for i, cid in enumerate(client_ids):
         if job.cancelled:
-            job.log("Abgebrochen - restliche Clients werden übersprungen")
+            job.log("Cancelled - remaining clients are skipped")
             break
         hostname = None
         try:
@@ -42,7 +42,7 @@ async def _run_automation(job, auto: dict) -> dict:
             fail_n += 1
             job.log(f"{hostname or cid}: FEHLER {e}")
         job.update(pct=(i + 1) / max(1, total) * 100,
-                   detail=f"{i + 1}/{total} Clients · {ok_n} ok · {fail_n} Fehler", done=i + 1)
+                   detail=f"{i + 1}/{total} clients · {ok_n} ok · {fail_n} failed", done=i + 1)
     await db.call(db.mark_automation_run, auto["id"])
     await db.call(db.add_audit_entry, "system", "automation.executed", target=auto["id"], details=auto["name"])
     return {"run_id": run_id, "ok": ok_n, "failed": fail_n, "total": total}
@@ -60,5 +60,5 @@ async def run():
                 if new:
                     await job.done.wait()          # nacheinander, wie bisher
         except Exception as e:
-            print(f"[automation] Engine-Fehler: {e}")
-        await _asyncio.sleep(30)  # alle 30 Sekunden prüfen
+            print(f"[automation] engine error: {e}")
+        await _asyncio.sleep(30)  # check every 30 seconds

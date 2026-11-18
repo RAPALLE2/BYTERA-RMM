@@ -1,13 +1,14 @@
-// provision.js (Modul "scripts") - Client-Einrichtung mit Presets
+// provision.js (module "scripts") - client provisioning with presets
 // ----------------------------------------------------------------
-// Links Preset-Liste, rechts ein Editor mit allen Optionen (dynamisch aus dem
-// Backend-Katalog). Presets werden gespeichert und auf viele Clients
-// ausgerollt (ein Backend-Job, Fortschritt live). Wie eine unattended.xml,
-// aber als externes, in der Oberflaeche bearbeitbares Skript.
+// Preset list on the left, an editor with all options on the right (built
+// dynamically from the backend catalog). Presets are saved and rolled out to
+// many clients (one backend job, live progress). Like an unattended.xml, but as
+// an external script editable in the UI.
 import { state } from "/js/app/state.js";
 import { moduleRequest } from "/js/app/modules.js";
 import { watchJobs } from "/js/app/bgjobs.js";
 import { esc, uiConfirm } from "/js/app/utils.js";
+import { icon } from "./icons.js";
 
 const req = (p, o = {}) => moduleRequest("/api/scripts/provision" + p, o);
 const toast = (m, t = "success", ms = 1900) => window.notify?.(m, t, ms);
@@ -17,8 +18,8 @@ export function renderProvision(body, win) {
 
   body.innerHTML = `<div style="display:flex;height:100%;min-height:0;font-size:13px">
     <aside style="width:250px;flex:0 0 250px;border-right:1px solid var(--border);display:flex;flex-direction:column;min-height:0">
-      <div style="padding:12px 12px 8px"><b style="font-size:15px">🧰 Einrichtung</b>
-        <div style="font-size:11.5px;color:var(--subtext);margin-top:2px">Presets für neue Clients</div></div>
+      <div style="padding:12px 12px 8px"><b style="font-size:15px;display:flex;align-items:center;gap:6px">${icon("kit", 16)} Provisioning</b>
+        <div style="font-size:11.5px;color:var(--subtext);margin-top:2px">Presets for new clients</div></div>
       <div style="padding:0 10px 8px;display:flex;gap:6px">
         <button class="btn-primary" data-new-win style="flex:1;font-size:12px">+ Windows</button>
         <button class="btn-primary" data-new-lin style="flex:1;font-size:12px">+ Linux</button></div>
@@ -41,11 +42,11 @@ export function renderProvision(body, win) {
             ${p.description ? `<div style="font-size:11px;color:var(--subtext);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.description)}</div>` : ""}</a>`).join("")
           || `<div style="padding:4px 10px;color:var(--subtext);font-size:12px">—</div>`);
     };
-    listEl.innerHTML = sec("windows", "Windows", "🪟") + sec("linux", "Linux", "🐧");
+    listEl.innerHTML = sec("windows", "Windows", icon("windows", 13)) + sec("linux", "Linux", icon("linux", 13));
     listEl.querySelectorAll("[data-p]").forEach((a) => a.addEventListener("click", () => open(a.dataset.p)));
   };
 
-  const confirmLeave = async () => !dirty || await uiConfirm("Ungespeicherte Änderungen verwerfen?");
+  const confirmLeave = async () => !dirty || await uiConfirm("Discard unsaved changes?");
 
   const open = async (pid) => {
     if (!(await confirmLeave())) return;
@@ -62,7 +63,7 @@ export function renderProvision(body, win) {
   body.querySelector("[data-new-win]").addEventListener("click", () => newPreset("windows"));
   body.querySelector("[data-new-lin]").addEventListener("click", () => newPreset("linux"));
 
-  // ---- kleine Bausteine
+  // ---- small building blocks
   const setDirty = () => { dirty = true; };
   const sectionBox = (title, hint, inner) => `<section style="border:1px solid var(--border);border-radius:12px;margin:0 0 14px;overflow:hidden">
     <div style="padding:10px 14px;background:var(--panel-2,var(--panel));font-weight:700">${esc(title)}${hint ? `<span style="font-weight:400;color:var(--subtext);font-size:11.5px"> — ${esc(hint)}</span>` : ""}</div>
@@ -83,14 +84,14 @@ export function renderProvision(body, win) {
 
   const drawEditor = (name, desc) => {
     main.innerHTML = `<div style="position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px solid var(--border);padding:12px 18px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-        <span style="font-size:18px">${selOs === "windows" ? "🪟" : "🐧"}</span>
-        <input data-name value="${esc(name)}" placeholder="Preset-Name" style="font-size:15px;font-weight:600;min-width:200px;flex:1">
-        <input data-desc value="${esc(desc)}" placeholder="Beschreibung (optional)" style="flex:2;min-width:160px">
-        <button class="btn" data-preview>👁 Vorschau</button>
-        <button class="btn" data-download ${sel ? "" : "disabled"} title="${sel ? "Skript herunterladen" : "Erst speichern"}">⬇ Skript</button>
-        <button class="btn-primary" data-save>💾 Speichern</button>
-        <button class="btn" data-run ${sel ? "" : "disabled"} title="${sel ? "Auf Clients ausrollen" : "Erst speichern"}">🚀 Ausrollen</button>
-        ${sel ? `<button class="btn" data-del style="color:var(--danger)">🗑</button>` : ""}
+        <span style="display:flex">${selOs === "windows" ? icon("windows", 18) : icon("linux", 18)}</span>
+        <input data-name value="${esc(name)}" placeholder="Preset name" style="font-size:15px;font-weight:600;min-width:200px;flex:1">
+        <input data-desc value="${esc(desc)}" placeholder="Description (optional)" style="flex:2;min-width:160px">
+        <button class="btn" data-preview>${icon("eye", 14)} Preview</button>
+        <button class="btn" data-download ${sel ? "" : "disabled"} title="${sel ? "Download script" : "Save first"}">${icon("download", 14)} Script</button>
+        <button class="btn-primary" data-save>${icon("save", 14)} Save</button>
+        <button class="btn" data-run ${sel ? "" : "disabled"} title="${sel ? "Roll out to clients" : "Save first"}">${icon("rocket", 14)} Roll out</button>
+        ${sel ? `<button class="btn" data-del style="color:var(--danger)">${icon("trash", 14)}</button>` : ""}
       </div>
       <div data-form style="padding:16px 18px;max-width:1000px"></div>`;
     const form = main.querySelector("[data-form]");
@@ -112,60 +113,60 @@ export function renderProvision(body, win) {
     const w = CAT.windows, g = cfg.general;
     const appGroups = [...new Set(w.apps.map((a) => a.group))];
     form.innerHTML =
-      sectionBox("Allgemein", "", `<div style="display:grid;grid-template-columns:150px 1fr;gap:8px 12px;align-items:center;max-width:620px">
-        <label>Computername</label><input data-g="computer_name" value="${esc(g.computer_name)}" placeholder="leer = unverändert · {SERIAL} = Seriennummer">
-        <label>Zeitzone</label><input data-g="timezone" value="${esc(g.timezone)}" placeholder="z.B. W. Europe Standard Time">
-        <label>Neustart danach</label><select data-g="reboot">
-          <option value="needed"${g.reboot === "needed" ? " selected" : ""}>nur wenn nötig</option>
-          <option value="always"${g.reboot === "always" ? " selected" : ""}>immer</option>
-          <option value="never"${g.reboot === "never" ? " selected" : ""}>nie</option></select>
-        <label></label><label style="display:flex;gap:7px;font-size:12.5px"><input type="checkbox" data-g="restore_point"${g.restore_point ? " checked" : ""}> Wiederherstellungspunkt vorher erstellen</label></div>`)
-      + sectionBox("Vorinstallierte Apps entfernen (Debloat)", "integrierte & gesponserte Apps", checks(w.appx, cfg.debloat.appx, "appx")
+      sectionBox("General", "", `<div style="display:grid;grid-template-columns:150px 1fr;gap:8px 12px;align-items:center;max-width:620px">
+        <label>Computer name</label><input data-g="computer_name" value="${esc(g.computer_name)}" placeholder="empty = unchanged · {SERIAL} = serial number">
+        <label>Time zone</label><input data-g="timezone" value="${esc(g.timezone)}" placeholder="e.g. W. Europe Standard Time">
+        <label>Reboot afterwards</label><select data-g="reboot">
+          <option value="needed"${g.reboot === "needed" ? " selected" : ""}>only if needed</option>
+          <option value="always"${g.reboot === "always" ? " selected" : ""}>always</option>
+          <option value="never"${g.reboot === "never" ? " selected" : ""}>never</option></select>
+        <label></label><label style="display:flex;gap:7px;font-size:12.5px"><input type="checkbox" data-g="restore_point"${g.restore_point ? " checked" : ""}> Create a restore point first</label></div>`)
+      + sectionBox("Remove preinstalled apps (debloat)", "built-in & sponsored apps", checks(w.appx, cfg.debloat.appx, "appx")
         + `<div style="margin-top:10px;display:grid;grid-template-columns:150px 1fr;gap:8px 12px;align-items:start">
-          <label style="padding-top:5px">Eigene (Appx-Name)</label><textarea data-custom="appx_custom" rows="2" placeholder="z.B. Microsoft.Something – einer pro Zeile" style="font-family:monospace">${esc((cfg.debloat.appx_custom || []).join("\n"))}</textarea></div>
-          <label style="display:flex;gap:7px;font-size:12.5px;margin-top:8px"><input type="checkbox" data-debloat="onedrive"${cfg.debloat.onedrive ? " checked" : ""}> OneDrive deinstallieren</label>`)
-      + sectionBox("Datenschutz & Oberfläche", "Registry-Tweaks für alle Benutzer + Standardprofil", checks(w.tweaks, cfg.debloat.tweaks, "tweaks"))
-      + sectionBox("Energie & Effizienz", "", `<div style="display:grid;grid-template-columns:150px 1fr;gap:8px 12px;align-items:center;max-width:620px;margin-bottom:10px">
-        <label>Energieplan</label><select data-eff="power_plan">
-          <option value=""${cfg.efficiency.power_plan === "" ? " selected" : ""}>unverändert</option>
-          <option value="balanced"${cfg.efficiency.power_plan === "balanced" ? " selected" : ""}>Ausbalanciert</option>
-          <option value="high"${cfg.efficiency.power_plan === "high" ? " selected" : ""}>Höchstleistung</option>
-          <option value="ultimate"${cfg.efficiency.power_plan === "ultimate" ? " selected" : ""}>Ultimative Leistung</option></select>
-        <label>Bildschirm aus (Min., Netz)</label><input type="number" min="0" max="600" data-effn="monitor_ac" value="${cfg.efficiency.monitor_ac ?? ""}" placeholder="0 = nie">
-        <label>Energiesparen (Min., Netz)</label><input type="number" min="0" max="600" data-effn="standby_ac" value="${cfg.efficiency.standby_ac ?? ""}" placeholder="0 = nie"></div>`
+          <label style="padding-top:5px">Custom (Appx name)</label><textarea data-custom="appx_custom" rows="2" placeholder="e.g. Microsoft.Something – one per line" style="font-family:monospace">${esc((cfg.debloat.appx_custom || []).join("\n"))}</textarea></div>
+          <label style="display:flex;gap:7px;font-size:12.5px;margin-top:8px"><input type="checkbox" data-debloat="onedrive"${cfg.debloat.onedrive ? " checked" : ""}> Uninstall OneDrive</label>`)
+      + sectionBox("Privacy & UI", "registry tweaks for all users + the default profile", checks(w.tweaks, cfg.debloat.tweaks, "tweaks"))
+      + sectionBox("Power & efficiency", "", `<div style="display:grid;grid-template-columns:150px 1fr;gap:8px 12px;align-items:center;max-width:620px;margin-bottom:10px">
+        <label>Power plan</label><select data-eff="power_plan">
+          <option value=""${cfg.efficiency.power_plan === "" ? " selected" : ""}>unchanged</option>
+          <option value="balanced"${cfg.efficiency.power_plan === "balanced" ? " selected" : ""}>Balanced</option>
+          <option value="high"${cfg.efficiency.power_plan === "high" ? " selected" : ""}>High performance</option>
+          <option value="ultimate"${cfg.efficiency.power_plan === "ultimate" ? " selected" : ""}>Ultimate performance</option></select>
+        <label>Turn off display (min, AC)</label><input type="number" min="0" max="600" data-effn="monitor_ac" value="${cfg.efficiency.monitor_ac ?? ""}" placeholder="0 = never">
+        <label>Sleep (min, AC)</label><input type="number" min="0" max="600" data-effn="standby_ac" value="${cfg.efficiency.standby_ac ?? ""}" placeholder="0 = never"></div>`
         + checks(w.efficiency, cfg.efficiency.options, "effopt"))
-      + sectionBox("Standard-Apps installieren", "winget / Chocolatey / Ninite",
+      + sectionBox("Install standard apps", "winget / Chocolatey / Ninite",
         `<div style="display:flex;gap:16px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
-          <label style="display:flex;gap:6px;align-items:center">Quelle <select data-apps="engine">
-            <option value="winget"${cfg.apps.engine === "winget" ? " selected" : ""}>winget (in Windows enthalten)</option>
+          <label style="display:flex;gap:6px;align-items:center">Source <select data-apps="engine">
+            <option value="winget"${cfg.apps.engine === "winget" ? " selected" : ""}>winget (included in Windows)</option>
             <option value="choco"${cfg.apps.engine === "choco" ? " selected" : ""}>Chocolatey</option>
             <option value="ninite"${cfg.apps.engine === "ninite" ? " selected" : ""}>Ninite</option></select></label>
-          <label style="display:flex;gap:6px;align-items:center;font-size:12.5px"><input type="checkbox" data-apps-upg${cfg.apps.upgrade_all ? " checked" : ""}> am Ende alle Programme aktualisieren</label></div>`
+          <label style="display:flex;gap:6px;align-items:center;font-size:12.5px"><input type="checkbox" data-apps-upg${cfg.apps.upgrade_all ? " checked" : ""}> upgrade all programs at the end</label></div>`
         + appGroups.map((grp) => `<div style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--subtext);margin:8px 0 2px">${esc(grp)}</div>`
             + checks(w.apps.filter((a) => a.group === grp).map((a) => ({ id: a.id, label: a.label })), cfg.apps.ids, "app", 3)).join("")
         + `<div style="display:grid;grid-template-columns:150px 1fr;gap:8px 12px;margin-top:10px;align-items:start">
-          <label style="padding-top:5px">Eigene Pakete</label><textarea data-custom="apps_custom" rows="2" placeholder="winget-ID / Choco-Paket / Ninite-Kürzel – einer pro Zeile" style="font-family:monospace">${esc((cfg.apps.custom || []).join("\n"))}</textarea></div>`)
-      + sectionBox("Windows-Updates", "", `<label style="display:flex;gap:7px;font-size:12.5px"><input type="checkbox" data-upd="install"${cfg.updates.install ? " checked" : ""}> Updates suchen und installieren</label>
-        <label style="display:flex;gap:7px;font-size:12.5px;margin-top:4px"><input type="checkbox" data-upd="drivers"${cfg.updates.drivers ? " checked" : ""}> auch Treiber-Updates</label>`)
-      + sectionBox("Win11Debloat (Raphire)", "lädt debloat.raphi.re und wendet es an", `<label style="display:flex;gap:7px;font-size:12.5px;margin-bottom:8px"><input type="checkbox" data-w11d-en${cfg.w11d.enabled ? " checked" : ""}> Win11Debloat zusätzlich ausführen</label>
+          <label style="padding-top:5px">Custom packages</label><textarea data-custom="apps_custom" rows="2" placeholder="winget ID / Choco package / Ninite slug – one per line" style="font-family:monospace">${esc((cfg.apps.custom || []).join("\n"))}</textarea></div>`)
+      + sectionBox("Windows updates", "", `<label style="display:flex;gap:7px;font-size:12.5px"><input type="checkbox" data-upd="install"${cfg.updates.install ? " checked" : ""}> Check for and install updates</label>
+        <label style="display:flex;gap:7px;font-size:12.5px;margin-top:4px"><input type="checkbox" data-upd="drivers"${cfg.updates.drivers ? " checked" : ""}> also driver updates</label>`)
+      + sectionBox("Win11Debloat (Raphire)", "downloads debloat.raphi.re and applies it", `<label style="display:flex;gap:7px;font-size:12.5px;margin-bottom:8px"><input type="checkbox" data-w11d-en${cfg.w11d.enabled ? " checked" : ""}> Also run Win11Debloat</label>
         <div data-w11d style="${cfg.w11d.enabled ? "" : "opacity:.5;pointer-events:none"}">
-          <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;font-size:12.5px">Anwenden auf <select data-w11d-target>
-            <option value="default_and_users"${cfg.w11d.target === "default_and_users" ? " selected" : ""}>Standardprofil + bestehende Benutzer</option>
-            <option value="default"${cfg.w11d.target === "default" ? " selected" : ""}>nur Standardprofil (neue Benutzer)</option>
-            <option value="users"${cfg.w11d.target === "users" ? " selected" : ""}>nur bestehende Benutzer</option></select></div>
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;font-size:12.5px">Apply to <select data-w11d-target>
+            <option value="default_and_users"${cfg.w11d.target === "default_and_users" ? " selected" : ""}>default profile + existing users</option>
+            <option value="default"${cfg.w11d.target === "default" ? " selected" : ""}>default profile only (new users)</option>
+            <option value="users"${cfg.w11d.target === "users" ? " selected" : ""}>existing users only</option></select></div>
           ${checks(w.w11d, cfg.w11d.params, "w11d")}
           <div style="display:grid;grid-template-columns:150px 1fr;gap:8px 12px;margin-top:8px;align-items:start">
-            <label style="padding-top:5px">Weitere Schalter</label><textarea data-custom="w11d_extra" rows="1" placeholder="z.B. DisableBingSearch – ohne Bindestrich, einer pro Zeile" style="font-family:monospace">${esc((cfg.w11d.extra || []).join("\n"))}</textarea></div></div>`)
-      + sectionBox("Optimizer (hellzerg)", "lädt die neueste Optimizer.exe und wendet eine Vorlage still an", `<label style="display:flex;gap:7px;font-size:12.5px;margin-bottom:8px"><input type="checkbox" data-opt-en${cfg.optimizer.enabled ? " checked" : ""}> Optimizer mit Vorlage ausführen</label>
+            <label style="padding-top:5px">Extra switches</label><textarea data-custom="w11d_extra" rows="1" placeholder="e.g. DisableBingSearch – without a dash, one per line" style="font-family:monospace">${esc((cfg.w11d.extra || []).join("\n"))}</textarea></div></div>`)
+      + sectionBox("Optimizer (hellzerg)", "downloads the latest Optimizer.exe and applies a template silently", `<label style="display:flex;gap:7px;font-size:12.5px;margin-bottom:8px"><input type="checkbox" data-opt-en${cfg.optimizer.enabled ? " checked" : ""}> Run Optimizer with a template</label>
         <div data-opt style="${cfg.optimizer.enabled ? "" : "opacity:.5;pointer-events:none"}">
           <textarea data-opt-tpl rows="8" style="width:100%;font-family:monospace;font-size:12px" spellcheck="false">${esc(cfg.optimizer.template || "")}</textarea>
-          <div style="font-size:11px;color:var(--subtext);margin-top:4px">JSON wie in der Optimizer-Automationsdoku. WindowsVersion muss passen (10/11). Hinweis: Optimizer ist eingestellt (Nachfolger: OptimizerNXT).</div></div>`)
-      + sectionBox("Windows-Features", "optionale Komponenten (DISM-Featurenamen)", `<div style="display:grid;grid-template-columns:150px 1fr;gap:8px 12px;align-items:start">
-        <label style="padding-top:5px">Aktivieren</label><textarea data-feat="enable" rows="2" placeholder="z.B. Microsoft-Windows-Subsystem-Linux – einer pro Zeile" style="font-family:monospace">${esc((cfg.features.enable || []).join("\n"))}</textarea>
-        <label style="padding-top:5px">Deaktivieren</label><textarea data-feat="disable" rows="2" placeholder="z.B. WindowsMediaPlayer – einer pro Zeile" style="font-family:monospace">${esc((cfg.features.disable || []).join("\n"))}</textarea></div>`)
-      + sectionBox("Eigene Befehle", "PowerShell", `<label style="font-size:12px;color:var(--subtext)">Vorher</label>
+          <div style="font-size:11px;color:var(--subtext);margin-top:4px">JSON as in the Optimizer automation docs. WindowsVersion must match (10/11). Note: Optimizer is discontinued (successor: OptimizerNXT).</div></div>`)
+      + sectionBox("Windows features", "optional components (DISM feature names)", `<div style="display:grid;grid-template-columns:150px 1fr;gap:8px 12px;align-items:start">
+        <label style="padding-top:5px">Enable</label><textarea data-feat="enable" rows="2" placeholder="e.g. Microsoft-Windows-Subsystem-Linux – one per line" style="font-family:monospace">${esc((cfg.features.enable || []).join("\n"))}</textarea>
+        <label style="padding-top:5px">Disable</label><textarea data-feat="disable" rows="2" placeholder="e.g. WindowsMediaPlayer – one per line" style="font-family:monospace">${esc((cfg.features.disable || []).join("\n"))}</textarea></div>`)
+      + sectionBox("Custom commands", "PowerShell", `<label style="font-size:12px;color:var(--subtext)">Before</label>
         <textarea data-cust="pre" rows="3" style="width:100%;font-family:monospace;margin-bottom:8px">${esc(cfg.custom.pre || "")}</textarea>
-        <label style="font-size:12px;color:var(--subtext)">Nachher</label>
+        <label style="font-size:12px;color:var(--subtext)">After</label>
         <textarea data-cust="post" rows="3" style="width:100%;font-family:monospace">${esc(cfg.custom.post || "")}</textarea>`);
     wireWin(form);
   }
@@ -201,22 +202,22 @@ export function renderProvision(body, win) {
     const l = CAT.linux, g = cfg.general;
     const pkgGroups = [...new Set(l.packages.map((p) => p.group))];
     form.innerHTML =
-      sectionBox("Allgemein", "", `<div style="display:grid;grid-template-columns:150px 1fr;gap:8px 12px;align-items:center;max-width:620px">
-        <label>Hostname</label><input data-g="hostname" value="${esc(g.hostname)}" placeholder="leer = unverändert · {SERIAL}">
-        <label>Zeitzone</label><input data-g="timezone" value="${esc(g.timezone)}" placeholder="Europe/Berlin">
-        <label>Neustart danach</label><select data-g="reboot">
-          <option value="needed"${g.reboot === "needed" ? " selected" : ""}>nur wenn nötig</option>
-          <option value="always"${g.reboot === "always" ? " selected" : ""}>immer</option>
-          <option value="never"${g.reboot === "never" ? " selected" : ""}>nie</option></select></div>`)
-      + sectionBox("Aktionen", "apt / dnf / zypper / pacman / apk werden automatisch erkannt", checks(l.options, cfg.options, "opt", 1))
-      + sectionBox("Pakete installieren", "Namen werden je Distribution übersetzt",
+      sectionBox("General", "", `<div style="display:grid;grid-template-columns:150px 1fr;gap:8px 12px;align-items:center;max-width:620px">
+        <label>Hostname</label><input data-g="hostname" value="${esc(g.hostname)}" placeholder="empty = unchanged · {SERIAL}">
+        <label>Time zone</label><input data-g="timezone" value="${esc(g.timezone)}" placeholder="Europe/Berlin">
+        <label>Reboot afterwards</label><select data-g="reboot">
+          <option value="needed"${g.reboot === "needed" ? " selected" : ""}>only if needed</option>
+          <option value="always"${g.reboot === "always" ? " selected" : ""}>always</option>
+          <option value="never"${g.reboot === "never" ? " selected" : ""}>never</option></select></div>`)
+      + sectionBox("Actions", "apt / dnf / zypper / pacman / apk are detected automatically", checks(l.options, cfg.options, "opt", 1))
+      + sectionBox("Install packages", "names are translated per distribution",
         pkgGroups.map((grp) => `<div style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--subtext);margin:8px 0 2px">${esc(grp)}</div>`
           + checks(l.packages.filter((p) => p.group === grp).map((p) => ({ id: p.id, label: p.label })), cfg.packages, "pkg", 3)).join("")
         + `<div style="display:grid;grid-template-columns:150px 1fr;gap:8px 12px;margin-top:10px;align-items:start">
-          <label style="padding-top:5px">Eigene Pakete</label><textarea data-custom="packages_custom" rows="2" placeholder="exakte Paketnamen – einer pro Zeile" style="font-family:monospace">${esc((cfg.packages_custom || []).join("\n"))}</textarea></div>`)
-      + sectionBox("Eigene Befehle", "Bash", `<label style="font-size:12px;color:var(--subtext)">Vorher</label>
+          <label style="padding-top:5px">Custom packages</label><textarea data-custom="packages_custom" rows="2" placeholder="exact package names – one per line" style="font-family:monospace">${esc((cfg.packages_custom || []).join("\n"))}</textarea></div>`)
+      + sectionBox("Custom commands", "Bash", `<label style="font-size:12px;color:var(--subtext)">Before</label>
         <textarea data-cust="pre" rows="3" style="width:100%;font-family:monospace;margin-bottom:8px">${esc(cfg.custom.pre || "")}</textarea>
-        <label style="font-size:12px;color:var(--subtext)">Nachher</label>
+        <label style="font-size:12px;color:var(--subtext)">After</label>
         <textarea data-cust="post" rows="3" style="width:100%;font-family:monospace">${esc(cfg.custom.post || "")}</textarea>`);
     form.querySelectorAll("[data-g]").forEach((el) => el.addEventListener(el.tagName === "SELECT" ? "change" : "input", () => { cfg.general[el.dataset.g] = el.value; setDirty(); }));
     form.querySelector('[data-custom="packages_custom"]').addEventListener("input", (e) => { cfg.packages_custom = e.target.value.split("\n").map((s) => s.trim()).filter(Boolean); setDirty(); });
@@ -225,20 +226,20 @@ export function renderProvision(body, win) {
     wireChecks(form, "pkg", cfg.packages);
   }
 
-  // ============================================================ Aktionen
+  // ============================================================ Actions
   const body2 = () => ({ name: main.querySelector("[data-name]").value.trim(),
                          desc: main.querySelector("[data-desc]").value.trim() });
 
   async function save() {
     const { name, desc } = body2();
-    if (!name) { toast("Bitte einen Namen vergeben", "error"); return; }
+    if (!name) { toast("Please enter a name", "error"); return; }
     try {
       const saved = sel
         ? await req(`/presets/${sel}`, { method: "PUT", body: JSON.stringify({ name, os: selOs, description: desc, config: cfg }) })
         : await req("/presets", { method: "POST", body: JSON.stringify({ name, os: selOs, description: desc, config: cfg }) });
       sel = saved.id; cfg = saved.config; dirty = false;
       await loadPresets(); drawEditor(saved.name, saved.description); drawList();
-      toast("Preset gespeichert");
+      toast("Preset saved");
     } catch (e) { toast(e.message, "error", 6000); }
   }
 
@@ -246,15 +247,15 @@ export function renderProvision(body, win) {
     try {
       const { script } = await req("/render", { method: "POST", body: JSON.stringify({ os: selOs, config: cfg }) });
       overlay(`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-          <b>Skript-Vorschau (${selOs === "windows" ? "PowerShell" : "Bash"})</b>
-          <button class="btn" data-copy>Kopieren</button></div>
+          <b>Script preview (${selOs === "windows" ? "PowerShell" : "Bash"})</b>
+          <button class="btn" data-copy>Copy</button></div>
         <pre style="background:var(--panel-2,#111);border:1px solid var(--border);border-radius:8px;padding:12px;overflow:auto;max-height:70vh;font-size:12px;white-space:pre-wrap">${esc(script)}</pre>`, 900,
-        (ov) => ov.querySelector("[data-copy]").addEventListener("click", () => { navigator.clipboard?.writeText(script); toast("Kopiert"); }));
+        (ov) => ov.querySelector("[data-copy]").addEventListener("click", () => { navigator.clipboard?.writeText(script); toast("Copied"); }));
     } catch (e) { toast(e.message, "error", 6000); }
   }
 
   async function del() {
-    if (!(await uiConfirm(`Preset „${body2().name}“ löschen?`))) return;
+    if (!(await uiConfirm(`Delete preset "${body2().name}"?`))) return;
     try { await req(`/presets/${sel}`, { method: "DELETE" }); sel = null; cfg = null; dirty = false; await loadPresets(); main.innerHTML = emptyHint(); }
     catch (e) { toast(e.message, "error", 6000); }
   }
@@ -262,12 +263,12 @@ export function renderProvision(body, win) {
   function runDialog() {
     const clients = (state.clients || []).filter((c) => pvOs(c) === selOs);
     const online = clients.filter((c) => c.online);
-    const ov = overlay(`<h3 style="margin:0 0 4px">🚀 „${esc(body2().name)}“ ausrollen</h3>
-      <div style="font-size:12px;color:var(--subtext);margin-bottom:10px">Nur ${selOs === "windows" ? "Windows" : "Linux"}-Clients. ${online.length} online, ${clients.length - online.length} offline.</div>
-      <div style="display:flex;gap:8px;margin-bottom:6px"><input data-q placeholder="Filtern …" style="flex:1"><label style="display:flex;gap:5px;align-items:center;font-size:12.5px"><input type="checkbox" data-all> alle</label></div>
+    const ov = overlay(`<h3 style="margin:0 0 4px;display:flex;align-items:center;gap:6px">${icon("rocket", 16)} Roll out "${esc(body2().name)}"</h3>
+      <div style="font-size:12px;color:var(--subtext);margin-bottom:10px">${selOs === "windows" ? "Windows" : "Linux"} clients only. ${online.length} online, ${clients.length - online.length} offline.</div>
+      <div style="display:flex;gap:8px;margin-bottom:6px"><input data-q placeholder="Filter …" style="flex:1"><label style="display:flex;gap:5px;align-items:center;font-size:12.5px"><input type="checkbox" data-all> all</label></div>
       <div data-cl style="max-height:300px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:6px"></div>
-      <label style="display:flex;gap:6px;align-items:center;font-size:12.5px;margin-top:8px"><input type="checkbox" data-queue checked> Offline-Clients in die Warteschlange (laufen beim nächsten Online)</label>
-      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px"><button class="btn" data-x>Abbrechen</button><button class="btn-primary" data-go>Ausrollen</button></div>`, 560);
+      <label style="display:flex;gap:6px;align-items:center;font-size:12.5px;margin-top:8px"><input type="checkbox" data-queue checked> Queue offline clients (run when they next come online)</label>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px"><button class="btn" data-x>Cancel</button><button class="btn-primary" data-go>Roll out</button></div>`, 560);
     const clEl = ov.querySelector("[data-cl]"), q = ov.querySelector("[data-q]");
     const paint = () => {
       const f = q.value.trim().toLowerCase();
@@ -275,13 +276,13 @@ export function renderProvision(body, win) {
         <input type="checkbox" class="pv-c" value="${esc(c.id)}">
         <span style="width:7px;height:7px;border-radius:50%;background:${c.online ? "var(--online,#16a34a)" : "var(--subtext)"}"></span>
         ${esc(c.hostname || c.id)} <span style="color:var(--subtext)">${esc(c.platform || "")}${c.online ? "" : " · offline"}</span></label>`).join("")
-        || `<div style="color:var(--subtext);padding:6px">Keine ${selOs}-Clients</div>`;
+        || `<div style="color:var(--subtext);padding:6px">No ${selOs} clients</div>`;
     };
     q.addEventListener("input", paint); paint();
     ov.querySelector("[data-all]").addEventListener("change", (e) => clEl.querySelectorAll(".pv-c").forEach((c) => { c.checked = e.target.checked; }));
     ov.querySelector("[data-go]").addEventListener("click", async () => {
       const ids = [...clEl.querySelectorAll(".pv-c:checked")].map((c) => c.value);
-      if (!ids.length) { toast("Keine Clients gewählt", "error"); return; }
+      if (!ids.length) { toast("No clients selected", "error"); return; }
       const queue = ov.querySelector("[data-queue]").checked;
       ov.remove();
       runProgress(ids, queue);
@@ -290,9 +291,9 @@ export function renderProvision(body, win) {
 
   function runProgress(ids, queue) {
     const b = {}; b[selOs === "windows" ? "preset_windows" : "preset_linux"] = sel;
-    const ov = overlay(`<div style="display:flex;justify-content:space-between;align-items:center"><b>🚀 Ausrollen …</b><button class="btn" data-x>Schließen</button></div>
+    const ov = overlay(`<div style="display:flex;justify-content:space-between;align-items:center"><b style="display:flex;align-items:center;gap:6px">${icon("rocket", 15)} Rolling out …</b><button class="btn" data-x>Close</button></div>
       <div data-bar style="height:8px;background:var(--panel-2,#222);border-radius:5px;margin:10px 0;overflow:hidden"><div data-fill style="height:100%;width:0;background:var(--accent);transition:width .3s"></div></div>
-      <div data-info style="font-size:12.5px;color:var(--subtext);margin-bottom:6px">gestartet …</div>
+      <div data-info style="font-size:12.5px;color:var(--subtext);margin-bottom:6px">started …</div>
       <pre data-log style="background:var(--panel-2,#111);border:1px solid var(--border);border-radius:8px;padding:10px;overflow:auto;height:300px;font-size:11.5px;margin:0"></pre>`, 760);
     const fill = ov.querySelector("[data-fill]"), info = ov.querySelector("[data-info]"), logEl = ov.querySelector("[data-log]");
     const onUpd = (job) => {
@@ -300,15 +301,15 @@ export function renderProvision(body, win) {
       fill.style.width = `${Math.round(job.pct || 0)}%`;
       if (job.detail) info.textContent = job.detail;
       if (job.logs) { logEl.textContent = job.logs.join("\n"); logEl.scrollTop = logEl.scrollHeight; }
-      if (job.status === "done") info.textContent = "Fertig. " + (job.detail || "");
-      if (job.status === "error") info.textContent = "Fehler: " + (job.error || "");
+      if (job.status === "done") info.textContent = "Done. " + (job.detail || "");
+      if (job.status === "error") info.textContent = "Error: " + (job.error || "");
     };
     moduleRequest("/api/scripts/provision/run", { method: "POST", body: JSON.stringify({ ...b, client_ids: ids, queue_offline: queue }), onJob: onUpd })
-      .then((r) => { const ok = Object.values(r?.results || {}).filter((x) => x.ok).length; const q = (r?.queued || []).length; toast(`Fertig: ${ok} erfolgreich${q ? ", " + q + " in Warteschlange" : ""}`, "success", 4500); info.textContent = "Fertig."; })
-      .catch((e) => { toast(e.message, "error", 7000); info.textContent = "Fehler: " + e.message; });
+      .then((r) => { const ok = Object.values(r?.results || {}).filter((x) => x.ok).length; const q = (r?.queued || []).length; toast(`Done: ${ok} succeeded${q ? ", " + q + " queued" : ""}`, "success", 4500); info.textContent = "Done."; })
+      .catch((e) => { toast(e.message, "error", 7000); info.textContent = "Error: " + e.message; });
   }
 
-  // ---- Overlay-Helfer
+  // ---- Overlay helper
   function overlay(html, width = 620, after) {
     const ov = document.createElement("div");
     ov.style.cssText = "position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;padding:14px";
@@ -321,9 +322,9 @@ export function renderProvision(body, win) {
     return ov;
   }
   const pvOs = (c) => (String(c.platform || "").toLowerCase().includes("win") ? "windows" : "linux");
-  const emptyHint = () => `<div style="padding:40px;text-align:center;color:var(--subtext)">Links ein Preset wählen oder ein neues anlegen.</div>`;
+  const emptyHint = () => `<div style="padding:40px;text-align:center;color:var(--subtext)">Pick a preset on the left or create a new one.</div>`;
 
-  main.innerHTML = `<div style="padding:40px;text-align:center;color:var(--subtext)">Lade …</div>`;
+  main.innerHTML = `<div style="padding:40px;text-align:center;color:var(--subtext)">Loading …</div>`;
   (async () => {
     try { await loadCat(); await loadPresets(); main.innerHTML = emptyHint(); }
     catch (e) { main.innerHTML = `<div style="padding:30px;color:var(--danger)">${esc(e.message)}</div>`; }

@@ -1,4 +1,4 @@
-"""Automationen (geplante Befehle) - REST. Gehoert zur Teilfunktion 'automation'."""
+"""Automations (scheduled commands) - REST. Part of the 'automation' feature."""
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -37,7 +37,7 @@ def toggle_automation(auto_id: str, user: dict = Depends(get_current_user)):
     require_perm(user, "automation")
     auto = db.get_automation(auto_id)
     if not auto:
-        raise HTTPException(404, "Automation nicht gefunden")
+        raise HTTPException(404, "Automation not found")
     db.set_automation_enabled(auto_id, not auto["enabled"])
     return {"ok": True, "enabled": not auto["enabled"]}
 
@@ -52,6 +52,6 @@ def delete_automation(auto_id: str, user: dict = Depends(get_current_user)):
 
 @router.get("/automations/{auto_id}/runs")
 def get_automation_runs(auto_id: str, user: dict = Depends(get_current_user)):
-    """Liefert die letzten Durchläufe einer Automation mit Ergebnis je Client."""
+    """Returns the latest runs of an automation with the result per client."""
     require_perm(user, "automation")
     return {"runs": db.list_automation_runs(auto_id)}

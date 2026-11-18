@@ -1,7 +1,7 @@
 // apps/bulk.js
 // ------------
-// Bulk Remote Shell: einen Befehl oder ein gespeichertes Skript auf MEHREREN
-// ausgewählten Clients gleichzeitig ausführen. Zeigt pro Client das Ergebnis.
+// Bulk remote shell: run a command or a saved script on MULTIPLE selected
+// clients at once. Shows the result per client.
 
 import { state } from "/js/app/state.js";
 import { api } from "/js/app/api.js";
@@ -9,6 +9,7 @@ import { attachScriptPicker } from "./scriptpicker.js";
 import { registerCleanup } from "/js/app/windowmanager.js";
 import { esc } from "/js/app/utils.js";
 import { t } from "/js/app/i18n.js";
+import { icon } from "./icons.js";
 
 export function renderBulk(body, win) {
   async function draw() {
@@ -16,11 +17,11 @@ export function renderBulk(body, win) {
     const clients = state.clients.filter((c) => c.online);
 
     let scripts = [];
-    try { scripts = await api.getScripts(); } catch { /* egal */ }
+    try { scripts = await api.getScripts(); } catch { /* ignore */ }
 
     body.innerHTML = `
       <div class="settings-section">
-        <h3>Bulk Remote Shell</h3>
+        <h3>Bulk remote shell</h3>
         <p style="color:var(--subtext);font-size:13px">
           ${t("bk_hint")}
         </p>
@@ -36,23 +37,23 @@ export function renderBulk(body, win) {
                 <input type="checkbox" class="bulk-client" value="${c.id}" />
                 <span class="status-dot" style="background:var(--online);display:inline-block;width:7px;height:7px;border-radius:50%"></span>
                 ${esc(c.hostname)} <span style="color:var(--subtext)">(${esc(c.platform || "")})</span>
-              </label>`).join("") || `<span style="color:var(--subtext)">Keine Online-Geräte.</span>`}
+              </label>`).join("") || `<span style="color:var(--subtext)">No online devices.</span>`}
           </div>
         </div>
 
         <div class="form-row">
           <label>${t("bk_use_script")}</label>
-          <button class="btn" id="bulk-script" style="align-self:flex-start;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📜 ${t("bk_pick_script")}</button>
+          <button class="btn" id="bulk-script" style="align-self:flex-start;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${icon("script", 14)} ${t("bk_pick_script")}</button>
         </div>
 
         <div class="form-row">
           <label>${t("bk_command")}</label>
-          <textarea id="bulk-cmd" style="min-height:60px;font-family:monospace" placeholder="z.B. hostname"></textarea>
+          <textarea id="bulk-cmd" style="min-height:60px;font-family:monospace" placeholder="e.g. hostname"></textarea>
         </div>
 
-        <button class="btn-primary" id="bulk-run" style="margin-top:4px">⚡ ${t("bk_run_all")}</button>
+        <button class="btn-primary" id="bulk-run" style="margin-top:4px">${icon("bolt", 14)} ${t("bk_run_all")}</button>
 
-        <h3 style="margin-top:24px">Ergebnisse</h3>
+        <h3 style="margin-top:24px">Results</h3>
         <div id="bulk-results"></div>
       </div>
     `;
@@ -61,13 +62,13 @@ export function renderBulk(body, win) {
     const clientChecks = () => Array.from(body.querySelectorAll(".bulk-client"));
     allCheck?.addEventListener("change", () => clientChecks().forEach((cb) => (cb.checked = allCheck.checked)));
 
-    // Skript-Auswahl (Suche + Ordnerstruktur) füllt das Befehlsfeld
+    // Script picker (search + folder structure) fills the command field
     const detachPicker = attachScriptPicker({
       button: body.querySelector("#bulk-script"),
       scripts,
       onPick: (sc) => {
         body.querySelector("#bulk-cmd").value = sc.command;
-        body.querySelector("#bulk-script").textContent = `📜 ${sc.name}`;
+        body.querySelector("#bulk-script").innerHTML = `${icon("script", 14)} ${esc(sc.name)}`;
       },
     });
     registerCleanup(win.key, () => detachPicker());
@@ -112,10 +113,10 @@ export function renderBulk(body, win) {
   function showProgress(job, el) {
     if (!job?.running) return;
     const p = job.progress || {};
-    el.innerHTML = `<div style="color:var(--subtext)">⏳ ${esc(job.title)}${job.by ? " · " + esc(job.by) : ""}</div>
+    el.innerHTML = `<div style="color:var(--subtext);display:flex;align-items:center;gap:5px">${icon("pending", 13)} ${esc(job.title)}${job.by ? " · " + esc(job.by) : ""}</div>
       <div style="height:6px;border-radius:3px;background:var(--panel-2);overflow:hidden;margin:6px 0">
         <div style="height:100%;width:${(job.pct || 0).toFixed(1)}%;background:var(--accent)"></div></div>
-      <div style="font-size:12px;color:var(--subtext)">${p.done ?? 0}/${p.total ?? "?"} · ${p.ok ?? 0} ok · ${p.failed ?? 0} Fehler</div>`;
+      <div style="font-size:12px;color:var(--subtext)">${p.done ?? 0}/${p.total ?? "?"} · ${p.ok ?? 0} ok · ${p.failed ?? 0} failed</div>`;
   }
 
   function renderResults(results, resultsEl) {
@@ -126,12 +127,12 @@ export function renderBulk(body, win) {
       if (r.ok) {
         const out = (r.stdout || "").trim() || (r.stderr || "").trim() || `(Exit ${r.code})`;
         return `<div class="panel" style="margin-bottom:8px">
-          <strong style="color:var(--accent)">✓ ${esc(name)}</strong>
+          <strong style="color:var(--accent);display:inline-flex;align-items:center;gap:4px">${icon("check", 14)} ${esc(name)}</strong>
           <pre style="background:var(--panel-2);padding:8px;border-radius:6px;margin-top:6px;font-size:12px;white-space:pre-wrap;overflow-x:auto">${esc(out)}</pre>
         </div>`;
       }
       return `<div class="panel" style="margin-bottom:8px">
-        <strong style="color:var(--danger)">✗ ${esc(name)}</strong>
+        <strong style="color:var(--danger);display:inline-flex;align-items:center;gap:4px">${icon("cross", 14)} ${esc(name)}</strong>
         <div style="color:var(--danger);font-size:12px;margin-top:4px">${esc(r.error || t("u_fehler"))}</div>
       </div>`;
     }).join("");

@@ -1,15 +1,15 @@
 """
 routers/scripts_routes.py
 ---------------------------
-Verwaltung gespeicherter Skripte (Scripts-App). Ein Skript hat einen Namen,
-einen Befehl (kann mehrzeilig sein, z.B. "apt update && apt upgrade -y") und
-ein Ziel-Betriebssystem (windows/linux/any).
+Management of saved scripts (Scripts app). A script has a name, a command (may
+be multi-line, e.g. "apt update && apt upgrade -y") and a target OS
+(windows/linux/any).
 
-Endpunkte:
-  GET    /api/scripts        -> alle Skripte
-  POST   /api/scripts        -> neues Skript anlegen
-  PUT    /api/scripts/{id}   -> Skript bearbeiten
-  DELETE /api/scripts/{id}   -> Skript löschen
+Endpoints:
+  GET    /api/scripts        -> all scripts
+  POST   /api/scripts        -> create a new script
+  PUT    /api/scripts/{id}   -> edit a script
+  DELETE /api/scripts/{id}   -> delete a script
 """
 
 from fastapi import APIRouter, Depends
@@ -25,7 +25,7 @@ class ScriptBody(BaseModel):
     name: str
     command: str
     os: str = "any"   # "windows" | "linux" | "any"
-    folder: str = ""  # Ordner in der Scripts-App ("" = kein Ordner)
+    folder: str = ""  # folder in the Scripts app ("" = no folder)
 
 
 @router.get("")
