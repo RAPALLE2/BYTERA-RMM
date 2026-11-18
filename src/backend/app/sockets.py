@@ -747,6 +747,20 @@ async def kick_offline_queue(client_id: str) -> None:
                             await db.call(db.queue_set_status, it["id"],
                                           "done" if res.get("ok") else "failed",
                                           str(res.get("output") or res.get("error") or "")[:3000])
+                    elif str(it["kind"]).startswith("mod:"):
+                        # Generisch fuer Module: "mod:<modul>:<datei>" -> <datei>.queue_run(client, payload)
+                        from app import modules as _mods
+                        _p = str(it["kind"]).split(":")
+                        hdl = _mods.use(_p[1], _p[2]) if len(_p) == 3 and _mods.is_enabled(_p[1]) else None
+                        if hdl is None or not hasattr(hdl, "queue_run"):
+                            await db.call(db.queue_set_status, it["id"], "failed",
+                                          f"Modul '{_p[1] if len(_p) > 1 else '?'}' ist nicht aktiv")
+                        else:
+                            await db.call(db.queue_set_status, it["id"], "running")
+                            res = await hdl.queue_run(client_id, payload)
+                            await db.call(db.queue_set_status, it["id"],
+                                          "done" if res.get("ok") else "failed",
+                                          str(res.get("output") or "")[:3000])
                     else:
                         await db.call(db.queue_set_status, it["id"], "failed",
                                       f"Unbekannte Aktionsart {it['kind']}")
