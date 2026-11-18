@@ -2,15 +2,16 @@
   "schema": 1,
   "id": "tickets",
   "name": "Tickets",
-  "version": "1.0.0",
-  "description": "Ticket-System: Tickets zu Clients oder zum RMM selbst, Zuweisung an Benutzer/Gruppen, Kommentare und Dateianhänge.",
+  "version": "1.1.0",
+  "description": "Ticket-System: Tickets zu Clients oder zum RMM selbst, Zuweisung an Benutzer/Gruppen, Kommentare und Dateianhänge. Neu: optionales öffentliches Ticket-Portal unter /web/tickets (Einstellungen in der Ticket-App, benötigt das aktivierte Webserver-Modul) - wahlweise mit oder ohne Anmeldung; mit Anmeldung können Benutzer dort auch ihre zugewiesenen Tickets bearbeiten.",
   "author": "BYTERA",
   "category": "Kollaboration",
   "icon": "🎫",
   "requires": [],
   "pip": [],
   "routers": [
-    "tickets_routes"
+    "tickets_routes",
+    "portal_routes"
   ],
   "apps": [
     {

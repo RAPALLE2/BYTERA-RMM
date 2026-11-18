@@ -17,7 +17,7 @@ import { RMM_TARGET, RMM_LABEL, targetLabel } from "/js/app/tickettarget.js";
 // Variablenname belegt (Tenant/Target/Trigger/Token o.ä.).
 import { t as tr } from "/js/app/i18n.js";
 import { condenseHints } from "/js/app/help.js";
-import { getModuleApi } from "/js/app/modules.js";
+import { getModuleApi, moduleRequest } from "/js/app/modules.js";
 
 // --- Bilder in Tickets (Modul "spaces") ---------------------------------
 // Ein Bild steht als [[space-img:<token>|<name>]] im Text. Die Datei liegt im
@@ -122,6 +122,7 @@ export function renderTickets(body, win) {
             <option value="closed">${tr("tk_s_closed")}</option>
           </select>
           <span style="flex:1"></span>
+          ${isAdmin() ? `<button class="btn" id="tk-portal" title="Öffentliches Ticket-Portal (/web/tickets) einrichten">🌐</button>` : ""}
           ${may("ticket_create") ? `<button class="btn-primary" id="tk-new">＋ Ticket</button>` : ""}
         </div>
         <div id="tk-list" style="flex:1;overflow:auto"></div>
@@ -138,6 +139,49 @@ export function renderTickets(body, win) {
     statusFilter = e.target.value; drawList();
   });
   body.querySelector("#tk-new")?.addEventListener("click", () => openEditor(null));
+
+  // --- Ticket-Portal (Admin): /web/tickets einrichten ---
+  body.querySelector("#tk-portal")?.addEventListener("click", async () => {
+    let cfg;
+    try { cfg = await moduleRequest("/api/tickets/portal/admin-config"); }
+    catch (e) { window.notify?.(e.message, "error"); return; }
+    editorEl.style.display = "flex";
+    editorEl.innerHTML = `
+      <div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px;width:460px;max-height:90%;overflow:auto">
+        <h3 style="margin:0 0 10px">🌐 Ticket-Portal</h3>
+        <p style="font-size:12px;color:var(--subtext);margin:0 0 10px">
+          Öffentliche Seite unter <code>${esc(window.location.origin)}/web/tickets</code>, auf der
+          (je nach Einstellung mit oder ohne Anmeldung) Tickets erstellt werden können.
+          Mit Anmeldung sehen Benutzer dort auch ihre eigenen und zugewiesenen Tickets und
+          können sie bearbeiten. Neue Portal-Tickets gehen an die Support-Gruppe.
+          ${cfg.webserver_on ? "" : `<b style="color:var(--warn)">⚠ Das Modul „Webserver“ ist nicht aktiv - die Portal-Seite ist erst erreichbar, wenn es aktiviert wird.</b>`}
+        </p>
+        <div class="form-row"><label><input type="checkbox" id="tp-on" ${cfg.enabled ? "checked" : ""}/> Portal aktivieren</label></div>
+        <div class="form-row"><label><input type="checkbox" id="tp-login" ${cfg.require_login ? "checked" : ""}/> Anmeldung erforderlich (RMM-Konto)</label></div>
+        <div class="form-row"><label>Titel</label><input id="tp-title" value="${esc(cfg.title || "")}"/></div>
+        <div class="form-row"><label>Begrüßungstext</label><textarea id="tp-intro" rows="3" style="width:100%">${esc(cfg.intro || "")}</textarea></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+          <button class="btn" id="tp-cancel">${tr("cancel")}</button>
+          <button class="btn-primary" id="tp-save">${tr("save")}</button>
+        </div>
+      </div>`;
+    editorEl.querySelector("#tp-cancel").addEventListener("click", () => { editorEl.style.display = "none"; });
+    editorEl.querySelector("#tp-save").addEventListener("click", async () => {
+      try {
+        await moduleRequest("/api/tickets/portal/admin-config", {
+          method: "POST", noJob: true,
+          body: JSON.stringify({
+            enabled: editorEl.querySelector("#tp-on").checked,
+            require_login: editorEl.querySelector("#tp-login").checked,
+            title: editorEl.querySelector("#tp-title").value,
+            intro: editorEl.querySelector("#tp-intro").value,
+          }),
+        });
+        editorEl.style.display = "none";
+        window.notify?.("Portal-Einstellungen gespeichert", "success");
+      } catch (e) { window.notify?.(e.message, "error"); }
+    });
+  });
 
   const subjectLabel = (a) => {
     const list = a.subject_type === "user" ? subjects.users : subjects.groups;

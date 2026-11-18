@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "id": "calls",
+  "name": "Anrufe",
+  "version": "1.0.0",
+  "description": "Teams-ähnliche Audio-/Video-Anrufe zwischen Dashboard-Benutzern: Einzel- und Gruppenanrufe mit Kamera, Mikrofon und Bildschirmfreigabe. Läuft im Browser UND in der installierten Client-App (deren Dashboard-Fenster ist ein Chromium-App-Fenster). Medien laufen per WebRTC direkt zwischen den Teilnehmern und sind Ende-zu-Ende verschlüsselt (DTLS-SRTP); das Backend vermittelt nur die Signalisierung, prüft dabei jeden Absender über die Anmeldung und signiert jede Vermittlungsnachricht (HMAC), sodass Einladungen und Verbindungsdaten nicht gefälscht werden können. Eingehende Anrufe klingeln überall im Dashboard.",
+  "author": "BYTERA",
+  "category": "Zusammenarbeit",
+  "icon": "📞",
+  "requires": [],
+  "pip": [],
+  "entry": "module",
+  "routers": [
+    "calls_routes"
+  ],
+  "hooks": {
+    "startup": "on_startup"
+  },
+  "init": {
+    "entry": "init.js",
+    "export": "init"
+  },
+  "apps": [
+    {
+      "id": "calls",
+      "label": "Anrufe",
+      "icon": "📞",
+      "title": "Anrufe",
+      "entry": "calls.js",
+      "export": "renderCalls",
+      "w": 900,
+      "h": 640
+    }
+  ]
+}
