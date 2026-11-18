@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "id": "links",
+  "name": "Links & QR",
+  "version": "1.0.0",
+  "description": "URL-Shortener und QR-Code-Generator. Kurzlinks laufen über das RMM (rmm.url/s/<code>, Klicks werden gezählt); QR-Codes enthalten wahlweise den RMM-Link (rmm.url/qr/<code>, Scans werden getrennt gezählt und das Ziel bleibt nachträglich änderbar) oder direkt die Zieladresse. QR-Codes werden komplett im Browser erzeugt (lokale Bibliothek, kein Internet nötig) und lassen sich als PNG oder SVG herunterladen.",
+  "author": "BYTERA",
+  "category": "Werkzeuge",
+  "icon": "🔗",
+  "requires": [],
+  "pip": [],
+  "entry": "module",
+  "routers": [
+    "links_routes"
+  ],
+  "hooks": {
+    "startup": "on_startup"
+  },
+  "apps": [
+    {
+      "id": "links",
+      "label": "Links & QR",
+      "icon": "🔗",
+      "title": "Links & QR",
+      "entry": "links.js",
+      "export": "renderLinks",
+      "w": 860,
+      "h": 620
+    }
+  ]
+}

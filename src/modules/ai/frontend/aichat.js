@@ -9,6 +9,14 @@ import { api } from "/js/app/api.js";
 import { state } from "/js/app/state.js";
 import { esc, uiConfirm } from "/js/app/utils.js";
 import { t } from "/js/app/i18n.js";
+import { getModuleApi } from "/js/app/modules.js";
+
+// Modul "spaces" (falls aktiv): Bilder anhaengen wie im Chat - die Datei
+// landet im eigenen Space unter media/image/ und steht als
+// [[space-img:<token>|<name>]] in der Nachricht.
+const spaces = () => getModuleApi("spaces");
+const SPACE_IMG_RE = /\[\[space-img:([A-Za-z0-9_-]+)\|([^\]]*)\]\]/g;
+const _blobCache = new Map();   // token -> Objekt-URL (einmal laden reicht)
 
 // =================================================================
 // NACHRICHTEN-DARSTELLUNG mit Bildern und Videos
@@ -47,6 +55,12 @@ function mediaTag(url, alt = "") {
 export function renderMessageHtml(text) {
   let out = esc(text ?? "");
 
+  // 0) Space-Anhaenge [[space-img:token|name]] -> Platzhalter-<img>, die
+  //    loadSpaceImages() danach mit Anmeldung laedt (Objekt-URL).
+  out = out.replace(SPACE_IMG_RE, (m, token, name) =>
+    `<img data-sptoken="${esc(token)}" alt="${esc(name)}" title="${esc(name)}"
+       style="max-width:100%;max-height:320px;border-radius:8px;margin:6px 0;display:block;background:var(--panel-2);min-height:40px" />`);
+
   // 1) Markdown-Bilder: ![alt](url)
   out = out.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, rawUrl) => {
     const url = safeUrl(rawUrl);
@@ -76,6 +90,22 @@ export function renderMessageHtml(text) {
   return out;
 }
 
+// Platzhalter-Bilder ([[space-img:…]]) mit Anmeldung nachladen.
+async function loadSpaceImages(root) {
+  const sp = spaces();
+  for (const img of root.querySelectorAll("img[data-sptoken]")) {
+    const token = img.dataset.sptoken;
+    delete img.dataset.sptoken;
+    if (!sp) { img.alt += " (Modul „Spaces“ ist aus)"; continue; }
+    try {
+      if (!_blobCache.has(token)) {
+        _blobCache.set(token, await sp.blobUrl(`/api/spaces/s/${token}/download?inline=1`));
+      }
+      img.src = _blobCache.get(token);
+    } catch { img.alt += " (nicht ladbar)"; }
+  }
+}
+
 export function renderAiChat(body, win) {
   let connections = [];
   let subjects = { users: [], groups: [] };
@@ -98,6 +128,8 @@ export function renderAiChat(body, win) {
         <div style="display:flex;gap:8px;padding:10px 14px;border-top:1px solid var(--border)">
           <textarea id="ai-input" rows="2" placeholder="Nachricht eingeben… (Enter = senden, Shift+Enter = Zeilenumbruch)"
             style="flex:1;resize:none"></textarea>
+          ${spaces() ? `<button class="btn btn-icon" id="ai-img" title="Bild anhängen (wird in deinem Space unter media/image gespeichert)" style="flex:none;align-self:stretch;height:auto">🖼️</button>
+          <input type="file" id="ai-imgfile" accept="image/*" multiple style="display:none">` : ""}
           <button class="btn-primary" id="ai-send">Senden</button>
         </div>
       </div>
@@ -178,6 +210,23 @@ export function renderAiChat(body, win) {
            border:1px solid var(--border);border-radius:10px;padding:8px 12px;font-size:13px;white-space:pre-wrap;word-break:break-word">${renderMessageHtml(m.content)}</div>
     `).join("") + (busy ? `<div style="color:var(--subtext);font-size:12px">⏳ ${esc(c.model)} denkt nach…</div>` : "");
     msgsEl.scrollTop = msgsEl.scrollHeight;
+    loadSpaceImages(msgsEl).then(() => { msgsEl.scrollTop = msgsEl.scrollHeight; });
+  }
+
+  // --- Bilder anhaengen (Knopf, Strg+V, Drag & Drop) -> eigener Space media/image ---
+  async function attachImages(files) {
+    const sp = spaces();
+    const imgs = [...files].filter((f) => f.type.startsWith("image/"));
+    if (!sp || !imgs.length) return;
+    for (const f of imgs) {
+      try {
+        const a = await sp.uploadAttachment(f, "ai");
+        const name = (a.name || "Bild").replace(/[\]|]/g, "_");
+        // In die Eingabe einfuegen - so kann man noch Text dazu schreiben.
+        inputEl.value = (inputEl.value ? inputEl.value + "\n" : "") + `[[space-img:${a.token}|${name}]]`;
+      } catch (e) { window.notify?.("Bild nicht angehängt: " + e.message, "error"); }
+    }
+    inputEl.focus();
   }
 
   async function send() {
@@ -204,6 +253,20 @@ export function renderAiChat(body, win) {
   inputEl.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   });
+
+  const aiImgBtn = body.querySelector("#ai-img");
+  const aiImgFile = body.querySelector("#ai-imgfile");
+  aiImgBtn?.addEventListener("click", () => aiImgFile.click());
+  aiImgFile?.addEventListener("change", () => { attachImages(aiImgFile.files); aiImgFile.value = ""; });
+  if (spaces()) {
+    inputEl.addEventListener("paste", (e) => {
+      const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith("image/"));
+      if (files.length) { e.preventDefault(); attachImages(files); }
+    });
+    msgsEl.addEventListener("dragover", (e) => { e.preventDefault(); msgsEl.style.outline = "2px dashed var(--accent)"; });
+    msgsEl.addEventListener("dragleave", () => { msgsEl.style.outline = ""; });
+    msgsEl.addEventListener("drop", (e) => { e.preventDefault(); msgsEl.style.outline = ""; attachImages(e.dataTransfer?.files || []); });
+  }
 
   // ---------------- Editor (Anlegen/Bearbeiten) ----------------
   function openEditor(existing) {

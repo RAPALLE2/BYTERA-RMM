@@ -47,8 +47,21 @@ from . import access, store, vfs
 router = APIRouter(prefix="/api/spaces", tags=["spaces"])
 
 MAX_UPLOAD = 2 * 1024 * 1024 * 1024        # 2 GB je Datei
-ATTACH_DIRS = {"chat": "Chat-Bilder", "tickets": "Ticket-Anhänge"}
+# Bereiche, aus denen Anhaenge kommen duerfen (Chat, Tickets, AI-Chat).
+# Abgelegt wird NICHT mehr je Bereich, sondern nach Medientyp im eigenen
+# Space unter media/<image|audio|video|files>/ (siehe _media_folder).
+ATTACH_AREAS = ("chat", "tickets", "ai")
 ATTACH_TYPES = ("image/", "audio/", "video/", "application/pdf", "text/")
+
+
+def _media_folder(mime: str) -> str:
+    if mime.startswith("image/"):
+        return "media/image"
+    if mime.startswith("audio/"):
+        return "media/audio"
+    if mime.startswith("video/"):
+        return "media/video"
+    return "media/files"
 
 
 def _parts(path: str) -> list[str]:
@@ -413,10 +426,10 @@ def link_download(token: str, path: str = "", inline: int = 0, user: dict = Depe
 # ================================================================== Anhaenge
 @router.post("/attach")
 async def attach(file: UploadFile = File(...), area: str = Form("chat"), user: dict = Depends(get_current_user)):
-    """Bild/Datei aus Chat oder Ticket: landet im Space des Absenders, Empfaenger
-    lesen es ueber einen Anhang-Link (nur angemeldet)."""
-    folder = ATTACH_DIRS.get(area)
-    if not folder:
+    """Bild/Datei aus Chat, Ticket oder AI-Chat: landet im Space des Absenders
+    unter media/<image|audio|video|files>/, Empfaenger lesen es ueber einen
+    Anhang-Link (nur angemeldet)."""
+    if area not in ATTACH_AREAS:
         raise HTTPException(400, "Unbekannter Bereich")
     if not access.has(user, "get_user_space"):
         raise HTTPException(403, "Für Anhänge wird ein eigener Space benötigt (Recht „Eigenen Space benutzen“)")
@@ -429,7 +442,7 @@ async def attach(file: UploadFile = File(...), area: str = Form("chat"), user: d
     base = store.safe_segment(Path(file.filename or "bild").name)
     stamp = time.strftime("%Y-%m-%d_%H%M%S")
     name = f"{stamp}_{base}"
-    rel = f"{folder}/{time.strftime('%Y-%m')}/{name}"
+    rel = f"{_media_folder(mt)}/{name}"
     try:
         vfs.write(user, [vfs.MY] + rel.split("/"), data)
     except Exception as e:
