@@ -58,6 +58,7 @@ export function renderTopology(body, win) {
   let currentFlow = "";                 // flow for new lines
   let view = { x: 40, y: 40, z: 1 };
   let saveTimer = null;
+  let bmcLinks = {};                    // Modul "bmc": agent-client-id -> {id,name,vendor}
   let staleBackend = false;             // backend still runs the old module code
 
   function emptyOvr() {
@@ -447,6 +448,16 @@ export function renderTopology(body, win) {
   const lineColor = (e) => e.color || flowById[e.flow]?.color || LINE_COLOR;
   const lineStyle = (e) => e.style || ovr.line_style || "default";
 
+  async function loadBmcLinks() {
+    try { bmcLinks = (await moduleRequest("/api/bmc/links")).links || {}; }
+    catch { bmcLinks = {}; }
+  }
+  function openBmc(agentId) {
+    const cl = findClient(agentId) || { id: agentId };
+    openWindow({ key: `bmc-${agentId}`, appId: "bmc", title: `iLO / iDRAC — ${cl.hostname || ""}`,
+                 props: { clientId: agentId }, w: 1120, h: 760, clientColor: cl.color });
+  }
+
   function draw() {
     const { nodes, edges } = graph();
     positions = layout(nodes);
@@ -594,6 +605,16 @@ export function renderTopology(body, win) {
     if (n.agent) el("circle", { cx: 27, cy: -27, r: 6, fill: n.agent.online ? "var(--ok, #34d399)" : "var(--danger, #f87171)",
                                 stroke: "var(--panel)", "stroke-width": 2 }, g);
     if (n.self) el("text", { x: -28, y: -22, "font-size": 13 }, g).textContent = "📍";
+    if (n.agent && bmcLinks[n.agent.id]) {
+      const bg = el("g", { transform: "translate(-27,-27)" }, g);
+      bg.style.cursor = "pointer";
+      el("circle", { r: 8.5, fill: "var(--panel)", stroke: "var(--accent)", "stroke-width": 1.5 }, bg);
+      el("text", { x: 0, y: 3.5, "text-anchor": "middle", "font-size": 10 }, bg).textContent = "🛉";
+      const lk = bmcLinks[n.agent.id];
+      el("title", {}, bg).textContent = "Externes Management: " + ((lk.vendor || "").includes("HPE") ? "iLO" : (lk.vendor || "").includes("Dell") ? "iDRAC" : "iLO/iDRAC");
+      bg.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+      bg.addEventListener("click", (ev) => { ev.stopPropagation(); openBmc(n.agent.id); });
+    }
     const disp = nodeDisplay(n);
     const name = disp.os + disp.name;
     const txt = (s, y, size, fill, weight = "400", mono = false) => {
@@ -1260,6 +1281,7 @@ export function renderTopology(body, win) {
   // ---------------------------------------------------------------- start
   loadPrefs();
   loadMap();
+  loadBmcLinks().then(() => { try { draw(); } catch { /* vor erstem Laden */ } });
   watchSource();
   if (win?.key) registerCleanup(win.key, () => {
     stopWatch?.();

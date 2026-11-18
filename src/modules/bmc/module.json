@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "id": "bmc",
+  "name": "iLO / iDRAC (Redfish)",
+  "version": "1.0.0",
+  "description": "Server-Fernwartung über iLO (HPE) und iDRAC (Dell) per Redfish-REST-API: Power an/aus/Neustart, Health & Sensoren (Temperatur, Lüfter, Netzteile, Verbrauch), Inventar (CPU/RAM/Datenträger/NICs), Ereignisprotokolle lesen & löschen, einmaliges Boot-Override, Virtual Media (ISO einbinden), Firmware, Identify-LED, BMC-Reset und beliebige Redfish-Aufrufe (roher Zugriff). Remote-Konsole & native Web-UI direkt öffnen oder über das Backend durchreichen. Erreichbar vom Backend oder über eine Node im Management-Netz. BMCs werden per IP/Host angelegt und optional mit einem Client verknüpft (Knopf „Externes Management“ in den Aktionen, Markierung in der Topologie).",
+  "author": "BYTERA",
+  "category": "Betrieb",
+  "icon": "🛉",
+  "requires": [],
+  "pip": ["httpx", "websockets"],
+  "routers": [
+    { "module": "bmc_routes" }
+  ],
+  "hooks": {
+    "startup": "on_startup",
+    "shutdown": "on_shutdown"
+  },
+  "node": {
+    "kind": "python",
+    "requires_docker": false,
+    "autostart": false,
+    "actions": ["up", "down", "restart", "status"]
+  },
+  "settings": [
+    {
+      "key": "proxy_host",
+      "type": "string",
+      "label": "Proxy-Hostname für die native Web-UI / Remote-Konsole",
+      "default": "",
+      "placeholder": "bmc-*.example.com",
+      "help": "Optional. Damit reicht das Backend die iLO/iDRAC-Oberfläche inklusive HTML5-Konsole unter einem eigenen Hostnamen durch – nur das Backend muss die BMC erreichen (z.B. über das VPN). '*' wird durch die Verbindungs-ID ersetzt; es braucht einen Wildcard-DNS-Eintrag und ein Wildcard-TLS-Zertifikat auf das RMM (gleiche Domain wie das Dashboard). Leer = die Konsole wird direkt im neuen Tab geöffnet (Browser muss die BMC erreichen)."
+    }
+  ],
+  "entry": "module",
+  "init": {
+    "entry": "init.js",
+    "export": "init"
+  },
+  "apps": [
+    {
+      "id": "bmc",
+      "label": "iLO / iDRAC",
+      "icon": "🛉",
+      "title": "iLO / iDRAC",
+      "entry": "app.js",
+      "export": "renderBmc",
+      "w": 1120,
+      "h": 760,
+      "perm": "use_bmc"
+    }
+  ]
+}

@@ -3147,6 +3147,8 @@ GLOBAL_PERM_KEYS = [
     "manage_headless_screen",
     "manage_canary",
     "manage_ad",
+    "use_bmc",         # Modul "bmc": iLO/iDRAC ansehen und steuern
+    "manage_bmc",      # Modul "bmc": BMC-Verbindungen anlegen/aendern
     "manage_tenants",
     "use_tenants",
     "manage_dist",
@@ -3296,6 +3298,7 @@ _PERM_IMPLIES = {
     "use_taskmanager": ["c_taskmanager_view", "c_taskmanager_kill"],
     "use_guacamole": ["c_guacamole"],
     "manage_users": ["create_users", "see_permissions", "manage_permissions"],
+    "manage_bmc": ["use_bmc"],
     # altes manage_clients deckte auch Notizen/Websites/Löschen/Power ab
     "manage_clients": ["c_delete", "c_power", "c_notes_view", "c_notes_edit",
                        "c_websites_view", "c_websites_edit", "set_warranty"],

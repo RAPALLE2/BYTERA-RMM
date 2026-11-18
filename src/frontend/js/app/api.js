@@ -114,6 +114,8 @@ const _PERM_KEY = {
   manage_headless_screen: "perm_manage_headless_screen",
   manage_canary: "perm_manage_canary",
   manage_ad: "perm_manage_ad",
+  use_bmc: "perm_use_bmc",
+  manage_bmc: "perm_manage_bmc",
   manage_tenants: "perm_manage_tenants",
   use_tenants: "perm_use_tenants",
   manage_dist: "perm_manage_dist",
