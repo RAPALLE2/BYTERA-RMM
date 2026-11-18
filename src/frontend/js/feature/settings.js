@@ -43,13 +43,17 @@ export function renderSettings(body, win) {
       branding: admin || hasGlobalPerm("manage_branding"),
       source: admin || hasGlobalPerm("see_source"),
       security: admin,
+      activation: admin || hasGlobalPerm("manage_modules"),
+      modstore: admin || hasGlobalPerm("manage_modules"),
     };
-    const order = ["general", "users", "branding", "security", "source"];
+    const order = ["general", "users", "branding", "security", "activation", "modstore", "source"];
     const allowed = order.filter((k) => canTab[k]);
     if (!allowed.includes(activeTab)) activeTab = allowed[0] || "general";
     const tabLabel = { general: t("tab_general"), users: t("tab_users"),
       branding: "Branding",
       security: "Security",
+      activation: "🔑 Aktivierung",
+      modstore: "🧩 Modul-Store",
       source: "Source" };
     body.innerHTML = `
       <div style="display:flex;flex-direction:column;height:100%">
@@ -67,6 +71,8 @@ export function renderSettings(body, win) {
     else if (activeTab === "users") renderUsersTab(content);
     else if (activeTab === "branding") renderBrandingTab(content);
     else if (activeTab === "security") renderSecurityTab(content);
+    else if (activeTab === "activation") renderActivationTab(content);
+    else if (activeTab === "modstore") renderModStoreTab(content);
     else if (activeTab === "source") {
       // Source bringt keine eigenen Innenabstaende mit -> sonst klebt alles am Fensterrand
       const wrap = document.createElement("div");
@@ -74,6 +80,166 @@ export function renderSettings(body, win) {
       content.appendChild(wrap);
       sourceCleanup = renderSource(wrap);
     }
+  }
+
+  // ---------------- AKTIVIERUNG (Code einlösen - noch ohne Funktion) ----------------
+  async function renderActivationTab(root) {
+    root.innerHTML = `<div class="settings-section"><p style="color:var(--subtext);font-size:13px">Lade…</p></div>`;
+    let d = null;
+    try { d = await moduleRequest("/api/activation"); }
+    catch (e) { root.innerHTML = `<div class="settings-section"><div style="color:var(--danger)">${esc(e.message)}</div></div>`; return; }
+    const when = d.redeemed_at ? new Date(d.redeemed_at).toLocaleString() : null;
+    root.innerHTML = `
+      <div class="settings-section">
+        <h3>🔑 Aktivierung</h3>
+        <p style="color:var(--subtext);font-size:13px;max-width:720px;line-height:1.5">
+          Hier kann ein Aktivierungscode eingelöst werden. Der Code wird mit
+          Einlösedatum gespeichert; das RMM fragt damit <b>später</b> den
+          Lizenzserver ab und schaltet ggf. Premium-Features frei oder lädt
+          Zusatz-Module herunter. <b>Aktuell hat der Code noch keine Funktion.</b>
+        </p>
+        <div class="panel" style="padding:12px 16px;max-width:560px;margin:10px 0">
+          ${d.key ? `
+            <div style="font-size:13px">Aktiver Code:
+              <code style="font-size:13px">${esc(d.key)}</code></div>
+            <div style="font-size:12px;color:var(--subtext);margin-top:4px">
+              Eingelöst am ${esc(when || "?")}${d.redeemed_by ? ` von ${esc(d.redeemed_by)}` : ""}</div>
+          ` : `<div style="font-size:13px;color:var(--subtext)">Noch kein Code eingelöst.</div>`}
+        </div>
+        <div style="display:flex;gap:8px;max-width:560px">
+          <input id="act-key" placeholder="Aktivierungscode (z.B. XXXX-XXXX-XXXX-XXXX)"
+                 style="flex:1;font-family:monospace" />
+          <button class="btn-primary" id="act-redeem">Einlösen</button>
+        </div>
+        <div id="act-err" class="form-error hidden" style="margin-top:8px"></div>
+      </div>`;
+    const input = root.querySelector("#act-key");
+    root.querySelector("#act-redeem").addEventListener("click", async () => {
+      const err = root.querySelector("#act-err");
+      err.classList.add("hidden");
+      try {
+        await moduleRequest("/api/activation", {
+          method: "POST", noJob: true, body: JSON.stringify({ key: input.value }),
+        });
+        window.notify?.("Aktivierungscode gespeichert", "success");
+        renderActivationTab(root);
+      } catch (e) { err.textContent = e.message; err.classList.remove("hidden"); }
+    });
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") root.querySelector("#act-redeem").click(); });
+  }
+
+  // ---------------- MODUL-STORE (eigene Paketquellen wie beim Synology-Community-Store) ----------------
+  async function renderModStoreTab(root) {
+    root.innerHTML = `<div class="settings-section"><p style="color:var(--subtext);font-size:13px">Lade…</p></div>`;
+    let sources = [];
+    try { sources = await moduleRequest("/api/modstore/sources"); }
+    catch (e) { root.innerHTML = `<div class="settings-section"><div style="color:var(--danger)">${esc(e.message)}</div></div>`; return; }
+
+    root.innerHTML = `
+      <div class="settings-section">
+        <h3>🧩 Modul-Store</h3>
+        <p style="color:var(--subtext);font-size:13px;max-width:760px;line-height:1.5">
+          Eigene Paketquellen wie beim Community-Store eines Synology-NAS: Eine
+          Server-Adresse angeben, unter der Modul-ZIPs liegen (einfaches
+          HTTP-Verzeichnis-Listing oder JSON-Manifest). Alle dort gefundenen
+          <code>.zip</code>-Pakete werden angezeigt und können direkt
+          installiert werden. Nach der Installation das Modul wie gewohnt in
+          der <b>Modul-Verwaltung aktivieren</b>.
+        </p>
+
+        <h4 style="margin:14px 0 6px">Paketquellen</h4>
+        <div id="ms-sources"></div>
+        <div style="display:flex;gap:8px;max-width:760px;margin-top:8px;flex-wrap:wrap">
+          <input id="ms-add-name" placeholder="Name (optional)" style="width:180px" />
+          <input id="ms-add-url" placeholder="https://server.example.com/bytera-module/" style="flex:1;min-width:260px" />
+          <button class="btn-primary" id="ms-add">＋ Quelle hinzufügen</button>
+        </div>
+        <div id="ms-err" class="form-error hidden" style="margin-top:8px"></div>
+        <div id="ms-pkgs" style="margin-top:16px"></div>
+      </div>`;
+
+    const err = root.querySelector("#ms-err");
+    const showErr = (e) => { err.textContent = e.message || String(e); err.classList.remove("hidden"); };
+
+    // ---- Quellen-Liste ----
+    const list = root.querySelector("#ms-sources");
+    if (!sources.length) {
+      list.innerHTML = `<div style="font-size:13px;color:var(--subtext)">Noch keine Paketquellen hinterlegt.</div>`;
+    } else {
+      list.innerHTML = sources.map((s) => `
+        <div class="panel" style="padding:8px 12px;margin-bottom:6px;display:flex;align-items:center;gap:10px;max-width:760px">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:600">${esc(s.name || s.url)}</div>
+            <div style="font-size:12px;color:var(--subtext);overflow:hidden;text-overflow:ellipsis">${esc(s.url)}</div>
+          </div>
+          <button class="btn" data-browse="${esc(s.id)}">🔍 Durchsuchen</button>
+          <button class="action-btn btn-danger" data-del="${esc(s.id)}" title="Quelle entfernen">✕</button>
+        </div>`).join("");
+    }
+
+    list.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", async () => {
+      if (!(await uiConfirm("Diese Paketquelle entfernen?"))) return;
+      try {
+        await moduleRequest(`/api/modstore/sources/${b.dataset.del}`, { method: "DELETE", noJob: true });
+        renderModStoreTab(root);
+      } catch (e) { showErr(e); }
+    }));
+
+    // ---- Quelle durchsuchen + Pakete anzeigen ----
+    const pkgsBox = root.querySelector("#ms-pkgs");
+    list.querySelectorAll("[data-browse]").forEach((b) => b.addEventListener("click", async () => {
+      err.classList.add("hidden");
+      pkgsBox.innerHTML = `<p style="color:var(--subtext);font-size:13px">Durchsuche Quelle…</p>`;
+      let d;
+      try { d = await moduleRequest(`/api/modstore/browse/${b.dataset.browse}`); }
+      catch (e) { pkgsBox.innerHTML = ""; showErr(e); return; }
+      if (!d.packages.length) {
+        pkgsBox.innerHTML = `<div style="font-size:13px;color:var(--subtext)">Keine .zip-Pakete unter dieser Adresse gefunden.</div>`;
+        return;
+      }
+      const fmtSize = (n) => (n == null ? "" : n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`);
+      pkgsBox.innerHTML = `
+        <h4 style="margin:0 0 6px">Pakete von „${esc(d.source.name || d.source.url)}“</h4>
+        ${d.packages.map((p, i) => `
+          <div class="panel" style="padding:8px 12px;margin-bottom:6px;display:flex;align-items:center;gap:10px;max-width:760px">
+            <div style="flex:1;min-width:0">
+              <div style="font-size:13px;font-weight:600">📦 ${esc(p.name)}</div>
+              ${p.description ? `<div style="font-size:12px;color:var(--subtext)">${esc(p.description)}</div>` : ""}
+              <div style="font-size:11px;color:var(--subtext);overflow:hidden;text-overflow:ellipsis">${esc(p.url)}${p.size ? ` · ${fmtSize(p.size)}` : ""}</div>
+            </div>
+            <button class="btn-primary" data-install="${i}">⬇️ Installieren</button>
+          </div>`).join("")}`;
+      pkgsBox.querySelectorAll("[data-install]").forEach((ib) => ib.addEventListener("click", async () => {
+        const p = d.packages[+ib.dataset.install];
+        ib.disabled = true; ib.textContent = "Installiere…";
+        try {
+          const res = await moduleRequest("/api/modstore/install", {
+            method: "POST", noJob: true,
+            body: JSON.stringify({ source_id: d.source.id, url: p.url }),
+          });
+          ib.textContent = "✓ Installiert";
+          window.notify?.(`Modul „${res.name}“ v${res.version} installiert - in der Modul-Verwaltung aktivieren`, "success");
+        } catch (e) {
+          ib.disabled = false; ib.textContent = "⬇️ Installieren";
+          showErr(e);
+        }
+      }));
+    }));
+
+    // ---- Quelle hinzufügen ----
+    root.querySelector("#ms-add").addEventListener("click", async () => {
+      err.classList.add("hidden");
+      try {
+        await moduleRequest("/api/modstore/sources", {
+          method: "POST", noJob: true,
+          body: JSON.stringify({
+            name: root.querySelector("#ms-add-name").value,
+            url: root.querySelector("#ms-add-url").value,
+          }),
+        });
+        renderModStoreTab(root);
+      } catch (e) { showErr(e); }
+    });
   }
 
   // ---------------- SECURITY (encryption towards agents, nodes, client apps) ----------------

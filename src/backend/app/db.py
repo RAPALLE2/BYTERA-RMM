@@ -583,6 +583,27 @@ def init_db() -> None:
             used_at INTEGER
         );
 
+        -- Aktivierungscodes (Settings -> Aktivierung). Noch ohne Funktion:
+        -- Der Code wird nur mit Einlösedatum gespeichert; später fragt das RMM
+        -- damit den Lizenzserver ab (Premium-Features / Zusatz-Module).
+        -- Jede Einlösung ist eine eigene Zeile - die neueste ist die aktive.
+        CREATE TABLE IF NOT EXISTS activation_keys (
+            id TEXT PRIMARY KEY,
+            key TEXT NOT NULL,
+            redeemed_at INTEGER NOT NULL,     -- Unix-ms der Einlösung
+            redeemed_by TEXT                  -- Benutzername, der eingelöst hat
+        );
+
+        -- Paketquellen des Modul-Stores (wie Community-Quellen bei Synology DSM):
+        -- eine Server-Adresse, unter der Modul-ZIPs liegen (Verzeichnis-Listing
+        -- oder JSON-Manifest). Verwaltet in Settings -> Modul-Store.
+        CREATE TABLE IF NOT EXISTS module_sources (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL DEFAULT '',
+            url TEXT NOT NULL,
+            added_at INTEGER NOT NULL
+        );
+
         -- Aufzeichnungen von Remote-Screen-Sessions.
         -- Die eigentlichen Frames liegen als Datei auf der Platte (Pfad in file_path),
         -- hier stehen nur die Metadaten. Auto-Löschung nach X Tagen (siehe cleanup).
@@ -2617,6 +2638,54 @@ def delete_client(client_id: str) -> None:
     _conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
     # Client-scoped Rechte-Grants mit aufräumen (verwaiste Einträge vermeiden).
     _conn.execute("DELETE FROM permission_grants WHERE scope = ?", (client_id,))
+    _conn.commit()
+
+
+# ------------------------------------------------------------------
+# AKTIVIERUNG + MODUL-STORE (Settings -> Aktivierung / Modul-Store)
+# ------------------------------------------------------------------
+
+def redeem_activation_key(key: str, username: str | None = None) -> dict:
+    """Speichert einen Aktivierungscode mit Einlösedatum (neueste Zeile = aktiv)."""
+    row = {"id": _new_id(), "key": key, "redeemed_at": _now_ms(), "redeemed_by": username}
+    _conn.execute(
+        "INSERT INTO activation_keys (id, key, redeemed_at, redeemed_by) VALUES (?, ?, ?, ?)",
+        (row["id"], row["key"], row["redeemed_at"], row["redeemed_by"]),
+    )
+    _conn.commit()
+    return row
+
+
+def get_activation() -> dict | None:
+    """Der zuletzt eingelöste Aktivierungscode (oder None)."""
+    row = _conn.execute(
+        "SELECT * FROM activation_keys ORDER BY redeemed_at DESC LIMIT 1"
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def list_module_sources() -> list[dict]:
+    rows = _conn.execute("SELECT * FROM module_sources ORDER BY added_at").fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_module_source(source_id: str) -> dict | None:
+    row = _conn.execute("SELECT * FROM module_sources WHERE id = ?", (source_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def add_module_source(name: str, url: str) -> dict:
+    row = {"id": _new_id(), "name": name, "url": url, "added_at": _now_ms()}
+    _conn.execute(
+        "INSERT INTO module_sources (id, name, url, added_at) VALUES (?, ?, ?, ?)",
+        (row["id"], row["name"], row["url"], row["added_at"]),
+    )
+    _conn.commit()
+    return row
+
+
+def delete_module_source(source_id: str) -> None:
+    _conn.execute("DELETE FROM module_sources WHERE id = ?", (source_id,))
     _conn.commit()
 
 

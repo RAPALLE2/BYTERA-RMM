@@ -283,6 +283,10 @@ if security_routes is not None:
 bgjobs_routes = _import_router("bgjobs_routes")
 if bgjobs_routes is not None:
     _mount("bgjobs_routes", bgjobs_routes)
+# Aktivierung + Modul-Store (Settings -> Aktivierung / Modul-Store)
+store_routes = _import_router("store_routes")
+if store_routes is not None:
+    _mount("store_routes", store_routes)
 
 # (Guacamole-WebSocket-Tunnel registriert das Modul 'guacamole' selbst.)
 
