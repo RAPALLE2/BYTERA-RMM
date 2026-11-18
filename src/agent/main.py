@@ -3740,6 +3740,38 @@ class _WinPipeTerminal:
             pass
 
 
+@sio.on("migrate-server", namespace="/agent")
+async def on_migrate_server(data):
+    """Backend-Migration: Das (alte) Backend teilt die NEUE Server-Adresse mit.
+    Der Agent schreibt sie in seine .env und startet sich neu - ab dann
+    verbindet er sich mit dem neuen Backend. Da data/.env des Backends
+    mitmigriert wird, bleiben Agent-Token und E2E-/TLS-Pinning gültig."""
+    from urllib.parse import urlparse
+    url = str((data or {}).get("url") or "").strip().rstrip("/")
+    p = urlparse(url)
+    if p.scheme not in ("http", "https") or not p.netloc:
+        _print(f"[migrate] Ungültige neue Server-Adresse erhalten: {url!r}")
+        return
+    if url == BACKEND_URL.rstrip("/"):
+        return  # schon richtig eingestellt
+    _print(f"[migrate] Neue Backend-Adresse: {url} - übernehme und starte neu")
+    try:
+        _env_store({"BACKEND_URL": url})
+    except Exception as e:
+        _print(f"[migrate] .env konnte nicht geschrieben werden: {e}")
+        return
+
+    async def _restart_soon():
+        await asyncio.sleep(1.5)   # Ack/Logs noch rausschreiben lassen
+        try:
+            await sio.disconnect()
+        except Exception:
+            pass
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    asyncio.get_event_loop().create_task(_restart_soon())
+
+
 @sio.on("term-open", namespace="/agent")
 async def on_term_open(data):
     """Startet eine echte interaktive Shell-Session."""

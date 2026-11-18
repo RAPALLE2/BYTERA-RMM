@@ -45,8 +45,9 @@ export function renderSettings(body, win) {
       security: admin,
       activation: admin || hasGlobalPerm("manage_modules"),
       modstore: admin || hasGlobalPerm("manage_modules"),
+      migration: admin,
     };
-    const order = ["general", "users", "branding", "security", "activation", "modstore", "source"];
+    const order = ["general", "users", "branding", "security", "activation", "modstore", "migration", "source"];
     const allowed = order.filter((k) => canTab[k]);
     if (!allowed.includes(activeTab)) activeTab = allowed[0] || "general";
     const tabLabel = { general: t("tab_general"), users: t("tab_users"),
@@ -54,6 +55,7 @@ export function renderSettings(body, win) {
       security: "Security",
       activation: "🔑 Aktivierung",
       modstore: "🧩 Modul-Store",
+      migration: "📦 Migration",
       source: "Source" };
     body.innerHTML = `
       <div style="display:flex;flex-direction:column;height:100%">
@@ -73,6 +75,7 @@ export function renderSettings(body, win) {
     else if (activeTab === "security") renderSecurityTab(content);
     else if (activeTab === "activation") renderActivationTab(content);
     else if (activeTab === "modstore") renderModStoreTab(content);
+    else if (activeTab === "migration") renderMigrationTab(content);
     else if (activeTab === "source") {
       // Source bringt keine eigenen Innenabstaende mit -> sonst klebt alles am Fensterrand
       const wrap = document.createElement("div");
@@ -239,6 +242,113 @@ export function renderSettings(body, win) {
         });
         renderModStoreTab(root);
       } catch (e) { showErr(e); }
+    });
+  }
+
+  // ---------------- MIGRATION (alles von einem anderen BYTERA-Backend übernehmen) ----------------
+  function renderMigrationTab(root) {
+    const fmtMB = (n) => (n == null ? "?" : `${Math.max(1, Math.round(n / 1048576))} MB`);
+    root.innerHTML = `
+      <div class="settings-section">
+        <h3>📦 Migration von einem anderen BYTERA-Backend</h3>
+        <p style="color:var(--subtext);font-size:13px;max-width:780px;line-height:1.5">
+          Hier auf dem <b>neuen</b> Backend mit einem <b>Admin-Account des alten
+          RMM</b> anmelden. Die Backends verbinden sich und es wird <b>alles</b>
+          übertragen: Datenbank (Clients, Benutzer, Settings, Modul-Einstellungen,
+          Aktivierungscode, …), Branding-Bilder, kompletter /storage-Ordner und
+          eigene Module. Die <code>.env</code> mit den Agent-/Verschlüsselungs-Schlüsseln
+          zieht mit um - Agents bleiben also authentifiziert.
+          <b>Achtung:</b> Lokale Daten dieses neuen Backends werden ersetzt
+          (Sicherung bleibt als <code>premigration-*</code> in <code>data/</code>).
+          Beide Backends müssen auf dem aktuellen Code-Stand sein.
+        </p>
+
+        <div class="panel" style="padding:12px 16px;max-width:640px;margin:10px 0;display:flex;flex-direction:column;gap:8px">
+          <input id="mig-url" placeholder="Adresse des alten RMM (z.B. https://rmm-alt.example.com)" />
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <input id="mig-user" placeholder="Benutzername (Admin)" style="flex:1;min-width:160px" autocomplete="off" />
+            <input id="mig-pass" type="password" placeholder="Passwort" style="flex:1;min-width:160px" autocomplete="new-password" />
+            <input id="mig-code" placeholder="2FA-Code (falls aktiv)" style="width:140px" autocomplete="off" />
+          </div>
+
+          <div style="font-size:13px;margin-top:6px"><b>Wie erreichen die Agents das neue Backend?</b></div>
+          <label style="font-size:13px"><input type="radio" name="mig-mode" value="same" checked />
+            Unter <b>derselben Adresse</b> wie bisher (IP/DNS wird auf diesen Server umgezogen - an den Agents ist nichts zu tun)</label>
+          <label style="font-size:13px"><input type="radio" name="mig-mode" value="new" />
+            Unter einer <b>neuen Adresse</b> - das alte Backend teilt sie allen Agents mit:</label>
+          <input id="mig-newurl" placeholder="https://rmm-neu.example.com" style="margin-left:22px;max-width:420px" disabled />
+
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button class="btn" id="mig-check">🔌 Verbinden & prüfen</button>
+            <button class="btn-primary" id="mig-start" disabled>🚚 Migration starten</button>
+          </div>
+        </div>
+        <div id="mig-info"></div>
+        <div id="mig-log" class="panel hidden" style="padding:10px 14px;max-width:640px;font-family:monospace;font-size:12px;white-space:pre-wrap"></div>
+        <div id="mig-err" class="form-error hidden" style="margin-top:8px;max-width:640px"></div>
+      </div>`;
+
+    const $ = (s) => root.querySelector(s);
+    const err = $("#mig-err");
+    const showErr = (e) => { err.textContent = e.message || String(e); err.classList.remove("hidden"); };
+    const creds = () => ({
+      url: $("#mig-url").value.trim(),
+      username: $("#mig-user").value.trim(),
+      password: $("#mig-pass").value,
+      code: $("#mig-code").value.trim(),
+    });
+    root.querySelectorAll("[name=mig-mode]").forEach((r) => r.addEventListener("change", () => {
+      const isNew = root.querySelector("[name=mig-mode]:checked").value === "new";
+      $("#mig-newurl").disabled = !isNew;
+      if (isNew && !$("#mig-newurl").value) $("#mig-newurl").value = window.location.origin;
+    }));
+
+    $("#mig-check").addEventListener("click", async () => {
+      err.classList.add("hidden");
+      $("#mig-info").innerHTML = `<p style="font-size:13px;color:var(--subtext)">Verbinde mit dem alten RMM…</p>`;
+      try {
+        const d = await moduleRequest("/api/migration/check", {
+          method: "POST", noJob: true, body: JSON.stringify(creds()),
+        });
+        const r = d.remote, c = r.counts || {}, s = r.sizes || {};
+        $("#mig-info").innerHTML = `
+          <div class="panel" style="padding:10px 14px;max-width:640px;font-size:13px">
+            ✅ Verbunden - altes RMM Version <b>${esc(String(r.version))}</b><br>
+            Clients: <b>${c.clients ?? "?"}</b> · Benutzer: <b>${c.users ?? "?"}</b><br>
+            Datenmenge: data ${fmtMB(s.data)} · storage ${fmtMB(s.storage)} · Module ${fmtMB(s.modules)}
+          </div>`;
+        $("#mig-start").disabled = false;
+      } catch (e) { $("#mig-info").innerHTML = ""; showErr(e); }
+    });
+
+    $("#mig-start").addEventListener("click", async () => {
+      err.classList.add("hidden");
+      const mode = root.querySelector("[name=mig-mode]:checked").value;
+      const newUrl = $("#mig-newurl").value.trim();
+      if (!(await uiConfirm(
+        "Migration jetzt starten?\n\nALLE Daten des alten RMM werden übernommen und " +
+        "ersetzen die lokalen Daten dieses Backends. Danach startet das Backend neu " +
+        "und du meldest dich mit den Benutzern des ALTEN RMM an."))) return;
+      const log = $("#mig-log");
+      log.classList.remove("hidden");
+      log.textContent = "Starte Migration …";
+      $("#mig-start").disabled = true; $("#mig-check").disabled = true;
+      try {
+        await moduleRequest("/api/migration/import", {
+          method: "POST",
+          body: JSON.stringify({ ...creds(), mode, new_url: newUrl }),
+          onJob: (job) => {
+            if (Array.isArray(job.logs) && job.logs.length) log.textContent = job.logs.join("\n");
+            else if (job.detail) log.textContent += `\n${job.detail}`;
+          },
+        });
+        log.textContent += "\n\n✅ Übertragung abgeschlossen - das Backend startet neu. " +
+          "Die Seite lädt gleich automatisch neu; danach mit einem Account des alten RMM anmelden.";
+        setTimeout(() => window.location.reload(), 15000);
+      } catch (e) {
+        showErr(e);
+        $("#mig-start").disabled = false; $("#mig-check").disabled = false;
+      }
     });
   }
 

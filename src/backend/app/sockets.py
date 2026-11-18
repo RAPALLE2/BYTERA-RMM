@@ -1464,9 +1464,18 @@ async def _do_register(sid, payload) -> tuple[bool, str]:
     await _side("auto-update", _auto_update)
     await _side("geraetetyp", _device_type)
     await _side("absturzmeldung", _crash_report)
+    async def _pending_handoff():
+        # Backend-Migration mit NEUER Adresse: Agents, die erst jetzt online
+        # kommen, bekommen die neue Server-Adresse nachgereicht (gesetzt von
+        # POST /api/migration/handoff auf dem ALTEN Backend).
+        url = await db.call(db.get_setting, "migration_handoff_url", "")
+        if url:
+            await sio.emit("migrate-server", {"url": url}, to=sid, namespace="/agent")
+
     await _side("netze", _subnets)
     await _side("wartungsmodus", _diag_mode)
     await _side("benachrichtigungen", _notify_online)
+    await _side("migrations-handoff", _pending_handoff)
 
     return True, "ok"
 

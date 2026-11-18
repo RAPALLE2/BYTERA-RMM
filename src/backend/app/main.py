@@ -287,6 +287,10 @@ if bgjobs_routes is not None:
 store_routes = _import_router("store_routes")
 if store_routes is not None:
     _mount("store_routes", store_routes)
+# Auto-Migration von einem anderen BYTERA-Backend (Settings -> Migration)
+migration_routes = _import_router("migration_routes")
+if migration_routes is not None:
+    _mount("migration_routes", migration_routes)
 
 # (Guacamole-WebSocket-Tunnel registriert das Modul 'guacamole' selbst.)
 

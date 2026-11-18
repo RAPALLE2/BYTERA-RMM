@@ -344,6 +344,100 @@ class _SafeConn:
         setattr(object.__getattribute__(self, "_conn"), name, value)
 
 
+def _apply_pending_migration() -> None:
+    """Backend-Migration (Settings -> Migration): Wendet eine vom Migrations-
+    Import gestagte Übernahme an, BEVOR die Datenbank geöffnet wird.
+
+    router/migration_routes.py lädt vom alten Backend ein Archiv herunter und
+    entpackt es nach <backend>/migration_incoming/ (+ apply.json als Marker);
+    danach startet das Backend neu. Hier werden die Teile an ihren Platz
+    geschoben:
+      data/     -> DATA_DIR   (DB, .env, Modul-Einstellungen; version.txt und
+                               requirements.txt des NEUEN Backends bleiben)
+      storage/  -> STORAGE_DIR (Dateien, Websites, Recordings, dist, /storage)
+      branding/ -> frontend/image (Logos/Bilder)
+      modules/  -> MODULES_DIR (nur Module, die hier noch nicht existieren)
+    Die bisherige DB/.env wird als premigration-* gesichert. Fehler brechen den
+    Start NICHT ab - der Rest wird angewendet und geloggt."""
+    import shutil
+    from app.paths import (BACKEND_DIR, DATA_DIR, STORAGE_DIR, MODULES_DIR,
+                           BRANDING_DIR)
+    staging = BACKEND_DIR / "migration_incoming"
+    marker = staging / "apply.json"
+    if not marker.exists():
+        return
+    print("[migration] Wende migrierte Daten des alten Backends an …")
+
+    def _replace(src: pathlib.Path, dst: pathlib.Path) -> None:
+        if dst.is_dir() and not dst.is_symlink():
+            shutil.rmtree(dst, ignore_errors=True)
+        elif dst.exists():
+            dst.unlink(missing_ok=True)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dst))
+
+    # ---- data/ (DB, .env, modules.json, Modul-Daten) ----
+    src_data = staging / "data"
+    if src_data.is_dir():
+        for keepname, backup in (("data.sqlite", "premigration-data.sqlite"),
+                                 (".env", ".env.premigration")):
+            cur = DATA_DIR / keepname
+            if cur.exists() and (src_data / keepname).exists():
+                try:
+                    shutil.copy2(cur, DATA_DIR / backup)
+                except OSError as e:
+                    print(f"[migration] Sicherung {backup} fehlgeschlagen: {e}")
+        for item in src_data.iterdir():
+            if item.name in ("version.txt", "requirements.txt", "backup"):
+                continue  # gehören zum NEUEN Backend-Stand
+            try:
+                _replace(item, DATA_DIR / item.name)
+            except OSError as e:
+                print(f"[migration] data/{item.name}: {e}")
+
+    # ---- storage/ ----
+    src_storage = staging / "storage"
+    if src_storage.is_dir():
+        for item in src_storage.iterdir():
+            try:
+                _replace(item, STORAGE_DIR / item.name)
+            except OSError as e:
+                print(f"[migration] storage/{item.name}: {e}")
+
+    # ---- branding/ (frontend/image) ----
+    src_brand = staging / "branding"
+    if src_brand.is_dir():
+        for item in src_brand.iterdir():
+            try:
+                _replace(item, BRANDING_DIR / item.name)
+            except OSError as e:
+                print(f"[migration] branding/{item.name}: {e}")
+
+    # ---- modules/ (nur hier unbekannte, z.B. eigene Module) ----
+    src_mods = staging / "modules"
+    if src_mods.is_dir():
+        for item in src_mods.iterdir():
+            if not item.is_dir():
+                continue
+            target = pathlib.Path(MODULES_DIR) / item.name
+            if target.exists():
+                continue  # Standard-/vorhandenes Modul: Code des neuen Stands behalten
+            try:
+                shutil.move(str(item), str(target))
+                print(f"[migration] Eigenes Modul übernommen: {item.name}")
+            except OSError as e:
+                print(f"[migration] modules/{item.name}: {e}")
+
+    shutil.rmtree(staging, ignore_errors=True)
+    print("[migration] Übernahme abgeschlossen - alte Daten liegen als "
+          "premigration-* in data/.")
+
+
+try:
+    _apply_pending_migration()
+except Exception as _mig_exc:   # Migration darf den Start nie verhindern
+    print(f"[migration] FEHLER beim Anwenden: {_mig_exc}")
+
 # Eine einzige, geteilte Verbindung für die ganze App.
 # check_same_thread=False, weil FastAPI/Uvicorn mehrere Threads nutzen kann;
 # die Serialisierung übernimmt _SafeConn (siehe oben).
