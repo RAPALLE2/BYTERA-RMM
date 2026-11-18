@@ -2552,6 +2552,9 @@ async def dashboard_term_open(sid, data):
     """Startet eine interaktive Shell-Session auf dem Ziel-Client."""
     client_id = data.get("clientId")
     shell = data.get("shell", "auto")
+    # Anmelde-Modus: "admin" = direkte Root-/System-Shell (wie bisher),
+    # "user" = der Agent startet /bin/login im PTY (Username/Passwort wie SSH).
+    mode = data.get("mode") if data.get("mode") in ("admin", "user") else "admin"
     session = data.get("session")
     if not await _ws_user_may(data.get("username"), "use_terminal", client_id):
         await sio.emit("term-output", {
@@ -2563,6 +2566,7 @@ async def dashboard_term_open(sid, data):
     ok = await send_to_agent(client_id, "term-open", {
         "session": session,
         "shell": shell,
+        "mode": mode,
         "cols": data.get("cols", 80),
         "rows": data.get("rows", 24),
     })
@@ -2591,7 +2595,8 @@ async def dashboard_term_open(sid, data):
         _term_sessions[session] = {
             "client_id": client_id,
             "username": data.get("username", "unbekannt"),
-            "shell": shell,
+            "shell": shell if mode == "admin" else f"{shell} (Benutzer-Login)",
+            "mode": mode,
             "started": _t.time(),
             "rec_id": rec_id,
         }

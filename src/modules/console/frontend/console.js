@@ -31,7 +31,7 @@ export function renderConsole(body, win) {
     try { ws?.close(); } catch { /* egal */ }
     try { term?.dispose(); } catch { /* egal */ }
     host.innerHTML = "";
-    const { MiniTerm } = await import("/js/feature/miniterm.js");
+    const { MiniTerm } = await import("/js/feature/terminalemu.js");
     const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/console/ws${via ? "?via=client" : ""}`;
     ws = new WebSocket(url, ["rmm-console", `rmmtoken.${getToken() || ""}`]);
     term = new MiniTerm(host, {

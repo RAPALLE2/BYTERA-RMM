@@ -8,7 +8,7 @@
 import { api } from "/js/app/api.js";
 import { registerCleanup } from "/js/app/windowmanager.js";
 import { esc, uiConfirm } from "/js/app/utils.js";
-import { MiniTerm } from "/js/feature/miniterm.js";
+import { MiniTerm } from "/js/feature/terminalemu.js";
 import { t } from "/js/app/i18n.js";
 
 function formatDuration(ms) {

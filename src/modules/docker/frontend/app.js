@@ -448,7 +448,7 @@ export function renderDocker(body) {
     async function tty(box) {
       box.innerHTML = `<div data-term style="height:420px;background:#0b0f14;border-radius:8px;overflow:hidden"></div>`;
       const st = p.querySelector("[data-cst]");
-      const { MiniTerm } = await import("/js/feature/miniterm.js");
+      const { MiniTerm } = await import("/js/feature/terminalemu.js");
       const dec = new TextDecoder();
       const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/docker${base}/console`,
                                ["rmm-console", `rmmtoken.${getToken() || ""}`]);

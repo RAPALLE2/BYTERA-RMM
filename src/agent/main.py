@@ -3334,12 +3334,26 @@ def _agent_supervise(name: str, factory):
 _terminals: dict = {}   # session_id -> Handle (plattformabhängig)
 
 
-def _resolve_shell_cmd(shell: str, elevated: bool) -> list:
-    """Bestimmt das Startkommando der Shell je nach Wunsch und Plattform."""
+def _resolve_shell_cmd(shell: str, elevated: bool, mode: str = "admin") -> list | None:
+    """Bestimmt das Startkommando der Shell je nach Wunsch, Modus und Plattform.
+
+    mode "admin": direkte Shell (Root/System - wie bisher).
+    mode "user":  POSIX startet /bin/login im PTY -> echte Username/Passwort-
+                  Abfrage über PAM, exakt wie an einer SSH-/TTY-Konsole.
+                  Rückgabe None = kein login-Programm gefunden.
+    """
     if IS_WINDOWS:
+        # Windows kennt hier nur die System-Shell (das Frontend bietet den
+        # Benutzer-Login dort gar nicht erst an).
         if shell == "powershell":
             return ["powershell.exe", "-NoLogo", "-NoProfile"]
         return ["cmd.exe"]
+    if mode == "user":
+        for candidate in ("/bin/login", "/usr/bin/login", "/sbin/login", "/usr/sbin/login"):
+            if os.path.exists(candidate):
+                # -p: Umgebung (TERM!) an die Benutzer-Shell durchreichen.
+                return [candidate, "-p"]
+        return None
     # POSIX: bevorzugt bash, sonst sh. 'shell' spielt hier keine Rolle.
     for candidate in ("/bin/bash", "/bin/sh"):
         if os.path.exists(candidate):
@@ -3350,12 +3364,16 @@ def _resolve_shell_cmd(shell: str, elevated: bool) -> list:
 class _PosixTerminal:
     """Interaktive Shell über ein echtes PTY (Linux/macOS)."""
 
-    def __init__(self, session_id, shell, cols, rows, loop):
+    def __init__(self, session_id, shell, cols, rows, loop, mode="admin"):
         import pty, fcntl, termios, struct
         self.session_id = session_id
         self.loop = loop
         self.alive = True
-        argv = _resolve_shell_cmd(shell, False)
+        argv = _resolve_shell_cmd(shell, False, mode)
+        if argv is None:
+            # Benutzer-Login gewünscht, aber kein login-Programm vorhanden.
+            raise RuntimeError("Kein /bin/login auf diesem System gefunden - "
+                              "Benutzer-Login nicht möglich")
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             # Kindprozess: Umgebung setzen und Shell starten.
@@ -3727,18 +3745,41 @@ async def on_term_open(data):
     """Startet eine echte interaktive Shell-Session."""
     session_id = data.get("session")
     shell = data.get("shell", "auto")
+    mode = data.get("mode") if data.get("mode") in ("admin", "user") else "admin"
     cols = int(data.get("cols", 80))
     rows = int(data.get("rows", 24))
     if not session_id:
         return
 
+    if IS_WINDOWS and mode == "user":
+        # Ohne eigenen SSH-Server gibt es unter Windows keinen sauberen
+        # Konsolen-Login (runas & Co. öffnen eigene Fenster auf dem Desktop).
+        await sio.emit("term-output", {
+            "id": DEVICE_ID, "session": session_id,
+            "data": "\x1b[33m[Benutzer-Login ist unter Windows nicht verfügbar - "
+                    "starte normale Shell.]\x1b[0m\r\n",
+        }, namespace="/agent")
+        mode = "admin"
+
     # SOFORT-Marker: beweist, dass DIESER (neue) Agent-Code läuft. Sieht der
     # Nutzer diese Zeile nicht, läuft auf dem Client noch die ALTE agent.py
     # (Prozess nach dem Update nicht neu gestartet).
+    what = "Login (Benutzer-Anmeldung)" if mode == "user" else f"{shell}-Shell"
     await sio.emit("term-output", {
         "id": DEVICE_ID, "session": session_id,
-        "data": f"\x1b[90m[Agent startet {shell}-Shell…]\x1b[0m\r\n",
+        "data": f"\x1b[90m[Agent startet {what}…]\x1b[0m\r\n",
     }, namespace="/agent")
+
+    if mode == "user" and not IS_WINDOWS:
+        try:
+            if os.geteuid() != 0:
+                await sio.emit("term-output", {
+                    "id": DEVICE_ID, "session": session_id,
+                    "data": "\x1b[33m[Hinweis: Der Agent läuft nicht als root - "
+                            "die Anmeldung kann fehlschlagen.]\x1b[0m\r\n",
+                }, namespace="/agent")
+        except Exception:
+            pass
 
     # Schon offen? Erst schließen (Neustart).
     old = _terminals.pop(session_id, None)
@@ -3753,7 +3794,7 @@ async def on_term_open(data):
         if IS_WINDOWS:
             term = _WinTerminal(session_id, shell, cols, rows, loop)
         else:
-            term = _PosixTerminal(session_id, shell, cols, rows, loop)
+            term = _PosixTerminal(session_id, shell, cols, rows, loop, mode)
         _terminals[session_id] = term
     except ImportError as e:
         # pywinpty fehlt oder ist kaputt. Erst einmal selbst reparieren -

@@ -1,20 +1,29 @@
 // apps/terminal.js
 // ----------------
 // ECHTES interaktives Terminal. Der Agent hält eine dauerhafte Shell-Session
-// (PTY) offen; hier wird sie mit einem eingebauten Terminal-Emulator
-// (miniterm.js, KEIN CDN/xterm nötig -> funktioniert auch im abgeschotteten
-// LAN ohne Internet) verbunden.
+// (PTY) offen; hier wird sie mit einem vollwertigen Terminal-Emulator
+// (terminalemu.js = xterm.js, LOKAL gebündelt, kein CDN -> funktioniert auch
+// im abgeschotteten LAN ohne Internet) verbunden: alle Farben (Truecolor),
+// alle Tasten (Pfeile, F-Tasten, Strg-/Alt-Kombos) und Maus-Unterstützung
+// (htop, mc, tmux, vim ...).
 //
 // Zusammenhängende Session: 'cd' wirkt dauerhaft, nano/vim & interaktive
 // Programme laufen, Verlauf per Pfeiltasten, Farben. Windows: cmd/powershell
 // wählbar (Agent spawnt die jeweilige .exe direkt).
+//
+// Anmelde-Modi (Linux/macOS):
+//   * Admin  -> wie bisher: direkte Root-Shell im PTY (der Agent läuft als root)
+//   * User   -> der Agent startet /bin/login im PTY: echte Username/Passwort-
+//               Abfrage über PAM, exakt wie an einer SSH-/TTY-Konsole.
+// Unter Windows gibt es nur die System-Shell (ein echter Benutzer-Login ist
+// dort ohne eigenen SSH-Server technisch nicht sauber möglich).
 
 import { esc, mapKeyboardText } from "../app/utils.js";
 import { exportLogText } from "./source.js";
 import { state } from "../app/state.js";
 import { dashboardSocket } from "../app/socket.js";
 import { registerCleanup } from "../app/windowmanager.js";
-import { MiniTerm } from "./miniterm.js";
+import { Term } from "./terminalemu.js";
 import { t } from "../app/i18n.js";
 
 export function renderTerminal(body, win) {
@@ -26,7 +35,15 @@ export function renderTerminal(body, win) {
     `term-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
   let shellMode = isWindows ? "cmd" : "auto";
+  let loginMode = "admin";       // "admin" = direkte Root-/System-Shell, "user" = Login-Abfrage
   let term = null;
+
+  // Auswahl des Anmelde-Modus (auf Windows nur Admin, s.o.).
+  const modeSel = `
+        <select id="term-mode-${win.key}" title="Admin = direkte Root-Shell (wie bisher). Benutzer-Login = Username/Passwort-Abfrage wie bei SSH.">
+          <option value="admin">🔐 Admin (Root-Shell)</option>
+          <option value="user"${isWindows ? ` disabled title="Unter Windows nicht verfügbar"` : ""}>👤 Benutzer-Login (wie SSH)</option>
+        </select>`;
 
   const shellBar = isWindows ? `
       <div style="display:flex;gap:6px;padding:6px 8px;border-bottom:1px solid var(--border);align-items:center;flex-wrap:wrap">
@@ -38,6 +55,7 @@ export function renderTerminal(body, win) {
           <option value="cmd">CMD</option>
           <option value="powershell">PowerShell</option>
         </select>
+        ${modeSel}
         <span style="font-size:11px;color:var(--subtext)">gilt beim (Neu-)Start</span>
         <span style="flex:1"></span>
         <span style="position:relative;display:inline-flex">
@@ -62,6 +80,7 @@ export function renderTerminal(body, win) {
         <button class="btn term-fs-btn" title="${t("vnc_fs_title")}">${t("vnc_fullscreen")}</button>
         <span class="bar-opts">
         <span style="font-size:11px;color:var(--subtext)">${t("term_shell_on", { host: esc(clientName || "Client") })}</span>
+        ${modeSel}
         <span style="flex:1"></span>
         <span style="position:relative;display:inline-flex">
           <button class="btn" id="term-script-${win.key}" title="${t("term_pick_script")}" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t("term_script_btn")}</button>
@@ -128,6 +147,18 @@ export function renderTerminal(body, win) {
   const shellSel = body.querySelector(`#term-shell-${win.key}`);
   if (shellSel) shellSel.addEventListener("change", () => { shellMode = shellSel.value; });
 
+  // Anmelde-Modus: Umschalten startet die Session sofort neu, damit die
+  // Login-Abfrage (bzw. die Root-Shell) direkt erscheint.
+  const modeSelEl = body.querySelector(`#term-mode-${win.key}`);
+  if (modeSelEl) modeSelEl.addEventListener("change", () => {
+    loginMode = modeSelEl.value === "user" ? "user" : "admin";
+    dashboardSocket.emit("term-close", { clientId, session: sessionId });
+    statusEl.textContent = loginMode === "user"
+      ? "Starte Benutzer-Login …" : "Starte Admin-Shell …";
+    setTimeout(openSession, 150);
+    term?.focus();
+  });
+
   // --- Socket-Events (nach Session gefiltert) ---
   let gotOutput = false;
   let gotAck = false;
@@ -157,10 +188,12 @@ export function renderTerminal(body, win) {
     gotOutput = false; gotAck = false; agentOnline = false;
     dashboardSocket.emit("term-open", {
       clientId, session: sessionId, shell: shellMode,
+      mode: loginMode,
       cols: term.cols, rows: term.rows,
       username: state.user?.username || "unknown",
     });
-    statusEl.textContent = `${t("vnc_connected")} (${isWindows ? shellMode : "shell"}). ${t("term_click_hint")}`;
+    const modeLabel = loginMode === "user" ? "Benutzer-Login" : (isWindows ? shellMode : "Root-Shell");
+    statusEl.textContent = `${t("vnc_connected")} (${modeLabel}). ${t("term_click_hint")}`;
     // Präzise Diagnose, falls keine Ausgabe kam.
     //
     // Das Fenster war 3 Sekunden. Das reicht auf einem LAN, aber nicht auf
@@ -195,13 +228,12 @@ export function renderTerminal(body, win) {
     // überholten Fehlermeldung stehen zu bleiben.
     setTimeout(() => {
       if (!term || !gotOutput) return;
-      statusEl.textContent =
-        `${t("vnc_connected")} (${isWindows ? shellMode : "shell"}). ${t("term_click_hint")}`;
+      statusEl.textContent = `${t("vnc_connected")} (${modeLabel}). ${t("term_click_hint")}`;
     }, 25000);
   }
 
-  // Terminal-Emulator aufbauen (sofort, keine externen Abhängigkeiten).
-  term = new MiniTerm(host, {
+  // Terminal-Emulator aufbauen (xterm.js, lokal gebündelt - siehe terminalemu.js).
+  term = new Term(host, {
     onData: (data) => dashboardSocket.emit("term-input", { clientId, session: sessionId, data }),
     onResize: (cols, rows) => dashboardSocket.emit("term-resize", { clientId, session: sessionId, cols, rows }),
   });
@@ -253,7 +285,7 @@ export function renderTerminal(body, win) {
     if (on) {
       if (!agentTerm) {
         // Nur Anzeige - Eingaben werden ignoriert (der Agent-Log ist read-only).
-        agentTerm = new MiniTerm(agentHost, { onData: () => {}, onResize: () => {} });
+        agentTerm = new Term(agentHost, { onData: () => {}, onResize: () => {} });
       }
       statusEl.textContent = "Agent-Konsole (read-only) - Log des Agenten auf diesem Client.";
       dashboardSocket.emit("agent-console-open", { clientId, username: state.user?.username || "unbekannt" });

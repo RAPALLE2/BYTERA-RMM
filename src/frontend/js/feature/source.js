@@ -14,7 +14,7 @@ import { helpDot } from "../app/help.js";
 import { state } from "../app/state.js";
 import { esc, formatBytes, uiConfirm, uiPrompt, uiConfirmTwice, downloadText, saveUrlAs } from "../app/utils.js";
 import { dashboardSocket } from "../app/socket.js";
-import { MiniTerm } from "./miniterm.js";
+import { MiniTerm } from "./terminalemu.js";
 import { t } from "../app/i18n.js";
 
 export function renderSource(container) {
