@@ -1,10 +1,10 @@
 """
-store.py (Modul "geotrack") - Standort-Tracker: Konfiguration + Standortverlauf.
+store.py (module "geotrack") - location tracker: configuration + location history.
 
-Tabellen (SQLite, db._conn):
-  geo_clients    je Client: ob getrackt wird (Standard: Laptops an), letzter Stand.
-  geo_locations  Standortverlauf (Zeit, lat/lon, Genauigkeit, Quelle os|wifi|ip,
-                 Ort/Land aus der Auflösung).
+Tables (SQLite, db._conn):
+  geo_clients    per client: whether it is tracked (default: laptops on), last state.
+  geo_locations  location history (time, lat/lon, accuracy, source os|wifi|ip,
+                 city/country from resolution).
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ def ensure_tables() -> None:
     c.commit()
 
 
-# ------------------------------------------------ Tracking-Status je Client
+# ------------------------------------------------ tracking state per client
 def get_client(client_id: str) -> dict | None:
     r = _c().execute("SELECT * FROM geo_clients WHERE client_id=?", (client_id,)).fetchone()
     return dict(r) if r else None
@@ -47,7 +47,7 @@ def is_enabled(client_id: str, detected_kind: str = "") -> bool:
     row = get_client(client_id)
     if row:
         return bool(row["enabled"])
-    return detected_kind == "laptop"          # Standard: Laptops an, sonst aus
+    return detected_kind == "laptop"          # default: laptops on, everything else off
 
 
 def set_enabled(client_id: str, enabled: bool):
@@ -68,7 +68,7 @@ def tracked_clients() -> list[dict]:
     return [dict(r) for r in _c().execute("SELECT * FROM geo_clients WHERE enabled=1").fetchall()]
 
 
-# ------------------------------------------------ Standorte
+# ------------------------------------------------ locations
 def add_location(client_id, lat, lon, accuracy, source, city="", country="", label="") -> dict:
     lid = uuid.uuid4().hex[:16]
     ts = _now()
@@ -83,15 +83,6 @@ def add_location(client_id, lat, lon, accuracy, source, city="", country="", lab
 def last_location(client_id) -> dict | None:
     r = _c().execute("SELECT * FROM geo_locations WHERE client_id=? ORDER BY ts DESC LIMIT 1", (client_id,)).fetchone()
     return dict(r) if r else None
-
-
-def last_locations_bulk(client_ids: list[str]) -> dict:
-    out = {}
-    for cid in client_ids:
-        loc = last_location(cid)
-        if loc:
-            out[cid] = loc
-    return out
 
 
 def history(client_id, limit=500) -> list[dict]:

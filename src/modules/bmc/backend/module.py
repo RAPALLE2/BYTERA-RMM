@@ -1,12 +1,12 @@
-"""iLO / iDRAC (Redfish) - Einstiegspunkt des Moduls "bmc"."""
+"""iLO / iDRAC (Redfish) - entry point of the "bmc" module."""
 from app import hostapps
 
 from . import webproxy
 
 
 async def on_startup(ctx):
-    # Native Web-UI / Remote-Konsole per Host-Dispatcher durchreichen (Einstellung
-    # "proxy_host" wird bei jeder Anfrage gelesen - Aenderung ohne Neustart).
+    # Proxy the native web UI / remote console via the host dispatcher (the
+    # "proxy_host" setting is read on every request - changes need no restart).
     hostapps.register("bmc-proxy", webproxy.match_host, webproxy.app)
 
 

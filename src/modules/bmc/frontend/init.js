@@ -1,9 +1,9 @@
-// init.js (Modul "bmc") - Knopf "Externes Management" in den Client-Aktionen
-// -------------------------------------------------------------------------
-//   Client mit verknüpfter iLO/iDRAC          -> "🛉 Externes Management"
-//   physischer Server ohne BMC + manage_bmc   -> "🛉 iLO/iDRAC verbinden"
-// Öffnet die Modul-App, fokussiert auf diesen Client. Stellt ausserdem die
-// Verknüpfungen (client_id -> BMC) als Modul-API bereit (z.B. für die Topologie).
+// init.js (module "bmc") - "External management" button in the client actions
+// ---------------------------------------------------------------------------
+//   client with a linked iLO/iDRAC           -> "External management"
+//   physical server without a BMC + manage_bmc -> "Connect iLO/iDRAC"
+// Opens the module app focused on this client. Also exposes the links
+// (client_id -> BMC) as a module API (e.g. for the topology).
 import { registerClientAction, registerModuleApi, moduleRequest } from "/js/app/modules.js";
 import { hasGlobalPerm, isAdmin, hasClientPerm } from "/js/app/state.js";
 import { openWindow } from "/js/app/windowmanager.js";
@@ -34,14 +34,14 @@ export function init() {
       if (l) {
         if (!(hasGlobalPerm("use_bmc") || isAdmin() || hasClientPerm(client.id, "c_power"))) return null;
         const v = (l.vendor || "").includes("HPE") ? "iLO" : (l.vendor || "").includes("Dell") ? "iDRAC" : "iLO/iDRAC";
-        return `🛉 Externes Management (${v})`;
+        return `External management (${v})`;
       }
-      // Kein BMC verknüpft: nicht bei virtuellen Maschinen/Containern anbieten
-      // (die haben keine eigene BMC), sonst nur mit Recht zum Anlegen.
+      // No BMC linked: don't offer for virtual machines/containers (they have no
+      // BMC of their own); otherwise only with permission to create one.
       const kind = (client.detected_kind || client.device_type || "").toLowerCase();
       if (["vm", "lxc", "container", "docker"].includes(kind)) return null;
       if (!(hasGlobalPerm("manage_bmc") || isAdmin())) return null;
-      return "🛉 iLO/iDRAC verbinden";
+      return "Connect iLO/iDRAC";
     },
     onClick(client) {
       const l = links[client.id];

@@ -1,9 +1,9 @@
 """
-store.py (Modul "bmc") - BMC-Verbindungen (iLO/iDRAC), verschluesselt.
+store.py (module "bmc") - BMC connections (iLO/iDRAC), encrypted.
 
-Eine Verbindung je Geraet: Adresse, Zugangsdaten (verschluesselt, Fernet),
-TLS-Pruefung/Fingerabdruck, Ausfuehrungsweg (Backend oder Node) und optionale
-Verknuepfung zu einem Client (client_id). Ablage:
+One connection per device: address, credentials (encrypted with Fernet),
+TLS verification/fingerprint, execution path (backend or node) and an optional
+link to a client (client_id). Stored at:
   data/modules/bmc/connections.json
 """
 
@@ -80,7 +80,7 @@ def by_client(client_id: str) -> dict | None:
 
 
 def links() -> dict:
-    """client_id -> {id, name, vendor} fuer Topologie/Aktionsknopf."""
+    """client_id -> {id, name, vendor} for the topology/action button."""
     out = {}
     for c in _load()["conns"].values():
         if c.get("client_id"):
@@ -103,7 +103,7 @@ def update(fn):
 
 
 def creds(c: dict) -> dict:
-    """Vollstaendige Verbindungsdaten inkl. entschluesseltem Passwort (fuer den Redfish-Client)."""
+    """Full connection data including the decrypted password (for the Redfish client)."""
     return {"host": c.get("host"), "port": c.get("port"), "username": c.get("username"),
             "password": dec(c.get("password_enc", "")), "verify_tls": c.get("verify_tls"),
             "fingerprint": c.get("fingerprint"), "insecure_http": c.get("insecure_http")}

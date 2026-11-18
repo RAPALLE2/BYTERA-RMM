@@ -1,17 +1,17 @@
 """
-redfish.py (Modul "bmc") - gemeinsamer Redfish-Client fuer iLO und iDRAC.
+redfish.py (module "bmc") - shared Redfish client for iLO and iDRAC.
 
-Dieselbe (synchrone) Klasse laeuft im BACKEND (direkt erreichbar) und im NODE-
-Teil (Node im Management-Netz). Redfish ist die DMTF-Standard-REST-API, die
-sowohl HPE iLO (4/5/6) als auch Dell iDRAC (7/8/9) sprechen. Alles geht ueber
-HTTPS + JSON, daher reicht httpx - kein ipmitool, keine Hersteller-SDKs.
+The same (synchronous) class runs in the BACKEND (directly reachable) and in the
+NODE part (node on the management network). Redfish is the DMTF standard REST API
+spoken by both HPE iLO (4/5/6) and Dell iDRAC (7/8/9). Everything is HTTPS + JSON,
+so httpx is enough - no ipmitool, no vendor SDKs.
 
 Design:
-  * Session-Login (X-Auth-Token), Fallback auf Basic-Auth.
-  * Alles wird aus dem Service-Root heraus ENTDECKT (keine fest verdrahteten
-    Pfade), damit iLO- und iDRAC-Eigenheiten automatisch passen.
-  * dispatch(op, args) kapselt die Einzelaktionen; "raw" erlaubt beliebige
-    Redfish-Aufrufe -> was die BMC kann, kann auch das Modul.
+  * Session login (X-Auth-Token), falling back to Basic auth.
+  * Everything is DISCOVERED from the service root (no hard-coded paths), so iLO
+    and iDRAC quirks are handled automatically.
+  * dispatch(op, args) wraps the individual actions; "raw" allows any Redfish
+    call -> whatever the BMC can do, the module can do too.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ class RedfishClient:
         import httpx
         host = str(conn.get("host") or "").strip()
         if not host:
-            raise RedfishError("Keine Adresse (Host/IP) angegeben")
+            raise RedfishError("No address (host/IP) given")
         scheme = "http" if conn.get("insecure_http") else "https"
         port = conn.get("port")
         base = f"{scheme}://{host}" + (f":{int(port)}" if port else "")
@@ -69,7 +69,7 @@ class RedfishClient:
                 der = ss.getpeercert(binary_form=True)
         got = hashlib.sha256(der).hexdigest()
         if got != self._fp:
-            raise RedfishError(f"Zertifikat-Fingerabdruck passt nicht (erwartet {self._fp[:16]}…, erhalten {got[:16]}…)")
+            raise RedfishError(f"Certificate fingerprint mismatch (expected {self._fp[:16]}…, got {got[:16]}…)")
 
     def _headers(self):
         h = {}
@@ -88,9 +88,9 @@ class RedfishClient:
         try:
             r = self._c.request(method, url, json=json, content=raw_body, headers=hs)
         except self._httpx.HTTPError as exc:
-            raise RedfishError(f"Verbindung zur BMC fehlgeschlagen: {exc}") from None
+            raise RedfishError(f"Connection to the BMC failed: {exc}") from None
         if r.status_code == 401 and not self._token and self.user:
-            # Session versuchen und einmal wiederholen
+            # try a session and retry once
             if self._login():
                 return self._req(method, path, json=json, raw_body=raw_body, headers=headers)
         return r
@@ -112,7 +112,7 @@ class RedfishClient:
                 msg = msg or err.get("message") or err.get("Message") or ""
             except Exception:
                 msg = (r.text or "")[:300]
-            raise RedfishError(f"{what} fehlgeschlagen (HTTP {r.status_code}): {msg}".strip(), r.status_code)
+            raise RedfishError(f"{what} failed (HTTP {r.status_code}): {msg}".strip(), r.status_code)
         return r
 
     def _get(self, path):
@@ -130,7 +130,7 @@ class RedfishClient:
             self._token = r.headers.get("X-Auth-Token")
             self._session_uri = r.headers.get("Location")
             return bool(self._token)
-        # Manche iLO wollen den Links->Sessions-Pfad
+        # some iLO firmware expects the Links->Sessions path
         links = root.get("Links", {}).get("Sessions", {}).get("@odata.id")
         if links and links != sess:
             r = self._req("POST", links, json={"UserName": self.user, "Password": self.pw})
@@ -184,7 +184,7 @@ class RedfishClient:
     def _system(self, idx=0):
         m = self._systems()
         if not m:
-            raise RedfishError("Kein ComputerSystem gefunden")
+            raise RedfishError("No ComputerSystem found")
         return self._get(m[idx])
 
     def _chassis(self):
@@ -207,7 +207,7 @@ class RedfishClient:
         v = (root.get("Vendor") or root.get("OemName") or "").strip()
         return v or "Redfish"
 
-    # ================================================ Operationen
+    # ================================================ operations
     def summary(self) -> dict:
         root = self._get_root()
         sys = self._system()
@@ -264,7 +264,7 @@ class RedfishClient:
         if mode:
             boot["BootSourceOverrideMode"] = mode
         sysuri = self._systems()[0]
-        self._ok(self._req("PATCH", sysuri, json={"Boot": boot}), "Boot-Reihenfolge setzen")
+        self._ok(self._req("PATCH", sysuri, json={"Boot": boot}), "Set boot order")
         return {"ok": True, "boot": boot}
 
     def identify(self, on: bool) -> dict:
@@ -273,7 +273,7 @@ class RedfishClient:
         r = self._req("PATCH", sysuri, json={"LocationIndicatorActive": bool(on)})
         if r.status_code >= 400:
             r = self._req("PATCH", sysuri, json={"IndicatorLED": "Lit" if on else "Off"})
-        self._ok(r, "Identify-LED schalten")
+        self._ok(r, "Toggle identify LED")
         return {"ok": True, "on": on}
 
     def _iter_sensors(self):
@@ -328,7 +328,7 @@ class RedfishClient:
                                           "type": d.get("MemoryDeviceType"), "speed": d.get("OperatingSpeedMhz"),
                                           "manufacturer": d.get("Manufacturer"), "part": d.get("PartNumber"),
                                           "health": (d.get("Status") or {}).get("Health")})
-        # Datentraeger ueber Storage und/oder SimpleStorage
+        # drives via Storage and/or SimpleStorage
         for col_key in ("Storage", "SimpleStorage"):
             uri = (sys.get(col_key) or {}).get("@odata.id")
             if not uri:
@@ -355,7 +355,7 @@ class RedfishClient:
                                        "hostname": d.get("HostName")})
         return out
 
-    # ---------------- Logs
+    # ---------------- logs
     def _log_services(self):
         out = []
         srcs = [self._get(sysuri) for sysuri in self._systems()]
@@ -377,7 +377,7 @@ class RedfishClient:
     def log_entries(self, uri: str, limit: int = 200) -> dict:
         svc = next((s for s in self._log_services() if s["uri"] == uri or s["id"] == uri), None)
         if not svc:
-            raise RedfishError("Protokolldienst nicht gefunden")
+            raise RedfishError("Log service not found")
         ent = svc.get("entries")
         if not ent:
             return {"service": svc, "entries": []}
@@ -394,7 +394,7 @@ class RedfishClient:
     def log_clear(self, uri: str) -> dict:
         svc = next((s for s in self._log_services() if s["uri"] == uri or s["id"] == uri), None)
         if not svc:
-            raise RedfishError("Protokolldienst nicht gefunden")
+            raise RedfishError("Log service not found")
         d = self._get(svc["uri"])
         act = (d.get("Actions") or {}).get("#LogService.ClearLog") or {}
         target = act.get("target") or (svc["uri"].rstrip("/") + "/Actions/LogService.ClearLog")
@@ -402,10 +402,10 @@ class RedfishClient:
         allow = act.get("ClearType@Redfish.AllowableValues")
         if allow:
             body["ClearType"] = allow[0]
-        self._ok(self._req("POST", target, json=body), "Protokoll löschen")
+        self._ok(self._req("POST", target, json=body), "Clear log")
         return {"ok": True}
 
-    # ---------------- Virtual Media
+    # ---------------- virtual media
     def _vm_items(self):
         out = []
         for mgr in self._managers():
@@ -429,22 +429,22 @@ class RedfishClient:
         act = (d.get("Actions") or {}).get("#VirtualMedia.InsertMedia")
         body = {"Image": image, "Inserted": True, "WriteProtected": bool(write_protected)}
         if act and act.get("target"):
-            self._ok(self._req("POST", act["target"], json=body), "ISO einbinden")
+            self._ok(self._req("POST", act["target"], json=body), "Mount ISO")
         else:
             self._ok(self._req("PATCH", uri, json={"Image": image, "Inserted": True,
-                                                   "WriteProtected": bool(write_protected)}), "ISO einbinden")
+                                                   "WriteProtected": bool(write_protected)}), "Mount ISO")
         return {"ok": True}
 
     def vm_eject(self, uri: str) -> dict:
         d = self._get(uri)
         act = (d.get("Actions") or {}).get("#VirtualMedia.EjectMedia")
         if act and act.get("target"):
-            self._ok(self._req("POST", act["target"], json={}), "Medium auswerfen")
+            self._ok(self._req("POST", act["target"], json={}), "Eject media")
         else:
-            self._ok(self._req("PATCH", uri, json={"Image": None, "Inserted": False}), "Medium auswerfen")
+            self._ok(self._req("PATCH", uri, json={"Image": None, "Inserted": False}), "Eject media")
         return {"ok": True}
 
-    # ---------------- Firmware
+    # ---------------- firmware
     def firmware(self) -> dict:
         root = self._get_root()
         out = []
@@ -462,16 +462,16 @@ class RedfishClient:
                 out.append({"name": mgr.get("Name") or "BMC", "version": mgr.get("FirmwareVersion")})
         return {"firmware": out}
 
-    # ---------------- Manager (BMC) Reset / Konsole-Infos
+    # ---------------- manager (BMC) reset / console info
     def manager_reset(self, reset_type: str = "GracefulRestart") -> dict:
         col = (self._get_root().get("Managers") or {}).get("@odata.id") or "/redfish/v1/Managers"
         for muri in self._members(self._get(col)):
             d = self._get(muri)
             act = (d.get("Actions") or {}).get("#Manager.Reset") or {}
             target = act.get("target") or (muri.rstrip("/") + "/Actions/Manager.Reset")
-            self._ok(self._req("POST", target, json={"ResetType": reset_type}), "BMC-Reset")
+            self._ok(self._req("POST", target, json={"ResetType": reset_type}), "BMC reset")
             return {"ok": True}
-        raise RedfishError("Kein Manager gefunden")
+        raise RedfishError("No manager found")
 
     def console_info(self) -> dict:
         out = {"graphical": None, "serial": None, "vendor": self.vendor()}
@@ -486,25 +486,25 @@ class RedfishClient:
                 out["serial"] = {"enabled": s.get("ServiceEnabled"), "types": s.get("ConnectTypesSupported")}
         return out
 
-    # ---------------- Roh (beliebiger Redfish-Aufruf)
+    # ---------------- raw (any Redfish call)
     def raw(self, method: str, path: str, body=None) -> dict:
         method = (method or "GET").upper()
         if method not in ("GET", "POST", "PATCH", "PUT", "DELETE"):
-            raise RedfishError("Methode nicht erlaubt")
+            raise RedfishError("Method not allowed")
         if not str(path).startswith("/redfish"):
-            raise RedfishError("Pfad muss mit /redfish beginnen")
+            raise RedfishError("Path must start with /redfish")
         r = self._req(method, path, json=body if body not in (None, "") else None)
         data = self._json(r)
         if r.status_code >= 400:
             self._ok(r, f"{method} {path}")
         return {"status": r.status_code, "data": data}
 
-    # ---------------- Verteiler
+    # ---------------- dispatcher
     OPS = ("summary", "power", "set_boot", "identify", "sensors", "inventory", "log_services",
            "log_entries", "log_clear", "virtual_media", "vm_insert", "vm_eject", "firmware",
            "manager_reset", "console_info", "raw")
 
     def dispatch(self, op: str, args: dict):
         if op not in self.OPS:
-            raise RedfishError(f"Unbekannte Operation {op}")
+            raise RedfishError(f"Unknown operation {op}")
         return getattr(self, op)(**(args or {}))

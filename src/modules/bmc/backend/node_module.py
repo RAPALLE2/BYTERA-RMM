@@ -1,8 +1,8 @@
-# node_module.py (Node-Teil von Modul "bmc") - Redfish vom Management-Netz aus
-# ----------------------------------------------------------------------------
-# Laeuft auf einer BYTERA-Node, die die iLO/iDRAC-Schnittstellen erreicht
-# (Management-LAN ist oft vom Backend isoliert). Dieselbe Logik wie im Backend
-# (redfish.py liegt daneben).
+# node_module.py (node part of module "bmc") - Redfish from the management network
+# ------------------------------------------------------------------------------
+# Runs on a BYTERA node that can reach the iLO/iDRAC interfaces (the management
+# LAN is often isolated from the backend). Same logic as the backend
+# (redfish.py sits next to it).
 #
 #   "bmc-call" {conn: {host,port,username,password,verify_tls,fingerprint,insecure_http}, op, args}
 #       -> {result: ...} | {error: "..."}
@@ -31,7 +31,7 @@ def _ensure_httpx():
         r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "httpx"],
                            capture_output=True, text=True, timeout=300)
         if r.returncode != 0:
-            raise RuntimeError(f"httpx ließ sich nicht installieren: {r.stderr[-300:]}")
+            raise RuntimeError(f"httpx could not be installed: {r.stderr[-300:]}")
 
 
 def bmc_call(ctx, data: dict):

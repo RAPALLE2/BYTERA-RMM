@@ -1,21 +1,21 @@
-# geotrack_routes.py (Modul "geotrack") - Standort-Tracker
-# ---------------------------------------------------------
-# Rechte: use_geotrack (Standorte ansehen), manage_geotrack (Tracking an/aus,
-# Verlauf löschen). Standortbezogene Daten sind sensibel - nur mit Recht sichtbar.
+# geotrack_routes.py (module "geotrack") - location tracker
+# ----------------------------------------------------------
+# Permissions: use_geotrack (view locations), manage_geotrack (toggle tracking,
+# clear history). Location data is sensitive - only visible with permission.
 #
-#   GET  /api/geo/clients                 getrackte Clients + letzter Standort
-#   GET  /api/geo/{cid}                    Status + letzter Standort eines Clients
-#   GET  /api/geo/{cid}/history            Verlauf
-#   POST /api/geo/{cid}/locate             jetzt orten (Backend-Job)
-#   PUT  /api/geo/{cid}/enabled            Tracking an/aus
-#   DELETE /api/geo/{cid}/history          Verlauf löschen
+#   GET  /api/geo/clients                 tracked clients + last location
+#   GET  /api/geo/{cid}                    status + last location of a client
+#   GET  /api/geo/{cid}/history            history
+#   POST /api/geo/{cid}/locate             locate now (background job)
+#   PUT  /api/geo/{cid}/enabled            tracking on/off
+#   DELETE /api/geo/{cid}/history          clear history
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app import bgjobs, db
-from app.auth import get_current_user, require_perm, user_has_permission
+from app.auth import get_current_user, require_perm
 
 from . import module as mod
 from . import store
@@ -25,11 +25,6 @@ router = APIRouter(prefix="/api/geo", tags=["geotrack"])
 
 def _see(user, cid=None):
     require_perm(user, "use_geotrack")
-    if cid and not (user_has_permission(user, "use_geotrack", cid) or user_has_permission(user, "c_view", cid)
-                    or user_has_permission(user, "c_power", cid)):
-        # globales Recht reicht; Client-Recht nur zusätzliche Absicherung
-        if not user_has_permission(user, "use_geotrack"):
-            raise HTTPException(403, "Keine Berechtigung")
 
 
 def _manage(user):
@@ -40,6 +35,14 @@ def _loc(l):
     if not l:
         return None
     return {k: l[k] for k in ("id", "ts", "lat", "lon", "accuracy", "source", "city", "country", "label")}
+
+
+def _online():
+    try:
+        from app.sockets import state
+        return set(state.client_id_to_sid.keys())
+    except Exception:
+        return set()
 
 
 @router.get("/clients")
@@ -61,20 +64,12 @@ def status(cid: str, user: dict = Depends(get_current_user)):
     _see(user, cid)
     c = db.get_client(cid)
     if not c:
-        raise HTTPException(404, "Client nicht gefunden")
+        raise HTTPException(404, "Client not found")
     row = store.get_client(cid)
     enabled = store.is_enabled(cid, c.get("detected_kind") or c.get("device_type") or "")
     return {"client_id": cid, "enabled": enabled, "set_by_user": bool(row and row["set_by_user"]),
             "last_ts": row["last_ts"] if row else 0, "last_error": row["last_error"] if row else "",
             "online": cid in _online(), "location": _loc(store.last_location(cid))}
-
-
-def _online():
-    try:
-        from app.sockets import state
-        return set(state.client_id_to_sid.keys())
-    except Exception:
-        return set()
 
 
 @router.get("/{cid}/history")
@@ -87,10 +82,10 @@ def history(cid: str, limit: int = 500, user: dict = Depends(get_current_user)):
 def set_enabled(cid: str, body: dict, user: dict = Depends(get_current_user)):
     _manage(user)
     if not db.get_client(cid):
-        raise HTTPException(404, "Client nicht gefunden")
+        raise HTTPException(404, "Client not found")
     en = bool(body.get("enabled"))
     store.set_enabled(cid, en)
-    db.add_audit_entry(user["username"], "geo.tracking", target=cid, details="an" if en else "aus")
+    db.add_audit_entry(user["username"], "geo.tracking", target=cid, details="on" if en else "off")
     return {"ok": True, "enabled": en}
 
 
@@ -107,18 +102,18 @@ async def locate(cid: str, background: bool = False, user: dict = Depends(get_cu
     _see(user, cid)
     c = db.get_client(cid)
     if not c:
-        raise HTTPException(404, "Client nicht gefunden")
+        raise HTTPException(404, "Client not found")
     if cid not in _online():
-        raise HTTPException(409, "Client ist offline")
+        raise HTTPException(409, "Client is offline")
 
     async def work(job):
-        job.log(f"Orte {c.get('hostname') or cid} …")
+        job.log(f"Locating {c.get('hostname') or cid} …")
         try:
             loc = await mod.locate_now(cid, c)
         except Exception as exc:
             raise RuntimeError(str(exc))
-        job.log(f"Standort: {loc.get('city') or ''} ({loc['lat']:.4f}, {loc['lon']:.4f}) · Quelle {loc['source']} · ±{int(loc.get('accuracy') or 0)} m")
+        job.log(f"Location: {loc.get('city') or ''} ({loc['lat']:.4f}, {loc['lon']:.4f}) · source {loc['source']} · ±{int(loc.get('accuracy') or 0)} m")
         return {"location": _loc(loc)}
 
-    return await bgjobs.run("geo.locate", cid, title=f"Standort orten: {c.get('hostname') or cid}",
+    return await bgjobs.run("geo.locate", cid, title=f"Locate: {c.get('hostname') or cid}",
                             user=user, perm="use_geotrack", work=work, background=background)

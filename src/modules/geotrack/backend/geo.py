@@ -1,15 +1,14 @@
 """
-geo.py (Modul "geotrack") - Agenten orten und Koordinaten auflösen.
+geo.py (module "geotrack") - locate agents and resolve coordinates.
 
-Ablauf einer Ortung:
-  1. Backend fragt den Agenten (Socket-Event "geo-locate") nach:
-       - OS-Standort (Windows-Standort-API / geoclue / CoreLocation), falls erlaubt
-       - umliegende WLAN-Access-Points (BSSID + Signal)
-       - öffentliche IP (Agent ruft einen IP-Echo-Dienst)
-  2. Auflösung in dieser Reihenfolge (beste Quelle gewinnt):
-       OS-Koordinaten  >  WLAN via Google-Geolocation-API (Key nötig)  >  IP-Geolocation
-Nichts davon wird fest verdrahtet gespeichert; nur das Ergebnis (lat/lon) landet
-im Verlauf (store.py).
+A single location run:
+  1. The backend asks the agent (socket event "geo-locate") for:
+       - OS location (Windows Location API / geoclue / CoreLocation), if allowed
+       - nearby Wi-Fi access points (BSSID + signal)
+       - the public IP (the agent queries an IP-echo service)
+  2. Resolution, in this order (best source wins):
+       OS coordinates  >  Wi-Fi via Google Geolocation API (key required)  >  IP geolocation
+None of this is persisted in clear; only the result (lat/lon) goes into the history (store.py).
 """
 
 from __future__ import annotations
@@ -22,17 +21,17 @@ GOOGLE_URL = "https://www.googleapis.com/geolocation/v1/geolocate"
 
 
 async def request_agent(client_id: str, timeout: float = 25.0) -> dict:
-    """Schickt 'geo-locate' an den Agenten und wartet auf 'geo-result'."""
+    """Send "geo-locate" to the agent and wait for "geo-result"."""
     from app import sockets
     from app.sockets import state, _new_request_id
     sid = state.client_id_to_sid.get(client_id)
     if not sid:
-        raise RuntimeError("Client ist offline")
+        raise RuntimeError("Client is offline")
     rid = _new_request_id()
     fut = asyncio.get_event_loop().create_future()
     state.pending_requests[rid] = fut
-    await sockets.sio.emit("geo-locate", {"requestId": rid}, to=sid, namespace="/agent")
     try:
+        await sockets.sio.emit("geo-locate", {"requestId": rid}, to=sid, namespace="/agent")
         payload = await asyncio.wait_for(fut, timeout=timeout)
     finally:
         state.pending_requests.pop(rid, None)
@@ -51,15 +50,18 @@ async def _google_wifi(wifi: list, key: str) -> dict | None:
     if len(aps) < 2:
         return None
     import httpx
-    async with httpx.AsyncClient(timeout=15) as c:
-        r = await c.post(GOOGLE_URL, params={"key": key}, json={"considerIp": False, "wifiAccessPoints": aps})
-    if r.status_code != 200:
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.post(GOOGLE_URL, params={"key": key}, json={"considerIp": False, "wifiAccessPoints": aps})
+        if r.status_code != 200:
+            return None
+        d = r.json()
+        loc = d.get("location") or {}
+        if "lat" not in loc:
+            return None
+        return {"lat": loc["lat"], "lon": loc["lng"], "accuracy": d.get("accuracy", 0), "source": "wifi"}
+    except Exception:
         return None
-    d = r.json()
-    loc = d.get("location") or {}
-    if "lat" not in loc:
-        return None
-    return {"lat": loc["lat"], "lon": loc["lng"], "accuracy": d.get("accuracy", 0), "source": "wifi"}
 
 
 async def _ip_geo(ip: str) -> dict | None:
@@ -78,9 +80,8 @@ async def _ip_geo(ip: str) -> dict | None:
                 lat, lon = d["loc"].split(",")
                 return {"lat": float(lat), "lon": float(lon), "accuracy": 25000, "source": "ip",
                         "city": d.get("city", ""), "country": d.get("country", "")}
-            # Standard: ip-api.com (kostenlos, ohne Key)
-            r = await c.get(f"http://ip-api.com/json/{ip}",
-                            params={"fields": "status,country,city,lat,lon"})
+            # default: ip-api.com (free, no key)
+            r = await c.get(f"http://ip-api.com/json/{ip}", params={"fields": "status,country,city,lat,lon"})
             d = r.json()
             if d.get("status") != "success":
                 return None
@@ -91,7 +92,7 @@ async def _ip_geo(ip: str) -> dict | None:
 
 
 async def _reverse(lat, lon) -> dict:
-    """Ort/Land zu Koordinaten (nur wenn noch nicht bekannt), via OSM Nominatim."""
+    """Resolve city/country for coordinates (only if not already known), via OSM Nominatim."""
     import httpx
     try:
         async with httpx.AsyncClient(timeout=12, headers={"User-Agent": "BYTERA-RMM"}) as c:
@@ -105,7 +106,7 @@ async def _reverse(lat, lon) -> dict:
 
 
 async def resolve(client_id: str, agent_data: dict, public_ip_hint: str = "") -> dict:
-    """agent_data: {os:{lat,lon,accuracy}|null, wifi:[{mac,signal}], public_ip}. -> Standort-Dict."""
+    """agent_data: {os:{lat,lon,accuracy}|null, wifi:[{mac,signal}], public_ip}. -> location dict."""
     key = str(modules.setting("geotrack", "google_api_key", "") or "")
     sources_cfg = modules.setting("geotrack", "sources", "os,wifi,ip") or "os,wifi,ip"
     allowed = {s.strip() for s in str(sources_cfg).split(",")}
@@ -118,7 +119,7 @@ async def resolve(client_id: str, agent_data: dict, public_ip_hint: str = "") ->
     if res is None and "ip" in allowed:
         res = await _ip_geo(agent_data.get("public_ip") or public_ip_hint)
     if res is None:
-        raise RuntimeError("Standort konnte nicht ermittelt werden (keine Quelle lieferte ein Ergebnis)")
+        raise RuntimeError("Could not determine location (no source returned a result)")
     if not res.get("city"):
         res.update(await _reverse(res["lat"], res["lon"]))
     return res

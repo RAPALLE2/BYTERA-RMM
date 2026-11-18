@@ -1,4 +1,4 @@
-"""Standort-Tracker - Einstiegspunkt des Moduls "geotrack"."""
+"""Location tracker - entry point of the "geotrack" module."""
 import asyncio
 import time
 
@@ -10,7 +10,7 @@ _ctx = None
 
 
 def _geo_result(sid, payload):
-    """Antwort eines Agenten auf 'geo-locate' -> wartendes Future auflösen."""
+    """Agent reply to "geo-locate" -> resolve the waiting future."""
     from app.sockets import state
     fut = state.pending_requests.get((payload or {}).get("requestId"))
     if fut and not fut.done():
@@ -18,7 +18,7 @@ def _geo_result(sid, payload):
 
 
 async def _locate_client(client_id: str, client=None) -> dict:
-    """Einen Client orten und das Ergebnis speichern. Wirft bei Fehler."""
+    """Locate one client and store the result. Raises on failure."""
     client = client or db.get_client(client_id) or {}
     try:
         data = await geo.request_agent(client_id)
@@ -33,6 +33,7 @@ async def _locate_client(client_id: str, client=None) -> dict:
 
 
 async def _loop(ctx):
+    """Background scheduler: re-locate tracked, online clients at the configured interval."""
     from app.sockets import state
     while True:
         try:
@@ -51,7 +52,7 @@ async def _loop(ctx):
                     await _locate_client(cid)
                 except Exception:
                     pass
-                await asyncio.sleep(2)            # Agenten nicht alle gleichzeitig belasten
+                await asyncio.sleep(2)            # don't hit all agents at once
         except asyncio.CancelledError:
             raise
         except Exception:

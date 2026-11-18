@@ -1,22 +1,21 @@
 """
-webproxy.py (Modul "bmc") - native Web-UI und Remote-Konsole der BMC erreichbar machen.
+webproxy.py (module "bmc") - make the BMC native web UI and remote console reachable.
 
-Zwei Wege, beide liefern die ECHTE iLO-/iDRAC-Oberflaeche samt HTML5-Konsole
-(nichts nachgebaut - alles, was die BMC kann, ist da):
+Two ways, both serving the REAL iLO/iDRAC UI including the HTML5 console
+(nothing re-implemented - everything the BMC can do is there):
 
-  direct  Der Browser des Admins erreicht die BMC selbst -> neuer Tab auf
-          https://<host>. Einfachster, zuverlaessigster Weg, wenn das
-          Management-Netz vom Arbeitsplatz aus erreichbar ist.
+  direct  The admin's browser reaches the BMC itself -> new tab to
+          https://<host>. Simplest, most reliable way when the management
+          network is reachable from the workstation.
 
-  proxy   Modul-Einstellung "proxy_host" (z.B. bmc-*.example.com) gesetzt: Das
-          Backend stellt die BMC unter einem eigenen Hostnamen bereit und leitet
-          HTTP + WebSocket durch (wie der Browser-Proxy des Browser-Moduls).
-          Nur das Backend muss die BMC erreichen (z.B. ueber das WireGuard-VPN).
-          Hinweis: gegen echte Hardware noch nicht getestet - selbst signierte
-          Zertifikate werden akzeptiert.
+  proxy   Module setting "proxy_host" (e.g. bmc-*.example.com) set: the backend
+          exposes the BMC under its own hostname and forwards HTTP + WebSocket
+          (like the browser module's proxy). Only the backend has to reach the
+          BMC (e.g. over the WireGuard VPN). Note: not yet tested against real
+          hardware - self-signed certificates are accepted.
 
-Reine Redfish-Aktionen (Power, Health, Inventar, Logs, Boot, Virtual Media ...)
-laufen NICHT hier, sondern ueber redfish.py (Backend oder Node).
+Plain Redfish actions (power, health, inventory, logs, boot, virtual media ...)
+do NOT run here but via redfish.py (backend or node).
 """
 
 from __future__ import annotations
@@ -73,12 +72,12 @@ def console_access(c: dict) -> dict:
     direct = _origin(c)
     out = {"vendor": c.get("vendor") or "", "direct_url": direct + "/", "proxy_url": None,
            "mode": "direct",
-           "hint": "Öffnet die native iLO/iDRAC-Oberfläche inkl. HTML5-Remote-Konsole. "
-                   "„Direkt“ setzt voraus, dass dein Browser die BMC erreicht."}
+           "hint": "Opens the native iLO/iDRAC UI including the HTML5 remote console. "
+                   "“Direct” requires that your browser can reach the BMC."}
     if enabled():
         out["proxy_url"] = f"https://{host_for(c['id'])}/"
         out["mode"] = "proxy"
-        out["hint"] += " „Über Backend“ leitet alles durch das RMM (nur das Backend muss die BMC erreichen)."
+        out["hint"] += " “Via backend” routes everything through the RMM (only the backend must reach the BMC)."
     return out
 
 
@@ -94,7 +93,7 @@ async def app(scope, receive, send):
     label = _label(host)
     c = store.get(label) if label else None
     if not c:
-        return await _deny(scope, send, 404, "Unbekannte BMC")
+        return await _deny(scope, send, 404, "Unknown BMC")
     origin = _origin(c)
     if scope["type"] == "websocket":
         return await _ws(scope, receive, send, c, origin)
@@ -148,7 +147,7 @@ async def _http(scope, receive, send, c, origin):
                                      timeout=httpx.Timeout(connect=8.0, read=60.0, write=60.0, pool=8.0)) as cl:
             r = await cl.request(scope["method"], url, headers=headers, content=body or None)
     except httpx.HTTPError as exc:
-        return await _deny(scope, send, 502, f"BMC nicht erreichbar: {exc}")
+        return await _deny(scope, send, 502, f"BMC unreachable: {exc}")
     out_headers = []
     for k, v in r.headers.multi_items():
         lk = k.lower()
@@ -173,7 +172,7 @@ async def _ws(scope, receive, send, c, origin):
         return
     import ssl
     from urllib.parse import urlparse
-    # erste Nachricht muss websocket.connect sein
+    # first message must be websocket.connect
     msg = await receive()
     if msg["type"] != "websocket.connect":
         return

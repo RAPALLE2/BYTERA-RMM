@@ -1,19 +1,19 @@
-# bmc_routes.py (Modul "bmc") - iLO/iDRAC ueber Redfish verwalten
+# bmc_routes.py (module "bmc") - manage iLO/iDRAC over Redfish
 # ---------------------------------------------------------------
-# Rechte: use_bmc (ansehen/steuern), manage_bmc (Verbindungen anlegen/aendern).
-# Ausfuehrung je Verbindung: Backend direkt ODER ueber eine Node im
-# Management-Netz (Feld "via"). Die Logik steckt in redfish.py - EINE Datei fuer
-# Backend und Node.
+# Permissions: use_bmc (view/control), manage_bmc (create/edit connections).
+# Execution per connection: backend directly OR via a node on the management
+# network (field "via"). The logic lives in redfish.py - ONE file for backend
+# and node.
 #
-#   GET    /api/bmc/connections            Verbindungen (ohne Geheimnisse)
-#   POST   /api/bmc/connections            anlegen            (manage_bmc)
-#   PUT    /api/bmc/connections/{id}        aendern            (manage_bmc)
-#   DELETE /api/bmc/connections/{id}        loeschen           (manage_bmc)
-#   GET    /api/bmc/links                   client_id -> BMC   (fuer Topologie/Knopf)
-#   GET    /api/bmc/nodes                   verfuegbare Nodes
-#   POST   /api/bmc/connections/{id}/test   Verbindung testen
-#   POST   /api/bmc/{id}/call/{op}          Redfish-Operation (power, sensors, ...)
-#   GET    /api/bmc/{id}/console            Zugang zur nativen Web-UI/Konsole
+#   GET    /api/bmc/connections            connections (without secrets)
+#   POST   /api/bmc/connections            create             (manage_bmc)
+#   PUT    /api/bmc/connections/{id}        edit               (manage_bmc)
+#   DELETE /api/bmc/connections/{id}        delete             (manage_bmc)
+#   GET    /api/bmc/links                   client_id -> BMC   (for topology/button)
+#   GET    /api/bmc/nodes                   available nodes
+#   POST   /api/bmc/connections/{id}/test   test connection
+#   POST   /api/bmc/{id}/call/{op}          Redfish operation (power, sensors, ...)
+#   GET    /api/bmc/{id}/console            access to the native web UI/console
 from __future__ import annotations
 
 import asyncio
@@ -42,12 +42,12 @@ def _manage(user):
 def _conn(cid) -> dict:
     c = store.get(cid)
     if not c:
-        raise HTTPException(404, "Verbindung nicht gefunden")
+        raise HTTPException(404, "Connection not found")
     return c
 
 
 def _may_see(user, c) -> bool:
-    # Globales Recht use_bmc reicht; bei verknuepftem Client zusaetzlich Client-Sicht pruefen
+    # the global use_bmc permission is enough; for a linked client also check client visibility
     if not user_has_permission(user, "use_bmc"):
         return False
     if c.get("client_id"):
@@ -55,7 +55,7 @@ def _may_see(user, c) -> bool:
     return True
 
 
-# ------------------------------------------------ Verbindungen (CRUD)
+# ------------------------------------------------ connections (CRUD)
 @router.get("/connections")
 def list_connections(user: dict = Depends(get_current_user)):
     _use(user)
@@ -78,9 +78,9 @@ class ConnBody(BaseModel):
 
 def _validate(body: ConnBody):
     if not body.host.strip():
-        raise HTTPException(400, "Adresse (Host/IP) fehlt")
+        raise HTTPException(400, "Address (host/IP) is required")
     if body.client_id and not db.get_client(body.client_id):
-        raise HTTPException(400, "Verknüpfter Client existiert nicht")
+        raise HTTPException(400, "Linked client does not exist")
 
 
 @router.post("/connections")
@@ -98,7 +98,7 @@ def edit_connection(cid: str, body: ConnBody, user: dict = Depends(get_current_u
     _validate(body)
     c = store.edit(cid, body.model_dump())
     if not c:
-        raise HTTPException(404, "Verbindung nicht gefunden")
+        raise HTTPException(404, "Connection not found")
     db.add_audit_entry(user["username"], "bmc.updated", target=cid, details=c.get("name"))
     return store.public(c)
 
@@ -131,7 +131,7 @@ def get_nodes(user: dict = Depends(get_current_user)):
         return {"nodes": []}
 
 
-# ------------------------------------------------ Ausfuehrung (Backend oder Node)
+# ------------------------------------------------ execution (backend or node)
 async def _run(c: dict, op: str, args: dict):
     via = (c.get("via") or "").strip()
     conn = store.creds(c)
@@ -163,9 +163,9 @@ async def test_connection(cid: str, user: dict = Depends(get_current_user)):
     _use(user)
     c = _conn(cid)
     if not _may_see(user, c):
-        raise HTTPException(403, "Keine Berechtigung")
+        raise HTTPException(403, "No permission")
     s = await _run(c, "summary", {})
-    # Hersteller merken (fuer Liste/Topologie), ohne Geheimnisse offenzulegen
+    # remember the vendor (for list/topology), without exposing secrets
     vendor = (s or {}).get("vendor")
     if vendor and vendor != c.get("vendor"):
         store.edit(cid, {**{k: c.get(k) for k in store.PUBLIC_FIELDS if k not in ("id",)}, "vendor": vendor})
@@ -181,9 +181,9 @@ async def call_op(cid: str, op: str, body: CallBody | None = None, user: dict = 
     _use(user)
     c = _conn(cid)
     if not _may_see(user, c):
-        raise HTTPException(403, "Keine Berechtigung")
+        raise HTTPException(403, "No permission")
     if op not in redfish.RedfishClient.OPS:
-        raise HTTPException(404, "Unbekannte Operation")
+        raise HTTPException(404, "Unknown operation")
     args = (body.args if body else {}) or {}
     res = await _run(c, op, args)
     if op in WRITE_OPS:
@@ -194,12 +194,12 @@ async def call_op(cid: str, op: str, body: CallBody | None = None, user: dict = 
 
 @router.get("/{cid}/console")
 def console(cid: str, user: dict = Depends(get_current_user)):
-    """Zugang zur nativen Web-UI/Remote-Konsole der BMC.
-    direct = Browser erreicht die BMC selbst (neuer Tab auf https://host).
-    proxy  = ueber das Backend (Modul-Einstellung proxy_host gesetzt)."""
+    """Access to the native web UI / remote console of the BMC.
+    direct = the browser reaches the BMC itself (new tab to https://host).
+    proxy  = via the backend (module setting proxy_host is set)."""
     _use(user)
     c = _conn(cid)
     if not _may_see(user, c):
-        raise HTTPException(403, "Keine Berechtigung")
+        raise HTTPException(403, "No permission")
     from . import webproxy
     return webproxy.console_access(c)

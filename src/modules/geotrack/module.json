@@ -1,16 +1,20 @@
 {
   "schema": 1,
   "id": "geotrack",
-  "name": "Standort-Tracker",
+  "name": "Location Tracker",
   "version": "1.0.0",
-  "description": "Ortet Agenten (Standard: Laptops, aber für jedes Gerät aktivierbar) und zeigt den Standort als Widget direkt beim Client sowie als Karte mit Verlauf. Quellen in dieser Reihenfolge: Betriebssystem-Standort, WLAN-BSSID (Google-Geolocation-API), IP-Geolocation. Intervall und Aufbewahrungsdauer einstellbar. Standortdaten sind sensibel – nur mit Recht sichtbar, Tracking je Gerät abschaltbar.",
+  "description": "Locates agents (laptops by default, but can be enabled for any device) and shows the location as a widget right on the client, plus a map with history. Sources, in order: operating-system location, Wi-Fi BSSID (Google Geolocation API), IP geolocation. Interval and retention are configurable. Location data is sensitive: visible only with permission, tracking can be turned off per device.",
   "author": "BYTERA",
   "category": "Betrieb",
   "icon": "📍",
   "requires": [],
-  "pip": ["httpx"],
+  "pip": [
+    "httpx"
+  ],
   "routers": [
-    { "module": "geotrack_routes" }
+    {
+      "module": "geotrack_routes"
+    }
   ],
   "hooks": {
     "startup": "on_startup",
@@ -24,9 +28,9 @@
   "apps": [
     {
       "id": "geotrack",
-      "label": "Standorte",
+      "label": "Locations",
       "icon": "📍",
-      "title": "Standort-Tracker",
+      "title": "Location Tracker",
       "entry": "app.js",
       "export": "renderGeo",
       "w": 1000,
@@ -35,12 +39,42 @@
     }
   ],
   "settings": [
-    { "key": "sources", "type": "string", "label": "Standortquellen (Reihenfolge, Komma)", "default": "os,wifi,ip",
-      "help": "Welche Quellen genutzt werden, beste zuerst: os (Betriebssystem), wifi (WLAN-BSSID via Google), ip (IP-Geolocation)." },
-    { "key": "interval_min", "type": "number", "label": "Ortungsintervall (Minuten)", "default": 30 },
-    { "key": "retention_days", "type": "number", "label": "Verlauf aufbewahren (Tage)", "default": 90 },
-    { "key": "google_api_key", "type": "string", "label": "Google-Geolocation-API-Key (für WLAN-Ortung)", "default": "" },
-    { "key": "ip_service", "type": "string", "label": "IP-Geolocation-Dienst (ip-api | ipinfo)", "default": "ip-api" },
-    { "key": "ipinfo_token", "type": "string", "label": "ipinfo.io Token (optional)", "default": "" }
+    {
+      "key": "sources",
+      "type": "string",
+      "label": "Location sources (order, comma-separated)",
+      "default": "os,wifi,ip",
+      "help": "Which sources to use, best first: os (operating system), wifi (Wi-Fi BSSID via Google), ip (IP geolocation)."
+    },
+    {
+      "key": "interval_min",
+      "type": "number",
+      "label": "Locate interval (minutes)",
+      "default": 30
+    },
+    {
+      "key": "retention_days",
+      "type": "number",
+      "label": "Keep history (days)",
+      "default": 90
+    },
+    {
+      "key": "google_api_key",
+      "type": "string",
+      "label": "Google Geolocation API key (for Wi-Fi location)",
+      "default": ""
+    },
+    {
+      "key": "ip_service",
+      "type": "string",
+      "label": "IP geolocation service (ip-api | ipinfo)",
+      "default": "ip-api"
+    },
+    {
+      "key": "ipinfo_token",
+      "type": "string",
+      "label": "ipinfo.io token (optional)",
+      "default": ""
+    }
   ]
 }
