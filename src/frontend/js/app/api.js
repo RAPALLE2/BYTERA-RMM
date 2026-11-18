@@ -116,6 +116,7 @@ const _PERM_KEY = {
   manage_ad: "perm_manage_ad",
   use_bmc: "perm_use_bmc",
   manage_bmc: "perm_manage_bmc",
+  use_passwords: "perm_use_passwords",
   manage_tenants: "perm_manage_tenants",
   use_tenants: "perm_use_tenants",
   manage_dist: "perm_manage_dist",

@@ -158,6 +158,7 @@ PERM_LABELS = {
     "manage_ad": "Active Directory verwalten (Benutzer, Gruppen, OUs, Passwörter) – Modul „Active Directory“",
     "use_bmc": "iLO/iDRAC ansehen und steuern (Power, Konsole, Sensoren) – Modul „iLO / iDRAC“",
     "manage_bmc": "iLO/iDRAC-Verbindungen anlegen und bearbeiten – Modul „iLO / iDRAC“",
+    "use_passwords": "Passwort-Manager nutzen (eigene & geteilte Tresore, Ende-zu-Ende) – Modul „Passwörter“",
     "manage_tenants": "Mandanten verwalten (Backends verbinden, Freigaben) – Modul „Mandanten“",
     "use_tenants": "Mandanten öffnen und wechseln – Modul „Mandanten“",
     "manage_dist": "Verteilung verwalten (/dist: Ordner, Dateien, Freigaben)",

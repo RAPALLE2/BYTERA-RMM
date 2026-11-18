@@ -3149,6 +3149,7 @@ GLOBAL_PERM_KEYS = [
     "manage_ad",
     "use_bmc",         # Modul "bmc": iLO/iDRAC ansehen und steuern
     "manage_bmc",      # Modul "bmc": BMC-Verbindungen anlegen/aendern
+    "use_passwords",   # Modul "passwords": Passwort-Manager nutzen
     "manage_tenants",
     "use_tenants",
     "manage_dist",
