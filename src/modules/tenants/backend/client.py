@@ -1,13 +1,13 @@
-# client.py (Modul "tenants") - Aufrufe an ein Mandanten-Backend
+# client.py (module "tenants") - calls to a tenant backend
 # -------------------------------------------------------------
-# Meldet den Benutzer mit SEINEN hinterlegten Zugangsdaten am Mandanten-Backend an
-# (normale Login-API des Mandanten) und holt einen Token. Darueber:
-#   - autologin(): Token fuer die Einbettung (Dashboard mit #client-token=)
-#   - api(): beliebige Mandanten-API im Namen des Benutzers (z. B. Spaces/Relay)
-# httpx (async). TLS-Pruefung je Mandant abschaltbar (selbstsignierte Zertifikate).
-# Verbindung je Mandant waehlbar (Feld "via"): "" = vom RMM-Server, sonst Node-ID ->
-# die Aufrufe laufen UEBER DIESE NODE (Node-Modul "tenants", Befehl "tenants-http") -
-# fuer Mandanten, die nur im Kunden-LAN erreichbar sind.
+# Logs the user in at the tenant backend with THEIR stored credentials
+# (the tenant's normal login API) and fetches a token. With it:
+#   - autologin(): token for embedding (dashboard with #client-token=)
+#   - api(): any tenant API on behalf of the user (e.g. spaces/relay)
+# httpx (async). TLS verification can be disabled per tenant (self-signed certs).
+# The connection is selectable per tenant (field "via"): "" = from the RMM server,
+# otherwise a node ID -> the calls run THROUGH THAT NODE (node module "tenants",
+# command "tenants-http") - for tenants reachable only in the customer LAN.
 from __future__ import annotations
 
 import httpx
@@ -27,7 +27,7 @@ def _base(tenant: dict) -> str:
 
 async def _request(tenant: dict, method: str, url: str, headers: dict | None = None,
                    json_body=None, content: bytes | None = None, timeout: float = 25) -> httpx.Response:
-    """Eine Anfrage an den Mandanten - direkt oder ueber die gewaehlte Node."""
+    """A request to the tenant - directly or through the selected node."""
     verify = bool(tenant.get("verify_tls", True))
     headers = dict(headers or {})
     via = tenant.get("via") or ""
@@ -46,7 +46,7 @@ async def _request(tenant: dict, method: str, url: str, headers: dict | None = N
             "method": method, "url": url, "headers": headers, "verify": verify, "timeout": timeout,
             "body": base64.b64encode(content).decode() if content else ""}, timeout=timeout + 15)
     except node_manager.NodeError as e:
-        raise httpx.ConnectError(f"über Node: {e}") from None
+        raise httpx.ConnectError(f"via node: {e}") from None
     return httpx.Response(int(res.get("status") or 502), headers=res.get("headers") or [],
                           content=base64.b64decode(res.get("body") or ""),
                           request=httpx.Request(method, url))
@@ -80,7 +80,7 @@ async def _login(tenant: dict, username: str, password: str, realm: str, code: s
 
 
 async def token_for(tenant: dict, user: dict, code: str = "") -> str:
-    """Token am Mandanten holen - mit den fuer diesen Benutzer gespeicherten Zugangsdaten."""
+    """Fetch a token at the tenant - with the credentials stored for this user."""
     cred = store.get_cred(tenant["id"], user["id"])
     if not cred or not cred.get("pw_enc"):
         raise TenantError("no_credentials", 412)
@@ -88,7 +88,7 @@ async def token_for(tenant: dict, user: dict, code: str = "") -> str:
 
 
 async def verify_credentials(tenant: dict, username: str, password: str, realm: str, code: str = "") -> dict:
-    """Beim Hinterlegen pruefen. -> {ok} oder wirft TenantError (inkl. 2fa_required)."""
+    """Check when storing. -> {ok} or raises TenantError (incl. 2fa_required)."""
     await _login(tenant, username, password, realm, code)
     return {"ok": True}
 

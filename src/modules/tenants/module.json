@@ -1,11 +1,11 @@
 {
   "schema": 1,
   "id": "tenants",
-  "name": "Mandanten",
+  "name": "Tenants",
   "version": "1.0.0",
-  "description": "Mehrere eigenständige RMM-Backends (Firmen, Abteilungen) verbinden und im Haupt-RMM direkt wechseln. Jeder Mandant ist komplett getrennt (eigene DB, Settings, Rechte, Spaces, Agents). Pro Benutzer eigene Zugangsdaten je Mandant; per App direkt in das Dashboard eines Mandanten wechseln (Autologin, offene Fenster bleiben). Einstellbar, welcher Benutzer/welche Gruppe einen Mandanten sehen darf. Die Spaces/Dateien des aktiven Mandanten erscheinen zusätzlich im eigenen Explorer/Spaces.",
+  "description": "Connect multiple standalone RMM backends (companies, departments) and switch between them directly in the main RMM. Each tenant is completely separate (its own DB, settings, permissions, spaces, agents). Per-user credentials per tenant; switch straight into a tenant's dashboard via the app (auto-login, open windows are kept). Configure which user/group may see a tenant. The active tenant's spaces/files also appear in your own Explorer/Spaces.",
   "author": "BYTERA",
-  "category": "System",
+  "category": "geraete",
   "icon": "🏢",
   "requires": [],
   "pip": [
@@ -21,9 +21,9 @@
   "apps": [
     {
       "id": "tenants",
-      "label": "Mandanten",
+      "label": "Tenants",
       "icon": "🏢",
-      "title": "Mandanten",
+      "title": "Tenants",
       "entry": "app.js",
       "export": "renderTenants",
       "perm": "use_tenants",

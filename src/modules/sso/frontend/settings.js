@@ -1,16 +1,17 @@
-// settings.js (Modul "sso")
+// settings.js (module "sso")
 // -------------------------
-// Verzeichnis-Anmeldung (LDAP/Active Directory) verwalten - frueher Einstellungen
-// -> Register "SSO". Gezeigt in der Modul-App (Einstellungen) und als eigene App
-// "SSO / Verzeichnis" im Startmenue (Recht "manage_sso").
+// Manage directory login (LDAP/Active Directory) - formerly Settings
+// -> "SSO" tab. Shown in the module app (settings) and as its own app
+// "SSO / Directory" in the start menu (permission "manage_sso").
 //
-// Abschalten des Moduls geht nur, wenn mindestens ein lokaler, aktiver Admin
-// existiert (Backend: guard.py). Der Kasten oben zeigt, ob das der Fall ist.
+// Disabling the module is only possible when at least one local, active admin
+// exists (backend: guard.py). The box at the top shows whether that is the case.
 
 import { api } from "/js/app/api.js";
 import { esc, uiConfirm } from "/js/app/utils.js";
 import { t } from "/js/app/i18n.js";
 import { condenseHints } from "/js/app/help.js";
+import { icon } from "./icons.js";
 
 export function renderSsoApp(body) {
   body.innerHTML = `<div style="height:100%;overflow:auto;box-sizing:border-box"></div>`;
@@ -25,12 +26,12 @@ async function drawGuard(box) {
     if (r.count > 0) {
       const names = r.admins.slice(0, 5).map((a) => `<code>${esc(a.username)}</code>`).join(", ");
       box.innerHTML = `<div style="border:1px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--subtext)">
-        ✅ Lokale Admin-Accounts: ${r.count} (${names}${r.count > 5 ? ", …" : ""}) – SSO kann jederzeit deaktiviert werden.</div>`;
+        ${icon("check", 14)} Local admin accounts: ${r.count} (${names}${r.count > 5 ? ", …" : ""}) – SSO can be disabled at any time.</div>`;
     } else {
       box.innerHTML = `<div style="border:1px solid var(--warn);border-radius:8px;padding:8px 10px;color:var(--warn)">
-        ⚠ Kein lokaler, aktiver Admin-Account vorhanden. Solange das so ist, lässt sich SSO nicht deaktivieren
-        – sonst könnte sich niemand mehr anmelden. Lege einen lokalen Benutzer mit Passwort und Rolle „admin“
-        oder dem Recht „Full Admin“ an.</div>`;
+        ${icon("warn", 14)} No local, active admin account exists. As long as this is the case, SSO cannot be disabled
+        – otherwise nobody could sign in anymore. Create a local user with a password and the role "admin"
+        or the "Full Admin" permission.</div>`;
     }
   } catch { box.innerHTML = ""; }
 }

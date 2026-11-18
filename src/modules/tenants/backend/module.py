@@ -1,3 +1,3 @@
-# module.py (Modul "tenants") - mehrere Mandanten-Backends verbinden und wechseln
+# module.py (module "tenants") - connect and switch between multiple tenant backends
 def on_startup(ctx):
-    ctx.log("Mandanten-Verwaltung bereit")
+    ctx.log("Tenant administration ready")

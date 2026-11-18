@@ -1,25 +1,25 @@
 """
 privacy.py
 ----------
-Zentrale Stelle für alles, was die DSGVO technisch verlangt. Bewusst als
-EIN Modul, damit es genau eine Wahrheit darüber gibt, wo im System
-personenbezogene Daten liegen - verstreute Einzellösungen veralten.
+Central place for everything the GDPR requires technically. Deliberately ONE
+module so there is exactly one source of truth about where personal data lives
+in the system - scattered individual solutions go stale.
 
-Enthält:
-  * PERSONAL_DATA_MAP  - Verzeichnis aller Tabellen mit Personenbezug.
-                         Grundlage für Auskunft, Löschung UND für den
-                         Bericht, der beim Verzeichnis der Verarbeitungs-
-                         tätigkeiten (Art. 30) hilft.
-  * RETENTION          - welche Aufbewahrungsfrist auf welche Daten wirkt
-                         (Art. 5 Abs. 1 lit. e - Speicherbegrenzung).
-  * export_user_data() - Auskunft & Datenübertragbarkeit (Art. 15 / 20)
-  * erase_user()       - Löschung (Art. 17), wahlweise anonymisieren
-  * purge()            - Fristen durchsetzen, läuft täglich als Job
-  * report()           - Bestandsübersicht für Admins
+Contains:
+  * PERSONAL_DATA_MAP  - directory of all tables with a personal reference.
+                         Basis for access requests, erasure AND for the report
+                         that helps with the record of processing activities
+                         (Art. 30).
+  * RETENTION          - which retention period applies to which data
+                         (Art. 5(1)(e) - storage limitation).
+  * export_user_data() - access & data portability (Art. 15 / 20)
+  * erase_user()       - erasure (Art. 17), optionally anonymize
+  * purge()            - enforce retention periods, runs daily as a job
+  * report()           - inventory overview for admins
 
-WICHTIG zur Abgrenzung: Dieses Modul erledigt die TECHNISCHE Seite.
-Rechtsgrundlage, Verzeichnis, DSFA, Betriebsvereinbarung und AV-Verträge
-sind organisatorisch und liegen außerhalb der Software.
+IMPORTANT scope note: this module handles the TECHNICAL side.
+Legal basis, records, DPIA, works agreement and processing contracts are
+organizational and live outside the software.
 """
 
 import json
@@ -30,104 +30,103 @@ import uuid
 from app import db
 
 # ------------------------------------------------------------------
-# Verzeichnis der personenbezogenen Daten
+# Directory of personal data
 # ------------------------------------------------------------------
 # strategy:
-#   'delete'    -> Datensatz wird bei Löschung entfernt
-#   'anonymize' -> Datensatz bleibt (fachlich nötig / Nachweispflicht),
-#                  der Personenbezug wird aber gekappt
+#   'delete'    -> the record is removed on erasure
+#   'anonymize' -> the record stays (needed for business / evidence duties),
+#                  but the personal reference is cut
 #
-# Handelsrechtliche oder sicherheitsbezogene Nachweispflichten können
-# gegen die sofortige Löschung sprechen (Art. 17 Abs. 3 lit. b/e). Deshalb
-# wird das Audit-Log anonymisiert statt gelöscht: die Aktion bleibt
-# nachvollziehbar, die Person ist es nicht mehr.
+# Commercial or security-related evidence duties can argue against immediate
+# erasure (Art. 17(3)(b)/(e)). Therefore the audit log is anonymized instead of
+# deleted: the action stays traceable, the person no longer is.
 
 PERSONAL_DATA_MAP = [
-    # (Tabelle, Spalte mit der Benutzer-ID, Bezeichnung, Strategie, Namensspalte)
-    {"table": "users", "col": "id", "label": "Benutzerkonto",
+    # (table, column with the user ID, label, strategy, name column)
+    {"table": "users", "col": "id", "label": "User account",
      "strategy": "delete", "name_col": None},
-    {"table": "user_groups", "col": "user_id", "label": "Gruppenzugehörigkeit",
+    {"table": "user_groups", "col": "user_id", "label": "Group membership",
      "strategy": "delete", "name_col": None},
-    {"table": "todos", "col": "user_id", "label": "Todos",
+    {"table": "todos", "col": "user_id", "label": "To-dos",
      "strategy": "delete", "name_col": None},
-    {"table": "todo_categories", "col": "user_id", "label": "Todo-Kategorien",
+    {"table": "todo_categories", "col": "user_id", "label": "To-do categories",
      "strategy": "delete", "name_col": None},
-    {"table": "chat_members", "col": "user_id", "label": "Chat-Teilnahmen",
+    {"table": "chat_members", "col": "user_id", "label": "Chat memberships",
      "strategy": "delete", "name_col": None},
-    {"table": "chat_messages", "col": "sender_id", "label": "Chat-Nachrichten",
+    {"table": "chat_messages", "col": "sender_id", "label": "Chat messages",
      "strategy": "delete", "name_col": None},
-    {"table": "chat_conversations", "col": "created_by", "label": "Angelegte Chats",
+    {"table": "chat_conversations", "col": "created_by", "label": "Created chats",
      "strategy": "anonymize", "name_col": None},
-    {"table": "calendar_events", "col": "created_by", "label": "Angelegte Termine",
+    {"table": "calendar_events", "col": "created_by", "label": "Created events",
      "strategy": "anonymize", "name_col": "created_by_name"},
-    {"table": "calendar_targets", "col": "target_id", "label": "Termin-Zuordnungen",
+    {"table": "calendar_targets", "col": "target_id", "label": "Event assignments",
      "strategy": "delete", "name_col": None, "where": "target_type = 'user'"},
-    {"table": "client_notes", "col": "author_id", "label": "Client-Notizen",
+    {"table": "client_notes", "col": "author_id", "label": "Client notes",
      "strategy": "anonymize", "name_col": "author_name"},
-    {"table": "note_shares", "col": "user_id", "label": "Notiz-Freigaben",
+    {"table": "note_shares", "col": "user_id", "label": "Note shares",
      "strategy": "delete", "name_col": None},
-    {"table": "tickets", "col": "created_by", "label": "Angelegte Tickets",
+    {"table": "tickets", "col": "created_by", "label": "Created tickets",
      "strategy": "anonymize", "name_col": None},
-    {"table": "ticket_comments", "col": "author_id", "label": "Ticket-Kommentare",
+    {"table": "ticket_comments", "col": "author_id", "label": "Ticket comments",
      "strategy": "anonymize", "name_col": "author"},
-    {"table": "ticket_comment_shares", "col": "user_id", "label": "Kommentar-Freigaben",
+    {"table": "ticket_comment_shares", "col": "user_id", "label": "Comment shares",
      "strategy": "delete", "name_col": None},
-    {"table": "ticket_assignees", "col": "subject_id", "label": "Ticket-Zuweisungen",
+    {"table": "ticket_assignees", "col": "subject_id", "label": "Ticket assignments",
      "strategy": "delete", "name_col": None, "where": "subject_type = 'user'"},
-    {"table": "media_items", "col": "owner_id", "label": "Medien-Bibliothek",
+    {"table": "media_items", "col": "owner_id", "label": "Media library",
      "strategy": "delete", "name_col": "owner_name"},
-    {"table": "ai_connections", "col": "owner_user_id", "label": "AI-Verbindungen",
+    {"table": "ai_connections", "col": "owner_user_id", "label": "AI connections",
      "strategy": "delete", "name_col": None},
-    {"table": "ai_connection_shares", "col": "subject_id", "label": "AI-Freigaben",
+    {"table": "ai_connection_shares", "col": "subject_id", "label": "AI shares",
      "strategy": "delete", "name_col": None, "where": "subject_type = 'user'"},
-    {"table": "permission_grants", "col": "subject_id", "label": "Rechte-Zuweisungen",
+    {"table": "permission_grants", "col": "subject_id", "label": "Permission grants",
      "strategy": "delete", "name_col": None, "where": "subject_type = 'user'"},
-    {"table": "org_hierarchy", "col": "child_id", "label": "Organigramm-Einordnung",
+    {"table": "org_hierarchy", "col": "child_id", "label": "Org chart placement",
      "strategy": "delete", "name_col": None, "where": "child_type = 'user'"},
-    {"table": "activity_log", "col": "actor_id", "label": "Aktivitätsprotokoll",
+    {"table": "activity_log", "col": "actor_id", "label": "Activity log",
      "strategy": "anonymize", "name_col": "actor_name"},
-    {"table": "erasure_requests", "col": "user_id", "label": "Löschanträge",
+    {"table": "erasure_requests", "col": "user_id", "label": "Erasure requests",
      "strategy": "delete", "name_col": "username"},
 ]
 
-# Tabellen, die die Person NICHT über die ID, sondern über den Benutzernamen
-# führen. Die werden gesondert behandelt (siehe _by_username).
+# Tables that reference the person NOT by ID but by username.
+# These are handled separately (see _by_username).
 USERNAME_TABLES = [
-    {"table": "audit_log", "col": "username", "label": "Audit-Log",
+    {"table": "audit_log", "col": "username", "label": "Audit log",
      "strategy": "anonymize"},
-    {"table": "screen_recordings", "col": "username", "label": "Bildschirmaufzeichnungen",
+    {"table": "screen_recordings", "col": "username", "label": "Screen recordings",
      "strategy": "delete"},
 ]
 
 ANON_ID = "geloescht"
-ANON_NAME = "Gelöschter Benutzer"
+ANON_NAME = "Deleted user"
 
 
 # ------------------------------------------------------------------
-# Aufbewahrungsfristen
+# Retention periods
 # ------------------------------------------------------------------
-# key = Einstellungs-Schlüssel, unit = 'days' | 'hours', 0 = unbegrenzt.
+# key = setting key, unit = 'days' | 'hours', 0 = unlimited.
 
 RETENTION = [
     {"key": "replay_retention_days", "unit": "days", "default": 30,
-     "label": "Bildschirm- & Session-Aufzeichnungen",
-     "note": "Der heikelste Datenbestand: zeigt konkretes Verhalten am Arbeitsplatz. "
-             "Kurze Frist wählen."},
+     "label": "Screen & session recordings",
+     "note": "The most sensitive data set: it shows concrete behaviour at the workplace. "
+             "Choose a short period."},
     {"key": "retention_audit_days", "unit": "days", "default": 90,
-     "label": "Audit-Log",
-     "note": "Wird nach Ablauf anonymisiert, nicht gelöscht - die Aktion bleibt "
-             "als Sicherheitsnachweis erhalten, die Person nicht."},
+     "label": "Audit log",
+     "note": "Anonymized after expiry, not deleted - the action is kept "
+             "as a security record, the person is not."},
     {"key": "retention_activity_days", "unit": "days", "default": 180,
-     "label": "Aktivitätsprotokoll (Notizen, Tickets)"},
+     "label": "Activity log (notes, tickets)"},
     {"key": "retention_chat_days", "unit": "days", "default": 365,
-     "label": "Chat-Nachrichten"},
+     "label": "Chat messages"},
     {"key": "metrics_retention_hours", "unit": "hours", "default": 0,
-     "label": "Metrik-Historie der Clients",
-     "note": "Kein direkter Personenbezug, kann aber Arbeitszeiten sichtbar machen."},
+     "label": "Client metric history",
+     "note": "No direct personal reference, but can reveal working hours."},
     {"key": "retention_todo_archive_days", "unit": "days", "default": 365,
-     "label": "Archivierte Todos"},
+     "label": "Archived to-dos"},
     {"key": "retention_enrollment_days", "unit": "days", "default": 30,
-     "label": "Verbrauchte Enrollment-Token"},
+     "label": "Used enrollment tokens"},
 ]
 
 
@@ -157,16 +156,16 @@ def retention_days(key: str, default: int) -> int:
 
 
 # ------------------------------------------------------------------
-# Auskunft / Datenübertragbarkeit (Art. 15, Art. 20)
+# Access / data portability (Art. 15, Art. 20)
 # ------------------------------------------------------------------
 
 def export_user_data(user_id: str) -> dict:
     """
-    Alle zu einer Person gespeicherten Daten als strukturiertes Dict.
-    Bewusst maschinenlesbar (JSON), das verlangt Art. 20 Abs. 1.
+    All data stored about a person as a structured dict.
+    Deliberately machine-readable (JSON), as required by Art. 20(1).
 
-    Passwort-Hashes werden NICHT ausgeliefert - sie sind kein Auskunfts-
-    gegenstand und ihre Herausgabe wäre ein Sicherheitsrisiko.
+    Password hashes are NOT included - they are not subject to access
+    requests and disclosing them would be a security risk.
     """
     user = db.get_user_by_id(user_id)
     if not user:
@@ -174,13 +173,13 @@ def export_user_data(user_id: str) -> dict:
     username = user.get("username") or ""
 
     out: dict = {
-        "auskunft_erstellt_am": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        "hinweis": (
-            "Auskunft nach Art. 15 DSGVO / Datenübertragbarkeit nach Art. 20 DSGVO. "
-            "Enthält alle im RMM-System zu dieser Person gespeicherten Daten."
+        "report_created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "notice": (
+            "Access under Art. 15 GDPR / data portability under Art. 20 GDPR. "
+            "Contains all data stored about this person in the RMM system."
         ),
         "person": {k: v for k, v in user.items() if k != "password_hash"},
-        "daten": {},
+        "data": {},
     }
 
     for entry in PERSONAL_DATA_MAP:
@@ -196,7 +195,7 @@ def export_user_data(user_id: str) -> dict:
         except Exception:
             continue
         if rows:
-            out["daten"][entry["label"]] = [dict(r) for r in rows]
+            out["data"][entry["label"]] = [dict(r) for r in rows]
 
     for entry in USERNAME_TABLES:
         table = entry["table"]
@@ -208,31 +207,31 @@ def export_user_data(user_id: str) -> dict:
         except Exception:
             continue
         if rows:
-            out["daten"][entry["label"]] = [dict(r) for r in rows]
+            out["data"][entry["label"]] = [dict(r) for r in rows]
 
     return out
 
 
 # ------------------------------------------------------------------
-# Löschung (Art. 17)
+# Erasure (Art. 17)
 # ------------------------------------------------------------------
 
 def erase_user(user_id: str, mode: str = "anonymize") -> dict:
     """
-    Personenbezug einer Person entfernen.
+    Remove the personal reference of a person.
 
-    mode='anonymize' (empfohlen): Datensätze mit Nachweisfunktion bleiben
-        bestehen, der Bezug zur Person wird gekappt. Fachlich saubere
-        Umsetzung von Art. 17 unter Beachtung von Abs. 3.
-    mode='hard': alles wird gelöscht, auch das Audit-Log dieser Person.
-        Nur nutzen, wenn keine Nachweispflicht entgegensteht.
+    mode='anonymize' (recommended): records with an evidence function stay,
+        the reference to the person is cut. A clean implementation of Art. 17
+        while respecting paragraph 3.
+    mode='hard': everything is deleted, including this person's audit log.
+        Only use when no evidence duty stands against it.
 
-    Gibt einen Bericht zurück (Tabelle -> Anzahl betroffener Zeilen),
-    der beim Nachweis der Löschung hilft.
+    Returns a report (table -> number of affected rows) that helps prove the
+    erasure.
     """
     user = db.get_user_by_id(user_id)
     if not user:
-        return {"error": "Benutzer nicht gefunden"}
+        return {"error": "User not found"}
     username = user.get("username") or ""
     report: dict[str, int] = {}
     c = _conn()
@@ -262,9 +261,9 @@ def erase_user(user_id: str, mode: str = "anonymize") -> dict:
             if cur.rowcount:
                 report[entry["label"]] = cur.rowcount
         except Exception as e:
-            report[f"{entry['label']} (Fehler)"] = str(e)
+            report[f"{entry['label']} (error)"] = str(e)
 
-    # Über den Benutzernamen geführte Tabellen
+    # Tables referenced by username
     for entry in USERNAME_TABLES:
         table, col = entry["table"], entry["col"]
         if not _table_exists(table):
@@ -272,7 +271,7 @@ def erase_user(user_id: str, mode: str = "anonymize") -> dict:
         strategy = "delete" if mode == "hard" else entry["strategy"]
         try:
             if entry["table"] == "screen_recordings":
-                # Erst die Dateien von der Platte, dann die Datenbank-Zeilen.
+                # First the files from disk, then the database rows.
                 rows = c.execute(
                     "SELECT file_path FROM screen_recordings WHERE username = ?",
                     (username,)).fetchall()
@@ -286,28 +285,28 @@ def erase_user(user_id: str, mode: str = "anonymize") -> dict:
             if cur.rowcount:
                 report[entry["label"]] = cur.rowcount
         except Exception as e:
-            report[f"{entry['label']} (Fehler)"] = str(e)
+            report[f"{entry['label']} (error)"] = str(e)
 
     c.execute("DELETE FROM users WHERE id = ?", (user_id,))
     c.commit()
-    report["Benutzerkonto"] = 1
+    report["User account"] = 1
 
-    # Die Löschung selbst wird protokolliert - ohne den Namen der gelöschten
-    # Person, sonst stünde sie über den Umweg des Protokolls wieder drin.
+    # The erasure itself is logged - without the name of the deleted
+    # person, otherwise it would reappear via the log.
     db.add_audit_entry("system", "privacy.user_erased",
-                       details=f"Modus: {mode}, betroffene Bereiche: {len(report)}")
+                       details=f"Mode: {mode}, affected areas: {len(report)}")
     return report
 
 
 # ------------------------------------------------------------------
-# Fristen durchsetzen (Art. 5 Abs. 1 lit. e)
+# Enforce retention periods (Art. 5(1)(e))
 # ------------------------------------------------------------------
 
 def purge() -> dict:
     """
-    Alle konfigurierten Aufbewahrungsfristen anwenden. Läuft täglich als
-    Hintergrund-Job und kann von Admins manuell ausgelöst werden.
-    Gibt zurück, was tatsächlich entfernt wurde.
+    Apply all configured retention periods. Runs daily as a background job and
+    can be triggered manually by admins.
+    Returns what was actually removed.
     """
     c = _conn()
     now = _now()
@@ -316,11 +315,11 @@ def purge() -> dict:
     def cutoff(key: str, default: int, unit: str = "days") -> int | None:
         v = retention_days(key, default)
         if v <= 0:
-            return None                       # 0 = unbegrenzt aufbewahren
+            return None                       # 0 = keep indefinitely
         factor = 3600_000 if unit == "hours" else 86400_000
         return now - v * factor
 
-    # --- Aufzeichnungen (Datei + DB-Zeile) ---
+    # --- Recordings (file + DB row) ---
     cut = cutoff("replay_retention_days", 30)
     if cut is not None and _table_exists("screen_recordings"):
         rows = c.execute(
@@ -329,57 +328,57 @@ def purge() -> dict:
         for r in rows:
             _delete_recording_file(r["file_path"])
         c.execute("DELETE FROM screen_recordings WHERE started_at < ?", (cut,))
-        result["Aufzeichnungen"] = len(rows)
+        result["Recordings"] = len(rows)
 
-    # --- Audit-Log: anonymisieren statt löschen ---
+    # --- Audit log: anonymize instead of delete ---
     cut = cutoff("retention_audit_days", 90)
     if cut is not None and _table_exists("audit_log"):
         cur = c.execute(
             "UPDATE audit_log SET username = ? WHERE ts < ? AND username != ?",
             (ANON_NAME, cut, ANON_NAME))
-        result["Audit-Log anonymisiert"] = cur.rowcount
+        result["Audit log anonymized"] = cur.rowcount
 
-    # --- Aktivitätsprotokoll ---
+    # --- Activity log ---
     cut = cutoff("retention_activity_days", 180)
     if cut is not None and _table_exists("activity_log"):
         cur = c.execute("DELETE FROM activity_log WHERE created_at < ?", (cut,))
-        result["Aktivitätsprotokoll"] = cur.rowcount
+        result["Activity log"] = cur.rowcount
 
-    # --- Chat-Nachrichten ---
+    # --- Chat messages ---
     cut = cutoff("retention_chat_days", 365)
     if cut is not None and _table_exists("chat_messages"):
         cur = c.execute("DELETE FROM chat_messages WHERE created_at < ?", (cut,))
-        result["Chat-Nachrichten"] = cur.rowcount
+        result["Chat messages"] = cur.rowcount
 
-    # --- Metrik-Historie ---
+    # --- Metric history ---
     cut = cutoff("metrics_retention_hours", 0, unit="hours")
     if cut is not None and _table_exists("metrics_history"):
         cur = c.execute("DELETE FROM metrics_history WHERE ts < ?", (cut,))
-        result["Metrik-Historie"] = cur.rowcount
+        result["Metric history"] = cur.rowcount
 
-    # --- Archivierte Todos ---
+    # --- Archived to-dos ---
     cut = cutoff("retention_todo_archive_days", 365)
     if cut is not None and _table_exists("todos"):
         cur = c.execute(
             "DELETE FROM todos WHERE updated_at < ? AND category_id IN"
             " (SELECT id FROM todo_categories WHERE builtin = 'archive')", (cut,))
-        result["Archivierte Todos"] = cur.rowcount
+        result["Archived to-dos"] = cur.rowcount
 
-    # --- Verbrauchte Enrollment-Token ---
+    # --- Used enrollment tokens ---
     cut = cutoff("retention_enrollment_days", 30)
     if cut is not None and _table_exists("enrollment_tokens"):
         cur = c.execute("DELETE FROM enrollment_tokens WHERE created_at < ?", (cut,))
-        result["Enrollment-Token"] = cur.rowcount
+        result["Enrollment tokens"] = cur.rowcount
 
     c.commit()
 
-    # --- Verwaiste Aufzeichnungsdateien ohne DB-Eintrag ---
-    result["Verwaiste Dateien"] = _purge_orphan_files()
+    # --- Orphan recording files without a DB entry ---
+    result["Orphan files"] = _purge_orphan_files()
 
     total = sum(v for v in result.values() if isinstance(v, int))
     if total:
         db.add_audit_entry("system", "privacy.purge",
-                           details=f"{total} Datensätze nach Ablauf der Frist entfernt")
+                           details=f"{total} records removed after retention expiry")
     db.set_setting("privacy_last_purge", str(now))
     return result
 
@@ -391,13 +390,12 @@ def _recordings_dir() -> pathlib.Path:
 
 def _local_file(stored_path: str) -> pathlib.Path | None:
     """
-    Zu einem in der DB gespeicherten Pfad die TATSÄCHLICHE lokale Datei finden.
+    Find the ACTUAL local file for a path stored in the DB.
 
-    In der DB stehen absolute Pfade des Rechners, auf dem aufgezeichnet wurde
-    (z.B. Windows-Pfade). Wird die Installation verschoben, umgezogen oder die
-    Datenbank per dbsync woanders eingespielt, zeigen die ins Leere. Der
-    Dateiname ist dagegen stabil (UUID + Zeitstempel), deshalb wird primär
-    darüber aufgelöst.
+    The DB stores absolute paths of the machine that recorded (e.g. Windows
+    paths). If the installation is moved, migrated or the database is loaded
+    elsewhere via dbsync, those point nowhere. The file name, on the other
+    hand, is stable (UUID + timestamp), so it is resolved primarily via that.
     """
     if not stored_path:
         return None
@@ -424,15 +422,14 @@ def _delete_recording_file(stored_path: str) -> bool:
 
 def _purge_orphan_files() -> int:
     """
-    Dateien im recordings-Ordner, zu denen es keinen DB-Eintrag mehr gibt.
-    Ohne das bleiben nach Löschungen Videos auf der Platte liegen - und die
-    sind weiterhin personenbezogene Daten.
+    Files in the recordings folder that no longer have a DB entry.
+    Without this, videos stay on disk after erasures - and they remain
+    personal data.
 
-    SICHERHEITSBREMSE: Verglichen wird nur über den Dateinamen. Passt KEINE
-    einzige Datei zu einem DB-Eintrag, obwohl beide Seiten gefüllt sind, ist
-    das mit hoher Wahrscheinlichkeit ein Pfad-/Mount-Problem und nicht ein
-    Ordner voller Karteileichen - dann wird nichts angefasst. Lieber ein
-    Rest zu viel als ein versehentlich gelöschter Bestand.
+    SAFETY BRAKE: comparison is only by file name. If NO single file matches a
+    DB entry although both sides are filled, this is most likely a path/mount
+    problem and not a folder full of orphans - then nothing is touched. Better
+    a few left over than an accidentally deleted set.
     """
     folder = _recordings_dir()
     if not folder.is_dir():
@@ -449,8 +446,8 @@ def _purge_orphan_files() -> int:
                 known.add(p)
 
     if known and not any(f.name in known for f in files):
-        print("[privacy] Verwaisten-Aufräumen übersprungen: kein Dateiname passt zu"
-              " einem Datenbank-Eintrag (vermutlich verschobener Pfad).")
+        print("[privacy] Orphan cleanup skipped: no file name matches a"
+              " database entry (probably a moved path).")
         return 0
 
     removed = 0
@@ -466,11 +463,11 @@ def _purge_orphan_files() -> int:
 
 
 # ------------------------------------------------------------------
-# Bestandsübersicht (hilft beim Verzeichnis nach Art. 30)
+# Inventory overview (helps with the record under Art. 30)
 # ------------------------------------------------------------------
 
 def report() -> dict:
-    """Welche Datenbestände existieren, wie groß, wie alt ist der älteste Eintrag."""
+    """Which data sets exist, how large, how old the oldest entry is."""
     c = _conn()
     items = []
     ts_cols = {
@@ -521,15 +518,15 @@ def report() -> dict:
 
 
 # ------------------------------------------------------------------
-# Löschanträge (Selbstbedienung für Betroffene)
+# Erasure requests (self-service for data subjects)
 # ------------------------------------------------------------------
 
 def create_erasure_request(user: dict, kind: str, reason: str) -> str:
     """
-    Betroffene können Löschung selbst beantragen. Der Antrag wird nicht
-    sofort ausgeführt - ein Admin muss ihn prüfen, weil Löschung eines
-    aktiven Kontos betriebliche Folgen hat und Art. 17 Abs. 3 Ausnahmen
-    kennt. Art. 12 Abs. 3 gibt dafür einen Monat Zeit.
+    Data subjects can request erasure themselves. The request is not executed
+    immediately - an admin must review it, because erasing an active account
+    has operational consequences and Art. 17(3) has exceptions. Art. 12(3)
+    allows one month for this.
     """
     rid = str(uuid.uuid4())
     _conn().execute(
@@ -539,7 +536,7 @@ def create_erasure_request(user: dict, kind: str, reason: str) -> str:
         (rid, user["id"], user.get("username", ""), kind, reason[:2000], _now()))
     _conn().commit()
     db.add_audit_entry(user.get("username"), "privacy.erasure_requested",
-                       details=f"Art: {kind}")
+                       details=f"Kind: {kind}")
     return rid
 
 

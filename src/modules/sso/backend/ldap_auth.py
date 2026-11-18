@@ -1,12 +1,12 @@
-# ldap_auth.py (Modul "sso")
+# ldap_auth.py (module "sso")
 # --------------------------
-# Verzeichnis-Anmeldung gegen LDAP / Active Directory (frueher app/auth.py).
-# Der Core ruft diese Funktionen ueber modules.optional("sso", "ldap_auth") auf:
-#   authenticate_realm(username, password, realm_id) -> User-Dict | None
+# Directory login against LDAP / Active Directory (formerly app/auth.py).
+# The core calls these functions via modules.optional("sso", "ldap_auth"):
+#   authenticate_realm(username, password, realm_id) -> user dict | None
 #   test_realm_connection(realm) -> dict
 #   list_realm_groups(realm) -> list[str]
 #
-# Das Paket ldap3 installiert die Modul-Verwaltung beim Aktivieren (module.json -> pip).
+# The ldap3 package is installed by the module management on activation (module.json -> pip).
 
 from fastapi import HTTPException
 
@@ -14,7 +14,7 @@ from app import db
 
 
 def _import_ldap3():
-    """Importiert ldap3 oder liefert eine klare Fehlermeldung, falls es fehlt."""
+    """Import ldap3 or return a clear error message if it is missing."""
     try:
         import ldap3
         from ldap3.utils.conv import escape_filter_chars
@@ -22,8 +22,8 @@ def _import_ldap3():
     except ImportError:
         raise HTTPException(
             501,
-            "AD-Anmeldung nicht verfügbar: das Paket 'ldap3' ist nicht installiert. "
-            "Bitte auf dem Server 'pip install ldap3' ausführen.",
+            "AD login not available: the package 'ldap3' is not installed. "
+            "Please run 'pip install ldap3' on the server.",
         )
 
 
@@ -38,7 +38,7 @@ def _build_ldap_server(realm: dict):
         port = None
 
     host = realm["server"]
-    # Falls jemand eine komplette URL einträgt (ldaps://host), respektieren wir das.
+    # If someone enters a full URL (ldaps://host), we respect that.
     if host.startswith("ldaps://"):
         use_ssl = True
         host = host[len("ldaps://"):]
@@ -66,9 +66,9 @@ def _extract_group_names(member_of: list[str]) -> list[str]:
 
 def test_realm_connection(realm: dict) -> dict:
     """
-    Prüft die Realm-Konfiguration, ohne einen Benutzer anzumelden: verbindet
-    sich mit dem Bind-/Service-Account und macht eine kleine Suche im Base DN.
-    Gibt ein Ergebnis-Dict zurück (wird vom Test-Button im Frontend genutzt).
+    Check the realm configuration without logging a user in: connects with the
+    bind/service account and does a small search in the base DN.
+    Returns a result dict (used by the test button in the frontend).
     """
     ldap3, _ = _import_ldap3()
     server = _build_ldap_server(realm)
@@ -118,7 +118,7 @@ def list_realm_groups(realm: dict) -> list[str]:
         raise HTTPException(502, f"AD-Verbindung fehlgeschlagen: {e}")
     try:
         names: set[str] = set()
-        # Paginiert suchen, damit auch große Verzeichnisse vollständig geladen werden.
+        # Search paginated so even large directories are loaded completely.
         conn.search(
             base_dn, "(objectClass=group)", search_scope=ldap3.SUBTREE,
             attributes=["cn"], paged_size=500,
@@ -149,20 +149,20 @@ def list_realm_groups(realm: dict) -> list[str]:
 
 def authenticate_realm(username: str, password: str, realm_id: str) -> dict | None:
     """
-    Authentifiziert einen Benutzer gegen ein konfiguriertes Verzeichnis (LDAP/AD).
+    Authenticate a user against a configured directory (LDAP/AD).
 
-    Ablauf:
-      1. Realm-Konfiguration laden (Server, Port, SSL, Base DN, Bind-User).
-      2. Mit dem Bind-User am LDAP anmelden und den Benutzer suchen
-         (sAMAccountName ODER userPrincipalName, Filter-Zeichen werden escaped).
-      3. Ein zweites Mal mit dem gefundenen DN + eingegebenem Passwort binden
-         - klappt das, ist das Passwort korrekt.
-      4. Die AD-Gruppen des Benutzers auslesen (inkl. verschachtelter Gruppen,
-         soweit das Verzeichnis das unterstützt).
-      5. Benutzer lokal anlegen/aktualisieren (ohne Passwort-Hash) und den
-         gleichnamigen RMM-Gruppen zuordnen.
+    Flow:
+      1. Load the realm configuration (server, port, SSL, base DN, bind user).
+      2. Bind to LDAP with the bind user and search for the user
+         (sAMAccountName OR userPrincipalName, filter characters are escaped).
+      3. Bind a second time with the found DN + the entered password
+         - if that works, the password is correct.
+      4. Read the user's AD groups (incl. nested groups, as far as the
+         directory supports it).
+      5. Create/update the user locally (without a password hash) and map them
+         to the RMM groups of the same name.
 
-    Gibt das lokale User-Dict zurück oder None bei Fehlschlag.
+    Returns the local user dict or None on failure.
     """
     ldap3, escape_filter_chars = _import_ldap3()
 
@@ -202,7 +202,7 @@ def authenticate_realm(username: str, password: str, realm_id: str) -> dict | No
         member_of = [str(g) for g in entry.memberOf] if "memberOf" in entry else []
 
         # 4b. Verschachtelte Gruppen (AD): Gruppen, in denen der User indirekt
-        #     Mitglied ist. Schlägt das fehl (z.B. nicht-AD-LDAP), ignorieren wir es.
+        #     is a member. If that fails (e.g. non-AD LDAP), we ignore it.
         try:
             nested_filter = f"(member:1.2.840.113556.1.4.1943:={escape_filter_chars(user_dn)})"
             conn.search(base_dn, nested_filter, search_scope=ldap3.SUBTREE, attributes=["cn"])
@@ -212,9 +212,9 @@ def authenticate_realm(username: str, password: str, realm_id: str) -> dict | No
             pass
         conn.unbind()
 
-        # 2. Mit dem gefundenen DN + eingegebenem Passwort binden (= Passwortprüfung)
+        # 2. Bind with the found DN + the entered password (= password check)
         if not password:
-            return None  # leeres Passwort niemals als "anonym gültig" durchwinken
+            return None  # never wave an empty password through as "anonymously valid"
         user_conn = ldap3.Connection(server, user=user_dn, password=password)
         if not user_conn.bind():
             return None  # falsches Passwort

@@ -1,20 +1,20 @@
 """
-notify_routes.py (Modul "notify", frueher router/notify_routes.py)
+notify_routes.py (module "notify", formerly router/notify_routes.py)
 ------------------------------------------------------------------
-Benachrichtigungs-Rework: Regel-Verwaltung + SMTP-Einstellungen.
+Notifications rework: rule management + SMTP settings.
 
-  GET  /api/notify/catalog        -> Trigger-/Kanal-Katalog (für den Editor)
-  GET  /api/notify/rules          -> alle Regeln
-  POST /api/notify/rules          -> Regel anlegen
-  PATCH /api/notify/rules/{id}    -> Regel ändern
-  DELETE /api/notify/rules/{id}   -> Regel löschen
-  POST /api/notify/rules/{id}/test-> Test-Notification über den Regel-Kanal
-  GET  /api/notify/smtp           -> SMTP-Einstellungen (Passwort maskiert)
-  POST /api/notify/smtp           -> SMTP-Einstellungen speichern
-  POST /api/notify/smtp/test      -> Test-Mail verschicken
+  GET  /api/notify/catalog        -> trigger/channel catalog (for the editor)
+  GET  /api/notify/rules          -> all rules
+  POST /api/notify/rules          -> create a rule
+  PATCH /api/notify/rules/{id}    -> modify a rule
+  DELETE /api/notify/rules/{id}   -> delete a rule
+  POST /api/notify/rules/{id}/test-> test notification over the rule's channel
+  GET  /api/notify/smtp           -> SMTP settings (password masked)
+  POST /api/notify/smtp           -> save SMTP settings
+  POST /api/notify/smtp/test      -> send a test mail
 
-Berechtigung: Admin ODER 'manage_settings' (gleiche Grenze wie die übrigen
-Benachrichtigungs-Einstellungen im Settings-Fenster).
+Permission: admin OR 'manage_settings' (same boundary as the other
+notification settings in the settings window).
 """
 
 import asyncio
@@ -95,7 +95,7 @@ async def update_rule(rule_id: str, body: RuleBody,
                       user: dict = Depends(get_current_user)):
     _require_manage(user)
     if not notifier.get_rule(rule_id):
-        raise HTTPException(404, "Regel nicht gefunden")
+        raise HTTPException(404, "Rule not found")
     fields = body.model_dump(exclude_unset=True)
     _validate(fields)
     return notifier.update_rule(rule_id, fields)
@@ -125,14 +125,14 @@ async def _test_rule_impl(rule_id: str, user: dict = Depends(get_current_user)):
     _require_manage(user)
     rule = notifier.get_rule(rule_id)
     if not rule:
-        raise HTTPException(404, "Regel nicht gefunden")
+        raise HTTPException(404, "Rule not found")
     n = build_notification(
-        f"Test der Regel „{rule['name']}“ (Trigger: "
+        f"Test of rule \"{rule['name']}\" (trigger: "
         f"{notifier.TRIGGERS.get(rule['trigger'], {}).get('label', rule['trigger'])}).",
-        head="🔔 Test-Notification", client="Test-Client",
-        service="Regel-Test", level="info")
+        head="Test notification", client="Test client",
+        service="Rule test", level="info")
     try:
-        await notifier._dispatch(rule, n)   # bewusst ohne Cooldown
+        await notifier._dispatch(rule, n)   # deliberately without cooldown
     except Exception as e:
         raise HTTPException(502, f"Versand fehlgeschlagen: {e}")
     return {"ok": True}
@@ -146,7 +146,7 @@ class SmtpBody(BaseModel):
     host: str
     port: int = 587
     user: str = ""
-    password: str | None = None    # None = unverändert lassen
+    password: str | None = None    # None = leave unchanged
     from_addr: str = ""
     security: str = "starttls"     # starttls | ssl | none
 
@@ -164,11 +164,11 @@ async def get_smtp(user: dict = Depends(get_current_user)):
 def set_smtp(body: SmtpBody, user: dict = Depends(get_current_user)):
     _require_manage(user)
     if body.security not in ("starttls", "ssl", "none"):
-        raise HTTPException(400, "Ungültige Sicherheit (starttls|ssl|none)")
+        raise HTTPException(400, "Invalid security (starttls|ssl|none)")
     db.set_setting("smtp_host", body.host.strip())
     db.set_setting("smtp_port", str(int(body.port)))
     db.set_setting("smtp_user", body.user.strip())
-    if body.password is not None:      # leerer String = Passwort löschen
+    if body.password is not None:      # empty string = delete the password
         db.set_setting("smtp_password", body.password)
     db.set_setting("smtp_from", body.from_addr.strip())
     db.set_setting("smtp_security", body.security)
@@ -198,9 +198,9 @@ async def _test_smtp_impl(body: SmtpTestBody, user: dict = Depends(get_current_u
     try:
         await asyncio.to_thread(
             notifier.send_email, body.to,
-            "🔔 RMM Test-Mail",
-            "Diese Test-Mail bestätigt, dass die SMTP-Verbindung funktioniert.\n\n"
+            "RMM test mail",
+            "This test mail confirms that the SMTP connection works.\n\n"
             "— BYTERA RMM")
     except Exception as e:
-        raise HTTPException(502, f"Test-Mail fehlgeschlagen: {e}")
+        raise HTTPException(502, f"Test mail failed: {e}")
     return {"ok": True}

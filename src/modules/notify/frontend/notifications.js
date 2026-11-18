@@ -1,26 +1,27 @@
 // apps/notifications.js
 // ---------------------
-// Benachrichtigungs-Rework (Tab "Benachrichtigungen" in den Einstellungen):
-//   1. Webhooks     - Discord/Custom; Custom mit eigenen HTTP-Headern (JSON)
-//                     und frei definierbarem Body-Template mit Platzhaltern
-//   2. E-Mail/SMTP  - Serververbindung (Host/Port/Login/Sicherheit) + Test
-//   3. Regeln       - "Wenn <Trigger> (auf Clients X/Y/Z), dann <Kanal> an
-//                     <Ziel>" mit vielen Trigger-Arten (offline, Garantie,
-//                     CPU/RAM/Disk/Temp-Schwellwerte, Websites, Logins, ...)
+// Notifications rework (tab "Notifications" in the settings):
+//   1. Webhooks     - Discord/Custom; Custom with its own HTTP headers (JSON)
+//                     and a freely definable body template with placeholders
+//   2. Email/SMTP   - server connection (host/port/login/security) + test
+//   3. Rules        - "When <trigger> (on clients X/Y/Z), then <channel> to
+//                     <target>" with many trigger types (offline, warranty,
+//                     CPU/RAM/disk/temp thresholds, websites, logins, ...)
 
 import { api } from "/js/app/api.js";
 import { state } from "/js/app/state.js";
 import { esc, uiConfirm } from "/js/app/utils.js";
-// t() unter Alias: in dieser Datei ist "t" bereits als lokaler
-// Variablenname belegt (Tenant/Target/Trigger/Token o.ä.).
+// t() under an alias: in this file "t" is already used as a local
+// variable name (tenant/target/trigger/token etc.).
 import { t as tr } from "/js/app/i18n.js";
 import { condenseHints } from "/js/app/help.js";
+import { icon } from "./icons.js";
 
 const PLACEHOLDER_HELP =
-  "Platzhalter: {head} {body} {message} {client} {tenant} {location} {service} {level} {timestamp}";
+  "Placeholders: {head} {body} {message} {client} {tenant} {location} {service} {level} {timestamp}";
 
-// Modul "notify": als App "Benachrichtigungen" (renderNotifyApp) und in der
-// Modul-App unter Einstellungen (renderNotifySettings).
+// Module "notify": as the app "Notifications" (renderNotifyApp) and in the
+// module app under settings (renderNotifySettings).
 export function renderNotifyApp(body, win) {
   body.innerHTML = `<div style="height:100%;overflow:auto;box-sizing:border-box"></div>`;
   return renderNotifySettings(body.firstElementChild, win);
@@ -28,14 +29,14 @@ export function renderNotifyApp(body, win) {
 
 export function renderNotifySettings(root, win) {
   renderNotifications(root, win);
-  // Erklaertexte in "?"-Symbole umwandeln (laedt asynchron nach - deshalb zweimal).
+  // Turn the explanatory texts into "?" symbols (loads asynchronously - hence twice).
   condenseHints(root);
   setTimeout(() => condenseHints(root), 400);
 }
 
 export function renderNotifications(body, win) {
-  // Erklaertexte dieser Seite in "?"-Symbole umwandeln - einmal direkt nach
-  // dem Zeichnen und einmal verzoegert fuer nachgeladene Bereiche.
+  // Turn the explanatory texts on this page into "?" symbols - once right after
+  // drawing and once delayed for lazily loaded areas.
   setTimeout(() => condenseHints(body), 0);
   setTimeout(() => condenseHints(body), 400);
 
@@ -47,9 +48,9 @@ export function renderNotifications(body, win) {
     body.innerHTML = `
       <div class="settings-section">
         <div class="tab-bar" style="margin-bottom:14px">
-          <button class="tab-btn nt-tab${tab === "rules" ? " active" : ""}" data-tab="rules">📋 Regeln</button>
-          <button class="tab-btn nt-tab${tab === "webhooks" ? " active" : ""}" data-tab="webhooks">🔗 Webhooks</button>
-          <button class="tab-btn nt-tab${tab === "smtp" ? " active" : ""}" data-tab="smtp">✉️ E-Mail (SMTP)</button>
+          <button class="tab-btn nt-tab${tab === "rules" ? " active" : ""}" data-tab="rules">${icon("list", 14)} Rules</button>
+          <button class="tab-btn nt-tab${tab === "webhooks" ? " active" : ""}" data-tab="webhooks">${icon("link", 14)} Webhooks</button>
+          <button class="tab-btn nt-tab${tab === "smtp" ? " active" : ""}" data-tab="smtp">${icon("mail", 14)} Email (SMTP)</button>
         </div>
         <div id="nt-content"></div>
       </div>`;
@@ -74,27 +75,27 @@ export function renderNotifications(body, win) {
     const isEdit = !!w;
     w = w || { type: "custom", name: "", url: "", headers: "", body_template: "" };
     return `
-      <div class="form-row"><label>Typ</label>
+      <div class="form-row"><label>Type</label>
         <select id="wf-type">
           <option value="discord" ${w.type === "discord" ? "selected" : ""}>Discord</option>
-          <option value="custom" ${w.type !== "discord" ? "selected" : ""}>Benutzerdefiniert (Custom)</option>
+          <option value="custom" ${w.type !== "discord" ? "selected" : ""}>Custom</option>
         </select></div>
       <div class="form-row"><label>Name</label>
         <input id="wf-name" value="${esc(w.name)}" placeholder="z.B. Alerts-Channel" /></div>
-      <div class="form-row"><label>Webhook-URL</label>
+      <div class="form-row"><label>Webhook URL</label>
         <input id="wf-url" value="${esc(w.url)}" placeholder="https://…" /></div>
       <div id="wf-custom" style="${(w.type || "custom") === "discord" ? "display:none" : ""}">
-        <div class="form-row"><label>Eigene HTTP-Header (JSON-Objekt, optional)</label>
+        <div class="form-row"><label>Custom HTTP headers (JSON object, optional)</label>
           <textarea id="wf-headers" rows="3" style="font-family:monospace"
             placeholder='{"Authorization": "Bearer …", "X-Api-Key": "…"}'>${esc(w.headers || "")}</textarea></div>
-        <div class="form-row"><label>Body-Template (optional, leer = Standard-JSON)</label>
+        <div class="form-row"><label>Body template (optional, empty = default JSON)</label>
           <textarea id="wf-body" rows="4" style="font-family:monospace"
             placeholder='{"text": "{head}\\n{body}", "level": "{level}"}'>${esc(w.body_template || "")}</textarea>
           <div style="font-size:11px;color:var(--subtext);margin-top:3px">${PLACEHOLDER_HELP}</div></div>
       </div>
       <div id="wf-error" class="form-error hidden"></div>
-      <button class="btn-primary" id="wf-save" style="margin-top:4px">${isEdit ? tr("u_anderungen_speichern") : "+ Webhook speichern"}</button>
-      ${isEdit ? `<button class="btn" id="wf-cancel" style="margin-left:6px">Abbrechen</button>` : ""}`;
+      <button class="btn-primary" id="wf-save" style="margin-top:4px">${isEdit ? tr("u_anderungen_speichern") : "+ Save webhook"}</button>
+      ${isEdit ? `<button class="btn" id="wf-cancel" style="margin-left:6px">${tr("cancel")}</button>` : ""}`;
   }
 
   function bindWebhookForm(root, editId, done) {
@@ -120,7 +121,7 @@ export function renderNotifications(body, win) {
       try {
         if (editId) await api.updateWebhook(editId, data);
         else await api.createWebhook(data);
-        window.notify?.("Webhook gespeichert", "success");
+        window.notify?.("Webhook saved", "success");
         done();
       } catch (e) { err.textContent = e.message; err.classList.remove("hidden"); }
     });
@@ -172,9 +173,9 @@ export function renderNotifications(body, win) {
     }));
     listEl.querySelectorAll("[data-test]").forEach((btn) => btn.addEventListener("click", async () => {
       btn.textContent = "…";
-      try { await api.testWebhook(btn.dataset.test); window.notify?.("Test-Benachrichtigung gesendet", "success"); }
-      catch (e) { window.notify?.("Test fehlgeschlagen: " + e.message, "error"); }
-      btn.textContent = "Testen";
+      try { await api.testWebhook(btn.dataset.test); window.notify?.("Test notification sent", "success"); }
+      catch (e) { window.notify?.("Test failed: " + e.message, "error"); }
+      btn.textContent = tr("nf_test");
     }));
     listEl.querySelectorAll("[data-del]").forEach((btn) => btn.addEventListener("click", async () => {
       if (!(await uiConfirm(tr("u_webhook_loschen_regeln_die_ihn_nut"), { okText: tr("delete"), danger: true }))) return;
@@ -185,7 +186,7 @@ export function renderNotifications(body, win) {
   // ================= SMTP =================
 
   async function drawSmtp(root) {
-    root.innerHTML = `<div style="color:var(--subtext);font-size:13px">Lade…</div>`;
+    root.innerHTML = `<div style="color:var(--subtext);font-size:13px">${tr("loading")}</div>`;
     let cfg;
     try { cfg = await api.getSmtp(); }
     catch (e) { root.innerHTML = `<div style="color:var(--danger)">${esc(e.message)}</div>`; return; }
@@ -212,7 +213,7 @@ export function renderNotifications(body, win) {
           <input id="sm-pass" type="password" placeholder="${cfg.password ? tr("nf_pw_stored") : ""}" /></div>
       </div>
       <div class="form-row"><label>${tr("nf_from_addr")}</label>
-        <input id="sm-from" value="${esc(cfg.from_addr)}" placeholder="rmm@firma.de (leer = Benutzername)" /></div>
+        <input id="sm-from" value="${esc(cfg.from_addr)}" placeholder="rmm@company.com (empty = username)" /></div>
       <div id="sm-error" class="form-error hidden"></div>
       <div style="display:flex;gap:8px;margin-top:6px;align-items:center">
         <button class="btn-primary" id="sm-save">${tr("save")}</button>
@@ -228,7 +229,7 @@ export function renderNotifications(body, win) {
           host: root.querySelector("#sm-host").value.trim(),
           port: parseInt(root.querySelector("#sm-port").value, 10) || 587,
           user: root.querySelector("#sm-user").value.trim(),
-          password: pass === "" ? null : pass,   // leer lassen = unverändert
+          password: pass === "" ? null : pass,   // leave empty = unchanged
           from_addr: root.querySelector("#sm-from").value.trim(),
           security: root.querySelector("#sm-sec").value,
         });
@@ -239,15 +240,15 @@ export function renderNotifications(body, win) {
       err.classList.add("hidden");
       const to = root.querySelector("#sm-testto").value.trim();
       if (!to) { err.textContent = tr("u_test_empfanger_angeben"); err.classList.remove("hidden"); return; }
-      try { await api.testSmtp(to); window.notify?.("Test-Mail verschickt ✔", "success"); }
+      try { await api.testSmtp(to); window.notify?.("Test mail sent", "success"); }
       catch (e) { err.textContent = e.message; err.classList.remove("hidden"); }
     });
   }
 
-  // ================= REGELN =================
+  // ================= RULES =================
 
-  const CHANNEL_LABELS = { email: "✉️ E-Mail", webhook: "🔗 Webhook", dashboard: "🖥️ Dashboard-Toast" };
-  const PARAM_LABELS = { days_before: "Vorlauf (Tage)", threshold: "Schwellwert" };
+  const CHANNEL_LABELS = { email: "Email", webhook: "Webhook", dashboard: "Dashboard toast" };
+  const PARAM_LABELS = { days_before: "Lead time (days)", threshold: "Threshold" };
   const PARAM_DEFAULTS = { days_before: 30, threshold: 90 };
 
   function triggerLabel(key) {
@@ -259,27 +260,27 @@ export function renderNotifications(body, win) {
     const selected = new Set((rule.client_ids || "").split(",").filter(Boolean));
     const clients = state.clients || [];
     return `
-      <div class="form-row"><label>Name der Regel</label>
-        <input class="rf-name" value="${esc(rule.name || "")}" placeholder="z.B. Garantie-Warnung Server" /></div>
+      <div class="form-row"><label>Rule name</label>
+        <input class="rf-name" value="${esc(rule.name || "")}" placeholder="e.g. Warranty warning servers" /></div>
       <div style="display:flex;gap:12px">
-        <div class="form-row" style="flex:1"><label>Wenn (Trigger)</label>
+        <div class="form-row" style="flex:1"><label>When (trigger)</label>
           <select class="rf-trigger">
             ${catalog.triggers.map((t) => `<option value="${t.key}" ${rule.trigger === t.key ? "selected" : ""}>${esc(t.label)}</option>`).join("")}
           </select></div>
-        <div class="form-row" style="flex:1"><label>Dann (Kanal)</label>
+        <div class="form-row" style="flex:1"><label>Then (channel)</label>
           <select class="rf-channel">
             ${catalog.channels.map((c) => `<option value="${c}" ${rule.channel === c ? "selected" : ""}>${CHANNEL_LABELS[c] || c}</option>`).join("")}
           </select></div>
       </div>
       <div class="rf-params"></div>
       <div class="form-row rf-target-row"><label class="rf-target-label"></label><span class="rf-target-slot"></span></div>
-      <div class="form-row"><label>Clients (leer = alle Clients)</label>
+      <div class="form-row"><label>Clients (empty = all clients)</label>
         <div style="max-height:130px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:6px 8px">
           ${clients.map((c) => `
             <label style="display:flex;gap:7px;align-items:center;font-size:12.5px;padding:2px 0;cursor:pointer">
               <input type="checkbox" class="rf-client" value="${c.id}" ${selected.has(c.id) ? "checked" : ""} />
               <span>${esc(c.hostname || c.id)}</span>
-            </label>`).join("") || `<span style="font-size:12px;color:var(--subtext)">Keine Clients vorhanden.</span>`}
+            </label>`).join("") || `<span style="font-size:12px;color:var(--subtext)">No clients available.</span>`}
         </div></div>
       <div class="form-error hidden rf-error"></div>`;
   }
@@ -303,15 +304,15 @@ export function renderNotifications(body, win) {
       const ch = channelSel.value;
       if (ch === "email") {
         row.style.display = "";
-        label.textContent = "An E-Mail-Adresse(n), Komma-getrennt";
-        slot.innerHTML = `<input class="rf-target" value="${esc(rule?.target || "")}" placeholder="user@gmail.de, chef@firma.de" style="width:100%" />`;
+        label.textContent = "To email address(es), comma-separated";
+        slot.innerHTML = `<input class="rf-target" value="${esc(rule?.target || "")}" placeholder="user@gmail.com, boss@company.com" style="width:100%" />`;
       } else if (ch === "webhook") {
         row.style.display = "";
-        label.textContent = "An Webhook";
+        label.textContent = "To webhook";
         slot.innerHTML = webhooks.length
           ? `<select class="rf-target" style="width:100%">${webhooks.map((w) =>
               `<option value="${w.id}" ${rule?.target === w.id ? "selected" : ""}>${esc(w.name)} (${esc(w.type)})</option>`).join("")}</select>`
-          : `<span style="font-size:12.5px;color:var(--warn,#f5a524)">Erst im Tab „Webhooks" einen Webhook anlegen.</span>`;
+          : `<span style="font-size:12.5px;color:var(--warn,#f5a524)">Create a webhook in the "Webhooks" tab first.</span>`;
       } else {
         row.style.display = "none";
         slot.innerHTML = "";
@@ -347,7 +348,7 @@ export function renderNotifications(body, win) {
   }
 
   async function drawRules(root) {
-    root.innerHTML = `<div style="color:var(--subtext);font-size:13px">Lade…</div>`;
+    root.innerHTML = `<div style="color:var(--subtext);font-size:13px">${tr("loading")}</div>`;
     let rules = [];
     try { rules = await api.getNotifyRules(); }
     catch (e) { root.innerHTML = `<div style="color:var(--danger)">${esc(e.message)}</div>`; return; }
@@ -380,7 +381,7 @@ export function renderNotifications(body, win) {
       const ids = (r.client_ids || "").split(",").filter(Boolean);
       const clientsTxt = ids.length
         ? ids.slice(0, 3).map(clientName).map(esc).join(", ") + (ids.length > 3 ? ` +${ids.length - 3}` : "")
-        : "alle Clients";
+        : "all clients";
       let params = {};
       try { params = JSON.parse(r.params || "{}"); } catch {}
       const paramTxt = Object.entries(params).map(([k, v]) => `${PARAM_LABELS[k] || k}: ${v}`).join(", ");
@@ -393,8 +394,8 @@ export function renderNotifications(body, win) {
           <div style="min-width:0">
             <strong>${esc(r.name)}</strong>
             <div style="font-size:12px;color:var(--subtext);margin-top:2px">
-              Wenn <b>${esc(triggerLabel(r.trigger))}</b>${paramTxt ? ` (${esc(paramTxt)})` : ""}
-              auf <b>${clientsTxt}</b> →
+              When <b>${esc(triggerLabel(r.trigger))}</b>${paramTxt ? ` (${esc(paramTxt)})` : ""}
+              on <b>${clientsTxt}</b> →
               ${CHANNEL_LABELS[r.channel] || esc(r.channel)}${targetTxt ? ` an <b>${esc(targetTxt)}</b>` : ""}
             </div>
           </div>
@@ -437,7 +438,7 @@ export function renderNotifications(body, win) {
       box.querySelector(".rl-update").addEventListener("click", async () => {
         const data = collect();
         if (!data) return;
-        try { await api.updateNotifyRule(r.id, data); window.notify?.("Regel aktualisiert", "success"); draw(); }
+        try { await api.updateNotifyRule(r.id, data); window.notify?.("Rule updated", "success"); draw(); }
         catch (e) { window.notify?.(e.message, "error"); }
       });
       box.querySelector(".rl-cancel").addEventListener("click", () => { box.style.display = "none"; });

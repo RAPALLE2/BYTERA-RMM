@@ -1,11 +1,11 @@
 {
   "schema": 1,
   "id": "notify",
-  "name": "Benachrichtigungen",
+  "name": "Notifications",
   "version": "1.0.0",
-  "description": "Benachrichtigungs-Regeln (Trigger wie Client offline, CPU-Last, Website down, Anmeldung …) mit Versand per E-Mail (SMTP), Webhook (Discord/Custom) oder als Toast im Dashboard. Ist das Modul aus, werden keine Benachrichtigungen verschickt.",
+  "description": "Notification rules (triggers like client offline, CPU load, website down, login …) delivered via email (SMTP), webhook (Discord/Custom) or as a dashboard toast. When the module is off, no notifications are sent.",
   "author": "BYTERA",
-  "category": "System",
+  "category": "zusammenarbeit",
   "icon": "🔔",
   "requires": [],
   "pip": [],
@@ -28,9 +28,9 @@
   "apps": [
     {
       "id": "notifications",
-      "label": "Benachrichtigungen",
+      "label": "Notifications",
       "icon": "🔔",
-      "title": "Benachrichtigungen",
+      "title": "Notifications",
       "entry": "notifications.js",
       "export": "renderNotifyApp",
       "w": 900,

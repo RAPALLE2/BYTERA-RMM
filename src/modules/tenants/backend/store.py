@@ -1,16 +1,16 @@
-# store.py (Modul "tenants") - verbundene Mandanten-Backends + Zugangsdaten je Benutzer
+# store.py (module "tenants") - connected tenant backends + credentials per user
 # ------------------------------------------------------------------------------------
 # data/modules/tenants/data.json:
 #   {"tenants": { id: {
-#        id, name, label, url (Basis-URL des Mandanten-RMM), verify_tls,
-#        allow: [ {type:"user"|"group", id} ]   # wer DARF diesen Mandanten sehen/oeffnen
+#        id, name, label, url (base URL of the tenant RMM), verify_tls,
+#        allow: [ {type:"user"|"group", id} ]   # who MAY see/open this tenant
 #        created, created_by, color, note
 #   }},
 #    "creds": { "<tenant_id>:<user_id>": {username, realm, pw_enc, saved_at} }}
 #
-# Jeder Mandant ist ein eigenstaendiges RMM-Backend (eigene DB/Settings/Rechte/Spaces).
-# Das Haupt-RMM speichert NUR: welche Backends es gibt, wer sie sehen darf, und die
-# persoenlichen Zugangsdaten je Benutzer (Passwort verschluesselt, Fernet aus JWT_SECRET).
+# Each tenant is a standalone RMM backend (its own DB/settings/permissions/spaces).
+# The main RMM stores ONLY: which backends exist, who may see them, and the
+# personal credentials per user (password encrypted, Fernet from JWT_SECRET).
 from __future__ import annotations
 
 import base64

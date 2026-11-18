@@ -1,8 +1,8 @@
-# module.py (Modul "styles") - Einstiegspunkt
+# module.py (module "styles") - entry point
 # -------------------------------------------
-# Styles sind reine Frontend-Dateien unter frontend/styles/<ordner>/. Das
-# Backend liest nur ihre style.json (registry.py), damit Profil/Einstellungen
-# die Auswahl anbieten und gespeicherte Werte geprueft werden koennen.
+# Styles are pure frontend files under frontend/styles/<folder>/. The backend
+# only reads their style.json (registry.py) so that profile/settings can offer
+# the choice and stored values can be validated.
 
 from rmm_mod_styles import registry
 

@@ -1,11 +1,11 @@
-# module.py (Modul "notify")
+# module.py (module "notify")
 # --------------------------
-# Benachrichtigungen: Regeln (Trigger -> Kanal), SMTP, Webhooks, Dashboard-Toasts.
+# Notifications: rules (trigger -> channel), SMTP, webhooks, dashboard toasts.
 #
-# Der Core meldet Ereignisse ueber app.notifier.fire_event(); jedes davon kommt
-# hier als Hook an (module.json -> "hooks") und geht an den Regel-Motor.
-# Metrik-Schwellwerte und der Uptime-Monitor rufen engine.py direkt (ueber
-# app.notifier). Die Garantie-Pruefung laeuft als Hintergrundaufgabe.
+# The core raises events via app.notifier.fire_event(); each of them arrives
+# here as a hook (module.json -> "hooks") and goes to the rule engine.
+# Metric thresholds and the uptime monitor call engine.py directly (via
+# app.notifier). The warranty check runs as a background task.
 
 from . import engine
 

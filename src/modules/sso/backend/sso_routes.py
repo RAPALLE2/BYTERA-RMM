@@ -1,17 +1,17 @@
-# sso_routes.py (Modul "sso")
+# sso_routes.py (module "sso")
 # ---------------------------
-# Verzeichnis-Anbindungen (Realms, LDAP/Active Directory) verwalten - frueher in
-# router/admin_routes.py. URLs unveraendert. Recht: "manage_sso".
+# Manage directory connections (realms, LDAP/Active Directory) - formerly in
+# router/admin_routes.py. URLs unchanged. Permission: "manage_sso".
 #
-#   GET    /api/admin/realms                         Liste (ohne Bind-Passwort)
-#   POST   /api/admin/realms                         anlegen
-#   PUT    /api/admin/realms/{id}                    aendern
-#   POST   /api/admin/realms/{id}/test               Verbindung testen
-#   DELETE /api/admin/realms/{id}                    loeschen
-#   GET    /api/admin/realms/{id}/ad-groups          AD-Gruppen auflisten
-#   POST   /api/admin/realms/{id}/ad-groups/import   AD-Gruppen als RMM-Gruppen importieren
-#   GET    /api/admin/sso/local-admins               lokale Admin-Konten (Bedingung fuers Deaktivieren)
-#   GET    /api/admin/sso/ad-connections             im Modul "Active Directory" verbundene ADs (zur Auswahl)
+#   GET    /api/admin/realms                         list (without bind password)
+#   POST   /api/admin/realms                         create
+#   PUT    /api/admin/realms/{id}                    modify
+#   POST   /api/admin/realms/{id}/test               test the connection
+#   DELETE /api/admin/realms/{id}                    delete
+#   GET    /api/admin/realms/{id}/ad-groups          list AD groups
+#   POST   /api/admin/realms/{id}/ad-groups/import   import AD groups as RMM groups
+#   GET    /api/admin/sso/local-admins               local admin accounts (condition for disabling)
+#   GET    /api/admin/sso/ad-connections             ADs connected in the "Active Directory" module (for selection)
 #   POST   /api/admin/sso/ad-connections/{cid}/import   eine davon als Realm uebernehmen
 
 import asyncio
@@ -43,7 +43,7 @@ class RealmBody(BaseModel):
 def list_realms(user: dict = Depends(get_current_user)):
     require_perm(user, "manage_sso")
     realms = db.list_realms()
-    # Bind-Passwort niemals ans Frontend zurückgeben
+    # never return the bind password to the frontend
     for r in realms:
         r.pop("bind_password", None)
     return realms
@@ -66,8 +66,8 @@ def update_realm(realm_id: str, body: RealmBody, user: dict = Depends(get_curren
     require_perm(user, "manage_sso")
     if not db.get_realm(realm_id):
         raise HTTPException(404, "Realm nicht gefunden")
-    # exclude_unset: nur die tatsächlich mitgeschickten Felder ändern, damit ein
-    # simpler Aktiv/Inaktiv-Umschalter nicht versehentlich SSL/Port/DN überschreibt.
+    # exclude_unset: only change the fields actually sent, so a simple
+    # active/inactive toggle does not accidentally overwrite SSL/port/DN.
     r = db.update_realm(realm_id, body.model_dump(exclude_unset=True))
     if r:
         r.pop("bind_password", None)
@@ -89,8 +89,8 @@ async def test_realm(realm_id: str, background: bool = False, user: dict = Depen
 
 def _test_realm_impl(realm_id: str, user: dict = Depends(get_current_user)):
     """
-    Prüft die Realm-Konfiguration: verbindet sich mit dem Bind-Account und
-    durchsucht das Base DN. Meldet Erfolg oder eine aussagekräftige Fehlermeldung.
+    Check the realm configuration: connects with the bind account and searches
+    the base DN. Reports success or a meaningful error message.
     """
     require_perm(user, "manage_sso")
     realm = db.get_realm(realm_id)
@@ -147,9 +147,9 @@ async def import_realm_ad_groups(realm_id: str, body: ImportAdGroupsBody,
 def _import_realm_ad_groups_impl(realm_id: str, body: ImportAdGroupsBody,
                                  user: dict = Depends(get_current_user)):
     """
-    Importiert AD-Gruppen als RMM-Gruppen (is_ad_group=1). Anschließend können in
-    der Berechtigungen-App Rechte an diese Gruppen vergeben werden. Mitglieder
-    der AD-Gruppe erben diese Rechte beim Login automatisch (Match über Namen).
+    Import AD groups as RMM groups (is_ad_group=1). Afterwards, permissions can
+    be assigned to these groups in the permissions app. Members of the AD group
+    inherit these permissions automatically on login (matched by name).
     """
     require_perm(user, "manage_sso")
     realm = db.get_realm(realm_id)
@@ -194,9 +194,9 @@ async def import_ad_connection(cid: str, background: bool = False, user: dict = 
     Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
     require_perm(user, "manage_sso")
     async def _work(job):
-        job.update(phase='sso.task', detail="SSO: AD-Verbindung als Realm übernehmen")
+        job.update(phase='sso.task', detail="SSO: adopt AD connection as a realm")
         return await asyncio.to_thread(_import_ad_connection_impl, cid=cid, user=user)
-    return await bgjobs.run('sso.task', cid, title="SSO: AD-Verbindung als Realm übernehmen", user=user, work=_work,
+    return await bgjobs.run('sso.task', cid, title="SSO: adopt AD connection as a realm", user=user, work=_work,
                             background=background, perm='manage_sso')
 
 
@@ -206,7 +206,7 @@ def _import_ad_connection_impl(cid: str, user: dict = Depends(get_current_user))
     require_perm(user, "manage_sso")
     from app import modules
     if not modules.is_enabled("addir"):
-        raise HTTPException(409, "Modul „Active Directory“ ist nicht aktiv")
+        raise HTTPException(409, "The \"Active Directory\" module is not active")
     adstore = modules.use("addir", "store")
     c = adstore.get(cid)
     if not c:

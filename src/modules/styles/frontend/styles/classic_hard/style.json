@@ -1,9 +1,12 @@
 {
   "id": "classic_hard",
   "name": "Classic Hard",
-  "description": "Wie die Proxmox-Oberfläche: Baum links, rechts Kategorien mit fester Ansicht, keine Widgets.",
+  "description": "Like the Proxmox interface: tree on the left, categories with a fixed view on the right, no widgets.",
   "order": 20,
   "bodyClass": "design-standard",
   "layout": "classic-hard",
-  "css": ["../classic/style.css", "style.css"]
+  "css": [
+    "../classic/style.css",
+    "style.css"
+  ]
 }

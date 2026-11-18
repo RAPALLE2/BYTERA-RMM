@@ -1,32 +1,33 @@
-// engine/classic.js (Modul "styles")
+// engine/classic.js (module "styles")
 // -----------------------------------
-// Layout-Engine "classic" fuer Styles (siehe ../../README.md):
+// Layout engine "classic" for styles (see ../../README.md):
 //
-//   style.json  "layout": "classic"       -> Classic: Navigation links = Ordner/Apps
-//                                            des Startmenues, Tab "Uebersicht" = Dashboard
-//               "layout": "classic-hard"  -> wie Proxmox (body.cl-hard): Navigation =
-//                                            feste Kategorien (appcategories.js), Baum-Wurzel
-//                                            "Rechenzentrum", Tab "Uebersicht" = Kategorie-
-//                                            Spalte + feste Ansicht statt Widgets (classicview.js)
+//   style.json  "layout": "classic"       -> Classic: navigation on the left = folders/apps
+//                                            of the start menu, tab "Overview" = dashboard
+//               "layout": "classic-hard"  -> like Proxmox (body.cl-hard): navigation =
+//                                            fixed categories (appcategories.js), tree root
+//                                            "Data center", tab "Overview" = category
+//                                            column + fixed view instead of widgets (classicview.js)
 //
-//   * Inhalte als TABS im Hauptbereich statt schwebender Fenster:
-//     erster Tab "Uebersicht", dann je offenes Fenster ein Tab
-//     (Klick = anzeigen, x / Mittelklick = schliessen)
-//   * die Taskleiste wird zur schmalen Statusleiste (Aufgaben, Uhr)
+//   * Content as TABS in the main area instead of floating windows:
+//     first tab "Overview", then one tab per open window
+//     (click = show, x / middle click = close)
+//   * the taskbar becomes a slim status bar (tasks, clock)
 //
-// Technisch bleibt der Fenster-Manager unveraendert: Jedes "Fenster" fuellt
-// den Inhaltsbereich, sichtbar ist nur der aktive Tab. Darum funktionieren alle
-// Apps und Module ohne Anpassung. Eingehaengt wird ueber die Style-Hooks des
-// Cores (/js/app/styles.js) - der Core selbst kennt dieses Layout nicht.
+// Technically the window manager stays unchanged: each "window" fills the
+// content area, only the active tab is visible. That is why all apps and modules
+// work without adaptation. It hooks in via the style hooks of the core
+// (/js/app/styles.js) - the core itself does not know this layout.
 //
-// Nur auf breiten Bildschirmen; auf dem Handy gilt weiter die mobile Ansicht
-// (mit dem Aussehen des Styles).
+// Only on wide screens; on mobile the mobile view still applies
+// (with the look of the style).
 
 import { state } from "/js/app/state.js";
 import { focusWindow, closeWindow, windowLink } from "/js/app/windowmanager.js";
 import { getCatalogApps, getMenuModel, openMenuApp, onMenuChange, catalogEntry } from "/js/app/startmenu.js";
 import { groupApps } from "/js/app/appcategories.js";
 import { esc } from "/js/app/utils.js";
+import { icon } from "./icons.js";
 
 let active = "overview";      // "overview" oder Fenster-Key
 let lastTop = null;           // zuletzt fokussiertes Fenster (Erkennung "neu geoeffnet/fokussiert")
@@ -83,7 +84,7 @@ export function initClassic() {
 
   // Classic Hard: Wurzel des Geraete-Baums heisst wie in Proxmox "Rechenzentrum"
   const dash = document.getElementById("sidebar-dashboard");
-  if (dash && isHard()) dash.innerHTML = `<span class="nav-ico">🗄️</span> Rechenzentrum`;
+  if (dash && isHard()) dash.innerHTML = `<span class="nav-ico">${icon("datacenter", 15)}</span> Data center`;
 
   // ---- Navigation (Apps) oben in der Seitenleiste ----
   navEl = document.createElement("div");
@@ -185,9 +186,9 @@ function drawTabs() {
       ${dot ? `<span class="cl-dot" style="background:${esc(dot)}"></span>` : ""}
       <span class="cl-tab-ico">${icon}</span>
       <span class="cl-tab-label">${esc(title)}</span>
-      ${closable ? `<button class="cl-tab-x" title="Schließen" aria-label="Schließen">×</button>` : ""}
+      ${closable ? `<button class="cl-tab-x" title="Close" aria-label="Close">×</button>` : ""}
     </div>`;
-  tabsEl.innerHTML = tab("overview", "🏠", "Übersicht", null, false)
+  tabsEl.innerHTML = tab("overview", icon("home", 15), "Overview", null, false)
     + state.windows.map((w) => tab(w.key, winIcon(w), w.title || w.appId, w.clientColor, true)).join("");
   tabsEl.querySelectorAll(".cl-tab").forEach((el) => {
     const key = el.dataset.key;
@@ -209,11 +210,11 @@ function tabMenu(key, ev) {
   m.style.left = `${ev.clientX}px`;
   m.style.top = `${ev.clientY}px`;
   m.innerHTML = `
-    <button data-a="link">🔗 Link zu dieser Ansicht kopieren</button>
-    <button data-a="close">Schließen</button>
-    <button data-a="others">Andere schließen</button>
-    <button data-a="right">Rechts davon schließen</button>
-    <button data-a="all">Alle schließen</button>`;
+    <button data-a="link">${icon("link", 14)} Copy a link to this view</button>
+    <button data-a="close">Close</button>
+    <button data-a="others">Close others</button>
+    <button data-a="right">Close to the right</button>
+    <button data-a="all">Close all</button>`;
   document.body.appendChild(m);
   const keys = state.windows.map((w) => w.key);
   m.addEventListener("click", (e) => {
@@ -247,8 +248,8 @@ function saveNavState(s) {
 function renderNav() {
   if (!navEl) return;
   const st = navState();
-  // Classic Hard: Apps nach den festen Kategorien gruppiert (dieselben wie die
-  // Standardordner im Startmenü). Classic: genau die Anordnung des Startmenüs.
+  // Classic Hard: apps grouped by the fixed categories (the same as the
+  // default folders in the start menu). Classic: exactly the start menu arrangement.
   const hard = isHard();
   const model = hard
     ? groupApps(getCatalogApps()).map((g) => ({ t: "folder", id: `cat_${g.key}`, name: g.name, icon: g.icon, apps: g.apps }))
@@ -271,7 +272,7 @@ function renderNav() {
     <div class="cl-nav-head">
       <span class="cl-caret">${collapsed ? "▸" : "▾"}</span>
       <span class="cl-nav-title">Anwendungen</span>
-      <button class="cl-nav-btn" data-a="menu" title="Startmenü öffnen (Anordnung und Ordner bearbeiten)">⋯</button>
+      <button class="cl-nav-btn" data-a="menu" title="Open the start menu (edit arrangement and folders)">⋯</button>
     </div>
     <div class="cl-nav-list" style="${collapsed ? "display:none" : ""}">${body || `<div class="cl-nav-empty">Keine Anwendungen</div>`}</div>`;
 
@@ -306,6 +307,6 @@ function renderStatus() {
   const u = state.user;
   const online = (state.clients || []).filter((c) => c.online).length;
   const total = (state.clients || []).length;
-  el.innerHTML = `<span>👤 ${esc(u?.display_name || u?.username || "")}</span>`
-    + (total ? `<span class="cl-sep">|</span><span>🖥 ${online}/${total} online</span>` : "");
+  el.innerHTML = `<span>${icon("user", 13)} ${esc(u?.display_name || u?.username || "")}</span>`
+    + (total ? `<span class="cl-sep">|</span><span>${icon("computer", 13)} ${online}/${total} online</span>` : "");
 }

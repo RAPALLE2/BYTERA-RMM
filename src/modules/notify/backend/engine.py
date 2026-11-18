@@ -1,18 +1,18 @@
-# engine.py (Modul "notify")
+# engine.py (module "notify")
 # --------------------------
-# Regel-Motor der Benachrichtigungen (frueher Core: app/notifier.py).
+# Rule engine for notifications (formerly core: app/notifier.py).
 #
-# Der Admin legt REGELN an ("Wenn <Trigger> auf <Clients>, dann <Kanal> an <Ziel>").
-# Der Core loest Ereignisse ueber app.notifier.fire_event() aus; die kommen hier
-# als Modul-Hook an (module.py -> on_event -> handle_event).
+# The admin creates RULES ("When <trigger> on <clients>, then <channel> to <target>").
+# The core raises events via app.notifier.fire_event(); they arrive here as a
+# module hook (module.py -> on_event -> handle_event).
 #
-# Kanaele:
-#   email     -> SMTP (Einstellungen smtp_host/port/user/password/from/security)
-#   webhook   -> gespeicherter Webhook (Discord oder Custom), target = webhook_id
-#   dashboard -> Live-Toast an alle Dashboards (Socket-Event "notify:push")
+# Channels:
+#   email     -> SMTP (settings smtp_host/port/user/password/from/security)
+#   webhook   -> stored webhook (Discord or Custom), target = webhook_id
+#   dashboard -> live toast to all dashboards (socket event "notify:push")
 #
-# Dedupe/Cooldown: pro Regel merkt last_fired (JSON {key: ts}), wann ein
-# Ereignis-Schluessel zuletzt gefeuert hat.
+# Dedupe/cooldown: per rule, last_fired (JSON {key: ts}) remembers when an
+# event key last fired.
 
 import asyncio
 import json
@@ -23,7 +23,7 @@ from email.mime.text import MIMEText
 from email.utils import formatdate
 
 from app import db
-from app.notifier import TRIGGERS, CHANNELS   # Katalog bleibt im Core (Ereignisse kommen von dort)
+from app.notifier import TRIGGERS, CHANNELS   # the catalog stays in the core (events come from there)
 
 
 
@@ -90,7 +90,7 @@ def _mark_fired(rule_id: str, key: str) -> None:
     except Exception:
         data = {}
     data[key] = int(time.time())
-    # Alte Einträge begrenzen, damit das JSON nicht unbegrenzt wächst.
+    # Limit old entries so the JSON does not grow unbounded.
     if len(data) > 200:
         for k in sorted(data, key=data.get)[: len(data) - 200]:
             data.pop(k, None)
@@ -125,15 +125,15 @@ def smtp_settings() -> dict:
 
 
 def send_email(to_addrs: str, subject: str, body: str) -> None:
-    """Verschickt eine Text-Mail über den konfigurierten SMTP-Server.
-    to_addrs darf mehrere Adressen enthalten (Komma-getrennt). Blockierend -
-    aus async-Kontext immer über asyncio.to_thread aufrufen."""
+    """Send a text email over the configured SMTP server.
+    to_addrs may contain multiple addresses (comma-separated). Blocking -
+    from an async context always call via asyncio.to_thread."""
     cfg = smtp_settings()
     if not cfg["host"]:
-        raise RuntimeError("Kein SMTP-Server konfiguriert (Einstellungen -> Benachrichtigungen).")
+        raise RuntimeError("No SMTP server configured (Settings -> Notifications).")
     recipients = [a.strip() for a in (to_addrs or "").split(",") if a.strip()]
     if not recipients:
-        raise RuntimeError("Keine Empfänger-Adresse angegeben.")
+        raise RuntimeError("No recipient address given.")
 
     msg = MIMEText(body, "plain", "utf-8")
     msg["Subject"] = subject
@@ -162,11 +162,11 @@ def send_email(to_addrs: str, subject: str, body: str) -> None:
 
 
 # ------------------------------------------------------------------
-# Dispatch: eine Notification über den Kanal einer Regel rausschicken
+# Dispatch: send a notification over the channel of a rule
 # ------------------------------------------------------------------
 
 def _dispatch_sync(rule: dict, notification: dict) -> None:
-    """Blockierender Versand (E-Mail/Webhook) - im Thread ausführen."""
+    """Blocking send (email/webhook) - run in a thread."""
     channel = rule["channel"]
     if channel == "email":
         subject = notification.get("head") or "RMM Benachrichtigung"
@@ -214,7 +214,7 @@ async def handle_event(trigger: str, client_id: str | None = None,
                        dedupe_key: str | None = None) -> None:
     """
     Fuehrt alle passenden Regeln fuer ein Ereignis aus.
-      trigger      -> Schluessel aus TRIGGERS
+      trigger      -> key from TRIGGERS
       client_id    -> betroffener Client (None bei clientlosen Events)
       notification -> Objekt aus build_notification() (head/body/Kontext)
       dedupe_key   -> Cooldown-Schluessel (default: client_id bzw. trigger)
@@ -256,8 +256,8 @@ async def send_all_webhooks(notification: dict) -> None:
 # ------------------------------------------------------------------
 
 async def check_metric_thresholds(client: dict, metrics: dict) -> None:
-    """Prüft cpu_high / ram_high / disk_high / temp_high für einen Client.
-    Der Cooldown pro Regel verhindert Alarm-Stürme bei jedem Heartbeat."""
+    """Check cpu_high / ram_high / disk_high / temp_high for a client.
+    The per-rule cooldown prevents alarm storms on every heartbeat."""
     from router.admin_routes import build_notification
     cid = client["id"]
     hostname = client.get("hostname") or cid
@@ -270,23 +270,23 @@ async def check_metric_thresholds(client: dict, metrics: dict) -> None:
     cpu = metrics.get("cpuLoad")
     if cpu is not None:
         checks.append(("cpu_high", float(cpu), "%",
-                       f"CPU-Auslastung bei {round(float(cpu))}%"))
+                       f"CPU usage at {round(float(cpu))}%"))
     mem_t, mem_u = metrics.get("memTotal"), metrics.get("memUsed")
     if mem_t:
         ram = (mem_u or 0) / mem_t * 100
-        checks.append(("ram_high", ram, "%", f"RAM-Auslastung bei {round(ram)}%"))
+        checks.append(("ram_high", ram, "%", f"RAM usage at {round(ram)}%"))
     disk_t, disk_u = metrics.get("diskTotal"), metrics.get("diskUsed")
     if disk_t:
         dsk = (disk_u or 0) / disk_t * 100
-        checks.append(("disk_high", dsk, "%", f"Disk-Belegung bei {round(dsk)}%"))
+        checks.append(("disk_high", dsk, "%", f"Disk usage at {round(dsk)}%"))
     temp = metrics.get("cpuTemp")
     if temp is not None:
         checks.append(("temp_high", float(temp), "°C",
-                       f"CPU-Temperatur bei {round(float(temp))}°C"))
+                       f"CPU temperature at {round(float(temp))}°C"))
 
     for trigger, value, unit, msg in checks:
-        # Nur weitermachen, wenn es überhaupt eine passende aktive Regel gibt
-        # (spart die build_notification-Arbeit im Normalfall).
+        # Only continue if there is a matching active rule at all
+        # (saves the build_notification work in the normal case).
         rules = [r for r in list_rules()
                  if r.get("enabled") and r["trigger"] == trigger
                  and _rule_matches_client(r, cid)]
@@ -303,21 +303,21 @@ async def check_metric_thresholds(client: dict, metrics: dict) -> None:
             if not _cooled_down(rule, cid, TRIGGERS[trigger]["cooldown"]):
                 continue
             _mark_fired(rule["id"], cid)
-            head = f"⚠️ {TRIGGERS[trigger]['label']} – {hostname}"
-            await _dispatch(rule, _n(head, f"{msg} (Schwellwert: {round(threshold)}{unit})."))
+            head = f"{TRIGGERS[trigger]['label']} – {hostname}"
+            await _dispatch(rule, _n(head, f"{msg} (threshold: {round(threshold)}{unit})."))
 
 
 # ------------------------------------------------------------------
-# Garantie-Prüfschleife (läuft periodisch im Hintergrund)
+# Warranty check loop (runs periodically in the background)
 # ------------------------------------------------------------------
 
 async def warranty_loop() -> None:
-    """Prüft stündlich alle Clients mit hinterlegtem Garantie-Datum:
-      warranty_expiring -> innerhalb von params.days_before (default 30 Tage)
-      warranty_expired  -> Datum überschritten
-    Der 24h-Cooldown pro Regel+Client sorgt für max. 1 Mail/Tag."""
+    """Check hourly all clients that have a warranty date set:
+      warranty_expiring -> within params.days_before (default 30 days)
+      warranty_expired  -> date passed
+    The 24h cooldown per rule+client ensures at most 1 mail/day."""
     from router.admin_routes import build_notification
-    await asyncio.sleep(20)   # Backend erst in Ruhe hochfahren lassen
+    await asyncio.sleep(20)   # let the backend start up calmly first
     while True:
         try:
             now = int(time.time() * 1000)
@@ -330,13 +330,13 @@ async def warranty_loop() -> None:
                 until_txt = time.strftime("%d.%m.%Y", time.localtime(until / 1000))
                 if days_left < 0:
                     n = build_notification(
-                        f"Die Garantie von {hostname} ist am {until_txt} abgelaufen "
-                        f"(vor {abs(int(days_left))} Tagen).",
-                        head=f"🛡️ Garantie abgelaufen – {hostname}",
-                        client=hostname, service="Garantie", level="error")
+                        f"The warranty of {hostname} expired on {until_txt} "
+                        f"({abs(int(days_left))} days ago).",
+                        head=f"Warranty expired – {hostname}",
+                        client=hostname, service="Warranty", level="error")
                     await handle_event("warranty_expired", client_id=cid, notification=n)
                 else:
-                    # expiring: pro Regel eigene Vorlaufzeit prüfen
+                    # expiring: check each rule's own lead time
                     for rule in list_rules():
                         if not rule.get("enabled") or rule["trigger"] != "warranty_expiring":
                             continue
@@ -353,11 +353,11 @@ async def warranty_loop() -> None:
                             continue
                         _mark_fired(rule["id"], cid)
                         n = build_notification(
-                            f"Die Garantie von {hostname} läuft am {until_txt} ab "
-                            f"(noch {int(days_left)} Tage).",
-                            head=f"🛡️ Garantie läuft bald ab – {hostname}",
-                            client=hostname, service="Garantie", level="warn")
+                            f"The warranty of {hostname} expires on {until_txt} "
+                            f"({int(days_left)} days left).",
+                            head=f"Warranty expiring soon – {hostname}",
+                            client=hostname, service="Warranty", level="warn")
                         await _dispatch(rule, n)
         except Exception as e:
-            print(f"[notify] Garantie-Prüfung fehlgeschlagen: {e}")
+            print(f"[notify] Warranty check failed: {e}")
         await asyncio.sleep(3600)

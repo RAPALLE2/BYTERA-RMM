@@ -1,17 +1,16 @@
 """
 routers/privacy_routes.py
 -------------------------
-Betroffenenrechte und Aufbewahrungsfristen als API.
+Data subject rights and retention periods as an API.
 
-Zwei Ebenen:
-  * Selbstbedienung (jeder eingeloggte Benutzer): eigene Daten einsehen,
-    exportieren, Löschung beantragen. Art. 15, 20 und 17 verlangen, dass
-    das ohne Umweg möglich ist.
-  * Verwaltung (Recht 'manage_privacy'): Fristen setzen, Bestand einsehen,
-    fremde Daten exportieren, Löschanträge bearbeiten, Löschung ausführen.
+Two levels:
+  * Self-service (every logged-in user): view, export your own data, request
+    erasure. Art. 15, 20 and 17 require that this is possible directly.
+  * Administration (permission 'manage_privacy'): set periods, view the
+    inventory, export others' data, handle erasure requests, perform erasure.
 
-Jeder Zugriff auf FREMDE Daten landet im Audit-Log - wer Auskunft über
-andere zieht, muss nachvollziehbar sein.
+Every access to OTHERS' data lands in the audit log - whoever pulls access
+about others must be traceable.
 """
 
 import json
@@ -36,18 +35,18 @@ router = APIRouter(prefix="/api/privacy", tags=["privacy"])
 
 @router.get("/me")
 def my_data_overview(user: dict = Depends(get_current_user)):
-    """Kurzüberblick: welche Datenarten liegen zu mir vor."""
+    """Quick overview: which kinds of data exist about me."""
     data = privacy.export_user_data(user["id"])
     return {
         "person": data.get("person", {}),
-        "kategorien": [{"label": k, "count": len(v)}
-                       for k, v in (data.get("daten") or {}).items()],
+        "categories": [{"label": k, "count": len(v)}
+                       for k, v in (data.get("data") or {}).items()],
     }
 
 
 @router.get("/me/export")
 def export_my_data(user: dict = Depends(get_current_user)):
-    """Vollständige Auskunft als JSON-Download (Art. 15 / Art. 20)."""
+    """Full access report as a JSON download (Art. 15 / Art. 20)."""
     data = privacy.export_user_data(user["id"])
     db.add_audit_entry(user.get("username"), "privacy.self_export",
                        details="Eigene Daten exportiert")
@@ -67,12 +66,12 @@ class ErasureBody(BaseModel):
 @router.post("/me/erasure-request")
 def request_erasure(body: ErasureBody, user: dict = Depends(get_current_user)):
     """
-    Löschung beantragen (Art. 17). Wird von einem Admin geprüft, weil
-    Art. 17 Abs. 3 Ausnahmen kennt (z.B. Nachweispflichten) und die
-    Löschung eines aktiven Kontos betriebliche Folgen hat.
+    Request erasure (Art. 17). Reviewed by an admin, because Art. 17(3) has
+    exceptions (e.g. evidence duties) and erasing an active account has
+    operational consequences.
     """
     if body.kind not in ("account", "content"):
-        raise HTTPException(400, "Unbekannte Art des Antrags")
+        raise HTTPException(400, "Unknown kind of request")
     open_already = [r for r in privacy.list_erasure_requests("open")
                     if r["user_id"] == user["id"]]
     if open_already:
@@ -93,7 +92,7 @@ def my_erasure_requests(user: dict = Depends(get_current_user)):
 
 @router.get("/report")
 def data_report(user: dict = Depends(get_current_user)):
-    """Bestandsübersicht - Grundlage fürs Verzeichnis nach Art. 30."""
+    """Inventory overview - basis for the record under Art. 30."""
     require_perm(user, "manage_privacy")
     return privacy.report()
 
@@ -114,7 +113,7 @@ def set_retention(body: RetentionBody, user: dict = Depends(get_current_user)):
         try:
             v = max(0, int(value))
         except (TypeError, ValueError):
-            raise HTTPException(400, f"Ungültiger Wert für {key}")
+            raise HTTPException(400, f"Invalid value for {key}")
         if str(db.get_setting(key, "")) != str(v):
             db.set_setting(key, v)
             changed.append(f"{key}={v}")
@@ -126,18 +125,18 @@ def set_retention(body: RetentionBody, user: dict = Depends(get_current_user)):
 
 @router.post("/purge")
 async def run_purge(background: bool = False, user: dict = Depends(get_current_user)):
-    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
-    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    """As a BACKEND JOB (app/bgjobs.py): reloading/closing aborts nothing,
+    progress + result in the task view. ?background=1 -> job immediately."""
     require_perm(user, "manage_privacy")
     async def _work(job):
-        job.update(phase='privacy.task', detail="Datenschutz: Fristen anwenden (Löschlauf)")
+        job.update(phase='privacy.task', detail="Privacy: apply retention periods (purge run)")
         return await asyncio.to_thread(_run_purge_impl, user=user)
-    return await bgjobs.run('privacy.task', 'purge', title="Datenschutz: Fristen anwenden (Löschlauf)", user=user, work=_work,
+    return await bgjobs.run('privacy.task', 'purge', title="Privacy: apply retention periods (purge run)", user=user, work=_work,
                             background=background, perm='manage_privacy')
 
 
 def _run_purge_impl(user: dict = Depends(get_current_user)):
-    """Fristen sofort anwenden, statt auf den Nacht-Job zu warten."""
+    """Apply retention periods immediately instead of waiting for the nightly job."""
     require_perm(user, "manage_privacy")
     result = privacy.purge()
     db.add_audit_entry(user.get("username"), "privacy.purge_manual",
@@ -147,16 +146,16 @@ def _run_purge_impl(user: dict = Depends(get_current_user)):
 
 @router.get("/users/{user_id}/export")
 def export_user(user_id: str, user: dict = Depends(get_current_user)):
-    """Auskunft für eine andere Person erteilen (z.B. auf schriftliches Verlangen)."""
+    """Provide access for another person (e.g. on a written request)."""
     require_perm(user, "manage_privacy")
     target = db.get_user_by_id(user_id)
     if not target:
-        raise HTTPException(404, "Benutzer nicht gefunden")
+        raise HTTPException(404, "User not found")
     data = privacy.export_user_data(user_id)
     db.add_audit_entry(user.get("username"), "privacy.export_other",
                        target=target.get("username"),
-                       details="Auskunft über fremde Daten erstellt")
-    name = f"auskunft-{target.get('username')}-{time.strftime('%Y%m%d')}.json"
+                       details="Access report about another person created")
+    name = f"access-{target.get('username')}-{time.strftime('%Y%m%d')}.json"
     return Response(
         content=json.dumps(data, ensure_ascii=False, indent=2, default=str),
         media_type="application/json",
@@ -172,42 +171,42 @@ class EraseBody(BaseModel):
 @router.post("/users/{user_id}/erase")
 async def erase_user(user_id: str, body: EraseBody,
                      background: bool = False, user: dict = Depends(get_current_user)):
-    """Als BACKEND-JOB (app/bgjobs.py): Neuladen/Schliessen bricht nichts ab,
-    Fortschritt + Ergebnis in der Aufgaben-Anzeige. ?background=1 -> Job sofort."""
+    """As a BACKEND JOB (app/bgjobs.py): reloading/closing aborts nothing,
+    progress + result in the task view. ?background=1 -> job immediately."""
     require_perm(user, "manage_privacy")
     async def _work(job):
-        job.update(phase='privacy.task', detail="Datenschutz: Benutzerdaten löschen (Art. 17)")
+        job.update(phase='privacy.task', detail="Privacy: erase user data (Art. 17)")
         return await asyncio.to_thread(_erase_user_impl, user_id=user_id, body=body, user=user)
-    return await bgjobs.run('privacy.task', user_id, title="Datenschutz: Benutzerdaten löschen (Art. 17)", user=user, work=_work,
+    return await bgjobs.run('privacy.task', user_id, title="Privacy: erase user data (Art. 17)", user=user, work=_work,
                             background=background, perm='manage_privacy')
 
 
 def _erase_user_impl(user_id: str, body: EraseBody,
                      user: dict = Depends(get_current_user)):
     """
-    Löschung ausführen (Art. 17). Nicht umkehrbar, deshalb muss der
-    Benutzername zur Bestätigung mitgeschickt werden.
+    Perform erasure (Art. 17). Irreversible, so the username must be sent along
+    for confirmation.
     """
     require_perm(user, "manage_privacy")
     target = db.get_user_by_id(user_id)
     if not target:
-        raise HTTPException(404, "Benutzer nicht gefunden")
+        raise HTTPException(404, "User not found")
     if target["id"] == user["id"]:
-        raise HTTPException(400, "Das eigene Konto kann hier nicht gelöscht werden")
+        raise HTTPException(400, "Your own account cannot be deleted here")
     if body.confirm_username != target.get("username"):
-        raise HTTPException(400, "Benutzername zur Bestätigung stimmt nicht")
+        raise HTTPException(400, "Confirmation username does not match")
     if body.mode not in ("anonymize", "hard"):
-        raise HTTPException(400, "Unbekannter Modus")
+        raise HTTPException(400, "Unknown mode")
 
     result = privacy.erase_user(user_id, body.mode)
-    # Offene Anträge dieser Person als erledigt markieren.
+    # Mark this person's open requests as done.
     db._conn.execute(
         "UPDATE erasure_requests SET status = 'done', handled_at = ?, handled_by = ?"
         " WHERE user_id = ? AND status = 'open'",
         (int(time.time() * 1000), user.get("username", ""), user_id))
     db._conn.commit()
     db.add_audit_entry(user.get("username"), "privacy.erase_executed",
-                       details=f"Modus {body.mode}, {len(result)} Bereiche")
+                       details=f"Mode {body.mode}, {len(result)} areas")
     return result
 
 
@@ -227,18 +226,18 @@ class ResolveBody(BaseModel):
 def resolve_request(request_id: str, body: ResolveBody,
                           user: dict = Depends(get_current_user)):
     """
-    Antrag abschließen. Eine Ablehnung muss begründet werden - Art. 12
-    Abs. 4 verlangt, dass Betroffene die Gründe erfahren.
+    Close a request. A rejection must be justified - Art. 12(4) requires that
+    data subjects learn the reasons.
     """
     require_perm(user, "manage_privacy")
     if body.status not in ("rejected", "done"):
-        raise HTTPException(400, "Ungültiger Status")
+        raise HTTPException(400, "Invalid status")
     if body.status == "rejected" and not body.note.strip():
-        raise HTTPException(400, "Eine Ablehnung muss begründet werden (Art. 12 Abs. 4 DSGVO)")
+        raise HTTPException(400, "A rejection must be justified (Art. 12(4) GDPR)")
     row = db._conn.execute("SELECT * FROM erasure_requests WHERE id = ?",
                            (request_id,)).fetchone()
     if not row:
-        raise HTTPException(404, "Antrag nicht gefunden")
+        raise HTTPException(404, "Request not found")
     db._conn.execute(
         "UPDATE erasure_requests SET status = ?, handled_at = ?, handled_by = ?,"
         " note = ? WHERE id = ?",

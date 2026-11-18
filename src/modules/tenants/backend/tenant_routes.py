@@ -1,15 +1,15 @@
-# tenant_routes.py (Modul "tenants") - Mandanten-Backends verwalten und wechseln
+# tenant_routes.py (module "tenants") - manage and switch between tenant backends
 # -----------------------------------------------------------------------------
-# Verwaltung (Recht manage_tenants):
-#   GET/POST            /api/tenants/admin                 alle Mandanten / anlegen
-#   PUT/DELETE          /api/tenants/admin/{id}            aendern / loeschen
-#   GET                 /api/tenants/directory             Benutzer+Gruppen (fuer allow-Liste)
-# Benutzer (jeder mit Recht use_tenants):
-#   GET                 /api/tenants                       sichtbare Mandanten + Status (Zugangsdaten?)
-#   PUT/DELETE          /api/tenants/{id}/credentials      eigene Zugangsdaten setzen/loeschen
-#   POST                /api/tenants/{id}/open             Autologin -> Einbettungs-URL (#client-token=)
-#   GET                 /api/tenants/{id}/spaces?path=     Spaces/Relay des Mandanten (via eigene Zugangsdaten)
-#   GET                 /api/tenants/{id}/spaces/file?path= Datei herunterladen (Proxy)
+# Administration (permission manage_tenants):
+#   GET/POST            /api/tenants/admin                 all tenants / create
+#   PUT/DELETE          /api/tenants/admin/{id}            modify / delete
+#   GET                 /api/tenants/directory             users+groups (for the allow list)
+# Users (anyone with permission use_tenants):
+#   GET                 /api/tenants                       visible tenants + status (credentials?)
+#   PUT/DELETE          /api/tenants/{id}/credentials      set/delete own credentials
+#   POST                /api/tenants/{id}/open             auto-login -> embedding URL (#client-token=)
+#   GET                 /api/tenants/{id}/spaces?path=     the tenant's spaces/relay (via own credentials)
+#   GET                 /api/tenants/{id}/spaces/file?path= download a file (proxy)
 from __future__ import annotations
 
 import time
@@ -28,7 +28,7 @@ from .client import TenantError
 router = APIRouter(prefix="/api/tenants", tags=["tenants"])
 
 
-# ====================================================== Verwaltung
+# ====================================================== administration
 class TenantBody(BaseModel):
     name: str = ""
     url: str = ""
@@ -36,7 +36,7 @@ class TenantBody(BaseModel):
     color: str = ""
     note: str = ""
     allow: list = []
-    via: str = ""          # "" = vom RMM-Server, sonst Node-ID (Node-Modul "tenants")
+    via: str = ""          # "" = from the RMM server, otherwise a node ID (node module "tenants")
 
 
 def _norm_url(u: str) -> str:
@@ -68,7 +68,7 @@ def _clean_allow(allow: list) -> list:
 def admin_create(body: TenantBody, user: dict = Depends(get_current_user)):
     require_perm(user, "manage_tenants")
     if not body.name.strip() or not body.url.strip():
-        raise HTTPException(400, "Name und URL sind nötig")
+        raise HTTPException(400, "Name and URL are required")
 
     def upd(d):
         tid = store.new_id()
@@ -139,14 +139,14 @@ class CredBody(BaseModel):
     username: str
     password: str
     realm: str = "local"
-    code: str = ""          # 2FA, falls der Mandant es verlangt
+    code: str = ""          # 2FA, if the tenant requires it
 
 
 @router.put("/{tid}/credentials")
 async def set_credentials(tid: str, body: CredBody, user: dict = Depends(get_current_user)):
     t = _tenant_or_403(tid, user)
     if not body.username.strip() or not body.password:
-        raise HTTPException(400, "Benutzername und Passwort sind nötig")
+        raise HTTPException(400, "Username and password are required")
     try:
         await client.verify_credentials(t, body.username.strip(), body.password, body.realm, body.code)
     except TenantError as e:
@@ -171,13 +171,13 @@ class OpenBody(BaseModel):
 
 @router.post("/{tid}/open")
 async def open_tenant(tid: str, body: OpenBody, user: dict = Depends(get_current_user)):
-    """Autologin: holt am Mandanten einen Token und baut die Einbettungs-URL."""
+    """Auto-login: fetches a token at the tenant and builds the embedding URL."""
     t = _tenant_or_403(tid, user)
     try:
         token = await client.token_for(t, user, body.code)
     except TenantError as e:
         if str(e) == "no_credentials":
-            raise HTTPException(412, "Für diesen Mandanten sind noch keine Zugangsdaten hinterlegt")
+            raise HTTPException(412, "No credentials stored for this tenant yet")
         if str(e) == "2fa_required":
             raise HTTPException(401, "2fa_required")
         raise HTTPException(e.status or 400, str(e))
@@ -193,7 +193,7 @@ async def _tenant_token(t: dict, user: dict) -> str:
         return await client.token_for(t, user)
     except TenantError as e:
         code = 412 if str(e) == "no_credentials" else (e.status or 400)
-        raise HTTPException(code, "Keine Zugangsdaten für diesen Mandanten" if str(e) == "no_credentials" else str(e))
+        raise HTTPException(code, "No credentials for this tenant" if str(e) == "no_credentials" else str(e))
 
 
 @router.get("/{tid}/spaces")
@@ -206,7 +206,7 @@ async def tenant_spaces(tid: str, path: str = "", user: dict = Depends(get_curre
     except TenantError as e:
         raise HTTPException(502, str(e))
     if r.status_code == 404:
-        raise HTTPException(409, "Der Mandant hat das Modul „Spaces“ nicht aktiv")
+        raise HTTPException(409, "The tenant does not have the \"Spaces\" module active")
     if r.status_code != 200:
         raise HTTPException(502, f"Mandant antwortete mit {r.status_code}")
     return r.json()
@@ -221,7 +221,7 @@ async def tenant_space_file(tid: str, path: str, user: dict = Depends(get_curren
     except TenantError as e:
         raise HTTPException(502, str(e))
     if r.status_code != 200:
-        raise HTTPException(r.status_code if r.status_code in (403, 404) else 502, "Datei nicht verfügbar")
+        raise HTTPException(r.status_code if r.status_code in (403, 404) else 502, "File not available")
     fname = path.rsplit("/", 1)[-1] or "download"
     return Response(r.content, media_type=r.headers.get("content-type", "application/octet-stream"),
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})

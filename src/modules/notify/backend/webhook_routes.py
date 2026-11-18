@@ -71,7 +71,7 @@ def update_webhook(webhook_id: str, body: WebhookUpdateBody,
             if not isinstance(parsed, dict):
                 raise ValueError()
         except Exception:
-            raise HTTPException(400, 'Header müssen ein JSON-Objekt sein, z.B. {"X-Api-Key": "..."}')
+            raise HTTPException(400, 'Headers must be a JSON object, e.g. {"X-Api-Key": "..."}')
     updated = db.update_webhook(webhook_id, fields)
     db.add_audit_entry(user["username"], "webhook.updated", target=webhook_id)
     return updated
@@ -97,7 +97,7 @@ def _test_webhook_impl(webhook_id: str, user: dict = Depends(get_current_user)):
     try:
         notification = build_notification(
             "This is a Test-Notification from BYTERA RMM.",
-            head="🔔 Test-Notification",
+            head="Test notification",
             tenant="Test-Tenant",
             location="Test-Location",
             client="Test-Client",

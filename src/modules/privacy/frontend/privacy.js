@@ -1,16 +1,16 @@
 // apps/privacy.js
 // ---------------
-// Datenschutz-Zentrale. Zwei Ebenen in einem Fenster:
+// Privacy center. Two levels in one window:
 //
-//   "Meine Daten"  - für JEDEN eingeloggten Benutzer. Auskunft nach Art. 15,
-//                    Export nach Art. 20, Löschantrag nach Art. 17. Diese
-//                    Rechte stehen Betroffenen zu, sie sind kein Admin-Feature.
-//   "Verwaltung"   - nur mit Recht 'manage_privacy': Aufbewahrungsfristen,
-//                    Bestandsübersicht, Löschanträge, Auskunft/Löschung für
-//                    andere Personen.
+//   "My data"      - for EVERY logged-in user. Access under Art. 15,
+//                    export under Art. 20, erasure request under Art. 17. These
+//                    rights belong to data subjects, they are not an admin feature.
+//   "Administration" - only with permission 'manage_privacy': retention periods,
+//                    inventory overview, erasure requests, access/erasure for
+//                    other people.
 //
-// Bewusst NICHT unter "Einstellungen" versteckt: wer seine Betroffenenrechte
-// wahrnehmen will, soll sie finden, ohne Admin-Bereiche zu durchsuchen.
+// Deliberately NOT hidden under "Settings": whoever wants to exercise their
+// data subject rights should find them without searching admin areas.
 
 import { api } from "/js/app/api.js";
 import { esc, uiConfirm, uiPrompt } from "/js/app/utils.js";
@@ -85,7 +85,7 @@ export function renderPrivacy(body, win) {
       ]);
     } catch (e) { return fail(e); }
 
-    const cats = data.kategorien || [];
+    const cats = data.categories || [];
     const open = (reqs || []).find((r) => r.status === "open");
 
     view.innerHTML = `
@@ -202,7 +202,7 @@ export function renderPrivacy(body, win) {
   }
 
   // ---------------------------------------------------------------
-  // Bestandsübersicht
+  // Inventory overview
   // ---------------------------------------------------------------
 
   async function drawReport() {
@@ -230,7 +230,7 @@ export function renderPrivacy(body, win) {
   }
 
   // ---------------------------------------------------------------
-  // Löschanträge
+  // Erasure requests
   // ---------------------------------------------------------------
 
   async function drawRequests() {
@@ -272,7 +272,7 @@ export function renderPrivacy(body, win) {
   }
 
   // ---------------------------------------------------------------
-  // Personen: Auskunft & Löschung für andere
+  // People: access & erasure for others
   // ---------------------------------------------------------------
 
   async function drawUsers() {
@@ -310,7 +310,7 @@ export function renderPrivacy(body, win) {
       description: t("privacy_erase_how_note"),
       okText: t("privacy_anonymize"), cancelText: t("privacy_hard") });
     // uiConfirm liefert true = OK-Button (anonymisieren), false = Abbruch.
-    // Für "vollständig" wird bewusst ein zweiter, expliziter Schritt verlangt.
+    // For "complete" a deliberate second, explicit step is required.
     const hard = mode === false
       ? await uiConfirm(t("privacy_hard_q"), {
           description: t("privacy_hard_note"),

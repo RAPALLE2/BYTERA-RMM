@@ -1,7 +1,7 @@
-# node_module.py (Node-Teil von Modul "tenants")
+# node_module.py (node part of module "tenants")
 # ---------------------------------------------
-# Ein Mandanten-Backend ist vom RMM-Server aus nicht erreichbar (z.B. nur im
-# Kunden-LAN)? Dann ruft das RMM dessen API UEBER DIESE NODE auf.
+# A tenant backend is not reachable from the RMM server (e.g. only in the
+# customer LAN)? Then the RMM calls its API THROUGH THIS NODE.
 #   "tenants-http" {method, url, headers:{}, body(b64), verify, timeout}
 #        -> {status, headers:[[k, v], ...], body(b64), final}
 import base64

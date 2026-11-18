@@ -1,11 +1,11 @@
 {
   "schema": 1,
   "id": "sso",
-  "name": "SSO / Verzeichnis-Anmeldung",
+  "name": "SSO / Directory Login",
   "version": "1.0.0",
-  "description": "Anmeldung über LDAP / Active Directory (Realms) inkl. Import von AD-Gruppen. Deaktivierbar nur, wenn mindestens ein lokaler, aktiver Admin-Account existiert. Danach bleiben AD-Benutzer bestehen, können sich aber nicht anmelden.",
+  "description": "Login via LDAP / Active Directory (realms) incl. import of AD groups. Can only be disabled when at least one local, active admin account exists. After that, AD users remain but cannot sign in.",
   "author": "BYTERA",
-  "category": "System",
+  "category": "sicherheit",
   "icon": "🔐",
   "requires": [],
   "pip": [
@@ -22,9 +22,9 @@
   "apps": [
     {
       "id": "sso-realms",
-      "label": "SSO / Verzeichnis",
+      "label": "SSO / Directory",
       "icon": "🔐",
-      "title": "SSO / Verzeichnis-Anmeldung",
+      "title": "SSO / Directory Login",
       "entry": "settings.js",
       "export": "renderSsoApp",
       "w": 760,

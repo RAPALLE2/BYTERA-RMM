@@ -1,9 +1,11 @@
 {
   "id": "standard",
   "name": "Classic",
-  "description": "Schlicht und flach: Navigation links mit den Apps des Startmenüs, Apps als Tabs, Dashboard bleibt.",
+  "description": "Simple and flat: navigation on the left with the start menu apps, apps as tabs, dashboard stays.",
   "order": 10,
   "bodyClass": "design-standard",
   "layout": "classic",
-  "css": ["style.css"]
+  "css": [
+    "style.css"
+  ]
 }

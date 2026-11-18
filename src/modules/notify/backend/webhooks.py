@@ -39,18 +39,18 @@ def _discord_payload(n: dict) -> dict:
 
 def send_webhook(webhook: dict, notification: dict | str) -> None:
     """
-    Schickt eine Benachrichtigung an einen Webhook.
+    Send a notification to a webhook.
 
-    'notification' ist normalerweise ein Objekt aus build_notification()
-    mit head/body/Kontext. Aus Bequemlichkeit wird auch ein einfacher String
-    akzeptiert (wird dann automatisch zu einer Notification verpackt).
+    'notification' is normally an object from build_notification() with
+    head/body/context. For convenience a simple string is also accepted
+    (then automatically wrapped into a notification).
 
-    - Discord: fertiges Embed-Template (head=Titel, body=Beschreibung,
-      Kontextfelder, Timestamp, Farbe je nach Level).
-    - Custom : generisches JSON, das IMMER 'head' und 'body' enthält, plus
-      den kompletten Kontext.
+    - Discord: ready-made embed template (head=title, body=description,
+      context fields, timestamp, color depending on level).
+    - Custom : generic JSON that ALWAYS contains 'head' and 'body', plus
+      the full context.
 
-    Läuft synchron in einem kurzen HTTP-Request (best effort).
+    Runs synchronously in a short HTTP request (best effort).
     """
     if isinstance(notification, str):
         notification = build_notification(notification)
@@ -72,9 +72,9 @@ def send_webhook(webhook: dict, notification: dict | str) -> None:
         for key in ("head", "body", "message", "client", "tenant",
                     "location", "service", "level", "timestamp"):
             val = str(notification.get(key, ""))
-            # In JSON-Templates müssen Sonderzeichen escaped werden - wir
-            # escapen wie ein JSON-String OHNE die umschließenden Quotes,
-            # damit "text": "{body}" gültig bleibt.
+            # In JSON templates special characters must be escaped - we
+            # escape like a JSON string WITHOUT the surrounding quotes,
+            # so that "text": "{body}" stays valid.
             out = out.replace("{" + key + "}", json.dumps(val)[1:-1])
         data = out.encode("utf-8")
         content_type = extra_headers.pop("Content-Type", None) \

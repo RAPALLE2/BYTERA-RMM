@@ -1,8 +1,8 @@
-# registry.py (Modul "styles") - verfuegbare Styles aus frontend/styles/*/style.json
+# registry.py (module "styles") - available styles from frontend/styles/*/style.json
 # ---------------------------------------------------------------------------------
-# Jeder Unterordner mit einer gueltigen style.json ist ein Style. Wird bei jedem
-# Aufruf frisch gelesen (kleine Dateien) - ein neu hinzugefuegter Ordner ist
-# also sofort auswaehlbar, ohne Neustart.
+# Every subfolder with a valid style.json is a style. Read fresh on every call
+# (small files) - so a newly added folder is immediately selectable, without a
+# restart.
 from __future__ import annotations
 
 import json

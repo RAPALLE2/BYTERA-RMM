@@ -1,22 +1,22 @@
-// engine/classicview.js (Modul "styles")
+// engine/classicview.js (module "styles")
 // ----------------------------------------
-// Inhalt des Tabs "Übersicht" im klassischen Design - aufgebaut wie Proxmox:
+// Content of the "Overview" tab in the classic design - built like Proxmox:
 //
-//   Seitenleiste (Baum)      | Kopfzeile: gewähltes Objekt + Status
-//   Rechenzentrum            |-----------------------------------------------
-//    └ Mandant               | Kategorien  | Inhalt der Kategorie
-//       └ Standort           |  Übersicht  |  (feste Ansicht, KEINE Widgets,
-//          └ Gerät           |  Leistung   |   nichts zu verschieben)
+//   Sidebar (tree)           | Header: selected object + status
+//   Data center              |-----------------------------------------------
+//    └ Tenant                | Categories  | Content of the category
+//       └ Location           |  Overview   |  (fixed view, NO widgets,
+//          └ Device          |  Performance|   nothing to move around)
 //                            |  …          |
 //
-// Gewählt wird im vorhandenen Geräte-Baum der Seitenleiste (sidebar.js):
-// "Dashboard" = Rechenzentrum, dann Mandant -> Standort -> Gerät. Je nach Art
-// des Objekts gibt es eigene Kategorien. Die zuletzt gewählte Kategorie wird
-// je Objektart gemerkt (Proxmox-Verhalten: Gerät wechseln, Kategorie bleibt).
+// Selection happens in the existing device tree of the sidebar (sidebar.js):
+// "Dashboard" = data center, then tenant -> location -> device. Depending on the
+// object type there are different categories. The last chosen category is
+// remembered per object type (Proxmox behaviour: switch device, category stays).
 //
-// Die Inhalte nutzen dieselben Bausteine wie die futuristische Ansicht
-// (panel.js, clientmetrics.js) - nur fest angeordnet. Live-Werte werden über
-// updateClassicView() aus app.js (client:metrics) aufgefrischt.
+// The content uses the same building blocks as the futuristic view
+// (panel.js, clientmetrics.js) - just fixed in place. Live values are refreshed
+// via updateClassicView() from app.js (client:metrics).
 
 import { state, findClient, isAdmin, hasGlobalPerm, hasClientPerm } from "/js/app/state.js";
 import { esc, formatBytes, formatUptime } from "/js/app/utils.js";
@@ -29,6 +29,7 @@ import { renderClientMetric, clientPresetById, presetAvailable } from "/js/app/c
 import { warrantyInfo } from "/js/app/dashwidgets.js";
 import { api } from "/js/app/api.js";
 import { clientIconSvg, batteryHtml } from "/js/app/deviceicons.js";
+import { icon } from "./icons.js";
 
 const CAT_KEY = "rmm_clview_cat";
 let catByType = (() => { try { return JSON.parse(localStorage.getItem(CAT_KEY) || "{}"); } catch { return {}; } })();
@@ -37,26 +38,26 @@ let tableFilter = "";
 let jobsStop = null;
 let lastLive = 0;
 
-// ---------------------------------------------------------------- Kategorien
+// ---------------------------------------------------------------- categories
 const CLIENT_CATS = [
-  { key: "overview", icon: "📋", label: "Übersicht", live: true },
-  { key: "perf", icon: "📈", label: "Leistung", live: true },
-  { key: "disks", icon: "💽", label: "Datenträger", live: true },
-  { key: "hardware", icon: "🔧", label: "Hardware", live: true },
-  { key: "network", icon: "🌐", label: "Netzwerk", live: true },
-  { key: "actions", icon: "⚡", label: "Aktionen" },
-  { key: "patches", icon: "⬆️", label: "Updates" },
-  { key: "websites", icon: "🔗", label: "Websites" },
-  { key: "children", icon: "🗂️", label: "Untergeordnet", when: (c) => childClientsOf(c.id).length > 0 },
-  { key: "notes", icon: "📝", label: "Notizen" },
-  { key: "warranty", icon: "🛡️", label: "Garantie" },
+  { key: "overview", icon: icon("clipboard", 15), label: "Overview", live: true },
+  { key: "perf", icon: icon("chart", 15), label: "Performance", live: true },
+  { key: "disks", icon: icon("disk", 15), label: "Storage", live: true },
+  { key: "hardware", icon: icon("wrench", 15), label: "Hardware", live: true },
+  { key: "network", icon: icon("globe", 15), label: "Network", live: true },
+  { key: "actions", icon: icon("bolt", 15), label: "Actions" },
+  { key: "patches", icon: icon("arrowup", 15), label: "Updates" },
+  { key: "websites", icon: icon("link", 15), label: "Websites" },
+  { key: "children", icon: icon("files", 15), label: "Child devices", when: (c) => childClientsOf(c.id).length > 0 },
+  { key: "notes", icon: icon("note", 15), label: "Notes" },
+  { key: "warranty", icon: icon("shield", 15), label: "Warranty" },
 ];
 const GROUP_CATS = [
-  { key: "overview", icon: "📋", label: "Übersicht", live: true },
-  { key: "devices", icon: "🖥️", label: "Geräte", live: true },
-  { key: "alerts", icon: "⚠️", label: "Warnungen", live: true },
+  { key: "overview", icon: icon("clipboard", 15), label: "Overview", live: true },
+  { key: "devices", icon: icon("computer", 15), label: "Devices", live: true },
+  { key: "alerts", icon: icon("warn", 15), label: "Alerts", live: true },
 ];
-const DC_CATS = [...GROUP_CATS, { key: "jobs", icon: "⏳", label: "Aufgaben" }];
+const DC_CATS = [...GROUP_CATS, { key: "jobs", icon: icon("clock", 15), label: "Tasks" }];
 
 const METRIC_SETS = {
   perf: ["c.cpuLoad", "c.ramPct", "c.cpuPerCore", "c.netBoth", "c.diskIO", "c.pingCf", "c.load", "c.swap"],
@@ -65,7 +66,7 @@ const METRIC_SETS = {
   disks: ["c.disks", "c.diskRead", "c.diskWrite"],
 };
 
-// ---------------------------------------------------------------- Auswahl
+// ---------------------------------------------------------------- selection
 function sel() {
   const s = state.selection;
   if (!s || s.type === "dashboard") return { type: "dc", id: "" };
@@ -84,8 +85,8 @@ function setCat(type, key) {
   try { localStorage.setItem(CAT_KEY, JSON.stringify(catByType)); } catch {}
 }
 
-// Geräte im Bereich der Auswahl (ohne VMs/CTs unter einem sichtbaren Host
-// doppelt zu zaehlen: Kinder zaehlen mit, werden aber eingerueckt gelistet)
+// Devices in the scope of the selection (without counting VMs/CTs under a visible
+// host twice: children are counted, but listed indented)
 function clientsIn(s) {
   const all = state.clients || [];
   if (s.type === "tenant") return all.filter((c) => c.tenant_id === s.id);
@@ -112,7 +113,7 @@ const dot = (color) => `<span class="clv-dot" style="background:${color}"></span
 const tenantName = (id) => state.hierarchy?.tenants?.find((x) => x.id === id)?.name || "–";
 const locationName = (id) => state.hierarchy?.locations?.find((x) => x.id === id)?.name || "–";
 
-// ---------------------------------------------------------------- Rendern
+// ---------------------------------------------------------------- render
 export function renderClassicView(el) {
   if (jobsStop) { try { jobsStop(); } catch {} jobsStop = null; }
   const s = sel();
@@ -155,11 +156,11 @@ function headHtml(s, client) {
   }
   const list = clientsIn(s);
   const on = list.filter((c) => c.online).length;
-  const title = s.type === "tenant" ? `🏢 ${esc(tenantName(s.id))}`
-    : s.type === "location" ? `📍 ${esc(locationName(s.id))}` : "🗄️ Rechenzentrum";
+  const title = s.type === "tenant" ? `${icon("building", 18)} ${esc(tenantName(s.id))}`
+    : s.type === "location" ? `${icon("pin", 18)} ${esc(locationName(s.id))}` : `${icon("datacenter", 18)} Data center`;
   const crumbs = s.type === "location"
     ? esc(tenantName(state.hierarchy?.locations?.find((l) => l.id === s.id)?.tenant_id))
-    : s.type === "tenant" ? "Mandant" : "Alle Mandanten";
+    : s.type === "tenant" ? "Tenant" : "All tenants";
   return `<div class="clv-title"><b>${title}</b><span class="clv-sub">${on}/${list.length} ${esc(t("online"))}</span></div>
     <div class="clv-crumbs">${crumbs}</div>`;
 }
@@ -174,7 +175,7 @@ function fillContent(box, s, client, cat) {
   if (cat === "jobs") return jobsList(box);
 }
 
-// ---------------------------------------------------------------- Gerät
+// ---------------------------------------------------------------- device
 function section(box, title, cls = "") {
   const sec = document.createElement("div");
   sec.className = `clv-section ${cls}`;
@@ -201,7 +202,7 @@ function metricGrid(box, client, ids) {
     catch (e) { card.querySelector(".cmetric-holder").textContent = String(e.message || e); }
     n++;
   }
-  if (!n) grid.innerHTML = `<div class="clv-empty">Für dieses Gerät sind hier keine Werte verfügbar.</div>`;
+  if (!n) grid.innerHTML = `<div class="clv-empty">No values available here for this device.</div>`;
   box.appendChild(grid);
 }
 
@@ -209,13 +210,13 @@ function fillClient(box, client, cat) {
   const rerender = () => fillClient(box, findClient(client.id) || client, cat);
   if (cat === "overview") {
     renderStatusPart(section(box, "Status", "clv-status"), client);
-    if (!client.metrics) { section(box, "Live-Werte").innerHTML = `<div class="clv-empty">${esc(t("no_live_data"))}</div>`; return; }
-    const b = section(box, "Live-Werte", "overview-content");
+    if (!client.metrics) { section(box, "Live values").innerHTML = `<div class="clv-empty">${esc(t("no_live_data"))}</div>`; return; }
+    const b = section(box, "Live values", "overview-content");
     renderOverviewSub(b, client, "metrics", () => { b.innerHTML = ""; renderOverviewSub(b, client, "metrics", null); });
     return;
   }
   if (cat === "disks") {
-    const b = section(box, "Belegung", "overview-content");
+    const b = section(box, "Usage", "overview-content");
     renderOverviewSub(b, client, "disk", rerender);
     return metricGrid(box, client, METRIC_SETS.disks);
   }
@@ -234,14 +235,14 @@ function fillClient(box, client, cat) {
 function warrantyView(box, client) {
   const info = warrantyInfo(client.warranty_until);
   const mayEdit = isAdmin() || hasClientPerm(client.id, "set_warranty");
-  const b = section(box, "Garantie");
+  const b = section(box, "Warranty");
   b.innerHTML = `
     <div style="font-size:22px;font-weight:700;color:${info.color}">${esc(info.text)}</div>
     <div style="color:var(--subtext);margin:4px 0 12px">${esc(info.sub)}</div>
-    ${mayEdit ? `<label class="clv-label">Garantie bis</label>
+    ${mayEdit ? `<label class="clv-label">Warranty until</label>
       <div style="display:flex;gap:8px;max-width:320px">
         <input type="date" class="clv-date" value="${client.warranty_until ? new Date(client.warranty_until).toISOString().slice(0, 10) : ""}">
-        <button class="btn btn-primary" data-a="save">Speichern</button>
+        <button class="btn btn-primary" data-a="save">Save</button>
       </div>` : ""}`;
   b.querySelector('[data-a="save"]')?.addEventListener("click", async () => {
     const v = b.querySelector(".clv-date").value;
@@ -250,13 +251,13 @@ function warrantyView(box, client) {
       await api.updateClient(client.id, { warranty_until: until });
       const c = (state.clients || []).find((x) => x.id === client.id);
       if (c) c.warranty_until = until;
-      window.notify?.("Garantie-Datum gespeichert", "success");
+      window.notify?.("Warranty date saved", "success");
       box.innerHTML = ""; warrantyView(box, c || client);
-    } catch (e) { window.notify?.(`Speichern fehlgeschlagen: ${e.message}`, "error"); }
+    } catch (e) { window.notify?.(`Save failed: ${e.message}`, "error"); }
   });
 }
 
-// ---------------------------------------------------------------- Rechenzentrum / Mandant / Standort
+// ---------------------------------------------------------------- data center / tenant / location
 function counts(list) {
   const r = { total: list.length, on: 0, off: 0, maint: 0 };
   for (const c of list) r[statusOf(c).key]++;
@@ -269,33 +270,33 @@ function groupOverview(box, s) {
   const alerts = collectAlerts(list);
   const tiles = section(box, "Status");
   tiles.innerHTML = `<div class="clv-tiles">
-      <div class="clv-tile"><span>Geräte</span><b>${k.total}</b></div>
+      <div class="clv-tile"><span>Devices</span><b>${k.total}</b></div>
       <div class="clv-tile"><span>${dot("var(--online)")}Online</span><b>${k.on}</b></div>
       <div class="clv-tile"><span>${dot("var(--subtext)")}Offline</span><b>${k.off}</b></div>
-      <div class="clv-tile"><span>${dot("var(--warn)")}Wartung</span><b>${k.maint}</b></div>
-      <div class="clv-tile${alerts.length ? " warn" : ""}"><span>⚠️ Warnungen</span><b>${alerts.length}</b></div>
+      <div class="clv-tile"><span>${dot("var(--warn)")}Maintenance</span><b>${k.maint}</b></div>
+      <div class="clv-tile${alerts.length ? " warn" : ""}"><span>${icon("warn", 13)} Alerts</span><b>${alerts.length}</b></div>
     </div>`;
   tiles.querySelector(".clv-tile.warn")?.addEventListener("click", () => { setCat(s.type, "alerts"); rerenderMain(); });
 
-  // Auslastung (Durchschnitt der Online-Geraete) als schlichte Balken
+  // Usage (average of the online devices) as simple bars
   const online = list.filter((c) => c.online && c.metrics);
   const avg = (f) => { const v = online.map((c) => metricsOf(c)[f]).filter((x) => x != null); return v.length ? Math.round(v.reduce((a, b) => a + b, 0) / v.length) : null; };
-  const bars = section(box, "Auslastung (Durchschnitt online)");
-  bars.innerHTML = [["CPU", avg("cpu")], ["RAM", avg("ram")], ["Datenträger", avg("disk")]]
+  const bars = section(box, "Usage (average online)");
+  bars.innerHTML = [["CPU", avg("cpu")], ["RAM", avg("ram")], ["Storage", avg("disk")]]
     .map(([l, v]) => `<div class="clv-bar-row"><span>${l}</span>${barHtml(v)}</div>`).join("");
 
-  // Untergliederung: Rechenzentrum -> Mandanten, Mandant -> Standorte
+  // Breakdown: data center -> tenants, tenant -> locations
   if (s.type === "dc" || s.type === "tenant") {
     const rows = s.type === "dc"
       ? (state.hierarchy?.tenants || []).map((x) => ({ type: "tenant", id: x.id, name: x.name, color: x.color, list: list.filter((c) => c.tenant_id === x.id) }))
       : (state.hierarchy?.locations || []).filter((l) => l.tenant_id === s.id).map((x) => ({ type: "location", id: x.id, name: x.name, list: list.filter((c) => c.location_id === x.id) }));
-    const b = section(box, s.type === "dc" ? "Mandanten" : "Standorte");
-    b.innerHTML = rows.length ? `<table class="clv-table"><thead><tr><th>Name</th><th>Geräte</th><th>Online</th><th>Offline</th><th>Warnungen</th></tr></thead><tbody>
+    const b = section(box, s.type === "dc" ? "Tenants" : "Locations");
+    b.innerHTML = rows.length ? `<table class="clv-table"><thead><tr><th>Name</th><th>Devices</th><th>Online</th><th>Offline</th><th>Alerts</th></tr></thead><tbody>
       ${rows.map((r) => { const kk = counts(r.list); const al = collectAlerts(r.list).length; return `
         <tr class="clv-link" data-go-type="${r.type}" data-go-id="${esc(r.id)}">
-          <td>${r.color ? dot(esc(r.color)) : "📍 "}${esc(r.name)}</td><td>${kk.total}</td><td>${kk.on}</td><td>${kk.off}</td>
+          <td>${r.color ? dot(esc(r.color)) : icon("pin", 13) + " "}${esc(r.name)}</td><td>${kk.total}</td><td>${kk.on}</td><td>${kk.off}</td>
           <td>${al ? `<span class="clv-warn">${al}</span>` : "–"}</td></tr>`; }).join("")}
-      </tbody></table>` : `<div class="clv-empty">Keine Einträge.</div>`;
+      </tbody></table>` : `<div class="clv-empty">No entries.</div>`;
     b.querySelectorAll("[data-go-type]").forEach((tr) => tr.addEventListener("click", () => goTo(tr.dataset.goType, tr.dataset.goId)));
   }
 }
@@ -323,22 +324,22 @@ function deviceRows(s) {
 }
 
 const DEV_COLS = [
-  ["status", "Status"], ["name", "Name"], ["tenant", "Mandant"], ["location", "Standort"], ["os", "Betriebssystem"],
-  ["ip", "IP"], ["cpu", "CPU"], ["ram", "RAM"], ["disk", "Disk"], ["uptime", "Laufzeit"], ["agent", "Agent"],
+  ["status", "Status"], ["name", "Name"], ["tenant", "Tenant"], ["location", "Location"], ["os", "Operating system"],
+  ["ip", "IP"], ["cpu", "CPU"], ["ram", "RAM"], ["disk", "Disk"], ["uptime", "Uptime"], ["agent", "Agent"],
 ];
 
 function devicesTable(box, s) {
   const cols = DEV_COLS.filter(([k]) => !(s.type !== "dc" && k === "tenant") && !(s.type === "location" && k === "location"));
   const bar = document.createElement("div");
   bar.className = "clv-toolbar";
-  bar.innerHTML = `<input type="search" class="clv-search" placeholder="Filtern (Name, IP, OS …)" value="${esc(tableFilter)}"><span class="clv-count"></span>`;
+  bar.innerHTML = `<input type="search" class="clv-search" placeholder="Filter (name, IP, OS …)" value="${esc(tableFilter)}"><span class="clv-count"></span>`;
   box.appendChild(bar);
   const wrap = document.createElement("div");
   wrap.className = "clv-table-wrap";
   box.appendChild(wrap);
   const draw = () => {
     const rows = deviceRows(s);
-    bar.querySelector(".clv-count").textContent = `${rows.length} Gerät${rows.length === 1 ? "" : "e"}`;
+    bar.querySelector(".clv-count").textContent = `${rows.length} device${rows.length === 1 ? "" : "s"}`;
     const pc = (v) => v == null ? "–" : `<span class="${v >= 90 ? "clv-warn" : ""}">${v} %</span>`;
     wrap.innerHTML = `<table class="clv-table clv-sortable"><thead><tr>${cols.map(([k, l]) =>
       `<th data-sort="${k}">${esc(l)}${tableSort.col === k ? (tableSort.dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr></thead><tbody>
@@ -349,7 +350,7 @@ function devicesTable(box, s) {
         if (k === "cpu" || k === "ram" || k === "disk") return `<td>${pc(r[k])}</td>`;
         if (k === "uptime") return `<td>${r.uptime != null ? esc(formatUptime(r.uptime)) : "–"}</td>`;
         return `<td>${esc(r[k] || "–")}</td>`;
-      }).join("")}</tr>`).join("") || `<tr><td colspan="${cols.length}" class="clv-empty">Keine Geräte.</td></tr>`}
+      }).join("")}</tr>`).join("") || `<tr><td colspan="${cols.length}" class="clv-empty">No devices.</td></tr>`}
       </tbody></table>`;
     wrap.querySelectorAll("th[data-sort]").forEach((th) => th.addEventListener("click", () => {
       const k = th.dataset.sort;
@@ -369,17 +370,17 @@ function collectAlerts(list) {
   for (const c of list) {
     const m = metricsOf(c);
     if (!c.online && c.status_override !== "maintenance") out.push({ c, level: "warn", text: "Offline" });
-    if (m.cpu != null && m.cpu >= 90) out.push({ c, level: "crit", text: `CPU-Last ${m.cpu} %` });
-    if (m.ram != null && m.ram >= 90) out.push({ c, level: "crit", text: `Arbeitsspeicher ${m.ram} % belegt` });
+    if (m.cpu != null && m.cpu >= 90) out.push({ c, level: "crit", text: `CPU load ${m.cpu} %` });
+    if (m.ram != null && m.ram >= 90) out.push({ c, level: "crit", text: `Memory ${m.ram} % used` });
     for (const d of (c.metrics?.disks || [])) {
       const p = pct(d.used, d.total);
-      if (p != null && p >= 90) out.push({ c, level: "crit", text: `Datenträger ${d.mountpoint || d.device} ${p} % voll (${formatBytes((d.total || 0) - (d.used || 0))} frei)` });
+      if (p != null && p >= 90) out.push({ c, level: "crit", text: `Disk ${d.mountpoint || d.device} ${p} % full (${formatBytes((d.total || 0) - (d.used || 0))} free)` });
     }
-    if (!(c.metrics?.disks || []).length && m.disk != null && m.disk >= 90) out.push({ c, level: "crit", text: `Datenträger ${m.disk} % voll` });
+    if (!(c.metrics?.disks || []).length && m.disk != null && m.disk >= 90) out.push({ c, level: "crit", text: `Disk ${m.disk} % full` });
     if (c.warranty_until) {
       const days = Math.floor((c.warranty_until - now) / 86400000);
-      if (days < 0) out.push({ c, level: "info", text: "Garantie abgelaufen" });
-      else if (days <= 30) out.push({ c, level: "info", text: `Garantie endet in ${days} Tag${days === 1 ? "" : "en"}` });
+      if (days < 0) out.push({ c, level: "info", text: "Warranty expired" });
+      else if (days <= 30) out.push({ c, level: "info", text: `Warranty ends in ${days} day${days === 1 ? "" : "s"}` });
     }
   }
   const rank = { crit: 0, warn: 1, info: 2 };
@@ -388,18 +389,18 @@ function collectAlerts(list) {
 
 function alertsList(box, s) {
   const list = collectAlerts(clientsIn(s));
-  const b = section(box, `Warnungen (${list.length})`);
-  const ico = { crit: "🔴", warn: "🟠", info: "🔵" };
-  b.innerHTML = list.length ? `<table class="clv-table"><thead><tr><th></th><th>Gerät</th><th>Meldung</th><th>Mandant</th><th>Standort</th></tr></thead><tbody>
+  const b = section(box, `Alerts (${list.length})`);
+  const ico = { crit: dot("var(--danger, #e5484d)"), warn: dot("var(--warn)"), info: dot("var(--accent)") };
+  b.innerHTML = list.length ? `<table class="clv-table"><thead><tr><th></th><th>Device</th><th>Message</th><th>Tenant</th><th>Location</th></tr></thead><tbody>
     ${list.map((a) => `<tr class="clv-link" data-client="${esc(a.c.id)}"><td>${ico[a.level]}</td><td><b>${esc(a.c.hostname)}</b></td>
       <td>${esc(a.text)}</td><td>${esc(tenantName(a.c.tenant_id))}</td><td>${a.c.location_id ? esc(locationName(a.c.location_id)) : "–"}</td></tr>`).join("")}
-    </tbody></table>` : `<div class="clv-empty">✓ Keine Warnungen.</div>`;
+    </tbody></table>` : `<div class="clv-empty">${icon("check", 14)} No alerts.</div>`;
   b.querySelectorAll("[data-client]").forEach((tr) => tr.addEventListener("click", () => goTo("client", tr.dataset.client)));
 }
 
 async function jobsList(box) {
-  const b = section(box, "Aufgaben (Backend-Jobs)");
-  b.innerHTML = `<div class="clv-empty">Wird geladen …</div>`;
+  const b = section(box, "Tasks (backend jobs)");
+  b.innerHTML = `<div class="clv-empty">Loading …</div>`;
   let mod;
   try { mod = await import("/js/app/bgjobs.js"); } catch (e) { b.innerHTML = `<div class="clv-empty">${esc(e.message)}</div>`; return; }
   const { listJobs, jobStatusText, cancelJob } = mod;
@@ -408,26 +409,26 @@ async function jobsList(box) {
     try { jobs = await listJobs({ history: true, limit: 60 }); }
     catch (e) { b.innerHTML = `<div class="clv-empty">${esc(e.message)}</div>`; return; }
     if (!document.body.contains(b)) return;
-    b.innerHTML = jobs.length ? `<table class="clv-table"><thead><tr><th>Aufgabe</th><th>Benutzer</th><th>Gestartet</th><th>Status</th><th></th></tr></thead><tbody>
-      ${jobs.map((j) => `<tr><td>${j.running ? "⏳" : j.status === "error" ? "❌" : j.status === "cancelled" ? "⛔" : "✅"} ${esc(j.title || j.kind)}</td>
-        <td>${esc(j.user || "–")}</td><td>${j.started ? esc(new Date(j.started).toLocaleString("de-DE")) : "–"}</td>
+    b.innerHTML = jobs.length ? `<table class="clv-table"><thead><tr><th>Task</th><th>User</th><th>Started</th><th>Status</th><th></th></tr></thead><tbody>
+      ${jobs.map((j) => `<tr><td>${j.running ? icon("clock", 13) : j.status === "error" ? icon("x", 13) : j.status === "cancelled" ? icon("ban", 13) : icon("check", 13)} ${esc(j.title || j.kind)}</td>
+        <td>${esc(j.user || "–")}</td><td>${j.started ? esc(new Date(j.started).toLocaleString()) : "–"}</td>
         <td>${esc(jobStatusText(j))}</td>
-        <td>${j.running && j.can_cancel !== false ? `<button class="btn" data-cancel="${esc(j.id)}">Abbrechen</button>` : ""}</td></tr>`).join("")}
-      </tbody></table>` : `<div class="clv-empty">Noch keine Aufgaben.</div>`;
+        <td>${j.running && j.can_cancel !== false ? `<button class="btn" data-cancel="${esc(j.id)}">Cancel</button>` : ""}</td></tr>`).join("")}
+      </tbody></table>` : `<div class="clv-empty">No tasks yet.</div>`;
     b.querySelectorAll("[data-cancel]").forEach((x) => x.addEventListener("click", () => cancelJob(x.dataset.cancel).catch((e) => window.notify?.(e.message, "error"))));
   };
   await draw();
-  // Live: bei jeder Job-Aenderung neu laden (gedrosselt)
+  // Live: reload on every job change (throttled)
   let tmr = null;
   const onUpd = () => { clearTimeout(tmr); tmr = setTimeout(draw, 500); };
   try {
     const { dashboardSocket } = await import("/js/app/socket.js");
     dashboardSocket.on("bgjob:update", onUpd);
     jobsStop = () => { clearTimeout(tmr); try { dashboardSocket.off("bgjob:update", onUpd); } catch {} };
-  } catch { /* ohne Socket: statisch */ }
+  } catch { /* without socket: static */ }
 }
 
-// ---------------------------------------------------------------- Navigation
+// ---------------------------------------------------------------- navigation
 function rerenderMain() {
   const el = document.getElementById("main-content");
   if (el) renderClassicView(el);
@@ -435,16 +436,16 @@ function rerenderMain() {
 
 async function goTo(type, id) {
   if (type === "client") {
-    try { const m = await import("/js/app/sidebar.js"); m.selectClientExternal(id); return; } catch { /* Fallback */ }
+    try { const m = await import("/js/app/sidebar.js"); m.selectClientExternal(id); return; } catch { /* fallback */ }
   }
   state.selection = { type, id };
   try { const m = await import("/js/app/sidebar.js"); m.renderSidebar(); } catch {}
   rerenderMain();
 }
 
-// ---------------------------------------------------------------- Live
-/** Aus app.js bei client:metrics. Gibt 1 zurueck, wenn die klassische
- *  Ansicht das Update uebernommen hat (dann kein kompletter Neuaufbau). */
+// ---------------------------------------------------------------- live
+/** From app.js on client:metrics. Returns 1 when the classic view handled the
+ *  update (then no full rebuild). */
 export function updateClassicView(clientId) {
   const root = document.querySelector("#main-content > .clv");
   if (!root) return 0;
@@ -456,7 +457,7 @@ export function updateClassicView(clientId) {
   const cats = catsFor(s, client);
   const cat = currentCat(s, cats);
   if (!cats.find((c) => c.key === cat)?.live) return 1;
-  // Nichts unter Cursor/Fingern wegrendern, max. alle 2 s
+  // Do not re-render anything under the cursor/fingers, at most every 2 s
   const focus = document.activeElement;
   if (focus && box.contains(focus) && /^(INPUT|TEXTAREA|SELECT)$/.test(focus.tagName)) {
     if (box._clvRedraw) return 1;
@@ -466,7 +467,7 @@ export function updateClassicView(clientId) {
   lastLive = now;
   root.querySelector(".clv-head").innerHTML = headHtml(s, client);
   if (s.type === "client") {
-    // nur die Metrik-Karten bzw. den Live-Bereich ersetzen
+    // only replace the metric cards or the live area
     const holders = box.querySelectorAll(".cmetric-holder[data-metric]");
     if (holders.length && !box.querySelector(".clv-status")) {
       holders.forEach((h) => { if (!h.matches(":hover")) renderClientMetric(h, client, { id: `clv-${h.dataset.metric}`, type: "cmetric", metric: h.dataset.metric }); });

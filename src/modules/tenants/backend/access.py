@@ -1,9 +1,9 @@
-# access.py (Modul "tenants") - wer darf welchen Mandanten sehen/oeffnen?
+# access.py (module "tenants") - who may see/open which tenant?
 # ---------------------------------------------------------------------
-# Die FEINEN Rechte liegen auf dem Mandanten-Backend selbst. Hier wird nur
-# gesteuert, wer ueberhaupt einen Mandanten im Haupt-RMM sieht und oeffnen darf:
-# leere allow-Liste = fuer alle sichtbar; sonst nur die genannten Benutzer/Gruppen.
-# Super-Admins sehen immer alles.
+# The FINE-grained permissions live on the tenant backend itself. Here only
+# who may see and open a tenant in the main RMM is controlled:
+# empty allow list = visible to everyone; otherwise only the named users/groups.
+# Super admins always see everything.
 from __future__ import annotations
 
 from app import db

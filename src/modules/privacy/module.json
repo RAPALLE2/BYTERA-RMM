@@ -1,11 +1,11 @@
 {
   "schema": 1,
   "id": "privacy",
-  "name": "Datenschutz (DSGVO)",
+  "name": "Privacy (GDPR)",
   "version": "1.0.0",
-  "description": "Auskunft, Loeschung und automatische Aufbewahrungsfristen (DSGVO Art. 5/15/17). ACHTUNG: Ohne dieses Modul werden Aufbewahrungsfristen NICHT automatisch durchgesetzt.",
+  "description": "Access, erasure and automatic retention periods (GDPR Art. 5/15/17). NOTE: without this module, retention periods are NOT enforced automatically.",
   "author": "BYTERA",
-  "category": "Betrieb",
+  "category": "sicherheit",
   "icon": "🛡️",
   "requires": [],
   "pip": [],
@@ -19,9 +19,9 @@
   "apps": [
     {
       "id": "privacy",
-      "label": "Datenschutz",
+      "label": "Privacy",
       "icon": "🛡️",
-      "title": "Datenschutz",
+      "title": "Privacy",
       "entry": "privacy.js",
       "export": "renderPrivacy",
       "w": 820,
