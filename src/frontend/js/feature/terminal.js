@@ -37,6 +37,12 @@ export function renderTerminal(body, win) {
   let shellMode = isWindows ? "cmd" : "auto";
   let loginMode = "admin";       // "admin" = direkte Root-/System-Shell, "user" = Login-Abfrage
   let term = null;
+  // Diagnostics timers of the current session. openSession() may run several
+  // times (restart, login-mode switch); without tracking, each call stacked a
+  // new 12 s + 25 s timer that fired against an already-replaced session.
+  let diagTimer = null;
+  let recheckTimer = null;
+  function clearDiagTimers() { clearTimeout(diagTimer); clearTimeout(recheckTimer); diagTimer = null; recheckTimer = null; }
 
   // Auswahl des Anmelde-Modus (auf Windows nur Admin, s.o.).
   const modeSel = `
@@ -185,6 +191,7 @@ export function renderTerminal(body, win) {
   dashboardSocket.on("term-ack", onAck);
 
   function openSession() {
+    clearDiagTimers();   // drop timers from a previous session (restart / mode switch)
     gotOutput = false; gotAck = false; agentOnline = false;
     dashboardSocket.emit("term-open", {
       clientId, session: sessionId, shell: shellMode,
@@ -206,7 +213,7 @@ export function renderTerminal(body, win) {
     // Deshalb: 12 Sekunden warten, und die Meldung nur schreiben, wenn bis
     // dahin WIRKLICH nichts kam. Ein zweiter Blick nach 25 s räumt den
     // Hinweis weg, falls die Sitzung doch noch startet.
-    const diagTimer = setTimeout(() => {
+    diagTimer = setTimeout(() => {
       if (gotOutput || !term) return;
       if (!gotAck) {
         term.write(t("term_no_backend") + t("term_no_backend2") + t("term_restart_hint"));
@@ -226,7 +233,7 @@ export function renderTerminal(body, win) {
     // Nachkontrolle: Kam die Ausgabe doch noch (langsame Shell, kurzer
     // Netz-Aussetzer), soll der Status das auch sagen statt auf einer
     // überholten Fehlermeldung stehen zu bleiben.
-    setTimeout(() => {
+    recheckTimer = setTimeout(() => {
       if (!term || !gotOutput) return;
       statusEl.textContent = `${t("vnc_connected")} (${modeLabel}). ${t("term_click_hint")}`;
     }, 25000);
@@ -459,6 +466,7 @@ export function renderTerminal(body, win) {
 
   // Aufräumen beim Schließen
   registerCleanup(win.key, () => {
+    clearDiagTimers();
     try { scriptMenu?.remove(); } catch {}   // Skript-Auswahlmenü (liegt im <body>)
     dashboardSocket.off("term-output", onOutput);
     dashboardSocket.off("term-exit", onExit);

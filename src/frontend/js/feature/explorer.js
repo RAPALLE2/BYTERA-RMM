@@ -18,6 +18,7 @@ import { isAdmin as userIsAdmin, state, hasGlobalPerm, hasClientPerm } from "../
 import { scheduleSave } from "../app/persist.js";
 import { t } from "../app/i18n.js";
 import { getModuleApi } from "../app/modules.js";
+import { registerCleanup } from "../app/windowmanager.js";
 
 // Auswahl-Optionen für das automatische Schließen eines Relays.
 const RELAY_AUTOCLOSE_BASE = [
@@ -298,8 +299,12 @@ export function renderExplorer(body, win) {
   // Rechtsklick auf die freie Fläche zeigt Neuer Ordner/Upload/Aktualisieren.
   let ctxMenuEl = null;
   function closeCtxMenu() { if (ctxMenuEl) { ctxMenuEl.remove(); ctxMenuEl = null; } }
+  // Named handlers so the cleanup block below can remove them. These are
+  // document-level listeners: without removal, every opened explorer window
+  // would leave a pair behind for the life of the page.
+  function onDocKeydownEsc(e) { if (e.key === "Escape") closeCtxMenu(); }
   document.addEventListener("click", closeCtxMenu);
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeCtxMenu(); });
+  document.addEventListener("keydown", onDocKeydownEsc);
 
   function showCtxMenu(x, y, items) {
     closeCtxMenu();
@@ -769,4 +774,16 @@ export function renderExplorer(body, win) {
   // Beim Öffnen den zuletzt offenen Ordner wiederherstellen (sonst Wurzel).
   if (startPath) history.push(startPath);
   load(startPath);
+
+  // Aufräumen beim Schließen: die am Dokument/Fenster angemeldeten Listener
+  // wieder entfernen und offene Elemente schließen. Ohne das sammeln sich mit
+  // jedem geöffneten Explorer-Fenster Listener an (Dokument-Klick/-Tasten,
+  // relay-changed), die nie mehr verschwinden.
+  registerCleanup(win.key, () => {
+    document.removeEventListener("click", closeCtxMenu);
+    document.removeEventListener("keydown", onDocKeydownEsc);
+    window.removeEventListener("relay-changed", onRelayChanged);
+    closeCtxMenu();
+    closeOverlay();
+  });
 }

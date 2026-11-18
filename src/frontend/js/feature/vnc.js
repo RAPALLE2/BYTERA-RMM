@@ -528,7 +528,8 @@ export function renderVnc(body, win) {
       return;
     }
     if (!d.data || !audioOn || !audioCtx) return;
-    const bin = atob(d.data);
+    let bin;
+    try { bin = atob(d.data); } catch { return; }   // ignore a corrupt audio chunk
     const rate = d.rate || 16000;
     const buf = audioCtx.createBuffer(1, bin.length, rate);
     const ch = buf.getChannelData(0);
@@ -591,7 +592,8 @@ export function renderVnc(body, win) {
       st = { name: d.name || "datei", size: d.size || 0, parts: [], got: 0, row: fileSysRow(`📥 ${d.name} – 0 %`) };
       incoming.set(d.tid, st);
     }
-    const bin = atob(d.data || "");
+    let bin;
+    try { bin = atob(d.data || ""); } catch { bin = ""; }   // skip a corrupt chunk, keep the transfer alive
     const arr = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
     st.parts[d.seq || 0] = arr;
@@ -678,7 +680,15 @@ export function renderVnc(body, win) {
     dashboardSocket.off("screen-audio", onAudio);
     try { audioCtx?.close(); } catch {}
     try { areaObserver?.disconnect(); } catch (e) {}
+    // renderTerminal() below calls registerCleanup() again for this window key,
+    // which OVERWRITES the vnc cleanup block - so it would never run. Tear down
+    // every window-level listener and the pinch-zoom here, while we still can.
     window.removeEventListener("mouseup", onMouseUp);
+    window.removeEventListener("focus", _onClipFocus);
+    window.removeEventListener("resize", layoutImage);
+    try { zoom.destroy(); } catch {}
+    for (const p of pendingAcks.values()) { try { clearTimeout(p.timer); } catch {} }
+    pendingAcks.clear();
 
     // Fenster leeren, Hinweis-Banner (inkl. Guacamole-Option) + Terminal einsetzen
     // Gleiche Falle wie oben: height:100% auf dem Fenster-Body wirkt nicht.
@@ -715,6 +725,9 @@ export function renderVnc(body, win) {
     // Falls das RDP-/Fehler-Overlay noch offen ist und jetzt ein Bild kommt: weg damit
     const overlay = body.querySelector(`#rdp-offer-${win.key}`);
     if (overlay) overlay.remove();
+    // Ignore malformed frames (no image payload) instead of setting a broken
+    // data URI - keeps the last good frame on screen during a hiccup.
+    if (!data.image) return;
     img.src = "data:image/jpeg;base64," + data.image;
     const sizeChanged = (remoteWidth !== data.width || remoteHeight !== data.height);
     remoteWidth = data.width;
@@ -974,8 +987,13 @@ export function renderVnc(body, win) {
   // Zoom kaum bedienbar. mapCoords() rechnet weiterhin richtig, weil der Zoom
   // nur die Darstellung veraendert - die getBoundingClientRect() des Bildes
   // waechst mit.
+  // NOTE: do NOT call registerCleanup() here. registerCleanup stores exactly
+  // one function per window key (it overwrites), and the main cleanup block at
+  // the end of this function registers the real teardown. Registering here as
+  // well would be overwritten there and zoom.destroy() would never run (leaking
+  // the pinch-zoom listeners on every close). zoom.destroy() is therefore part
+  // of the single cleanup below.
   const zoom = attachPinchZoom(img.parentElement, img, { min: 1, max: 6 });
-  registerCleanup(win.key, () => zoom.destroy());
 
   // ---- Touch-Bedienung -----------------------------------------------
   // Ein Finger gehört der Gegenstelle, damit sich dort Fenster ziehen und
@@ -1189,9 +1207,15 @@ export function renderVnc(body, win) {
     dashboardSocket.off("screen-audio", onAudio);
     try { audioCtx?.close(); } catch {}
     try { areaObserver?.disconnect(); } catch (e) {}
+    try { zoom.destroy(); } catch {}
+    // Pending file-transfer acks hold a 60 s timeout each - clear them so a
+    // window closed mid-transfer leaves nothing running.
+    for (const p of pendingAcks.values()) { try { clearTimeout(p.timer); } catch {} }
+    pendingAcks.clear();
     stopScreen();
     if (rdpActive) dashboardSocket.emit("rdp-stop", { clientId });
     window.removeEventListener("mouseup", onMouseUp);
     window.removeEventListener("focus", _onClipFocus);
+    window.removeEventListener("resize", layoutImage);   // only added when ResizeObserver is unavailable; harmless otherwise
   });
 }
