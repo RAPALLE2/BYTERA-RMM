@@ -1,14 +1,14 @@
 """
 routers/hierarchy_routes.py
 -----------------------------
-Verwaltung der Tenant -> Location -> Folder Struktur, die die Sidebar
-im Dashboard darstellt (ähnlich Proxmox "Datacenter -> Node").
+Management of the tenant -> location -> folder structure that the sidebar in the
+dashboard renders (similar to Proxmox "Datacenter -> Node").
 
-Endpunkte:
-  GET  /api/hierarchy            -> komplette Struktur auf einmal (für die Sidebar)
-  POST /api/tenants               -> neuen Tenant (Kunde/Firma) anlegen
-  POST /api/locations              -> neue Location innerhalb eines Tenants anlegen
-  POST /api/folders                -> neuen (ggf. verschachtelten) Ordner anlegen
+Endpoints:
+  GET  /api/hierarchy            -> complete structure at once (for the sidebar)
+  POST /api/tenants               -> create a new tenant (customer/company)
+  POST /api/locations              -> create a new location within a tenant
+  POST /api/folders                -> create a new (optionally nested) folder
 """
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -39,9 +39,9 @@ class CreateFolderBody(BaseModel):
 @router.get("/api/hierarchy")
 def get_hierarchy(user: dict = Depends(get_current_user)):
     """
-    Liefert Tenants, Locations und Folders in einem einzigen Aufruf zurück.
-    Das Frontend baut daraus lokal den Baum für die Sidebar zusammen -
-    das ist einfacher, als für jede Ebene einzeln nachzufragen.
+    Returns tenants, locations and folders in a single call.
+    The frontend builds the sidebar tree locally from this - simpler than
+    querying each level individually.
     """
     return {
         "tenants": db.list_tenants(),
@@ -77,8 +77,8 @@ def create_folder(body: CreateFolderBody, user: dict = Depends(get_current_user)
 @router.delete("/api/folders/{folder_id}")
 def delete_folder(folder_id: str, user: dict = Depends(get_current_user)):
     """
-    Löscht einen Ordner samt Unterordnern. Clients darin verlieren nur ihre
-    Ordner-Zuordnung, bleiben aber in ihrer Location.
+    Deletes a folder including its subfolders. Clients in it only lose their
+    folder assignment but stay in their location.
     """
     require_perm(user, "manage_hierarchy")
     removed = db.delete_folder(folder_id)
@@ -90,14 +90,14 @@ def delete_folder(folder_id: str, user: dict = Depends(get_current_user)):
 @router.delete("/api/tenants/{tenant_id}")
 def delete_tenant(tenant_id: str, user: dict = Depends(get_current_user)):
     """
-    Löscht einen Tenant mitsamt Locations/Ordnern. Alle betroffenen Clients
-    werden automatisch nach Uncategorized/Default verschoben (nichts geht verloren).
+    Deletes a tenant along with its locations/folders. All affected clients are
+    moved to Uncategorized/Default automatically (nothing is lost).
     """
     require_perm(user, "manage_hierarchy")
     try:
         result = db.delete_tenant(tenant_id)
     except KeyError:
-        raise HTTPException(404, "Tenant nicht gefunden")
+        raise HTTPException(404, "Tenant not found")
     except ValueError as e:
         raise HTTPException(400, str(e))
     db.add_audit_entry(user["username"], "tenant.deleted", target=tenant_id,
@@ -108,14 +108,14 @@ def delete_tenant(tenant_id: str, user: dict = Depends(get_current_user)):
 @router.delete("/api/locations/{location_id}")
 def delete_location(location_id: str, user: dict = Depends(get_current_user)):
     """
-    Löscht eine Location mitsamt Ordnern. Alle betroffenen Clients werden
-    automatisch nach Uncategorized/Default verschoben (nichts geht verloren).
+    Deletes a location along with its folders. All affected clients are moved to
+    Uncategorized/Default automatically (nothing is lost).
     """
     require_perm(user, "manage_hierarchy")
     try:
         result = db.delete_location(location_id)
     except KeyError:
-        raise HTTPException(404, "Location nicht gefunden")
+        raise HTTPException(404, "Location not found")
     except ValueError as e:
         raise HTTPException(400, str(e))
     db.add_audit_entry(user["username"], "location.deleted", target=location_id,

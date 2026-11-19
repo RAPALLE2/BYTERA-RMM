@@ -1,18 +1,18 @@
 """
 diag_routes.py
 --------------
-Der Wartungsmodus im Dashboard (Einstellungen → Source → Diagnose).
+The maintenance mode in the dashboard (Settings -> Source -> Diagnostics).
 
-  GET  /api/diag/status              läuft er? welche Dateien gibt es?
-  POST /api/diag/enable              einschalten (optional mit Zeitlimit)
-  POST /api/diag/disable             ausschalten
-  GET  /api/diag/tail?lines=300      die letzten Zeilen live
-  GET  /api/diag/bundle              alles als ZIP herunterladen
-  POST /api/diag/clear               Logs leeren
+  GET  /api/diag/status              is it running? which files exist?
+  POST /api/diag/enable              turn on (optionally with a time limit)
+  POST /api/diag/disable             turn off
+  GET  /api/diag/tail?lines=300      the last lines live
+  GET  /api/diag/bundle              download everything as a ZIP
+  POST /api/diag/clear               clear logs
 
-Alles hinter 'see_source' - wer die Quellen sehen darf, darf auch die
-Diagnose bedienen. Die Logs können Pfade, Hostnamen und Fehlermeldungen
-aus dem Kundennetz enthalten; das ist nichts für gewöhnliche Benutzer.
+Everything behind 'see_source' - whoever may see the sources may also operate
+diagnostics. The logs may contain paths, host names and error messages from the
+customer network; that is not for ordinary users.
 """
 
 from __future__ import annotations
@@ -31,15 +31,15 @@ router = APIRouter()
 
 def _require(user: dict) -> None:
     if not user_has_permission(user, "see_source"):
-        raise HTTPException(403, "Dafür fehlt die Berechtigung 'Quellen sehen'")
+        raise HTTPException(403, "This requires the 'see sources' permission")
 
 
 class EnableBody(BaseModel):
-    # 0 = ohne Ende. Ein Zeitlimit ist die Voreinstellung, damit ein
-    # vergessener Wartungsmodus nicht wochenlang die Platte füllt.
+    # 0 = no end. A time limit is the default so that a forgotten maintenance
+    # mode does not fill the disk for weeks.
     minutes: int = 120
     reason: str = ""
-    # Sollen die Agenten ebenfalls alles mitschreiben und hochladen?
+    # Should the agents also record everything and upload it?
     include_agents: bool = True
 
 
@@ -57,7 +57,7 @@ async def diag_enable(body: EnableBody, user: dict = Depends(get_current_user)):
     result = diagnostics.enable(body.minutes, body.reason)
     db.set_setting("maintenance_agents", "1" if body.include_agents else "0")
     db.add_audit_entry(user["username"], "diag.enabled",
-                       details=f"{body.minutes} min – {body.reason}")
+                       details=f"{body.minutes} min - {body.reason}")
     if body.include_agents:
         await _broadcast_agents(True, body.minutes)
     result["agents_included"] = body.include_agents
@@ -102,14 +102,14 @@ def diag_clear(user: dict = Depends(get_current_user)):
 
 async def _broadcast_agents(enabled: bool, minutes: int) -> None:
     """
-    Sagt allen Agenten Bescheid.
+    Notifies all agents.
 
-    Kein Fehler, wenn ein Agent gerade offline ist: Er bekommt den Zustand
-    bei der nächsten Anmeldung ohnehin mitgeteilt (siehe sockets.py).
+    No error if an agent is currently offline: it is told the state on its next
+    registration anyway (see sockets.py).
     """
     try:
         from app.sockets import sio
         await sio.emit("diag-mode", {"enabled": enabled, "minutes": minutes},
                        namespace="/agent")
     except Exception as e:
-        print(f"[diag] Agenten nicht erreicht: {e}")
+        print(f"[diag] agents not reached: {e}")

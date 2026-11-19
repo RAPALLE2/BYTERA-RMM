@@ -1,17 +1,17 @@
 """
 routers/files_routes.py
 --------------------------
-File Station für den Backend-Server SELBST (also "dieser Server" in der
-File-Explorer-App). Für Remote-Clients läuft das Browsing stattdessen über
-den Agenten (siehe clients_routes.py -> /api/clients/{id}/fs).
+File station for the backend server ITSELF (i.e. "this server" in the file
+explorer app). For remote clients the browsing runs via the agent instead (see
+clients_routes.py -> /api/clients/{id}/fs).
 
-Endpunkte:
-  GET  /api/server-files            -> Ordnerinhalt des Backend-Rechners
-  GET  /api/server-files/read       -> Datei base64 lesen (Download / Bild / Edit)
-  POST /api/server-files/write      -> Datei hochladen / editiert zurückschreiben
-  POST /api/server-files/mkdir      -> Ordner anlegen
-  POST /api/server-files/delete     -> Datei/Ordner löschen
-  POST /api/server-files/rename     -> umbenennen / verschieben
+Endpoints:
+  GET  /api/server-files            -> folder contents of the backend machine
+  GET  /api/server-files/read       -> read file base64 (download / image / edit)
+  POST /api/server-files/write      -> upload file / write edited content back
+  POST /api/server-files/mkdir      -> create folder
+  POST /api/server-files/delete     -> delete file/folder
+  POST /api/server-files/rename     -> rename / move
 """
 
 import base64
@@ -33,7 +33,7 @@ MAX_READ = 25 * 1024 * 1024
 
 
 # ------------------------------------------------------------------
-# Rechte/Besitzer im "ls -al"-Stil (identisch zum Agenten)
+# Permissions/owner in "ls -al" style (identical to the agent)
 # ------------------------------------------------------------------
 def _perm_string(mode: int, is_dir: bool, is_link: bool = False) -> str:
     if is_link:
@@ -99,7 +99,7 @@ def _entry_meta(full_path: str, is_dir: bool) -> dict:
 
 
 def _list_windows_drives() -> list[dict]:
-    """Ermittelt alle Laufwerke unter Windows (lokal + Netzlaufwerke) via psutil."""
+    """Determines all drives on Windows (local + network drives) via psutil."""
     import psutil
     drives = []
     try:
@@ -112,7 +112,7 @@ def _list_windows_drives() -> list[dict]:
                 size = psutil.disk_usage(mount).total
             except Exception:
                 size = 0
-            label = mount.rstrip("\\") + ("  (Netzlaufwerk)" if is_network else "")
+            label = mount.rstrip("\\") + ("  (network drive)" if is_network else "")
             drives.append({
                 "name": label,
                 "path": mount if mount.endswith("\\") else mount + "\\",
@@ -126,7 +126,7 @@ def _list_windows_drives() -> list[dict]:
 @router.get("")
 def list_dir(path: str = "", user: dict = Depends(get_current_user)):
     require_perm(user, "see_source")
-    # Kein Pfad angegeben -> "Wurzel"-Ansicht zeigen (Laufwerke bzw. / und Home)
+    # No path given -> show the "root" view (drives resp. / and home)
     if not path:
         if IS_WINDOWS:
             return {"path": "", "entries": _list_windows_drives()}
@@ -162,12 +162,12 @@ def list_dir(path: str = "", user: dict = Depends(get_current_user)):
 
 @router.get("/read")
 def read_file(path: str, user: dict = Depends(get_current_user)):
-    """Liest eine Datei base64-kodiert (Download, Bild-Vorschau, Editor)."""
+    """Reads a file base64-encoded (download, image preview, editor)."""
     require_perm(user, "see_source")
     try:
         size = os.path.getsize(path)
         if size > MAX_READ:
-            raise HTTPException(413, f"Datei zu groß ({size} Bytes, max. {MAX_READ})")
+            raise HTTPException(413, f"File too large ({size} bytes, max. {MAX_READ})")
         with open(path, "rb") as f:
             content = f.read()
     except HTTPException:

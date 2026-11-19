@@ -1,16 +1,16 @@
-# dist_routes.py (Core, frueher Modul "dist") - einheitliche Verteilung unter /dist
+# dist_routes.py (Core, formerly module "dist") - unified distribution under /dist
 # ------------------------------------------------------------------
-# OEFFENTLICH (ohne Anmeldung), je Ordner per Einstellung freigegeben (Standard: an):
-#   GET /dist                      Uebersicht aller oeffentlichen Ordner (HTML)
-#   GET /dist/{folder}             Dateiliste eines Ordners (HTML)
-#   GET /dist/{folder}/{file}      Datei herunterladen
-# VERWALTUNG (Recht manage_dist):
-#   GET    /api/dist/folders               alle Ordner (auch private) + Metadaten
-#   POST   /api/dist/folders               {name,label,public} anlegen
+# PUBLIC (no login), released per folder via setting (default: on):
+#   GET /dist                      overview of all public folders (HTML)
+#   GET /dist/{folder}             file list of a folder (HTML)
+#   GET /dist/{folder}/{file}      download file
+# MANAGEMENT (permission manage_dist):
+#   GET    /api/dist/folders               all folders (including private) + metadata
+#   POST   /api/dist/folders               create {name,label,public}
 #   PATCH  /api/dist/folders/{name}        {public?,label?}
-#   DELETE /api/dist/folders/{name}        (nur Nicht-Kern-Ordner)
-#   GET    /api/dist/folders/{name}/files  Dateien
-#   POST   /api/dist/folders/{name}/upload Dateien hochladen
+#   DELETE /api/dist/folders/{name}        (non-core folders only)
+#   GET    /api/dist/folders/{name}/files  files
+#   POST   /api/dist/folders/{name}/upload upload files
 #   DELETE /api/dist/folders/{name}/files/{file}
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from app.auth import get_current_user, require_perm
 from app import dist_store as store
 
 router = APIRouter(tags=["dist"])
-_OFF = PlainTextResponse("Dieser Bereich ist nicht freigegeben.", status_code=403)
+_OFF = PlainTextResponse("This area is not released.", status_code=403)
 
 
 def _fmt_size(n: int) -> str:
@@ -121,11 +121,11 @@ def dist_file(folder: str, filename: str):
         return _OFF
     p = store.file_path(folder, filename)
     if not p:
-        return PlainTextResponse("Nicht gefunden", status_code=404)
+        return PlainTextResponse("Not found", status_code=404)
     return FileResponse(str(p), filename=p.name, media_type="application/octet-stream")
 
 
-# --- Kurz-Aliasse: /enrollment /agent /client zeigen auf /dist/<name> ---
+# --- short aliases: /enrollment /agent /client point to /dist/<name> ---
 from starlette.responses import RedirectResponse as _Redirect
 
 def _alias(folder):
@@ -135,7 +135,7 @@ def _alias(folder):
         return _Redirect(f"/dist/{folder}/{filename}", status_code=307)
     return idx, sub
 
-# (Kein Alias "/enroll": die Adresse gehoert den Enrollment-Links /enroll/<token>.)
+# (No alias "/enroll": that address belongs to the enrollment links /enroll/<token>.)
 for _name, _target in (("enrollment", "enroll"), ("agent", "agent"), ("client", "client")):
     _idx, _sub = _alias(_target)
     router.add_api_route(f"/{_name}", _idx, methods=["GET"], include_in_schema=False)
@@ -143,7 +143,7 @@ for _name, _target in (("enrollment", "enroll"), ("agent", "agent"), ("client", 
     router.add_api_route(f"/{_name}/{{filename}}", _sub, methods=["GET"], include_in_schema=False)
 
 
-# ====================================================== Verwaltung
+# ====================================================== management
 def _perm(user):
     require_perm(user, "manage_dist")
 
@@ -166,7 +166,7 @@ def api_create(body: FolderBody, user: dict = Depends(get_current_user)):
     if not store.valid_name(body.name):
         raise HTTPException(400, "Invalid folder name")
     if not store.create_folder(body.name, body.label, body.public):
-        raise HTTPException(400, "Konnte nicht angelegt werden")
+        raise HTTPException(400, "Could not be created")
     db.add_audit_entry(user["username"], "dist.folder_created", details=body.name)
     return {"ok": True}
 
@@ -180,7 +180,7 @@ class MetaBody(BaseModel):
 def api_meta(name: str, body: MetaBody, user: dict = Depends(get_current_user)):
     _perm(user)
     if not store.folder_path(name):
-        raise HTTPException(404, "Ordner nicht gefunden")
+        raise HTTPException(404, "Folder not found")
     store.set_meta(name, public=body.public, label=body.label)
     return {"ok": True, "meta": store.meta(name)}
 
@@ -198,7 +198,7 @@ def api_delete(name: str, user: dict = Depends(get_current_user)):
 def api_files(name: str, request: Request, user: dict = Depends(get_current_user)):
     _perm(user)
     if not store.folder_path(name):
-        raise HTTPException(404, "Ordner nicht gefunden")
+        raise HTTPException(404, "Folder not found")
     try:
         from router.enrollment_routes import _backend_url
         base = _backend_url(request).rstrip("/")
@@ -214,7 +214,7 @@ def api_files(name: str, request: Request, user: dict = Depends(get_current_user
 async def api_upload(name: str, files: list[UploadFile] = File(...), user: dict = Depends(get_current_user)):
     _perm(user)
     if not store.folder_path(name) and not store.valid_name(name):
-        raise HTTPException(404, "Ordner nicht gefunden")
+        raise HTTPException(404, "Folder not found")
     saved = []
     for f in files:
         data = await f.read()
@@ -228,5 +228,5 @@ async def api_upload(name: str, files: list[UploadFile] = File(...), user: dict 
 def api_delete_file(name: str, filename: str, user: dict = Depends(get_current_user)):
     _perm(user)
     if not store.delete_file(name, filename):
-        raise HTTPException(404, "Datei nicht gefunden")
+        raise HTTPException(404, "File not found")
     return {"ok": True}

@@ -1,20 +1,20 @@
 # router/nodes_routes.py
 # ----------------------
-# REST-API der Nodes (Core). Siehe app/node_manager.py.
+# REST API of the nodes (Core). See app/node_manager.py.
 #
-#   GET    /api/nodes                          alle Nodes mit Zustand
-#   GET    /api/nodes/package                  Node-Paket (ZIP) - NUR fuer Agenten (X-Agent-Token)
-#   GET    /api/nodes/modules                  Module mit Node-Teil (+ ob aktiv)
-#   GET    /api/nodes/{client_id}              Zustand einer Node
-#   POST   /api/nodes/{client_id}/enable       Node auf dem Client installieren (ueber den Agenten)
-#   POST   /api/nodes/{client_id}/disable      Node entfernen
-#   POST   /api/nodes/{client_id}/update       neues Node-Paket einspielen (Agent aktualisiert die Node)
-#   POST   /api/nodes/{client_id}/refresh      Zustand von der Node neu abfragen
-#   POST   /api/nodes/{client_id}/docker-install   Docker auf der Node installieren (Linux)
-#   GET    /api/nodes/{client_id}/logs         letzte Logzeilen der Node
-#   POST   /api/nodes/{client_id}/modules/{id}           Node-Modul bereitstellen (Body: {params})
-#   DELETE /api/nodes/{client_id}/modules/{id}           Node-Modul entfernen
-#   POST   /api/nodes/{client_id}/modules/{id}/action    Aktion (up/down/restart/status/logs ...)
+#   GET    /api/nodes                          all nodes with state
+#   GET    /api/nodes/package                  node package (ZIP) - ONLY for agents (X-Agent-Token)
+#   GET    /api/nodes/modules                  modules with a node part (+ whether active)
+#   GET    /api/nodes/{client_id}              state of a node
+#   POST   /api/nodes/{client_id}/enable       install the node on the client (via the agent)
+#   POST   /api/nodes/{client_id}/disable      remove the node
+#   POST   /api/nodes/{client_id}/update       apply a new node package (agent updates the node)
+#   POST   /api/nodes/{client_id}/refresh      re-query the state from the node
+#   POST   /api/nodes/{client_id}/docker-install   install Docker on the node (Linux)
+#   GET    /api/nodes/{client_id}/logs         last log lines of the node
+#   POST   /api/nodes/{client_id}/modules/{id}           deploy a node module (body: {params})
+#   DELETE /api/nodes/{client_id}/modules/{id}           remove a node module
+#   POST   /api/nodes/{client_id}/modules/{id}/action    action (up/down/restart/status/logs ...)
 
 import hmac
 
@@ -28,17 +28,17 @@ from app.config import AGENT_TOKEN
 router = APIRouter(prefix="/api/nodes", tags=["nodes"])
 
 
-# Recht "manage_nodes" ist ein CLIENT-Recht: Es gilt pro Client (bzw. ueber den
-# Standard-Client "*" oder global fuer alle). Wer es auf mindestens einem
-# Client hat, sieht die Uebersicht - aber nur mit diesen Clients - und den
-# Katalog der Node-Module.
+# The permission "manage_nodes" is a CLIENT permission: it applies per client
+# (resp. via the default client "*" or globally for all). Whoever has it on at
+# least one client sees the overview - but only with those clients - and the
+# catalog of node modules.
 
 def _perm(user: dict, client_id: str) -> None:
     require_perm(user, "manage_nodes", client_id)
 
 
 def _allowed_ids(user: dict) -> set[str] | None:
-    """Clients, deren Node der Benutzer verwalten darf. None = alle (Super-Admin)."""
+    """Clients whose node the user may manage. None = all (super admin)."""
     if is_super_admin(user):
         return None
     return {c["id"] for c in db.list_clients()
@@ -48,7 +48,7 @@ def _allowed_ids(user: dict) -> set[str] | None:
 def _perm_any(user: dict) -> set[str] | None:
     ids = _allowed_ids(user)
     if ids is not None and not ids:
-        raise HTTPException(status_code=403, detail="Fehlendes Recht: manage_nodes")
+        raise HTTPException(status_code=403, detail="Missing permission: manage_nodes")
     return ids
 
 
@@ -62,8 +62,8 @@ def _host(client_id: str) -> str:
 
 async def _node_job(kind: str, client_id: str, title: str, user: dict, background: bool, fn,
                     key_extra: str = "", meta: dict | None = None):
-    """Node-Aktion als BACKEND-JOB (app/bgjobs.py) - Neuladen bricht nichts ab,
-    Fortschritt/Ergebnis sieht jeder Berechtigte in der Aufgaben-Anzeige."""
+    """Node action as a BACKEND JOB (app/bgjobs.py) - reloading aborts nothing,
+    everyone authorized sees progress/result in the task view."""
     async def work(job):
         job.update(phase=kind, detail=title)
         try:
@@ -88,9 +88,9 @@ async def list_nodes(user: dict = Depends(get_current_user)):
 
 @router.get("/package")
 def package(x_agent_token: str | None = Header(default=None)):
-    """Das Node-Paket holt der AGENT (nicht der Browser) - geschuetzt durch das Agent-Token."""
+    """The AGENT fetches the node package (not the browser) - protected by the agent token."""
     if not x_agent_token or not hmac.compare_digest(x_agent_token, AGENT_TOKEN):
-        raise HTTPException(status_code=403, detail="Agent-Token fehlt oder ist falsch")
+        raise HTTPException(status_code=403, detail="Agent token missing or wrong")
     return Response(node_manager.package_zip(), media_type="application/zip",
                     headers={"X-Node-Hash": node_manager.package_hash()})
 
@@ -103,8 +103,8 @@ def node_modules(user: dict = Depends(get_current_user)):
 
 @router.get("/choices/{module_id}")
 def node_choices(module_id: str, user: dict = Depends(get_current_user)):
-    """Verbundene Nodes fuer die Auswahl "Backend oder Node" eines Moduls.
-    installed=False -> Node-Modul muss erst nachgeladen werden."""
+    """Connected nodes for a module's "backend or node" choice.
+    installed=False -> the node module must be loaded first."""
     return {"nodes": node_manager.node_choices(module_id, user),
             "has_node_part": any(m["id"] == module_id for m in modules.node_modules())}
 
@@ -119,7 +119,7 @@ async def get_node(client_id: str, user: dict = Depends(get_current_user)):
 async def enable_node(client_id: str, background: bool = False, user: dict = Depends(get_current_user)):
     _perm(user, client_id)
     db.add_audit_entry(user["username"], "node.enable", target=client_id)
-    return await _node_job("enable", client_id, "Node installieren", user, background,
+    return await _node_job("enable", client_id, "Install node", user, background,
                            lambda job: node_manager.enable(client_id))
 
 
@@ -127,7 +127,7 @@ async def enable_node(client_id: str, background: bool = False, user: dict = Dep
 async def disable_node(client_id: str, background: bool = False, user: dict = Depends(get_current_user)):
     _perm(user, client_id)
     db.add_audit_entry(user["username"], "node.disable", target=client_id)
-    return await _node_job("disable", client_id, "Node entfernen", user, background,
+    return await _node_job("disable", client_id, "Remove node", user, background,
                            lambda job: node_manager.disable(client_id))
 
 
@@ -135,7 +135,7 @@ async def disable_node(client_id: str, background: bool = False, user: dict = De
 async def update_node(client_id: str, background: bool = False, user: dict = Depends(get_current_user)):
     _perm(user, client_id)
     db.add_audit_entry(user["username"], "node.update", target=client_id)
-    return await _node_job("update", client_id, "Node aktualisieren", user, background,
+    return await _node_job("update", client_id, "Update node", user, background,
                            lambda job: node_manager.update(client_id))
 
 
@@ -154,10 +154,10 @@ async def docker_install(client_id: str, background: bool = False, user: dict = 
     db.add_audit_entry(user["username"], "node.docker_install", target=client_id)
 
     async def fn(job):
-        job.update(detail="Docker wird auf der Node installiert (kann einige Minuten dauern)")
+        job.update(detail="Docker is being installed on the node (can take a few minutes)")
         data = await node_manager.docker_install(client_id)
         return {"result": data, "node": await node_manager.get_state(client_id)}
-    return await _node_job("docker_install", client_id, "Docker installieren", user, background, fn)
+    return await _node_job("docker_install", client_id, "Install Docker", user, background, fn)
 
 
 @router.get("/{client_id}/logs")
@@ -175,7 +175,7 @@ async def deploy_module(client_id: str, module_id: str, body: dict | None = None
     async def fn(job):
         data = await node_manager.deploy_module(client_id, module_id, (body or {}).get("params") or {})
         return {"result": data, "node": await node_manager.get_state(client_id)}
-    return await _node_job("module", client_id, f"Node-Modul „{module_id}“ bereitstellen", user, background, fn,
+    return await _node_job("module", client_id, f"Deploy node module '{module_id}'", user, background, fn,
                            key_extra=f":{module_id}", meta={"module": module_id})
 
 
@@ -188,7 +188,7 @@ async def remove_module(client_id: str, module_id: str, background: bool = False
     async def fn(job):
         data = await node_manager.remove_module(client_id, module_id)
         return {"result": data, "node": await node_manager.get_state(client_id)}
-    return await _node_job("module_remove", client_id, f"Node-Modul „{module_id}“ entfernen", user, background, fn,
+    return await _node_job("module_remove", client_id, f"Remove node module '{module_id}'", user, background, fn,
                            key_extra=f":{module_id}", meta={"module": module_id})
 
 
@@ -198,9 +198,9 @@ async def module_action(client_id: str, module_id: str, body: dict, background: 
     _perm(user, client_id)
     action = str(body.get("action") or "")
     if not action:
-        raise HTTPException(status_code=400, detail="action fehlt")
+        raise HTTPException(status_code=400, detail="action missing")
     async def fn(job):
         data = await node_manager.module_action(client_id, module_id, action, body.get("data") or {})
         return {"result": data, "node": await node_manager.get_state(client_id)}
-    return await _node_job("module_action", client_id, f"Node-Modul „{module_id}“: {action}", user, background, fn,
+    return await _node_job("module_action", client_id, f"Node module '{module_id}': {action}", user, background, fn,
                            key_extra=f":{module_id}:{action}", meta={"module": module_id, "action": action})

@@ -1,6 +1,6 @@
-# tempusb_routes.py (Core) - Digitaler USB-Stick
+# tempusb_routes.py (Core) - digital USB stick
 # -----------------------------------------------
-#   GET    /api/temp-usb                         sichtbare Bereiche (+ can_manage)
+#   GET    /api/temp-usb                         visible areas (+ can_manage)
 #   POST   /api/temp-usb                         {label, owner_type:user|group, owner_id}
 #   PATCH  /api/temp-usb/{id}                     {label}
 #   DELETE /api/temp-usb/{id}
@@ -9,13 +9,13 @@
 #   POST   /api/temp-usb/{id}/mkdir              {path}
 #   POST   /api/temp-usb/{id}/delete             {path}
 #   GET    /api/temp-usb/{id}/download?path=
-#   GET    /api/temp-usb/directory               Benutzer + Gruppen (fuer owner-Auswahl)
+#   GET    /api/temp-usb/directory               users + groups (for owner selection)
 #   POST   /api/temp-usb/{id}/attach             {clientId, mode:folder|usb, path?}
 #   POST   /api/temp-usb/{id}/detach             {clientId}
 #
-# "attach" startet den Ordner-Sync (bzw. virtuellen USB) am Geraet und schiebt
-# den aktuellen Inhalt des Bereichs hinueber. Zurueckkommende Dateien landen
-# wieder im Bereich (siehe sockets.py: temp-usb-upload).
+# "attach" starts the folder sync (resp. virtual USB) on the device and pushes
+# the current content of the area over. Returning files land back in the area
+# (see sockets.py: temp-usb-upload).
 from __future__ import annotations
 
 import base64
@@ -30,8 +30,8 @@ from app.auth import get_current_user, is_super_admin, user_has_permission
 
 router = APIRouter(prefix="/api/temp-usb", tags=["temp-usb"])
 
-MAX_UPLOAD = 1024 * 1024 * 1024        # 1 GB je Datei
-PUT_CHUNK = 256 * 1024                  # Stueckgroesse Richtung Agent
+MAX_UPLOAD = 1024 * 1024 * 1024        # 1 GB per file
+PUT_CHUNK = 256 * 1024                  # chunk size towards the agent
 
 
 def _ctx(user: dict):
@@ -44,11 +44,11 @@ def _area_or_404(area_id: str, user: dict):
     a = store.get(area_id)
     gids, manage = _ctx(user)
     if not a or not store.may_access(a, user, gids, manage):
-        raise HTTPException(404, "USB-Bereich nicht gefunden")
+        raise HTTPException(404, "USB area not found")
     return a
 
 
-# ------------------------------------------------------------------ Bereiche
+# ------------------------------------------------------------------ areas
 @router.get("")
 def list_areas(user: dict = Depends(get_current_user)):
     gids, manage = _ctx(user)
@@ -59,14 +59,14 @@ def list_areas(user: dict = Depends(get_current_user)):
 def directory(user: dict = Depends(get_current_user)):
     _, manage = _ctx(user)
     if not manage:
-        raise HTTPException(403, "Keine Berechtigung")
+        raise HTTPException(403, "No permission")
     users = [{"id": u["id"], "name": u.get("display_name") or u["username"]} for u in db.list_users()]
     groups = [{"id": g["id"], "name": g["name"]} for g in db.list_groups()]
     return {"users": users, "groups": groups}
 
 
 class CreateBody(BaseModel):
-    label: str = "USB-Stick"
+    label: str = "USB stick"
     owner_type: str = "user"
     owner_id: str = ""
 
@@ -75,10 +75,10 @@ class CreateBody(BaseModel):
 def create_area(body: CreateBody, user: dict = Depends(get_current_user)):
     _, manage = _ctx(user)
     if not manage:
-        raise HTTPException(403, "Keine Berechtigung")
+        raise HTTPException(403, "No permission")
     owner_id = body.owner_id or (user["id"] if body.owner_type == "user" else "")
     if not owner_id:
-        raise HTTPException(400, "Besitzer fehlt")
+        raise HTTPException(400, "Owner missing")
     try:
         a = store.create(body.label, body.owner_type, owner_id, user["username"])
     except ValueError as e:
@@ -106,7 +106,7 @@ def delete_area(area_id: str, user: dict = Depends(get_current_user)):
     return {"ok": True}
 
 
-# ------------------------------------------------------------------ Dateien
+# ------------------------------------------------------------------ files
 @router.get("/{area_id}/files")
 def files(area_id: str, path: str = "", user: dict = Depends(get_current_user)):
     _area_or_404(area_id, user)
@@ -124,8 +124,8 @@ async def upload(area_id: str, path: str = Form(""), files: list[UploadFile] = F
     for f in files:
         data = await f.read()
         if len(data) > MAX_UPLOAD:
-            raise HTTPException(413, f"{f.filename}: zu groß")
-        store.write_file(area_id, path, f.filename or "datei", data)
+            raise HTTPException(413, f"{f.filename}: too large")
+        store.write_file(area_id, path, f.filename or "file", data)
         saved.append(f.filename)
     return {"saved": saved}
 
@@ -160,19 +160,19 @@ def download(area_id: str, path: str, user: dict = Depends(get_current_user)):
     try:
         p = store.file_path(area_id, path)
     except (FileNotFoundError, ValueError):
-        raise HTTPException(404, "Datei nicht gefunden")
+        raise HTTPException(404, "File not found")
     return FileResponse(str(p), filename=p.name, media_type="application/octet-stream")
 
 
-# ------------------------------------------------------------------ An ein Geraet anhaengen
+# ------------------------------------------------------------------ attach to a device
 class AttachBody(BaseModel):
     clientId: str
-    mode: str = "folder"       # folder = Ordner-Sync, usb = virtueller USB (Treiber noetig)
-    path: str = ""             # Zielordner; leer -> Standard (C:\bytera bzw. /mnt/bytera)
+    mode: str = "folder"       # folder = folder sync, usb = virtual USB (driver required)
+    path: str = ""             # target folder; empty -> default (C:\bytera or /mnt/bytera)
 
 
 async def _push_area_files(client_id: str, area_id: str) -> int:
-    """Aktuellen Inhalt des Bereichs stueckweise an den Agenten schicken."""
+    """Send the current content of the area to the agent in chunks."""
     from app.sockets import send_to_agent
     sent = 0
 
@@ -201,14 +201,14 @@ async def _push_area_files(client_id: str, area_id: str) -> int:
 async def attach(area_id: str, body: AttachBody, user: dict = Depends(get_current_user)):
     a = _area_or_404(area_id, user)
     if body.mode not in ("folder", "usb"):
-        raise HTTPException(400, "Ungültiger Modus")
+        raise HTTPException(400, "Invalid mode")
     from app.sockets import send_to_agent
     ok = await send_to_agent(body.clientId, "temp-usb-attach", {
         "id": area_id, "label": a["label"], "mode": body.mode, "path": body.path or "",
         "driver": db.get_setting("temp_usb_driver") or "",
     })
     if not ok:
-        raise HTTPException(409, "Gerät ist nicht online")
+        raise HTTPException(409, "Device is not online")
     await _push_area_files(body.clientId, area_id)
     store.set_attached(area_id, body.clientId, {"mode": body.mode, "path": body.path or "", "by": user["username"]})
     db.add_audit_entry(user["username"], "tempusb.attach", target=area_id, details=f"{body.clientId};{body.mode}")

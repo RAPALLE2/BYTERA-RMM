@@ -1,20 +1,20 @@
 # router/modules_routes.py
 # ------------------------
-# API der Modul-App (Core). Verwaltung mit dem globalen Recht "manage_modules".
+# API of the module app (Core). Managed with the global permission "manage_modules".
 #
-#   GET    /api/modules                       Liste aller Module (Status, Funktionen, Einstellungen)
-#   GET    /api/modules/frontend              aktive Module mit Frontend-Teil (alle angemeldeten Benutzer)
-#   POST   /api/modules/{id}/enable           aktivieren (?with_deps=1 aktiviert Abhaengigkeiten mit)
-#   POST   /api/modules/{id}/disable          deaktivieren (?cascade=1 schaltet abhaengige Module mit ab)
-#   GET    /api/modules/{id}/settings         Einstellungen
-#   PUT    /api/modules/{id}/settings         Einstellungen speichern
-#   PUT    /api/modules/{id}/features         Teilfunktionen schalten
-#   GET    /api/modules/{id}/crashes          Crashberichte
-#   DELETE /api/modules/{id}/crashes          Crashberichte loeschen
-#   POST   /api/modules/{id}/report-crash     Fehler aus dem Frontend melden
-#   PUT    /api/modules/crash-policy          Wie viele Abstuerze fuehren zur Abschaltung
-#   POST   /api/modules/rescan                module.json neu einlesen
-#   GET    /modules/frontend/{id}/{pfad}      Frontend-Dateien eines AKTIVEN Moduls
+#   GET    /api/modules                       list of all modules (status, features, settings)
+#   GET    /api/modules/frontend              active modules with a frontend part (all logged-in users)
+#   POST   /api/modules/{id}/enable           enable (?with_deps=1 also enables dependencies)
+#   POST   /api/modules/{id}/disable          disable (?cascade=1 also disables dependent modules)
+#   GET    /api/modules/{id}/settings         settings
+#   PUT    /api/modules/{id}/settings         save settings
+#   PUT    /api/modules/{id}/features         toggle sub-features
+#   GET    /api/modules/{id}/crashes          crash reports
+#   DELETE /api/modules/{id}/crashes          delete crash reports
+#   POST   /api/modules/{id}/report-crash     report an error from the frontend
+#   PUT    /api/modules/crash-policy          how many crashes lead to shutdown
+#   POST   /api/modules/rescan                re-read module.json
+#   GET    /modules/frontend/{id}/{path}      frontend files of an ACTIVE module
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
@@ -27,8 +27,8 @@ router = APIRouter()
 
 
 def _admin(user: dict) -> None:
-    # Globales Recht "manage_modules" (Rechte-Verwaltung -> Allgemein).
-    # Administratoren haben es automatisch.
+    # Global permission "manage_modules" (permission management -> general).
+    # Administrators have it automatically.
     require_perm(user, "manage_modules")
 
 
@@ -74,20 +74,20 @@ def _mod_name(mid: str) -> str:
 @router.post("/api/modules/{mid}/enable")
 async def enable_module(mid: str, with_deps: bool = False, background: bool = False,
                         user: dict = Depends(get_current_user)):
-    """Modul aktivieren als BACKEND-JOB (app/bgjobs.py): Abhaengigkeiten/Werkzeuge
-    laden kann dauern - Neuladen bricht es nicht ab."""
+    """Enable a module as a BACKEND JOB (app/bgjobs.py): loading
+    dependencies/tools can take a while - reloading does not abort it."""
     _admin(user)
     from app import bgjobs
 
     async def work(job):
-        job.update(phase="enable", detail="Abhängigkeiten werden geprüft/geladen, Modul wird gestartet")
+        job.update(phase="enable", detail="Dependencies are being checked/loaded, module is starting")
         try:
             res = await modules.enable(mid, with_deps=with_deps)
         except modules.ModuleError as exc:
             raise _wrap(exc)
         db.add_audit_entry(user["username"], "module.enable", target=mid, details=",".join(res["enabled"]))
         return {**res, "module": modules.describe(mid)}
-    return await bgjobs.run("module.toggle", mid, title=f"Modul „{_mod_name(mid)}“ aktivieren", user=user,
+    return await bgjobs.run("module.toggle", mid, title=f"Enable module '{_mod_name(mid)}'", user=user,
                             work=work, background=background, perm="manage_modules", meta={"module": mid})
 
 
@@ -98,14 +98,14 @@ async def disable_module(mid: str, cascade: bool = False, background: bool = Fal
     from app import bgjobs
 
     async def work(job):
-        job.update(phase="disable", detail="Modul wird beendet")
+        job.update(phase="disable", detail="Module is shutting down")
         try:
             res = await modules.disable(mid, cascade=cascade)
         except modules.ModuleError as exc:
             raise _wrap(exc)
         db.add_audit_entry(user["username"], "module.disable", target=mid, details=",".join(res["disabled"]))
         return {**res, "module": modules.describe(mid)}
-    return await bgjobs.run("module.toggle", mid, title=f"Modul „{_mod_name(mid)}“ deaktivieren", user=user,
+    return await bgjobs.run("module.toggle", mid, title=f"Disable module '{_mod_name(mid)}'", user=user,
                             work=work, background=background, perm="manage_modules", meta={"module": mid})
 
 
@@ -163,7 +163,7 @@ class FrontendCrash(BaseModel):
     where: str = Field(default="frontend", max_length=200)
     error: str = Field(default="", max_length=1000)
     stack: str = Field(default="", max_length=6000)
-    fatal: bool = False        # True: Modul liess sich nicht laden -> abschalten
+    fatal: bool = False        # True: module could not be loaded -> shut it down
 
 
 @router.post("/api/modules/{mid}/report-crash")
@@ -174,11 +174,11 @@ def report_frontend_crash(mid: str, body: FrontendCrash, user: dict = Depends(ge
         raise _wrap(exc)
     if not modules.is_enabled(mid):
         return {"ok": True, "ignored": True}
-    # Fatal (Modul liess sich nicht laden/zeichnen): zaehlt gegen das Crash-Limit und
-    # schaltet das Modul ab. Nicht-fatale Laufzeitfehler einzelner Browser werden
-    # nur als Bericht abgelegt (sichtbar in der Modul-App), schalten aber nichts ab.
+    # Fatal (module could not be loaded/rendered): counts against the crash limit
+    # and shuts the module down. Non-fatal runtime errors of individual browsers
+    # are only stored as a report (visible in the module app) but shut nothing down.
     modules.report_crash(mid, None, body.where, source="frontend",
-                         extra=f"{body.error}\n{body.stack}\nbenutzer={user.get('username')}".strip(),
+                         extra=f"{body.error}\n{body.stack}\nuser={user.get('username')}".strip(),
                          disable=bool(body.fatal))
     return {"ok": True}
 
@@ -187,10 +187,10 @@ def report_frontend_crash(mid: str, body: FrontendCrash, user: dict = Depends(ge
 def module_frontend_file(mid: str, rel: str):
     f = modules.frontend_file(mid, rel)
     if f is None:
-        raise HTTPException(status_code=404, detail="Nicht gefunden")
-    # Fehlende Exporte durch Platzhalter ergaenzen (app/frontend_guard.py) -
-    # sonst faellt ein ganzer Modulbaum aus, nur weil eine Datei nicht zum
-    # Stand der anderen passt.
+        raise HTTPException(status_code=404, detail="Not found")
+    # Fill missing exports with placeholders (app/frontend_guard.py) - otherwise
+    # a whole module tree fails just because one file does not match the revision
+    # of the others.
     if str(rel).lower().endswith(".js"):
         try:
             from app import frontend_guard
