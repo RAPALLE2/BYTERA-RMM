@@ -1,37 +1,34 @@
 // icons.js
 // --------
-// Farbige SVG-Icons statt Emojis (Option in Profil > Symbole).
+// Colored SVG icons instead of emoji (option in Profile > Symbols).
 //
-// Funktionsweise: Ein MutationObserver ersetzt bekannte UI-Emojis in
-// Textknoten LIVE durch kleine Inline-SVGs (<span class="svgicon">). Dadurch
-// muss KEINE der ~30 App-Dateien angefasst werden - alle bestehenden und
-// zukuenftigen `${"📁"}`-Vorkommen werden automatisch abgedeckt, und auf
-// Systemen ohne Emoji-Font (Linux/Android ohne Noto Color Emoji) sehen die
-// Icons ueberall identisch aus.
+// How it works: a MutationObserver replaces known UI emoji in text nodes LIVE
+// with small inline SVGs (<span class="svgicon">). Thanks to this, NONE of the
+// ~30 app files need to be touched - all existing and future `${"📁"}`
+// occurrences are covered automatically, and on systems without an emoji font
+// (Linux/Android without Noto Color Emoji) the icons look identical everywhere.
 //
-// Modus: localStorage "rmm_icon_mode" = "svg" (Standard) | "emoji".
-// Umschalten wirkt sofort (Revert ersetzt alle Spans wieder durch das
-// Original-Emoji aus data-ch).
+// Mode: localStorage "rmm_icon_mode" = "svg" (default) | "emoji".
+// Switching takes effect immediately (revert replaces all spans with the
+// original emoji from data-ch).
 //
-// Ausgenommen (nie angefasst): Eingaben (INPUT/TEXTAREA/SELECT/OPTION),
-// contenteditable, <svg>, xterm-Terminals und Terminal-Ausgaben (Nutzdaten!).
+// Excluded (never touched): inputs (INPUT/TEXTAREA/SELECT/OPTION),
+// contenteditable, <svg>, xterm terminals and terminal output (payload!).
 
 const KEY = "rmm_icon_mode";
 
-// ---- Farbpalette (dunkles Theme, bewusst kraeftig "angemalt") ----
+// ---- color palette (dark theme, deliberately boldly "painted") ----
 const C = {
   amber: "#eab308", amberD: "#b45309",
   blue: "#4f8cff", blueD: "#2d5fd0", sky: "#7cc4ff",
-  gray: "#9aa7b8", grayD: "#5b6activate", slate: "#3a4763", slateL: "#55648a",
+  gray: "#9aa7b8", grayD: "#5b6a85", slate: "#3a4763", slateL: "#55648a",
   green: "#34d399", red: "#f75c5c", purple: "#a78bfa",
   paper: "#dfe6f2", paperD: "#b9c4d8", dark: "#232c42",
 };
-C.grayD = "#5b6a85";
-
 const svg = (inner, vb = "0 0 16 16") =>
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb}" aria-hidden="true">${inner}</svg>`;
 
-// ---- Icon-Definitionen (Emoji -> farbiges SVG) ----
+// ---- icon definitions (emoji -> colored SVG) ----
 const ICONS = {
   "📁": svg(`<path d="M1 4a1.5 1.5 0 0 1 1.5-1.5h3.2l1.4 1.6h6.4A1.5 1.5 0 0 1 15 5.6V12a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12z" fill="${C.amber}"/><path d="M1 6h14v6a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12z" fill="#f5c542"/>`),
   "🗂️": svg(`<path d="M1 5h4l1 1.4h9V13a1.4 1.4 0 0 1-1.4 1.4H2.4A1.4 1.4 0 0 1 1 13z" fill="${C.amber}"/><rect x="2.6" y="2" width="10.8" height="2" rx=".6" fill="${C.paperD}"/><rect x="1.8" y="3.4" width="12.4" height="1.8" rx=".6" fill="${C.paper}"/>`),
@@ -83,24 +80,84 @@ const ICONS = {
   "🚀": svg(`<path d="M8 1.6a6.6 6.6 0 0 1 6.6 6.6c0 1.9-.8 3.6-2 4.8l-1.5-1.4A4.6 4.6 0 1 0 4.9 11.6l-1.5 1.4a6.6 6.6 0 0 1 4.6-11.4z" fill="${C.slateL}"/><path d="M8 8.9L11.8 4 8.9 9.5a1.1 1.1 0 1 1-.9-.6z" fill="${C.red}"/><circle cx="8" cy="9.4" r=".9" fill="${C.red}"/><path d="M3.2 8.2h1.2M11.6 8.2h1.2M8 3v1.2" stroke="${C.paper}" stroke-width="1" stroke-linecap="round"/>`),
   "🌀": svg(`<path d="M8 1.6a6.4 6.4 0 1 1-6.4 6.4h2.2A4.2 4.2 0 1 0 8 3.8a2.1 2.1 0 1 0 0 4.2 1 1 0 1 1 0 2 4.1 4.1 0 1 1 0-8.2z" fill="${C.sky}"/>`),
   "🟠": svg(`<circle cx="8" cy="8" r="5.6" fill="#f59e0b"/>`),
+  // --- module / app identity icons (added for the icon pass) ---
+  "⌨️": svg(`<rect x="1" y="4" width="14" height="8.4" rx="1.3" fill="${C.slate}"/><g fill="${C.sky}"><rect x="2.4" y="5.4" width="1.4" height="1.4" rx=".3"/><rect x="4.4" y="5.4" width="1.4" height="1.4" rx=".3"/><rect x="6.4" y="5.4" width="1.4" height="1.4" rx=".3"/><rect x="8.4" y="5.4" width="1.4" height="1.4" rx=".3"/><rect x="10.4" y="5.4" width="1.4" height="1.4" rx=".3"/><rect x="2.4" y="7.6" width="1.4" height="1.4" rx=".3"/><rect x="4.4" y="7.6" width="1.4" height="1.4" rx=".3"/><rect x="6.4" y="7.6" width="1.4" height="1.4" rx=".3"/><rect x="8.4" y="7.6" width="3.4" height="1.4" rx=".3"/><rect x="4.4" y="9.8" width="7" height="1.4" rx=".3"/></g>`),
+  "⏰": svg(`<circle cx="8" cy="9" r="5.2" fill="${C.red}"/><circle cx="8" cy="9" r="3.8" fill="${C.paper}"/><path d="M3.4 2.6l2.2 2M12.6 2.6l-2.2 2" stroke="${C.red}" stroke-width="1.6" stroke-linecap="round"/><path d="M8 9V6.4M8 9l2 1.2" stroke="${C.dark}" stroke-width="1" stroke-linecap="round"/>`),
+  "⏻": svg(`<path d="M8 2v5.4" stroke="${C.green}" stroke-width="1.8" stroke-linecap="round"/><path d="M4.6 5.2a5 5 0 1 0 6.8 0" fill="none" stroke="${C.green}" stroke-width="1.8" stroke-linecap="round"/>`),
+  "☁️": svg(`<path d="M4.6 12.6a3.3 3.3 0 0 1-.5-6.56 4.1 4.1 0 0 1 7.9 1.05 2.8 2.8 0 0 1-.3 5.51z" fill="${C.sky}"/>`),
+  "✅": svg(`<circle cx="8" cy="8" r="6.4" fill="${C.green}"/><path d="M4.8 8.2l2.2 2.2 4.2-4.4" stroke="#fff" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`),
+  "🌐": svg(`<circle cx="8" cy="8" r="6.3" fill="${C.blue}"/><g fill="none" stroke="#dff0ff" stroke-width=".9"><ellipse cx="8" cy="8" rx="2.6" ry="6.3"/><path d="M1.8 6.2h12.4M1.8 9.8h12.4M8 1.7v12.6"/></g>`),
+  "🌍": svg(`<circle cx="8" cy="8" r="6.3" fill="${C.blue}"/><path d="M3.6 6.4c1.3-.5 2 .4 3 .2s1.1-1.4 2.3-1.1.9 1.6 1.9 1.8 1.3-.3 1.7.2c-.2 2.2-1.3 3-2.3 3.4s-1 1.6-2.2 1.8-1.6-.6-2.3-1.4-1.6-.9-1.6-2.3-.2-2.3.8-2.4z" fill="${C.green}"/>`),
+  "🎨": svg(`<path d="M8 2.2c3.5 0 6.3 2.4 6.3 5.3 0 1.9-1.7 2.7-3 2.7h-1.2c-.9 0-1.5.8-1.1 1.7.3.7-.1 1.6-1 1.6C4.6 13.5 1.7 10.9 1.7 7.5 1.7 4.5 4.5 2.2 8 2.2z" fill="${C.amber}"/><circle cx="5.4" cy="7" r="1" fill="${C.red}"/><circle cx="8" cy="5.2" r="1" fill="${C.blue}"/><circle cx="10.6" cy="6.4" r="1" fill="${C.green}"/>`),
+  "🎫": svg(`<path d="M1.6 5.2a1 1 0 0 1 1-1h10.8a1 1 0 0 1 1 1V6a1.3 1.3 0 0 0 0 4v.8a1 1 0 0 1-1 1H2.6a1 1 0 0 1-1-1V10a1.3 1.3 0 0 0 0-4z" fill="${C.amber}"/><path d="M6 4.6v6.8" stroke="${C.amberD}" stroke-width="1" stroke-dasharray="1.2 1"/>`),
+  "🎬": svg(`<rect x="1.6" y="6" width="12.8" height="8" rx="1" fill="${C.slate}"/><rect x="1.6" y="3.4" width="12.8" height="3" rx=".6" fill="${C.slateL}"/><path d="M3 3.4L4.6 6.4M6 3.4L7.6 6.4M9 3.4L10.6 6.4M12 3.4L13.6 6.4" stroke="${C.paper}" stroke-width="1"/>`),
+  "🎵": svg(`<path d="M6 3.2l6-1.2v8.3a2 2 0 1 1-1.4-1.9V4.2L7.4 5v6.1A2 2 0 1 1 6 9.2z" fill="${C.blue}"/>`),
+  "🏛️": svg(`<path d="M8 1.6l6 3v1.2H2V4.6z" fill="${C.paperD}"/><g fill="${C.paper}"><rect x="3" y="6.6" width="1.6" height="5.4"/><rect x="6" y="6.6" width="1.6" height="5.4"/><rect x="8.8" y="6.6" width="1.6" height="5.4"/><rect x="11.4" y="6.6" width="1.6" height="5.4"/></g><rect x="2" y="12.4" width="12" height="1.8" rx=".3" fill="${C.paperD}"/>`),
+  "🏰": svg(`<path d="M2 6h2V4h1.6v2h1.6V4h1.6v2h1.6V4H14v2h-.4v8H2z" fill="${C.slateL}"/><rect x="6.6" y="9" width="2.8" height="5" fill="${C.dark}"/>`),
+  "🐳": svg(`<path d="M2 8c0-2.2 2-4 4.6-4S11 5.8 11 8c1.4 0 2.6-.6 3.4-1.4-.2 1.6-1 2.8-2.2 3.6.6.3 1.3.4 2 .4-1 1-2.6 1.6-4.4 1.6H6.6C4 12.2 2 10.4 2 8z" fill="${C.blue}"/><circle cx="5.4" cy="7.4" r=".8" fill="#fff"/><path d="M6.6 3.2c0 1 .4 1.4 1 1.8" stroke="${C.sky}" stroke-width="1" fill="none" stroke-linecap="round"/>`),
+  "💬": svg(`<path d="M2 4.2A1.8 1.8 0 0 1 3.8 2.4h8.4A1.8 1.8 0 0 1 14 4.2v4.6a1.8 1.8 0 0 1-1.8 1.8H6l-3 2.6v-2.6h-.2A1.8 1.8 0 0 1 2 8.8z" fill="${C.blue}"/>`),
+  "📞": svg(`<path d="M3.4 2.2l2.4.4 1 2.8-1.6 1.2a8 8 0 0 0 3.8 3.8l1.2-1.6 2.8 1 .4 2.4a1.3 1.3 0 0 1-1.4 1.2A11.4 11.4 0 0 1 2.2 3.6 1.3 1.3 0 0 1 3.4 2.2z" fill="${C.green}"/>`),
+  "📦": svg(`<path d="M8 1.8l6 3v6.4l-6 3-6-3V4.8z" fill="#c8903f"/><path d="M8 1.8l6 3-6 3-6-3z" fill="#e0a85a"/><path d="M8 7.8v6.4l6-3V4.8z" fill="#b07c33"/><path d="M2 4.8l6 3M8 7.8v6.4" stroke="#8a5f23" stroke-width=".6"/>`),
+  "🔀": svg(`<path d="M2 11.6h2.6c1.6 0 2.8-1.4 4-3 .9-1.2 1.8-2.2 3-2.2H14" fill="none" stroke="${C.blue}" stroke-width="1.5" stroke-linecap="round"/><path d="M2 4.4h2.6c1 0 1.8.5 2.4 1.3" fill="none" stroke="${C.blue}" stroke-width="1.5" stroke-linecap="round"/><path d="M12 4.6l2 1.8-2 1.8M12 12.6l2-1.8-2-1.8" fill="none" stroke="${C.blue}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>`),
+  "🕵️": svg(`<path d="M3 6.4C3 4 5.2 2.4 8 2.4s5 1.6 5 4L14 7H2z" fill="${C.dark}"/><ellipse cx="8" cy="7" rx="7" ry="1.3" fill="${C.slate}"/><circle cx="6" cy="10.4" r="2.4" fill="none" stroke="${C.gray}" stroke-width="1.2"/><path d="M7.7 12.1l2 2" stroke="${C.gray}" stroke-width="1.4" stroke-linecap="round"/>`),
+  "🖧": svg(`<rect x="6" y="1.6" width="4" height="3.2" rx=".5" fill="${C.slateL}"/><rect x="1.4" y="11.2" width="4" height="3.2" rx=".5" fill="${C.slateL}"/><rect x="6" y="11.2" width="4" height="3.2" rx=".5" fill="${C.slateL}"/><rect x="10.6" y="11.2" width="4" height="3.2" rx=".5" fill="${C.slateL}"/><path d="M8 4.8v3.4M3.4 11.2v-3h9.2v3M8 8.2v3" stroke="${C.blue}" stroke-width="1.1" fill="none"/>`),
+  "🗒️": svg(`<rect x="2.6" y="2.6" width="10.8" height="11.4" rx="1" fill="${C.paper}"/><rect x="2.6" y="2.6" width="10.8" height="2.2" fill="${C.red}"/><g stroke="${C.grayD}" stroke-width="1"><path d="M4.6 7.4h6.8M4.6 9.6h6.8M4.6 11.8h4.4"/></g>`),
+  "🗓️": svg(`<rect x="2" y="3" width="12" height="11" rx="1.1" fill="${C.paper}"/><rect x="2" y="3" width="12" height="3" rx="1.1" fill="${C.red}"/><rect x="4.4" y="1.4" width="1.4" height="3" rx=".6" fill="${C.grayD}"/><rect x="10.2" y="1.4" width="1.4" height="3" rx=".6" fill="${C.grayD}"/><g fill="${C.slateL}"><rect x="4" y="7.6" width="1.6" height="1.6"/><rect x="7.2" y="7.6" width="1.6" height="1.6"/><rect x="10.4" y="7.6" width="1.6" height="1.6"/><rect x="4" y="10.4" width="1.6" height="1.6"/><rect x="7.2" y="10.4" width="1.6" height="1.6"/></g>`),
+  "🗝️": svg(`<circle cx="4.6" cy="4.6" r="3.1" fill="${C.amberD}"/><circle cx="4.6" cy="4.6" r="1.1" fill="${C.dark}"/><path d="M6.6 6.6l6.6 6.6" stroke="${C.amberD}" stroke-width="1.7" stroke-linecap="round"/><path d="M11 11l1.4-1.4M12.2 12.2l1.2-1.2" stroke="${C.amberD}" stroke-width="1.5" stroke-linecap="round"/>`),
+  "🗺️": svg(`<path d="M1.6 3.4L6 2v11l-4.4 1.4zM6 2l4 1.4v11L6 13zM10 3.4L14.4 2v11L10 14.4z" fill="${C.green}"/><path d="M6 2v11M10 3.4v11" stroke="#1f7a4d" stroke-width=".6"/><circle cx="7.8" cy="7" r="1.1" fill="${C.red}"/>`),
+  "🛉": svg(`<path d="M3 2h.4a2 2 0 0 1 2 2v1.4" fill="none" stroke="${C.gray}" stroke-width="1.4" stroke-linecap="round"/><path d="M2.6 6.2a2.8 2.8 0 0 1 5.6 0z" fill="${C.slateL}"/><g stroke="${C.sky}" stroke-width="1" stroke-linecap="round"><path d="M4 8.4v1.6M5.4 8.4v2.4M6.8 8.4v1.6M3.2 11v1.4M5.4 12.2v1.4M7 11v1.4"/></g>`),
+  "🤝": svg(`<path d="M1 7l3-2.4 3.4 2.2 3-2 4 2.4v3.4l-2.6 2.2-3-2-2.4 1.8L3 10.4z" fill="${C.amber}"/><path d="M7.4 6.8L9 8.2M9 8.8l1.4 1.2" stroke="${C.amberD}" stroke-width="1" stroke-linecap="round"/>`),
+  "🧪": svg(`<path d="M6 2h4v1.4H9.4v7.2a1.9 1.9 0 0 1-3.8 0V3.4H5V2z" fill="${C.paper}"/><path d="M5.6 8h3.8v2.6a1.9 1.9 0 0 1-3.8 0z" fill="${C.green}"/>`),
+  "🧭": svg(`<circle cx="8" cy="8" r="6.3" fill="${C.slateL}"/><circle cx="8" cy="8" r="4.6" fill="${C.dark}"/><path d="M8 8l3-4.4L8.8 8z" fill="${C.red}"/><path d="M8 8l-3 4.4L7.2 8z" fill="#cfd8e8"/>`),
+  "🧮": svg(`<rect x="1.8" y="2" width="12.4" height="12" rx="1" fill="none" stroke="${C.amberD}" stroke-width="1.3"/><path d="M2 6h12M2 10h12" stroke="${C.amberD}" stroke-width="1"/><g fill="${C.red}"><circle cx="4.4" cy="4" r="1.1"/><circle cx="7" cy="4" r="1.1"/></g><g fill="${C.blue}"><circle cx="9.6" cy="8" r="1.1"/><circle cx="12" cy="8" r="1.1"/></g><g fill="${C.green}"><circle cx="4.4" cy="12" r="1.1"/><circle cx="7" cy="12" r="1.1"/></g>`),
+  "🧰": svg(`<path d="M2 6h12v7a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z" fill="${C.red}"/><rect x="1.4" y="6" width="13.2" height="2.2" fill="#d94a4a"/><path d="M5.4 6V4.6a1 1 0 0 1 1-1h3.2a1 1 0 0 1 1 1V6H9V5h-2v1z" fill="${C.slateL}"/><rect x="6.8" y="7" width="2.4" height="1.8" rx=".3" fill="${C.amber}"/>`),
+  "🩹": svg(`<rect x="2.2" y="6" width="11.6" height="4" rx="2" fill="#e8c39a" transform="rotate(-30 8 8)"/><rect x="5.6" y="6.4" width="4.8" height="3.2" rx=".6" fill="#f3ddc2" transform="rotate(-30 8 8)"/><g fill="#c99b6a"><circle cx="8" cy="8" r=".5"/><circle cx="6.6" cy="8.8" r=".5"/><circle cx="9.4" cy="7.2" r=".5"/><circle cx="7" cy="6.8" r=".5"/><circle cx="9" cy="9.2" r=".5"/></g>`),
+  "🧩": svg(`<path d="M3 3h3.2a1.2 1.2 0 0 1 2.4 0H12v3.6a1.2 1.2 0 0 0 0 2.4V13H8.4a1.2 1.2 0 0 0-2.4 0H3V9.4a1.2 1.2 0 0 1 0-2.4z" fill="${C.green}"/>`),
+  "🐧": svg(`<ellipse cx="8" cy="8.6" rx="4.4" ry="5.6" fill="${C.dark}"/><ellipse cx="8" cy="9.4" rx="2.8" ry="4.2" fill="${C.paper}"/><circle cx="6.4" cy="5.4" r=".8" fill="#fff"/><circle cx="9.6" cy="5.4" r=".8" fill="#fff"/><circle cx="6.4" cy="5.6" r=".4" fill="${C.dark}"/><circle cx="9.6" cy="5.6" r=".4" fill="${C.dark}"/><path d="M6.6 6.6h2.8l-1.4 1.4z" fill="${C.amber}"/><path d="M5.8 13.6l1.4-1M10.2 13.6l-1.4-1" stroke="${C.amber}" stroke-width="1.4" stroke-linecap="round"/>`),
+  "🍎": svg(`<path d="M8 4.4c-1-1-2.6-1.2-3.8-.3C2.8 5.2 2.6 7.8 3.6 10c.7 1.6 1.8 3 3 3 .7 0 1-.3 1.4-.3s.7.3 1.4.3c1.2 0 2.3-1.4 3-3 1-2.2.8-4.8-.6-5.9-1.2-.9-2.8-.7-3.8.3z" fill="${C.red}"/><path d="M8 4.4V2.6c0-.8.7-1.4 1.6-1.4" fill="none" stroke="#4a7a2a" stroke-width="1.1" stroke-linecap="round"/>`),
+  "📂": svg(`<path d="M1 4a1.4 1.4 0 0 1 1.4-1.4h3l1.4 1.5h5.8A1.4 1.4 0 0 1 15 5.5V6H3.4L1.4 11z" fill="${C.amber}"/><path d="M3.6 6.4h11.8l-1.9 6.1a1 1 0 0 1-1 .5H2.4a1 1 0 0 1-1-1.3z" fill="#f5c542"/>`),
+  "📈": svg(`<path d="M2 2v12h12" fill="none" stroke="${C.grayD}" stroke-width="1.3" stroke-linecap="round"/><path d="M4 10.5l3-3 2.4 1.6L13 4.5" fill="none" stroke="${C.green}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M10.4 4.5H13v2.6" fill="none" stroke="${C.green}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>`),
+  "🔒": svg(`<rect x="3.4" y="7" width="9.2" height="7" rx="1.3" fill="${C.amber}"/><path d="M5.2 7V5.2a2.8 2.8 0 0 1 5.6 0V7H9V5.2a1 1 0 0 0-2 0V7z" fill="${C.gray}"/><circle cx="8" cy="10.2" r="1.2" fill="${C.dark}"/>`),
+  "🔓": svg(`<rect x="3.4" y="7" width="9.2" height="7" rx="1.3" fill="${C.amber}"/><path d="M5.2 7V5.2a2.8 2.8 0 0 1 5.6 0H9a1 1 0 0 0-2 0V7z" fill="${C.gray}"/><circle cx="8" cy="10.2" r="1.2" fill="${C.dark}"/>`),
+  "👁": svg(`<path d="M1 8s2.6-4.4 7-4.4S15 8 15 8s-2.6 4.4-7 4.4S1 8 1 8z" fill="${C.paper}"/><circle cx="8" cy="8" r="2.4" fill="${C.blue}"/><circle cx="8" cy="8" r="1" fill="${C.dark}"/>`),
+  "🛠️": svg(`<path d="M10.5 2.5a2.6 2.6 0 0 0-1 4.2l-6 6 1.6 1.6 6-6a2.6 2.6 0 0 0 3.4-3.2L12.2 7 11 5.8 13 3.7A2.6 2.6 0 0 0 10.5 2.5z" fill="${C.slateL}"/><path d="M2.8 11.2l2 2" stroke="${C.amber}" stroke-width="2" stroke-linecap="round"/>`),
+  "🔧": svg(`<path d="M10.6 2a3.2 3.2 0 0 0-1.1 5.3L3 13.8l1.6 1.6 6.5-6.5A3.2 3.2 0 0 0 14 5.4l-1.8 1.8-1.4-1.4L12.6 4A3.2 3.2 0 0 0 10.6 2z" fill="${C.slateL}"/>`),
+  "🔨": svg(`<path d="M3 13.4l5-5 1.6 1.6-5 5a1.1 1.1 0 0 1-1.6-1.6z" fill="${C.amberD}"/><path d="M8.6 3.4l4 4-1.4 1.4-1-1-2 2-1.6-1.6 2-2-1-1z" fill="${C.slateL}"/>`),
+  "🎉": svg(`<path d="M2 14l3.4-9 5.6 5.6z" fill="${C.amber}"/><circle cx="12" cy="3" r="1" fill="${C.red}"/><circle cx="13.6" cy="6" r=".9" fill="${C.blue}"/><circle cx="9.6" cy="2.2" r=".9" fill="${C.green}"/><rect x="10.8" y="7.6" width="1.4" height="1.4" fill="${C.purple}" transform="rotate(20 11.5 8.3)"/>`),
+  "🟢": svg(`<circle cx="8" cy="8" r="5.6" fill="${C.green}"/>`),
+  "📱": svg(`<rect x="4" y="1.4" width="8" height="13.2" rx="1.6" fill="${C.slate}"/><rect x="5" y="3" width="6" height="9" rx=".4" fill="${C.sky}"/><circle cx="8" cy="13.2" r=".7" fill="${C.slateL}"/>`),
+  "🩺": svg(`<path d="M4 2v3.4a3 3 0 0 0 6 0V2" fill="none" stroke="${C.gray}" stroke-width="1.4" stroke-linecap="round"/><path d="M7 8.4v2.2a3.4 3.4 0 0 0 6.8 0v-1" fill="none" stroke="${C.gray}" stroke-width="1.4" stroke-linecap="round"/><circle cx="13.8" cy="8.6" r="1.5" fill="${C.blue}"/>`),
+  "🚚": svg(`<rect x="1" y="4.4" width="8" height="6" rx=".6" fill="${C.blue}"/><path d="M9 6h3l2.4 2.4v2H9z" fill="${C.sky}"/><circle cx="4.4" cy="11.4" r="1.6" fill="${C.dark}"/><circle cx="11.6" cy="11.4" r="1.6" fill="${C.dark}"/>`),
+  "🛟": svg(`<circle cx="8" cy="8" r="6.2" fill="${C.red}"/><g stroke="#fff" stroke-width="2"><path d="M8 2v3M8 11v3M2 8h3M11 8h3"/></g><circle cx="8" cy="8" r="2.6" fill="${C.paper}"/>`),
+  "📶": svg(`<g fill="${C.green}"><rect x="1.6" y="10" width="2.4" height="3.4" rx=".4"/><rect x="5" y="7.6" width="2.4" height="5.8" rx=".4"/><rect x="8.4" y="5.2" width="2.4" height="8.2" rx=".4"/><rect x="11.8" y="2.6" width="2.4" height="10.8" rx=".4"/></g>`),
 };
-// Alias: 🗑️ (mit VS16) = 🗑
+// VS16 / no-VS16 glyph aliases (same picture for both forms)
 ICONS["🗑️"] = ICONS["🗑"];
+ICONS["⌨"] = ICONS["⌨️"];
+ICONS["☁"] = ICONS["☁️"];
+ICONS["🏛"] = ICONS["🏛️"];
+ICONS["🕵"] = ICONS["🕵️"];
+ICONS["🗒"] = ICONS["🗒️"];
+ICONS["🗓"] = ICONS["🗓️"];
+ICONS["🗝"] = ICONS["🗝️"];
+ICONS["🗺"] = ICONS["🗺️"];
+ICONS["🛠"] = ICONS["🛠️"];
+ICONS["👁️"] = ICONS["👁"];
 
-// ---- Modus ----
+// ---- mode ----
 export function getIconMode() {
   const v = localStorage.getItem(KEY);
-  return v === "emoji" ? "emoji" : "svg";   // Standard: SVG
+  return v === "emoji" ? "emoji" : "svg";   // default: SVG
 }
 export function setIconMode(mode) {
   localStorage.setItem(KEY, mode === "emoji" ? "emoji" : "svg");
-  // Icon-Modus zusätzlich serverseitig sichern (in jedem Browser gleich).
+  // Also persist the icon mode server-side (identical in every browser).
   import("./persist.js").then((m) => m.syncToServerSoon()).catch(() => {});
   if (mode === "emoji") { stop(); revertAll(); }
   else { scan(document.body); start(); }
 }
 
-// ---- Ersetzen / Zuruecksetzen ----
+// ---- replace / revert ----
 const EMOJI_RE = new RegExp(
   "(" + Object.keys(ICONS).sort((a, b) => b.length - a.length)
         .map((e) => e.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")", "g");
@@ -112,7 +169,7 @@ function skippable(el) {
     if (SKIP.has(n.tagName)) return true;
     if (n.isContentEditable) return true;
     if (n.classList) {
-      // Nutzdaten nie anfassen: Terminal-Ausgaben & xterm
+      // Never touch payload: terminal output & xterm
       if (n.classList.contains("xterm") || n.classList.contains("terminal-output") ||
           n.classList.contains("svgicon")) return true;
     }
@@ -160,7 +217,7 @@ function revertAll() {
     s.replaceWith(document.createTextNode(s.dataset.ch || "")));
 }
 
-// ---- Observer (gebatcht) ----
+// ---- observer (batched) ----
 let observer = null;
 let pending = new Set();
 let raf = 0;
@@ -185,7 +242,7 @@ function stop() {
   pending.clear(); if (raf) { cancelAnimationFrame(raf); raf = 0; }
 }
 
-// ---- Init ----
+// ---- init ----
 function init() {
   if (getIconMode() === "svg") { scan(document.body); start(); }
 }
