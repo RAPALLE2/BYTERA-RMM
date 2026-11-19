@@ -3844,16 +3844,16 @@ class _WinPipeTerminal:
 
 
 # ------------------------------------------------------------------
-# BACKUP & SNAPSHOTS (Modul "backup", Proxmox-Stil)
-#   Engine restic (Ordner ODER Image; inkrementell, dedupliziert, Ende-zu-Ende
-#   verschluesselt) - Repo je nach Weg:
-#     rest_path -> restic-REST am Backend (lokal oder ueber Backend auf NAS)
-#     smb       -> Windows: UNC-Pfad, Linux: kurzzeitiger CIFS-Mount
-#     sftp      -> restic-SFTP mit Schluessel-Login
-#   Engine pbs: Proxmox Backup Server per proxmox-backup-client (Linux).
-#   Image: Linux liest das Block-Geraet (Standard: Systemplatte), Windows
-#   eine VSS-Schattenkopie von C: (konsistenter Volume-Stand).
-#   OS-Snapshots: Windows VSS, Linux btrfs / ZFS / LVM.
+# BACKUP & SNAPSHOTS (module "backup", Proxmox style)
+#   Engine restic (folder OR image; incremental, deduplicated, end-to-end
+#   encrypted) - repo depends on the path:
+#     rest_path -> restic REST on the backend (local or via backend to a NAS)
+#     smb       -> Windows: UNC path, Linux: short-lived CIFS mount
+#     sftp      -> restic SFTP with key login
+#   Engine pbs: Proxmox Backup Server via proxmox-backup-client (Linux).
+#   Image: Linux reads the block device (default: system disk), Windows a
+#   VSS shadow copy of C: (consistent volume state).
+#   OS snapshots: Windows VSS, Linux btrfs / ZFS / LVM.
 # ------------------------------------------------------------------
 _BK_TOOLS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools")
 _NOWIN = 0x08000000 if IS_WINDOWS else 0
@@ -3912,7 +3912,7 @@ def _iso_ms(s: str) -> int:
 
 
 class _Repo:
-    """Bereitet den Zugang zu einem restic-Repo vor (Mount, Schluessel ...)."""
+    """Prepares access to a restic repo (mount, keys ...)."""
 
     def __init__(self, spec: dict):
         self.spec = spec or {}
@@ -3957,14 +3957,14 @@ class _Repo:
                 shutil.rmtree(os.path.dirname(cred), ignore_errors=True)
                 if rc != 0:
                     os.rmdir(mnt)
-                    raise _BkError(f"SMB-Freigabe nicht einhängbar (cifs-utils installiert?): {err.strip()[:300]}")
+                    raise _BkError(f"SMB share could not be mounted (cifs-utils installed?): {err.strip()[:300]}")
                 self._cleanup.append(lambda: (_bk_run(["umount", mnt], timeout=60), os.rmdir(mnt)))
                 self.repo = os.path.join(mnt, path.replace("\\", "/"))
                 os.makedirs(self.repo, exist_ok=True)
         elif s.get("sftp"):
             c = s["sftp"]
             if not c.get("private_key"):
-                raise _BkError("SFTP direkt braucht einen SSH-Schlüssel (im Speicherziel erzeugen)")
+                raise _BkError("Direct SFTP needs an SSH key (create it in the storage target)")
             kd = tempfile.mkdtemp(prefix="bytera-ssh-")
             key = os.path.join(kd, "id")
             with open(os.open(key, os.O_WRONLY | os.O_CREAT, 0o600), "w") as fh:
@@ -3977,7 +3977,7 @@ class _Repo:
             self.extra = ["-o", f"sftp.command=ssh {c['user']}@{c['host']} -p {int(c.get('port') or 22)} "
                                 f"-i {key} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile={kh} -s sftp"]
         else:
-            raise _BkError("Unbekanntes Repo")
+            raise _BkError("Unknown repo")
         self.env["RESTIC_REPOSITORY"] = self.repo
         return self
 
@@ -3990,7 +3990,7 @@ class _Repo:
 
 
 def _restic(rp: _Repo, args: list, stdin=None, progress=None, timeout=None):
-    """restic ausfuehren; JSON-Statuszeilen werden zu Fortschrittsmeldungen."""
+    """Run restic; JSON status lines become progress messages."""
     def once(insecure):
         cmd = [_restic_bin(), *rp.extra, *(["--insecure-tls"] if insecure else []), *args]
         p = subprocess.Popen(cmd, stdin=stdin if stdin is not None else subprocess.DEVNULL,
@@ -4018,7 +4018,7 @@ def _restic(rp: _Repo, args: list, stdin=None, progress=None, timeout=None):
     rc, out, err = once(rp.insecure)
     if rc != 0 and not rp.insecure and stdin is None and rp.repo.startswith("rest:https") \
             and ("x509" in err or "certificate" in err):
-        rp.insecure = True                    # selbstsigniertes Backend-Zertifikat
+        rp.insecure = True                    # self-signed backend certificate
         rc, out, err = once(True)
     return rc, out, err
 
@@ -4029,7 +4029,7 @@ def _restic_init(rp: _Repo) -> None:
         return
     rc, _o, err2 = _restic(rp, ["init", "--repository-version", "2"], timeout=300)
     if rc != 0:
-        raise _BkError(f"Repo konnte nicht angelegt werden: {(err2 or err).strip()[-400:]}")
+        raise _BkError(f"Repo could not be created: {(err2 or err).strip()[-400:]}")
 
 
 def _restic_snapshots(rp: _Repo) -> list:
@@ -4057,7 +4057,7 @@ def _root_disk() -> str:
         parts = line.split()
         if len(parts) == 2 and parts[1] == "disk":
             return parts[0].lstrip("`-|└─├ ")
-    raise _BkError("Systemplatte nicht ermittelbar - bitte Gerät im Job angeben")
+    raise _BkError("System disk could not be determined - please specify the device in the job")
 
 
 def _ps(script: str, timeout=120):
@@ -4067,11 +4067,11 @@ def _ps(script: str, timeout=120):
 def _vss_create(volume="C:\\") -> tuple:
     rc, out, err = _ps(
         f"$r=(Get-WmiObject -List Win32_ShadowCopy).Create('{volume}','ClientAccessible');"
-        "if($r.ReturnValue -ne 0){throw \"VSS-Fehler $($r.ReturnValue)\"};"
+        "if($r.ReturnValue -ne 0){throw \"VSS error $($r.ReturnValue)\"};"
         "$c=Get-WmiObject Win32_ShadowCopy | Where-Object {$_.ID -eq $r.ShadowID};"
         "\"$($c.ID)|$($c.DeviceObject)\"", timeout=300)
     if rc != 0 or "|" not in out:
-        raise _BkError(f"VSS-Schattenkopie fehlgeschlagen: {(err or out).strip()[-300:]}")
+        raise _BkError(f"VSS shadow copy failed: {(err or out).strip()[-300:]}")
     sid, dev = out.strip().splitlines()[-1].split("|", 1)
     return sid.strip(), dev.strip()
 
@@ -4092,7 +4092,7 @@ def _bk_backup_restic(spec, args, progress) -> dict:
             tags += ["--tag", "bytera-image"]
             if IS_WINDOWS:
                 sid, dev = _vss_create("C:\\")
-                progress(f"VSS-Schattenkopie erstellt ({sid}) - lese Volume C: …")
+                progress(f"VSS shadow copy created ({sid}) - reading volume C: …")
                 try:
                     p = subprocess.Popen([_restic_bin(), *rp.extra,
                                           *(["--insecure-tls"] if rp.insecure else []),
@@ -4109,7 +4109,7 @@ def _bk_backup_restic(spec, args, progress) -> dict:
                                     try:
                                         chunk = src.read(4 * 1024 * 1024)
                                     except OSError:
-                                        break             # Ende des Volumes
+                                        break             # end of the volume
                                     if not chunk:
                                         break
                                     p.stdin.write(chunk)
@@ -4126,20 +4126,20 @@ def _bk_backup_restic(spec, args, progress) -> dict:
                     th.join()
                     err = p.stderr.read().decode("utf-8", "replace")
                     if p.wait() != 0 or err_box:
-                        raise _BkError(f"Image-Backup fehlgeschlagen: {(err_box[0] if err_box else err)[-400:]}")
+                        raise _BkError(f"Image backup failed: {(err_box[0] if err_box else err)[-400:]}")
                     out = "".join(out_lines)
                 finally:
                     _vss_delete(sid)
             else:
                 dev = args.get("image_device") or _root_disk()
-                progress(f"Lese Datenträger {dev} (absturzkonsistent) …")
+                progress(f"Reading disk {dev} (crash-consistent) …")
                 dd = subprocess.Popen(["dd", f"if={dev}", "bs=4M", "status=none"], stdout=subprocess.PIPE)
                 rc, out, err = _restic(rp, ["backup", "--json", *tags, *comp, "--stdin",
                                             "--stdin-filename", f"disk-{os.path.basename(dev)}.img"],
                                        stdin=dd.stdout, progress=progress)
                 dd.wait()
                 if rc != 0:
-                    raise _BkError(f"Image-Backup fehlgeschlagen: {err.strip()[-400:]}")
+                    raise _BkError(f"Image backup failed: {err.strip()[-400:]}")
         else:
             paths = [p for p in (args.get("paths") or []) if p.strip()]
             if not paths:
@@ -4149,13 +4149,13 @@ def _bk_backup_restic(spec, args, progress) -> dict:
             for e in args.get("excludes") or []:
                 ex += ["--exclude", e]
             vss = ["--use-fs-snapshot"] if IS_WINDOWS else []
-            progress(f"Sichere {', '.join(paths)} …")
+            progress(f"Backing up {', '.join(paths)} …")
             rc, out, err = _restic(rp, ["backup", "--json", *tags, *comp, *vss, *ex, *paths],
                                    progress=progress)
-            if rc not in (0, 3):                  # 3 = einzelne Dateien nicht lesbar
-                raise _BkError(f"Backup fehlgeschlagen: {err.strip()[-400:]}")
+            if rc not in (0, 3):                  # 3 = some individual files not readable
+                raise _BkError(f"Backup failed: {err.strip()[-400:]}")
             if rc == 3:
-                progress("Hinweis: einige Dateien waren nicht lesbar und fehlen im Backup")
+                progress("Note: some files were not readable and are missing from the backup")
         for line in (out or "").splitlines():
             if '"message_type":"summary"' in line:
                 try:
@@ -4169,11 +4169,11 @@ def _bk_backup_restic(spec, args, progress) -> dict:
             flags = []
             for k, v in keep.items():
                 flags += [f"--{k.replace('_', '-')}", str(int(v))]
-            progress(f"Aufbewahrung anwenden ({', '.join(f'{k}={v}' for k, v in keep.items())}) …")
+            progress(f"Applying retention ({', '.join(f'{k}={v}' for k, v in keep.items())}) …")
             rc, _o, err = _restic(rp, ["forget", "--tag", "bytera", "--keep-tag", "protected",
                                        *flags, "--prune"], timeout=6 * 3600)
             if rc != 0:
-                progress(f"Aufbewahrung fehlgeschlagen: {err.strip()[-200:]}")
+                progress(f"Retention failed: {err.strip()[-200:]}")
         snaps = _restic_snapshots(rp)
         return {"snapshot_id": (summary or {}).get("snapshot_id"),
                 "summary": {k: (summary or {}).get(k) for k in
@@ -4188,19 +4188,19 @@ def _bk_restore_restic(spec, args, progress) -> dict:
         snaps = {s["id"]: s for s in _restic_snapshots(rp)}
         snap = snaps.get(sid)
         if not snap:
-            raise _BkError("Backup nicht gefunden")
+            raise _BkError("Backup not found")
         if snap["mode"] == "image":
             dest = args.get("image_dest") or ""
             if not dest:
-                raise _BkError("Für ein Image bitte eine Zieldatei (oder unter Linux einen Datenträger) angeben")
+                raise _BkError("For an image, specify a target file (or a device on Linux)")
             name = (snap.get("paths") or ["/"])[0]
             if args.get("image_to_device"):
                 if IS_WINDOWS:
-                    raise _BkError("Unter Windows lässt sich ein Image nur als Datei wiederherstellen")
+                    raise _BkError("On Windows an image can only be restored as a file")
                 with open("/proc/mounts") as fh:
                     if any(line.split()[0].startswith(dest) for line in fh):
-                        raise _BkError(f"{dest} ist eingehängt - nur auf einen NICHT benutzten Datenträger schreiben")
-            progress(f"Schreibe Image nach {dest} …")
+                        raise _BkError(f"{dest} is mounted - only write to a device that is NOT in use")
+            progress(f"Writing image to {dest} …")
             with open(dest, "wb") as fh:
                 p = subprocess.Popen([_restic_bin(), *rp.extra,
                                       *(["--insecure-tls"] if rp.insecure else []),
@@ -4216,11 +4216,11 @@ def _bk_restore_restic(spec, args, progress) -> dict:
         if args.get("target") == "path":
             target = args.get("path") or ""
             if not target:
-                raise _BkError("Zielordner fehlt")
+                raise _BkError("Target folder missing")
             os.makedirs(target, exist_ok=True)
             rc, _o, err = _restic(rp, ["restore", sid, "--target", target, *inc], progress=progress)
         elif IS_WINDOWS:
-            # restic speichert C:\x als /C/x -> je Laufwerk in dessen Wurzel zurueckspielen
+            # restic stores C:\x as /C/x -> restore each drive into its own root
             drives = sorted({p.strip("/").split("/")[0] for p in snap.get("paths") or [] if p.strip("/")})
             rc, err = 0, ""
             for d in drives:
@@ -4237,15 +4237,15 @@ def _bk_restore_restic(spec, args, progress) -> dict:
         else:
             rc, _o, err = _restic(rp, ["restore", sid, "--target", "/", *inc], progress=progress)
         if rc != 0:
-            raise _BkError(f"Wiederherstellung fehlgeschlagen: {err.strip()[-400:]}")
-        return {"restored": args.get("path") or "Originalort"}
+            raise _BkError(f"Restore failed: {err.strip()[-400:]}")
+        return {"restored": args.get("path") or "original location"}
 
 
 # ---------------- Proxmox Backup Server (Linux) ----------------
 def _pbs_bin() -> str:
     if IS_WINDOWS:
-        raise _BkError("Für Windows gibt es keinen Proxmox-Backup-Client - bitte SMB/SFTP/Backend "
-                       "nutzen oder den Client (falls VM/LXC) über das Proxmox-Modul sichern")
+        raise _BkError("There is no Proxmox backup client for Windows - please use SMB/SFTP/backend "
+                       "or back up the client (if VM/LXC) via the Proxmox module")
     found = shutil.which("proxmox-backup-client")
     if found:
         return found
@@ -4253,8 +4253,8 @@ def _pbs_bin() -> str:
                           env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"})
     found = shutil.which("proxmox-backup-client")
     if not found:
-        raise _BkError("proxmox-backup-client fehlt und ließ sich nicht installieren "
-                       f"(Proxmox-Paketquelle eingerichtet?): {err.strip()[-200:]}")
+        raise _BkError("proxmox-backup-client is missing and could not be installed "
+                       f"(Proxmox package source set up?): {err.strip()[-200:]}")
     return found
 
 
@@ -4309,11 +4309,11 @@ def _bk_backup_pbs(spec, args, progress) -> dict:
     else:
         paths = [p for p in (args.get("paths") or []) if p.strip()] or ["/etc", "/home", "/root"]
         archives = [f"{_pbs_name(p)}.pxar:{p}" for p in paths if os.path.exists(p)]
-    progress(f"Proxmox Backup Server: sichere {len(archives)} Archiv(e) …")
+    progress(f"Proxmox Backup Server: backing up {len(archives)} archive(s) …")
     rc, out, err = _bk_run([_pbs_bin(), "backup", *archives, "--backup-type", "host",
                             "--backup-id", spec["backup_id"], *ns], timeout=24 * 3600, env=env)
     if rc != 0:
-        raise _BkError(f"PBS-Backup fehlgeschlagen: {err.strip()[-400:]}")
+        raise _BkError(f"PBS backup failed: {err.strip()[-400:]}")
     snaps = _pbs_snapshots(spec)
     newest = snaps[0]["id"] if snaps else None
     if newest and args.get("name"):
@@ -4332,11 +4332,11 @@ def _bk_restore_pbs(spec, args, progress) -> dict:
     env, ns = _pbs_env(spec)
     snap = next((s for s in _pbs_snapshots(spec) if s["id"] == args.get("id")), None)
     if not snap:
-        raise _BkError("Backup nicht gefunden")
+        raise _BkError("Backup not found")
     if snap["mode"] == "image":
         dest = args.get("image_dest") or ""
         if not dest:
-            raise _BkError("Zieldatei oder Datenträger angeben")
+            raise _BkError("Specify a target file or device")
         rc, _o, err = _bk_run([_pbs_bin(), "restore", snap["id"], "disk.img", dest, *ns],
                               timeout=24 * 3600, env=env)
     else:
@@ -4344,22 +4344,22 @@ def _bk_restore_pbs(spec, args, progress) -> dict:
         for p in snap["paths"]:
             target = os.path.join(args["path"], p.strip("/").replace("/", "_")) \
                 if args.get("target") == "path" else p
-            progress(f"Stelle {p} wieder her nach {target} …")
+            progress(f"Restoring {p} to {target} …")
             rc, _o, err = _bk_run([_pbs_bin(), "restore", snap["id"], f"{_pbs_name(p)}.pxar", target,
                                    "--overwrite", "true", *ns], timeout=24 * 3600, env=env)
             if rc != 0:
                 break
     if rc != 0:
-        raise _BkError(f"PBS-Wiederherstellung fehlgeschlagen: {err.strip()[-400:]}")
-    return {"restored": args.get("path") or args.get("image_dest") or "Originalort"}
+        raise _BkError(f"PBS restore failed: {err.strip()[-400:]}")
+    return {"restored": args.get("path") or args.get("image_dest") or "original location"}
 
 
-# ---------------- Betriebssystem-Snapshots ----------------
+# ---------------- Operating-system snapshots ----------------
 def _fs_root_info():
     rc, out, _e = _bk_run(["findmnt", "-no", "FSTYPE,SOURCE,TARGET", "/"], timeout=20)
     parts = out.split()
     if len(parts) < 3:
-        raise _BkError("Dateisystem nicht ermittelbar")
+        raise _BkError("File system could not be determined")
     return parts[0], parts[1].split("[")[0], parts[2]
 
 
@@ -4385,8 +4385,8 @@ def _fs_snap(op: str, args: dict) -> dict:
             return {"kind": "vss", "snapshots": [{"id": d["id"], "time": d["time"],
                                                   "volume": d.get("volume") or "", "device": d.get("device")}
                                                  for d in data],
-                    "info": "Windows-Schattenkopien (VSS). Einzelne Dateien/Ordner lassen sich zurückholen; "
-                            "das ganze Systemlaufwerk lässt sich im laufenden Betrieb nicht zurücksetzen."}
+                    "info": "Windows shadow copies (VSS). Individual files/folders can be restored; "
+                            "the whole system drive cannot be rolled back while running."}
         if op == "create":
             sid, _dev = _vss_create((args.get("volume") or "C:").rstrip("\\") + "\\")
             return {"id": sid}
@@ -4398,7 +4398,7 @@ def _fs_snap(op: str, args: dict) -> dict:
             s = snaps.get(args["id"])
             path = str(args.get("path") or "")
             if not s or len(path) < 3 or path[1:3] != ":\\":
-                raise _BkError("Snapshot oder Pfad ungültig (z.B. C:\\Users\\max\\Dokumente)")
+                raise _BkError("Snapshot or path invalid (e.g. C:\\Users\\john\\Documents)")
             link = os.path.join(os.environ.get("ProgramData", "C:\\ProgramData"), f"bytera-shadow-{uuid.uuid4().hex[:8]}")
             _bk_run(["cmd", "/c", "mklink", "/d", link, s["device"] + "\\"], timeout=60)
             try:
@@ -4408,16 +4408,16 @@ def _fs_snap(op: str, args: dict) -> dict:
                     rc, out, err = _bk_run(["robocopy", src, dest, "/E", "/COPY:DAT", "/R:1", "/W:1",
                                             "/NFL", "/NDL"], timeout=6 * 3600)
                     if rc >= 8:
-                        raise _BkError(f"robocopy-Fehler {rc}: {(out + err)[-300:]}")
+                        raise _BkError(f"robocopy error {rc}: {(out + err)[-300:]}")
                 else:
                     os.makedirs(os.path.dirname(dest), exist_ok=True)
                     shutil.copy2(src, dest)
             finally:
                 _bk_run(["cmd", "/c", "rmdir", link], timeout=60)
-            return {"note": f"{path} wiederhergestellt nach {args.get('dest') or path}"}
+            return {"note": f"{path} restored to {args.get('dest') or path}"}
         if op == "rollback":
-            raise _BkError("Windows-Schattenkopien lassen sich nicht komplett zurücksetzen - "
-                           "bitte einzelne Dateien/Ordner wiederherstellen")
+            raise _BkError("Windows shadow copies cannot be fully rolled back - "
+                           "please restore individual files/folders")
     fstype, source, mnt = _fs_root_info()
     if fstype == "btrfs":
         sdir = os.path.join(mnt, ".snapshots")
@@ -4430,7 +4430,7 @@ def _fs_snap(op: str, args: dict) -> dict:
                         items.append({"id": n, "time": int(m.group(1)) * 1000 if m else 0,
                                       "name": m.group(2) if m else n})
             return {"kind": "btrfs", "snapshots": items,
-                    "info": "btrfs-Snapshots (nur lesend) unter /.snapshots. Dateien lassen sich zurückholen."}
+                    "info": "btrfs snapshots (read-only) under /.snapshots. Files can be restored."}
         if op == "create":
             os.makedirs(sdir, exist_ok=True)
             sid = f"bytera-{int(time.time())}-{name}"
@@ -4451,7 +4451,7 @@ def _fs_snap(op: str, args: dict) -> dict:
             for line in out.splitlines():
                 n, c = line.split("\t")
                 items.append({"id": n, "time": int(c) * 1000, "name": n.split("@", 1)[1]})
-            return {"kind": "zfs", "snapshots": items, "info": f"ZFS-Snapshots von {source}."}
+            return {"kind": "zfs", "snapshots": items, "info": f"ZFS snapshots of {source}."}
         if op == "create":
             sid = f"{source}@bytera-{name}"
             rc, _o, err = _bk_run(["zfs", "snapshot", sid])
@@ -4460,25 +4460,25 @@ def _fs_snap(op: str, args: dict) -> dict:
             return {"id": sid}
         if op == "delete":
             if not str(args["id"]).startswith(source + "@"):
-                raise _BkError("Ungültiger Snapshot")
+                raise _BkError("Invalid snapshot")
             rc, _o, err = _bk_run(["zfs", "destroy", args["id"]])
             if rc != 0:
                 raise _BkError(err.strip()[-300:])
             return {}
         if op == "rollback":
             if mnt == "/":
-                raise _BkError("Das laufende Root-Dateisystem lässt sich nicht live zurücksetzen - "
-                               "bitte einzelne Dateien wiederherstellen")
+                raise _BkError("The running root file system cannot be rolled back live - "
+                               "please restore individual files")
             rc, _o, err = _bk_run(["zfs", "rollback", "-r", args["id"]])
             if rc != 0:
                 raise _BkError(err.strip()[-300:])
-            return {"note": "zurückgesetzt"}
+            return {"note": "rolled back"}
         snap_root = os.path.join(mnt, ".zfs", "snapshot", str(args.get("id", "")).split("@", 1)[-1])
     else:
         names = _lvm_names(source)
         if not names:
-            raise _BkError(f"Dateisystem {fstype} auf {source} unterstützt keine Snapshots "
-                           "(btrfs, ZFS oder LVM nötig)")
+            raise _BkError(f"File system {fstype} on {source} does not support snapshots "
+                           "(btrfs, ZFS or LVM needed)")
         vg, lv = names
         if op == "list":
             rc, out, _e = _bk_run(["lvs", "--noheadings", "--separator", "|", "-o",
@@ -4490,12 +4490,12 @@ def _fs_snap(op: str, args: dict) -> dict:
                     items.append({"id": f"{vg}/{p[0]}", "time": int(p[1]) * 1000 if p[1].isdigit() else 0,
                                   "name": p[0][7:]})
             return {"kind": "lvm", "snapshots": items,
-                    "info": "LVM-Snapshots. Zurücksetzen wird beim nächsten Neustart angewendet."}
+                    "info": "LVM snapshots. Rollback is applied on the next reboot."}
         if op == "create":
             sid = f"{vg}/bytera_{name}"
             rc, _o, err = _bk_run(["lvcreate", "-s", "-n", f"bytera_{name}", "-l", "20%ORIGIN", f"{vg}/{lv}"])
             if rc != 0:
-                raise _BkError(f"LVM-Snapshot fehlgeschlagen (freier Platz in der VG?): {err.strip()[-300:]}")
+                raise _BkError(f"LVM snapshot failed (free space in the VG?): {err.strip()[-300:]}")
             return {"id": sid}
         if op == "delete":
             rc, _o, err = _bk_run(["lvremove", "-y", args["id"]])
@@ -4506,7 +4506,7 @@ def _fs_snap(op: str, args: dict) -> dict:
             rc, _o, err = _bk_run(["lvconvert", "--merge", args["id"]])
             if rc != 0:
                 raise _BkError(err.strip()[-300:])
-            return {"note": "Zurücksetzen vorgemerkt - wird beim nächsten Neustart angewendet"}
+            return {"note": "Rollback scheduled - will be applied on the next reboot"}
         tmp = tempfile.mkdtemp(prefix="bytera-lvsnap-")
         rc, _o, err = _bk_run(["mount", "-o", "ro,nouuid" if fstype == "xfs" else "ro", f"/dev/{args['id']}", tmp])
         if rc != 0:
@@ -4518,7 +4518,7 @@ def _fs_snap(op: str, args: dict) -> dict:
             _bk_run(["umount", tmp])
             os.rmdir(tmp)
     if op == "rollback":
-        raise _BkError("Für diesen Snapshot-Typ bitte einzelne Dateien/Ordner wiederherstellen")
+        raise _BkError("For this snapshot type, please restore individual files/folders")
     return _fs_copy_back(snap_root, mnt, args)
 
 
@@ -4526,10 +4526,10 @@ def _fs_copy_back(snap_root: str, mnt: str, args: dict) -> dict:
     path = os.path.abspath(str(args.get("path") or ""))
     rel = os.path.relpath(path, mnt)
     if rel.startswith(".."):
-        raise _BkError("Pfad liegt nicht auf diesem Dateisystem")
+        raise _BkError("Path is not on this file system")
     src = os.path.join(snap_root, rel)
     if not os.path.exists(src):
-        raise _BkError("Pfad existiert im Snapshot nicht")
+        raise _BkError("Path does not exist in the snapshot")
     dest = args.get("dest") or path
     if os.path.isdir(src):
         os.makedirs(dest, exist_ok=True)
@@ -4539,7 +4539,7 @@ def _fs_copy_back(snap_root: str, mnt: str, args: dict) -> dict:
         rc, _o, err = _bk_run(["cp", "-a", src, dest], timeout=6 * 3600)
     if rc != 0:
         raise _BkError(err.strip()[-300:])
-    return {"note": f"{path} wiederhergestellt nach {dest}"}
+    return {"note": f"{path} restored to {dest}"}
 
 
 def _bk_dispatch(op: str, spec: dict, args: dict, progress) -> dict:
@@ -4585,8 +4585,8 @@ def _bk_dispatch(op: str, spec: dict, args: dict, progress) -> dict:
         return {}
     if op == "ls":
         if pbs:
-            raise _BkError("Dateiansicht für PBS-Backups bitte im PBS-Webinterface - "
-                           "hier lassen sich ganze Archive wiederherstellen")
+            raise _BkError("File view for PBS backups is in the PBS web interface - "
+                           "here whole archives can be restored")
         with _Repo(spec) as rp:
             rc, out, err = _restic(rp, ["ls", "--json", args["id"], args.get("path") or "/"], timeout=600)
             if rc != 0:
@@ -4603,7 +4603,7 @@ def _bk_dispatch(op: str, spec: dict, args: dict, progress) -> dict:
             return {"entries": entries}
     if op.startswith("fs-snap-"):
         return _fs_snap(op[8:], args)
-    raise _BkError(f"Unbekannte Aktion {op}")
+    raise _BkError(f"Unknown action {op}")
 
 
 @sio.on("backup-cmd", namespace="/agent")
@@ -4632,8 +4632,8 @@ async def on_backup_cmd(data):
 
 
 # ------------------------------------------------------------------
-# WARTUNGSMODUS (Core): Schutzmechanismen aussetzen. Das Backend schickt
-# {"active", "until"}; laeuft die Zeit ab, beendet der Agent ihn auch selbst.
+# MAINTENANCE MODE (core): suspend protection mechanisms. The backend sends
+# {"active", "until"}; when the time runs out, the agent also ends it itself.
 # ------------------------------------------------------------------
 _maint = {"active": False, "until": 0}
 
@@ -4644,7 +4644,7 @@ def _maintenance_active() -> bool:
     until = int(_maint.get("until") or 0)
     if until and until <= time.time() * 1000:
         _maint["active"] = False
-        _print("[wartung] Wartungsmodus abgelaufen")
+        _print("[maintenance] maintenance mode expired")
         _usb_on_maintenance_change()
         return False
     return True
@@ -4657,29 +4657,28 @@ async def on_maintenance_mode(data):
     _maint["active"] = bool(data.get("active"))
     _maint["until"] = int(data.get("until") or 0)
     if was != _maint["active"]:
-        _print(f"[wartung] Wartungsmodus {'AKTIV - Schutzmechanismen ausgesetzt' if _maint['active'] else 'beendet'}")
+        _print(f"[maintenance] maintenance mode {'ACTIVE - protections suspended' if _maint['active'] else 'ended'}")
         await asyncio.get_event_loop().run_in_executor(None, _usb_on_maintenance_change)
 
 
 # ------------------------------------------------------------------
-# USB-STEUERUNG (Modul "usbguard"): Ein-/Ausstecken melden und - im
-# Blockier-Modus - neue Geraete erst nach Freigabe ans System durchreichen.
-#   Linux:   /sys/bus/usb/devices/usb*/authorized_default = 0 -> neue Geraete
-#            bleiben vom Kernel unautorisiert (keine Treiber, keine Daten),
-#            bis "authorized" = 1 gesetzt wird. Hubs werden automatisch
-#            freigegeben (sonst waeren Geraete dahinter unsichtbar).
-#   Windows: neue USB-Geraete werden direkt nach dem Erkennen per pnputil
-#            deaktiviert und bei Freigabe wieder aktiviert (kurze, technisch
-#            bedingte Erkennungsluecke). Hubs/Host-Controller bleiben aktiv.
-# Vertrauenswuerdige Geraete werden automatisch zugelassen:
-#   * per Geraete-ID (VID:PID, optional Seriennummer) - z.B. YubiKeys
-#   * Speichersticks per SIGNIERTER Schluesseldatei ".bytera-usbkey" im
-#     Stammverzeichnis. Die Datei ist mit dem Backend-Schluessel (Ed25519)
-#     signiert und an die Seriennummer des Sticks gebunden - Kopieren auf
-#     einen anderen Stick nuetzt also nichts. Zum Pruefen wird der Stick kurz
-#     NUR LESEND (noexec) eingehaengt; ist die Datei ungueltig, wird er
-#     sofort wieder gesperrt.
-# Im Wartungsmodus wird nichts blockiert.
+# USB CONTROL (module "usbguard"): report plug/unplug and - in block mode -
+# only pass new devices to the system after approval.
+#   Linux:   /sys/bus/usb/devices/usb*/authorized_default = 0 -> new devices
+#            stay unauthorized by the kernel (no drivers, no data) until
+#            "authorized" = 1 is set. Hubs are released automatically
+#            (otherwise devices behind them would be invisible).
+#   Windows: new USB devices are disabled via pnputil right after detection
+#            and re-enabled on approval (a short, technically unavoidable
+#            detection gap). Hubs/host controllers stay active.
+# Trusted devices are allowed automatically:
+#   * by device ID (VID:PID, optionally serial number) - e.g. YubiKeys
+#   * storage sticks via a SIGNED key file ".bytera-usbkey" in the root
+#     directory. The file is signed with the backend key (Ed25519) and bound
+#     to the stick's serial number - copying it to another stick is useless.
+#     To check it, the stick is briefly mounted READ-ONLY (noexec); if the
+#     file is invalid, it is locked again immediately.
+# In maintenance mode nothing is blocked.
 # ------------------------------------------------------------------
 _usb = {"enabled": False, "block": False, "thread": None, "pending": set(),
         "trust": [], "pubkey": "", "revoked": set(), "loop": None}
@@ -4711,7 +4710,7 @@ def _usb_list_linux() -> dict:
     except Exception:
         return out
     for n in names:
-        if ":" in n:                      # Interfaces ueberspringen
+        if ":" in n:                      # skip interfaces
             continue
         base = os.path.join(_USB_SYS, n)
         vid = _usb_read(os.path.join(base, "idVendor"))
@@ -4727,7 +4726,7 @@ def _usb_list_linux() -> dict:
                     storage = True
         except Exception:
             pass
-        out[n] = {"name": f"{label or 'USB-Gerät'} ({vid}:{pid})",
+        out[n] = {"name": f"{label or 'USB device'} ({vid}:{pid})",
                   "vid": vid.lower(), "pid": pid.lower(),
                   "serial": _usb_read(os.path.join(base, "serial")),
                   "hub": _usb_read(os.path.join(base, "bDeviceClass")) == "09",
@@ -4755,18 +4754,18 @@ def _usb_list_windows() -> dict:
         iid = str(d.get("InstanceId") or "")
         if not iid:
             continue
-        name = str(d.get("FriendlyName") or "USB-Gerät")
+        name = str(d.get("FriendlyName") or "USB device")
         up = iid.upper()
         m = re.search(r"VID_([0-9A-F]{4})&PID_([0-9A-F]{4})", up)
         seg = iid.split("\\")[-1]
-        # Ein Segment mit '&' ist eine von Windows erzeugte Kennung, keine
-        # echte Seriennummer - dann ist keine Bindung an den Stick moeglich.
+        # A segment with '&' is a Windows-generated identifier, not a real
+        # serial number - then no binding to the stick is possible.
         serial = "" if "&" in seg else seg
         out[iid] = {"name": name,
                     "vid": (m.group(1).lower() if m else ""), "pid": (m.group(2).lower() if m else ""),
                     "serial": serial,
-                    # NUR echte Hubs/Controller durchlassen. Achtung: Das
-                    # "USB-Massenspeichergeraet" hat ebenfalls die Klasse "USB"!
+                    # Only let through real hubs/controllers. Note: the
+                    # "USB mass storage device" also has the class "USB"!
                     "hub": "ROOT_HUB" in up or "HUB" in name.upper()
                            or "HOST CONTROLLER" in name.upper(),
                     "storage": str(d.get("Service") or "").upper() == "USBSTOR",
@@ -4811,7 +4810,7 @@ def _usb_blocking() -> bool:
 
 
 def _usb_on_maintenance_change() -> None:
-    """Wartung an: alles freigeben. Wartung aus: Sperre wieder scharf schalten."""
+    """Maintenance on: release everything. Maintenance off: arm the lock again."""
     if not _usb["enabled"]:
         return
     _usb_set_block_default(_usb_blocking())
@@ -4834,7 +4833,7 @@ def _usb_id_trusted(info: dict) -> bool:
 
 
 def _usb_verify_keyfile(raw: bytes, info: dict) -> str | None:
-    """Prueft eine Schluesseldatei. Rueckgabe: Label (gueltig) oder None."""
+    """Checks a key file. Returns: label (valid) or None."""
     try:
         import base64 as _b64
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -4845,7 +4844,7 @@ def _usb_verify_keyfile(raw: bytes, info: dict) -> str | None:
         if not kid or kid in _usb["revoked"]:
             return None
         vid, pid, serial = (str(doc.get(k) or "") for k in ("vid", "pid", "serial"))
-        # Bindung an DIESEN Stick: Seriennummer (und ID) muessen passen.
+        # Binding to THIS stick: serial number (and ID) must match.
         if not serial or serial != info.get("serial"):
             return None
         if vid.lower() != info.get("vid") or pid.lower() != info.get("pid"):
@@ -4853,19 +4852,19 @@ def _usb_verify_keyfile(raw: bytes, info: dict) -> str | None:
         msg = f"bytera-usbkey|v1|{kid}|{vid.lower()}|{pid.lower()}|{serial}|{doc.get('label','')}|{doc.get('iat',0)}"
         Ed25519PublicKey.from_public_bytes(_b64.b64decode(_usb["pubkey"])).verify(
             _b64.b64decode(doc.get("sig") or ""), msg.encode("utf-8"))
-        return str(doc.get("label") or "Schlüsseldatei")
+        return str(doc.get("label") or "key file")
     except Exception:
         return None
 
 
 def _usb_read_keyfile_linux(dev: str) -> bytes | None:
-    """Stick kurz autorisieren, nur lesend einhaengen, Schluesseldatei lesen."""
+    """Briefly authorize the stick, mount it read-only, read the key file."""
     import subprocess as _sp
     import tempfile as _tf
     _usb_write(os.path.join(_USB_SYS, dev, "authorized"), "1")
     devpath = os.path.realpath(os.path.join(_USB_SYS, dev))
     parts = []
-    for _ in range(20):                       # bis 10 s auf das Block-Geraet warten
+    for _ in range(20):                       # wait up to 10 s for the block device
         time.sleep(0.5)
         try:
             for blk in os.listdir("/sys/block"):
@@ -4916,7 +4915,7 @@ def _win_removable_letters() -> set:
 
 
 def _usb_read_keyfile_windows(before: set) -> bytes | None:
-    for _ in range(20):                       # bis 10 s auf den Laufwerksbuchstaben warten
+    for _ in range(20):                       # wait up to 10 s for the drive letter
         time.sleep(0.5)
         new = _win_removable_letters() - before
         for letter in sorted(new):
@@ -4938,12 +4937,12 @@ def _usb_handle_new(dev: str, info: dict, letters_before: set) -> None:
             "storage": bool(info.get("storage"))}
     if not _usb_blocking():
         if _usb["enabled"] and _usb["block"]:
-            _usb_apply(dev, True)              # Wartungsmodus: immer zulassen
+            _usb_apply(dev, True)              # maintenance mode: always allow
         _usb_emit({**base, "action": "add", "blocked": False,
                    "trusted": "maintenance" if _maintenance_active() else ""})
         return
     if info.get("hub"):
-        _usb_apply(dev, True)                  # Hubs immer durchlassen
+        _usb_apply(dev, True)                  # always let hubs through
         return
     if _usb_id_trusted(info):
         _usb_apply(dev, True)
@@ -4957,19 +4956,19 @@ def _usb_handle_new(dev: str, info: dict, letters_before: set) -> None:
             _usb_apply(dev, True)
             _usb_emit({**base, "action": "add", "blocked": False, "trusted": f"key:{label}"})
             return
-    _usb_apply(dev, False)                     # sperren (Linux: wieder entziehen)
+    _usb_apply(dev, False)                     # block (Linux: revoke again)
     _usb["pending"].add(dev)
     _usb_emit({**base, "action": "add", "blocked": True, "trusted": ""})
 
 
 def _usb_loop():
     lister = _usb_list_windows if IS_WINDOWS else _usb_list_linux
-    known = lister()                           # Bestand beim Start nicht melden
+    known = lister()                           # do not report existing devices at startup
     letters = _win_removable_letters() if IS_WINDOWS else set()
     while _usb["enabled"]:
         time.sleep(3 if IS_WINDOWS else 1.5)
         try:
-            _maintenance_active()              # Ablauf auch lokal erkennen
+            _maintenance_active()              # detect expiry locally too
             cur = lister()
             for dev, info in cur.items():
                 if dev in known or info.get("root"):
@@ -5003,9 +5002,9 @@ async def on_usb_config(data):
         t = threading.Thread(target=_usb_loop, daemon=True)
         _usb["thread"] = t
         t.start()
-    _print(f"[usb] Steuerung {'aktiv' if _usb['enabled'] else 'aus'}"
-           + (" (Blockier-Modus)" if _usb["block"] else "")
-           + (f", {len(_usb['trust'])} vertrauenswürdige Geräte-IDs" if _usb["trust"] else ""))
+    _print(f"[usb] control {'active' if _usb['enabled'] else 'off'}"
+           + (" (block mode)" if _usb["block"] else "")
+           + (f", {len(_usb['trust'])} trusted device IDs" if _usb["trust"] else ""))
 
 
 @sio.on("usb-decide", namespace="/agent")
@@ -5018,17 +5017,17 @@ async def on_usb_decide(data):
     await asyncio.get_event_loop().run_in_executor(None, _usb_apply, dev, allow)
     if allow:
         _usb["pending"].discard(dev)
-    _print(f"[usb] {dev}: {'freigegeben' if allow else 'bleibt blockiert'}")
+    _print(f"[usb] {dev}: {'allowed' if allow else 'stays blocked'}")
 
 
 # ------------------------------------------------------------------
-# TEMPORÄRE BENUTZER: lokales Konto mit zufaelligem Einmal-Passwort anlegen
-# (Linux: useradd/chpasswd, Windows: net user). Verfall ueberwacht der Agent
-# selbst (persistiert in tempusers.json, ueberlebt also Neustarts):
-#   '1h'/'2h'/'4h'/'24h' -> nach Ablauf loeschen
-#   'logoff'             -> loeschen, sobald der Benutzer nach einer Anmeldung
-#                           keine Sitzung mehr hat ("bei Ende der Benutzung")
-#   'never'              -> nie automatisch loeschen
+# TEMPORARY USERS: create a local account with a random one-time password
+# (Linux: useradd/chpasswd, Windows: net user). The agent monitors the expiry
+# itself (persisted in tempusers.json, so it survives restarts):
+#   '1h'/'2h'/'4h'/'24h' -> delete after expiry
+#   'logoff'             -> delete once the user has no session after having
+#                           logged in once ("at end of use")
+#   'never'              -> never delete automatically
 # ------------------------------------------------------------------
 _TEMPUSER_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tempusers.json")
 _tempuser_lock = threading.Lock()
@@ -5052,7 +5051,7 @@ def _tempusers_save(data: dict) -> None:
 
 
 def _tempuser_sessions(username: str) -> bool:
-    """Hat der Benutzer gerade eine Sitzung? (who/quser, best effort)"""
+    """Does the user currently have a session? (who/quser, best effort)"""
     import subprocess as _sp
     try:
         if IS_WINDOWS:
@@ -5076,10 +5075,10 @@ def _tempuser_delete(username: str) -> bool:
         else:
             _sp.run(["pkill", "-KILL", "-u", username], capture_output=True, timeout=30)
             _sp.run(["userdel", "-r", username], capture_output=True, timeout=60)
-        _print(f"[tempuser] Benutzer {username} geloescht")
+        _print(f"[tempuser] user {username} deleted")
         return True
     except Exception as exc:
-        _print(f"[tempuser] Loeschen von {username} fehlgeschlagen: {exc}")
+        _print(f"[tempuser] deleting {username} failed: {exc}")
         return False
 
 
@@ -5102,7 +5101,7 @@ def _tempuser_watch_loop():
                             info["seen"] = True
                             changed = True
                     elif info.get("seen"):
-                        drop = True        # war angemeldet, jetzt nicht mehr
+                        drop = True        # was logged in, now no longer
                 if drop:
                     _tempuser_delete(name)
                     data.pop(name, None)
@@ -5121,43 +5120,43 @@ def _tempuser_create(expiry: str) -> dict:
     alphabet = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!#+-"
     password = "".join(_sec.choice(alphabet) for _ in range(16))
     if IS_WINDOWS:
-        r = _sp.run(f'net user "{username}" "{password}" /add /comment:"BYTERA Temp-Benutzer"',
+        r = _sp.run(f'net user "{username}" "{password}" /add /comment:"BYTERA temp user"',
                     shell=True, capture_output=True, text=True, errors="replace", timeout=60)
         if r.returncode != 0:
-            return {"ok": False, "error": (r.stderr or r.stdout or "net user fehlgeschlagen").strip()[:300]}
+            return {"ok": False, "error": (r.stderr or r.stdout or "net user failed").strip()[:300]}
         _sp.run(f'net localgroup Users "{username}" /add', shell=True, capture_output=True, timeout=30)
-        note = "Lokales Windows-Konto (Gruppe: Users)."
+        note = "Local Windows account (group: Users)."
     else:
         if hasattr(os, "geteuid") and os.geteuid() != 0:
-            return {"ok": False, "error": "Agent laeuft nicht als root"}
-        r = _sp.run(["useradd", "-m", "-s", "/bin/bash", "-c", "BYTERA Temp-Benutzer", username],
+            return {"ok": False, "error": "agent is not running as root"}
+        r = _sp.run(["useradd", "-m", "-s", "/bin/bash", "-c", "BYTERA temp user", username],
                     capture_output=True, text=True, errors="replace", timeout=60)
         if r.returncode != 0:
-            return {"ok": False, "error": (r.stderr or "useradd fehlgeschlagen").strip()[:300]}
+            return {"ok": False, "error": (r.stderr or "useradd failed").strip()[:300]}
         r = _sp.run(["chpasswd"], input=f"{username}:{password}", text=True,
                     capture_output=True, timeout=30)
         if r.returncode != 0:
             _sp.run(["userdel", "-r", username], capture_output=True, timeout=30)
-            return {"ok": False, "error": "Passwort setzen fehlgeschlagen"}
-        note = "Lokales Linux-Konto mit Home-Verzeichnis."
+            return {"ok": False, "error": "setting the password failed"}
+        note = "Local Linux account with a home directory."
     hours = {"1h": 1, "2h": 2, "4h": 4, "24h": 24}.get(expiry)
     with _tempuser_lock:
         data = _tempusers_load()
         if hours:
             data[username] = {"mode": "until", "until": time.time() + hours * 3600}
-            note += f" Wird in {hours} h automatisch geloescht."
+            note += f" Will be deleted automatically in {hours} h."
         elif expiry == "logoff":
             data[username] = {"mode": "logoff", "seen": False}
-            note += " Wird nach der Abmeldung (Ende der Benutzung) geloescht."
+            note += " Will be deleted after logoff (end of use)."
         else:
-            note += " Kein automatischer Verfall."
+            note += " No automatic expiry."
         _tempusers_save(data)
     t = _tempuser_thread.get("t")
     if t is None or not t.is_alive():
         t = threading.Thread(target=_tempuser_watch_loop, daemon=True)
         _tempuser_thread["t"] = t
         t.start()
-    _print(f"[tempuser] Benutzer {username} angelegt (Verfall: {expiry})")
+    _print(f"[tempuser] user {username} created (expiry: {expiry})")
     return {"ok": True, "username": username, "password": password, "note": note}
 
 
@@ -5176,17 +5175,17 @@ async def on_tempuser_create(data):
 
 
 # ------------------------------------------------------------------
-# BLACKBOX "letzter Stand": alle X Minuten (vom Backend konfiguriert) einen
-# kleinen Zustands-Schnappschuss melden: Desktop-Screenshot (verkleinert),
-# Metriken und die letzten Log-Zeilen. Geht das Geraet offline, zeigt das
-# Dashboard den letzten gemeldeten Stand. Das Backend speichert Metriken als
-# DELTAS und verwirft den alten Screenshot, sobald ein neuer ankommt.
+# BLACKBOX "last state": every X minutes (configured by the backend) report a
+# small state snapshot: desktop screenshot (downscaled), metrics and the last
+# log lines. If the device goes offline, the dashboard shows the last reported
+# state. The backend stores metrics as DELTAS and discards the old screenshot
+# as soon as a new one arrives.
 # ------------------------------------------------------------------
 _blackbox = {"enabled": False, "interval": 5, "thread": None, "last": 0.0}
 
 
 def _blackbox_shot() -> str | None:
-    """Kleiner JPEG-Screenshot (base64) - None, wenn kein Display greifbar."""
+    """Small JPEG screenshot (base64) - None if no display is reachable."""
     try:
         import mss
         from PIL import Image
@@ -5235,7 +5234,7 @@ async def on_blackbox_config(data):
         _blackbox["interval"] = max(1, min(int(data.get("interval_min") or 5), 240))
     except (TypeError, ValueError):
         _blackbox["interval"] = 5
-    _blackbox["last"] = 0.0          # bei Konfig-Wechsel zeitnah einen Stand melden
+    _blackbox["last"] = 0.0          # report a state promptly on a config change
     t = _blackbox.get("thread")
     if _blackbox["enabled"] and (t is None or not t.is_alive()):
         t = threading.Thread(target=_blackbox_loop,
@@ -5246,9 +5245,9 @@ async def on_blackbox_config(data):
 
 @sio.on("software-install", namespace="/agent")
 async def on_software_install(data):
-    """Software-Rollout (Modul "software"): Installationsdateien vom Backend
-    laden und das Installationskommando ausfuehren. Platzhalter im Kommando:
-    {dir} = Download-Ordner, {file} = erste Datei (voller Pfad)."""
+    """Software rollout (module "software"): download the installation files
+    from the backend and run the install command. Placeholders in the command:
+    {dir} = download folder, {file} = first file (full path)."""
     data = data or {}
     request_id = data.get("requestId")
     loop = asyncio.get_event_loop()
@@ -5262,7 +5261,7 @@ async def on_software_install(data):
         try:
             first = ""
             for f in data.get("files") or []:
-                name = os.path.basename(str(f.get("name") or "datei"))
+                name = os.path.basename(str(f.get("name") or "file"))
                 blob = _backend_fetch(str(f.get("path") or ""), timeout=600,
                                       limit=2 * 1024 * 1024 * 1024)
                 p = os.path.join(tdir, name)
@@ -5272,7 +5271,7 @@ async def on_software_install(data):
                     first = p
             cmd = str(data.get("command") or "").replace("{dir}", tdir).replace("{file}", first)
             if not cmd and first:
-                # Kein Kommando: bekannte Formate direkt still installieren.
+                # No command: silently install known formats directly.
                 low = first.lower()
                 if low.endswith(".msi"):
                     cmd = f'msiexec /i "{first}" /qn /norestart'
@@ -5283,7 +5282,7 @@ async def on_software_install(data):
                 elif low.endswith(".rpm"):
                     cmd = f'rpm -i "{first}"'
             if not cmd:
-                return "Kein Installationskommando angegeben", 2
+                return "No install command specified", 2
             res = _sp.run(cmd, shell=True, cwd=tdir, capture_output=True,
                           text=True, errors="replace", timeout=1800)
             out = ((res.stdout or "") + (res.stderr or ""))[-6000:]
@@ -5305,27 +5304,27 @@ async def on_software_install(data):
 
 @sio.on("migrate-server", namespace="/agent")
 async def on_migrate_server(data):
-    """Backend-Migration: Das (alte) Backend teilt die NEUE Server-Adresse mit.
-    Der Agent schreibt sie in seine .env und startet sich neu - ab dann
-    verbindet er sich mit dem neuen Backend. Da data/.env des Backends
-    mitmigriert wird, bleiben Agent-Token und E2E-/TLS-Pinning gültig."""
+    """Backend migration: the (old) backend announces the NEW server address.
+    The agent writes it to its .env and restarts - from then on it connects to
+    the new backend. Since the backend's data/.env is migrated along, the agent
+    token and E2E/TLS pinning stay valid."""
     from urllib.parse import urlparse
     url = str((data or {}).get("url") or "").strip().rstrip("/")
     p = urlparse(url)
     if p.scheme not in ("http", "https") or not p.netloc:
-        _print(f"[migrate] Ungültige neue Server-Adresse erhalten: {url!r}")
+        _print(f"[migrate] received an invalid new server address: {url!r}")
         return
     if url == BACKEND_URL.rstrip("/"):
-        return  # schon richtig eingestellt
-    _print(f"[migrate] Neue Backend-Adresse: {url} - übernehme und starte neu")
+        return  # already set correctly
+    _print(f"[migrate] new backend address: {url} - applying and restarting")
     try:
         _env_store({"BACKEND_URL": url})
     except Exception as e:
-        _print(f"[migrate] .env konnte nicht geschrieben werden: {e}")
+        _print(f"[migrate] could not write .env: {e}")
         return
 
     async def _restart_soon():
-        await asyncio.sleep(1.5)   # Ack/Logs noch rausschreiben lassen
+        await asyncio.sleep(1.5)   # let the ack/logs flush out first
         try:
             await sio.disconnect()
         except Exception:
@@ -5337,7 +5336,7 @@ async def on_migrate_server(data):
 
 @sio.on("term-open", namespace="/agent")
 async def on_term_open(data):
-    """Startet eine echte interaktive Shell-Session."""
+    """Starts a real interactive shell session."""
     session_id = data.get("session")
     shell = data.get("shell", "auto")
     mode = data.get("mode") if data.get("mode") in ("admin", "user") else "admin"
@@ -5347,22 +5346,22 @@ async def on_term_open(data):
         return
 
     if IS_WINDOWS and mode == "user":
-        # Ohne eigenen SSH-Server gibt es unter Windows keinen sauberen
-        # Konsolen-Login (runas & Co. öffnen eigene Fenster auf dem Desktop).
+        # Without our own SSH server there is no clean console login on
+        # Windows (runas & co. open their own windows on the desktop).
         await sio.emit("term-output", {
             "id": DEVICE_ID, "session": session_id,
-            "data": "\x1b[33m[Benutzer-Login ist unter Windows nicht verfügbar - "
-                    "starte normale Shell.]\x1b[0m\r\n",
+            "data": "\x1b[33m[User login is not available on Windows - "
+                    "starting a normal shell.]\x1b[0m\r\n",
         }, namespace="/agent")
         mode = "admin"
 
-    # SOFORT-Marker: beweist, dass DIESER (neue) Agent-Code läuft. Sieht der
-    # Nutzer diese Zeile nicht, läuft auf dem Client noch die ALTE agent.py
-    # (Prozess nach dem Update nicht neu gestartet).
-    what = "Login (Benutzer-Anmeldung)" if mode == "user" else f"{shell}-Shell"
+    # IMMEDIATE marker: proves that THIS (new) agent code is running. If the
+    # user does not see this line, the client is still running the OLD agent.py
+    # (process not restarted after the update).
+    what = "login (user sign-in)" if mode == "user" else f"{shell} shell"
     await sio.emit("term-output", {
         "id": DEVICE_ID, "session": session_id,
-        "data": f"\x1b[90m[Agent startet {what}…]\x1b[0m\r\n",
+        "data": f"\x1b[90m[Agent starting {what}…]\x1b[0m\r\n",
     }, namespace="/agent")
 
     if mode == "user" and not IS_WINDOWS:
@@ -5370,13 +5369,13 @@ async def on_term_open(data):
             if os.geteuid() != 0:
                 await sio.emit("term-output", {
                     "id": DEVICE_ID, "session": session_id,
-                    "data": "\x1b[33m[Hinweis: Der Agent läuft nicht als root - "
-                            "die Anmeldung kann fehlschlagen.]\x1b[0m\r\n",
+                    "data": "\x1b[33m[Note: the agent is not running as root - "
+                            "the sign-in may fail.]\x1b[0m\r\n",
                 }, namespace="/agent")
         except Exception:
             pass
 
-    # Schon offen? Erst schließen (Neustart).
+    # Already open? Close it first (restart).
     old = _terminals.pop(session_id, None)
     if old:
         try:
@@ -5392,19 +5391,19 @@ async def on_term_open(data):
             term = _PosixTerminal(session_id, shell, cols, rows, loop, mode)
         _terminals[session_id] = term
     except ImportError as e:
-        # pywinpty fehlt oder ist kaputt. Erst einmal selbst reparieren -
-        # das deckt den haeufigsten Fall ab (Reste einer alten Version bzw.
-        # das kollidierende Paket 'winpty'). Klappt das nicht, laeuft die
-        # Shell im eingeschraenkten Pipe-Modus weiter, statt gar nicht.
+        # pywinpty is missing or broken. First try to repair it ourselves -
+        # that covers the most common case (leftovers of an old version or the
+        # colliding package 'winpty'). If that fails, the shell keeps running
+        # in the limited pipe mode instead of not at all.
         diag = _winpty_diagnose()
-        _print(f"[term] pywinpty-Import fehlgeschlagen: {e}\n{diag}")
+        _print(f"[term] pywinpty import failed: {e}\n{diag}")
         term = None
         if _winpty_repair():
             try:
                 term = _WinTerminal(session_id, shell, cols, rows, loop)
                 await sio.emit("term-output", {
                     "id": DEVICE_ID, "session": session_id,
-                    "data": "\x1b[32m[pywinpty wurde repariert.]\x1b[0m\r\n",
+                    "data": "\x1b[32m[pywinpty was repaired.]\x1b[0m\r\n",
                 }, namespace="/agent")
             except Exception as e2:
                 _print(f"[term] still no ConPTY after repair: {e2}")
@@ -5415,7 +5414,7 @@ async def on_term_open(data):
                 "data": "\r\n\x1b[33mNo ConPTY available "
                         f"({e}).\x1b[0m\r\n"
                         + "".join(f"\x1b[90m{l}\x1b[0m\r\n" for l in diag.split("\n"))
-                        + "\x1b[90mHinweis: Ein 'pip install pywinpty' hilft hier meist "
+                        + "\x1b[90mNote: a 'pip install pywinpty' usually "
                           "is not enough - a leftover is on the search path. Manually: "
                           "pip uninstall -y winpty pywinpty && pip install pywinpty"
                           "\x1b[0m\r\n",
@@ -5425,7 +5424,7 @@ async def on_term_open(data):
             except Exception as e3:
                 await sio.emit("term-output", {
                     "id": DEVICE_ID, "session": session_id,
-                    "data": f"\r\n\x1b[31mAuch der Ersatz-Modus scheiterte: {e3}\x1b[0m\r\n",
+                    "data": f"\r\n\x1b[31mThe fallback mode also failed: {e3}\x1b[0m\r\n",
                 }, namespace="/agent")
                 await sio.emit("term-exit", {"id": DEVICE_ID, "session": session_id},
                                namespace="/agent")
@@ -5463,8 +5462,8 @@ async def on_term_close(data):
 
 
 # --------------------------------------------------------------
-# Agent-Konsole: Dashboard liest den Log dieses Agenten mit
-# (Historie aus dem rollierenden Puffer + Live-Zeilen).
+# Agent console: the dashboard reads along this agent's log
+# (history from the rolling buffer + live lines).
 # --------------------------------------------------------------
 
 @sio.on("agent-console-open", namespace="/agent")
@@ -5483,23 +5482,23 @@ async def on_agent_console_close(data=None):
 
 
 # --------------------------------------------------------------
-# Fernbefehle: Dateisystem auflisten (File Station im Dashboard)
+# Remote commands: list the file system (File Station in the dashboard)
 # --------------------------------------------------------------
 
 def _list_windows_drives() -> list[dict]:
     """
-    Ermittelt ALLE Laufwerke unter Windows (lokale Festplatten, USB, CD,
-    und gemappte Netzlaufwerke) über psutil - zuverlässiger als das veraltete
-    'wmic', das auf neueren Windows-Versionen oft gar nicht mehr existiert.
+    Determines ALL drives on Windows (local disks, USB, CD, and mapped network
+    drives) via psutil - more reliable than the outdated 'wmic', which often no
+    longer exists on newer Windows versions.
     """
     drives = []
     try:
-        # all=True liefert auch Netzlaufwerke und Wechseldatenträger mit
+        # all=True also includes network drives and removable media
         for part in psutil.disk_partitions(all=True):
             mount = part.mountpoint
             if not mount:
                 continue
-            # Typ-Kennzeichnung für ein hübsches Label (lokal vs. Netzlaufwerk)
+            # type marker for a nice label (local vs. network drive)
             is_network = "remote" in (part.opts or "").lower() or part.fstype == ""
             try:
                 usage = psutil.disk_usage(mount)
@@ -5508,7 +5507,7 @@ def _list_windows_drives() -> list[dict]:
                 size = 0
             label = mount.rstrip("\\")
             if is_network:
-                label += "  (Netzlaufwerk)"
+                label += "  (network drive)"
             drives.append({
                 "name": label,
                 "path": mount if mount.endswith("\\") else mount + "\\",
@@ -5523,7 +5522,7 @@ def _list_windows_drives() -> list[dict]:
 
 
 def _perm_string(mode: int, is_dir: bool, is_link: bool = False) -> str:
-    """Baut einen 'ls -al'-artigen Rechte-String, z.B. 'drwxr-xr-x'."""
+    """Builds an 'ls -al'-style permission string, e.g. 'drwxr-xr-x'."""
     import stat as _stat
     if is_link:
         type_char = "l"
@@ -5552,8 +5551,8 @@ def _perm_string(mode: int, is_dir: bool, is_link: bool = False) -> str:
 
 
 def _owner_group(stat_res) -> tuple[str, str]:
-    """Ermittelt Besitzer- und Gruppennamen (Linux/Mac). Unter Windows bzw.
-    bei fehlenden Modulen wird die numerische UID/GID zurückgegeben."""
+    """Determines owner and group names (Linux/Mac). On Windows or with
+    missing modules, the numeric UID/GID is returned."""
     uid = getattr(stat_res, "st_uid", 0)
     gid = getattr(stat_res, "st_gid", 0)
     owner, group = str(uid), str(gid)
@@ -5572,8 +5571,8 @@ def _owner_group(stat_res) -> tuple[str, str]:
 
 
 def _entry_meta(full_path: str, is_dir: bool) -> dict:
-    """Sammelt Größe, mtime, Rechte, Besitzer, Gruppe und Oktal-Modus einer
-    Datei/eines Ordners - so, wie es 'ls -al' anzeigen würde."""
+    """Collects size, mtime, permissions, owner, group and octal mode of a
+    file/folder - as 'ls -al' would show it."""
     import stat as _stat
     meta = {"size": 0, "mtime": 0, "perms": "", "owner": "", "group": "",
             "mode": "", "is_link": False}
@@ -5593,15 +5592,15 @@ def _entry_meta(full_path: str, is_dir: bool) -> dict:
 
 
 def _list_directory(path: str) -> list[dict]:
-    """Listet den Inhalt eines Ordners auf. Bei leerem Pfad: Laufwerke bzw. Root/Home zeigen."""
+    """Lists the contents of a folder. For an empty path: show drives or root/home."""
     if not path:
         if IS_WINDOWS:
             return _list_windows_drives()
-        # Linux/Mac: Root, Home und alle gemounteten Partitionen anzeigen
+        # Linux/Mac: show root, home and all mounted partitions
         home = str(Path.home())
         entries = [
-            {"name": "/ (Root)", "path": "/", "isDir": True, "size": 0, "mtime": 0},
-            {"name": f"🏠 Home ({home})", "path": home, "isDir": True, "size": 0, "mtime": 0},
+            {"name": "/ (root)", "path": "/", "isDir": True, "size": 0, "mtime": 0},
+            {"name": f"Home ({home})", "path": home, "isDir": True, "size": 0, "mtime": 0},
         ]
         seen = {"/", home}
         try:
@@ -5614,7 +5613,7 @@ def _list_directory(path: str) -> list[dict]:
                     except Exception:
                         size = 0
                     entries.append({
-                        "name": f"💽 {mp} ({part.device})",
+                        "name": f"{mp} ({part.device})",
                         "path": mp, "isDir": True, "size": size, "mtime": 0,
                     })
         except Exception:
@@ -5641,7 +5640,7 @@ def _list_directory(path: str) -> list[dict]:
 
 @sio.on("fs-list", namespace="/agent")
 async def on_fs_list(data):
-    """Wird aufgerufen, wenn das Backend einen Ordnerinhalt sehen will."""
+    """Called when the backend wants to see the contents of a folder."""
     request_id = data.get("requestId")
     req_path = data.get("path", "")
 
@@ -5654,10 +5653,10 @@ async def on_fs_list(data):
 
 
 def _read_file_b64(path: str, max_bytes: int = 25 * 1024 * 1024) -> dict:
-    """Liest eine Datei und gibt sie base64-kodiert zurück (für den Download)."""
+    """Reads a file and returns it base64-encoded (for the download)."""
     size = os.path.getsize(path)
     if size > max_bytes:
-        raise ValueError(f"Datei zu groß ({size} Bytes, max. {max_bytes})")
+        raise ValueError(f"File too large ({size} bytes, max. {max_bytes})")
     with open(path, "rb") as f:
         content = f.read()
     return {
@@ -5668,7 +5667,7 @@ def _read_file_b64(path: str, max_bytes: int = 25 * 1024 * 1024) -> dict:
 
 @sio.on("fs-read", namespace="/agent")
 async def on_fs_read(data):
-    """Liest eine einzelne Datei für den Download im Dashboard."""
+    """Reads a single file for the download in the dashboard."""
     request_id = data.get("requestId")
     path = data.get("path", "")
     loop = asyncio.get_event_loop()
@@ -5680,11 +5679,11 @@ async def on_fs_read(data):
 
 
 # --------------------------------------------------------------
-# Schreibende Datei-Operationen (Upload, Ordner, Löschen, Umbenennen, Editieren)
+# Writing file operations (upload, folder, delete, rename, edit)
 # --------------------------------------------------------------
 
 def _write_file_b64(path: str, data_b64: str) -> dict:
-    """Schreibt eine (hochgeladene oder editierte) Datei an den Zielpfad."""
+    """Writes an (uploaded or edited) file to the target path."""
     content = base64.b64decode(data_b64)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "wb") as f:
@@ -5698,7 +5697,7 @@ def _make_dir(path: str) -> dict:
 
 
 def _delete_path(path: str) -> dict:
-    """Löscht eine Datei oder einen (auch nicht-leeren) Ordner."""
+    """Deletes a file or a (possibly non-empty) folder."""
     import shutil
     if os.path.isdir(path) and not os.path.islink(path):
         shutil.rmtree(path)
@@ -5713,23 +5712,22 @@ def _rename_path(src: str, dst: str) -> dict:
 
 
 # --------------------------------------------------------------
-# Datei-Operationen mit ADMIN-RECHTEN (Web-Explorer + Explorer-Relay)
+# File operations with ADMIN RIGHTS (web explorer + explorer relay)
 # --------------------------------------------------------------
-# Läuft der Agent NICHT bereits als SYSTEM/root, schlagen Dateizugriffe auf
-# geschützte Pfade mit "Zugriff verweigert" fehl (und der Relay-Client zeigt
-# Fehler bzw. bricht die Verbindung ab). Deshalb gilt für ALLES, was über den
-# Web-Explorer oder das Explorer-Relay läuft: Erst der normale (schnelle)
-# Versuch - schlägt der mit Zugriff-verweigert fehl, wird die Operation
-# automatisch ELEVIERT wiederholt:
-#   Windows: Start-Process -Verb RunAs (läuft der Agent als Dienst/SYSTEM,
-#            ist das transparent ohne UAC-Dialog)
-#   Linux:   sudo -n (setzt eine NOPASSWD-Regel für den Agent-Benutzer voraus;
-#            läuft der Agent als root, greift schon der Direktversuch)
-# So werden die Operationen effektiv IMMER mit Admin-Rechten ausgeführt und
-# ein "Datei ohne Rechte editieren" bringt den Relay nicht mehr zum Absturz.
+# If the agent does NOT already run as SYSTEM/root, file access to protected
+# paths fails with "access denied" (and the relay client shows errors or drops
+# the connection). So for EVERYTHING that goes through the web explorer or the
+# explorer relay: first the normal (fast) attempt - if it fails with
+# access-denied, the operation is automatically retried ELEVATED:
+#   Windows: Start-Process -Verb RunAs (if the agent runs as service/SYSTEM,
+#            this is transparent without a UAC dialog)
+#   Linux:   sudo -n (requires a NOPASSWD rule for the agent user; if the agent
+#            runs as root, the direct attempt already works)
+# This way the operations are effectively ALWAYS run with admin rights and
+# "editing a file without permission" no longer crashes the relay.
 
 def _is_access_denied(exc: Exception) -> bool:
-    """Erkennt 'Zugriff verweigert'-Fehler plattformübergreifend."""
+    """Detects 'access denied' errors across platforms."""
     if isinstance(exc, PermissionError):
         return True
     if isinstance(exc, OSError):
@@ -5740,9 +5738,9 @@ def _is_access_denied(exc: Exception) -> bool:
     return False
 
 
-# Eigenständiges Mini-Skript, das die Datei-Operation im ELEVIERTEN Prozess
-# ausführt. Austausch über zwei JSON-Dateien (Request/Response), damit keine
-# Kommandozeilen-Quoting-Probleme entstehen.
+# Standalone mini script that runs the file operation in the ELEVATED
+# process. Exchange via two JSON files (request/response) so that no
+# command-line quoting problems arise.
 _FS_ELEV_SOURCE = r'''
 import base64, json, os, shutil, sys
 with open(sys.argv[1], "r", encoding="utf-8") as f:
@@ -5789,7 +5787,7 @@ try:
         os.rename(req["src"], req["dst"])
         res = {"ok": True, "src": req["src"], "dst": req["dst"]}
     else:
-        res = {"error": "Unbekannte Operation: %s" % op}
+        res = {"error": "Unknown operation: %s" % op}
 except Exception as e:
     res = {"error": str(e)}
 with open(sys.argv[2], "w", encoding="utf-8") as f:
@@ -5798,8 +5796,8 @@ with open(sys.argv[2], "w", encoding="utf-8") as f:
 
 
 def _fs_elevated(op: dict) -> dict:
-    """Führt eine Datei-Operation ELEVIERT (Admin/root) aus. Blockierend -
-    wird wie die Direkt-Varianten im Executor aufgerufen."""
+    """Runs a file operation ELEVATED (admin/root). Blocking - called in the
+    executor like the direct variants."""
     import json as _json_mod
     import shutil as _shutil
     tmpdir = tempfile.mkdtemp(prefix="rmm-fsadmin-")
@@ -5813,7 +5811,7 @@ def _fs_elevated(op: dict) -> dict:
             _json_mod.dump(op, f)
 
         if IS_WINDOWS:
-            # Gleiches Muster wie _run_elevated_windows: Start-Process -Verb RunAs.
+            # Same pattern as _run_elevated_windows: Start-Process -Verb RunAs.
             inner_exec = f'"{sys.executable}" "{script}" "{req_f}" "{res_f}"'
             launch_script = (
                 f"$p = Start-Process -FilePath cmd.exe -ArgumentList '/c',{_ps_single_quote(inner_exec)} "
@@ -5824,8 +5822,8 @@ def _fs_elevated(op: dict) -> dict:
                   "-EncodedCommand", encoded],
                  capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
         else:
-            # Linux/macOS: sudo ohne Passwort-Abfrage (-n). Ohne passende
-            # sudoers-Regel schlägt das kontrolliert fehl (kein Hänger).
+            # Linux/macOS: sudo without a password prompt (-n). Without a matching
+            # sudoers rule this fails in a controlled way (no hang).
             _run(["sudo", "-n", sys.executable, script, req_f, res_f],
                  capture_output=True, timeout=120)
 
@@ -5843,22 +5841,22 @@ def _fs_elevated(op: dict) -> dict:
 
 
 # ------------------------------------------------------------------
-# Elevation-Bremse: Explorer-Relay-Browsing kann pro Ordner DUTZENDE
-# "Zugriff verweigert"-Fälle auslösen (folder.jpg, Thumbs.db, System-
-# Junctions, ...). Ohne Bremse würde für jeden einzelnen ein RunAs-
-# PowerShell-Prozess gestartet (bis 120s Timeout) - das hat den Agent
-# in der Vergangenheit destabilisiert (harter Prozess-Tod 0x80000003).
-#   - _ELEV_LOCK:     nie mehr als EINE Elevation gleichzeitig
-#   - _elev_failed:   pro Pfad 10min Sperre nach fehlgeschlagener Elevation
-#   - _elev_last_fail: nach JEDEM Fehlschlag 60s globale Pause
-#   - System-Junctions (Documents and Settings, $Recycle.Bin, ...) werden
-#     bei "list" gar nicht erst eleviert - dort hilft Elevation ohnehin nicht.
+# Elevation throttle: explorer-relay browsing can trigger DOZENS of
+# "access denied" cases per folder (folder.jpg, Thumbs.db, system
+# junctions, ...). Without a throttle, a RunAs PowerShell process would be
+# started for each one (up to 120s timeout) - which destabilized the agent
+# in the past (hard process death 0x80000003).
+#   - _ELEV_LOCK:     never more than ONE elevation at a time
+#   - _elev_failed:   10min block per path after a failed elevation
+#   - _elev_last_fail: 60s global pause after ANY failure
+#   - system junctions (Documents and Settings, $Recycle.Bin, ...) are not
+#     elevated at all on "list" - elevation does not help there anyway.
 # ------------------------------------------------------------------
 _ELEV_LOCK = threading.Lock()
 _elev_failed: dict[str, float] = {}
 _elev_last_fail = 0.0
-_ELEV_PATH_COOLDOWN = 600.0   # Sekunden pro Pfad
-_ELEV_GLOBAL_COOLDOWN = 60.0  # Sekunden nach beliebigem Fehlschlag
+_ELEV_PATH_COOLDOWN = 600.0   # seconds per path
+_ELEV_GLOBAL_COOLDOWN = 60.0  # seconds after any failure
 _WIN_SYSTEM_JUNCTIONS = {
     "documents and settings", "$recycle.bin", "system volume information",
     "recovery", "config.msi", "dfsrprivate", "perflogs",
@@ -5870,15 +5868,15 @@ def _elev_key(op: dict) -> str:
 
 
 def _fs_with_admin(direct, op: dict):
-    """Direktversuch; bei 'Zugriff verweigert' automatisch eleviert wiederholen.
-    Mit Drossel, damit Explorer-Relay-Browsing keinen Elevation-Sturm auslöst."""
+    """Direct attempt; on 'access denied' automatically retried elevated.
+    With a throttle, so explorer-relay browsing does not cause an elevation storm."""
     global _elev_last_fail
     try:
         return direct()
     except Exception as e:
         if not _is_access_denied(e):
             raise
-        # Bekannte System-Junctions: Elevation bringt beim Auflisten nichts.
+        # Known system junctions: elevation does nothing when listing.
         if op.get("op") == "list":
             base = os.path.basename((op.get("path") or "").rstrip("\\/")).lower()
             if base in _WIN_SYSTEM_JUNCTIONS:
@@ -5887,11 +5885,11 @@ def _fs_with_admin(direct, op: dict):
         key = _elev_key(op)
         ts = _elev_failed.get(key)
         if ts and now - ts < _ELEV_PATH_COOLDOWN:
-            raise  # gleicher Pfad ist erst kürzlich gescheitert
+            raise  # same path failed only recently
         if now - _elev_last_fail < _ELEV_GLOBAL_COOLDOWN:
-            raise  # globale Schonfrist nach letztem Fehlschlag
+            raise  # global grace period after the last failure
         _print(f"[agent] file operation '{op.get('op')}' without permission "
-               f"({e}) -> wiederhole mit Admin-Rechten")
+               f"({e}) -> retrying with admin rights")
         with _ELEV_LOCK:
             try:
                 res = _fs_elevated(op)
@@ -5904,7 +5902,7 @@ def _fs_with_admin(direct, op: dict):
 
 
 def _listdir_admin(path: str):
-    # Leerer Pfad = Laufwerks-/Root-Übersicht, braucht nie Elevation.
+    # Empty path = drive/root overview, never needs elevation.
     if not path:
         return _list_directory(path)
     res = _fs_with_admin(lambda: _list_directory(path), {"op": "list", "path": path})
@@ -5935,7 +5933,7 @@ def _rename_admin(src: str, dst: str) -> dict:
 
 @sio.on("fs-write", namespace="/agent")
 async def on_fs_write(data):
-    """Datei hochladen oder eine editierte Datei zurückschreiben."""
+    """Upload a file or write back an edited file."""
     request_id = data.get("requestId")
     path = data.get("path", "")
     payload = data.get("data", "")
@@ -5982,11 +5980,11 @@ async def on_fs_rename(data):
 
 
 # --------------------------------------------------------------
-# Task-Manager: strukturierte Prozessliste + Prozess beenden
+# Task manager: structured process list + terminate a process
 # --------------------------------------------------------------
 
 def _collect_processes() -> list[dict]:
-    """Sammelt die laufenden Prozesse mit CPU-/RAM-Nutzung über psutil."""
+    """Collects the running processes with CPU/RAM usage via psutil."""
     procs = []
     for p in psutil.process_iter(["pid", "name", "username", "memory_percent"]):
         try:
@@ -5995,19 +5993,19 @@ def _collect_processes() -> list[dict]:
                 "pid": info["pid"],
                 "name": info["name"] or "?",
                 "username": info.get("username") or "",
-                "cpu": p.cpu_percent(interval=0),   # seit letztem Aufruf
+                "cpu": p.cpu_percent(interval=0),   # since the last call
                 "mem": round(info.get("memory_percent") or 0, 1),
             })
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
-    # Nach Speicherverbrauch sortieren, die größten zuerst
+    # Sort by memory usage, largest first
     procs.sort(key=lambda x: x["mem"], reverse=True)
-    return procs[:60]  # auf die Top 60 begrenzen
+    return procs[:60]  # limit to the top 60
 
 
 @sio.on("proc-list", namespace="/agent")
 async def on_proc_list(data):
-    """Liefert die Prozessliste an den Task-Manager im Dashboard."""
+    """Returns the process list to the task manager in the dashboard."""
     request_id = data.get("requestId")
     loop = asyncio.get_event_loop()
     try:
@@ -6019,7 +6017,7 @@ async def on_proc_list(data):
 
 @sio.on("proc-kill", namespace="/agent")
 async def on_proc_kill(data):
-    """Beendet einen Prozess anhand seiner PID."""
+    """Terminates a process by its PID."""
     request_id = data.get("requestId")
     pid = data.get("pid")
     try:
