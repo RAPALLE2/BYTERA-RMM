@@ -1,21 +1,21 @@
 // panel.js
 // --------
-// Rendert den mittleren Hauptbereich, abhängig von der Sidebar-Auswahl:
-//   - Client   -> Detailansicht (Status | Übersicht mit Metrics/Notes/Disk | Actions)
-//   - Location -> aggregierte Übersicht aller Clients dieser Location
-//   - Tenant   -> aggregierte Übersicht, nach Location gruppiert
+// Renders the central main area, depending on the sidebar selection:
+//   - Client   -> detail view (Status | overview with Metrics/Notes/Disk | Actions)
+//   - Location -> aggregated overview of all clients of this location
+//   - Tenant   -> aggregated overview, grouped by location
 //
-// Die Metrics-Ansicht bietet: Gradient-Donuts (CPU/RAM/Disk), CPU-Cores/Threads,
-// RAM used/frei, Netzwerk-Graph mit In/Out-Toggle, beschriftete Verlaufs-
-// Diagramme mit Hover-Tooltip und Zeitspannen-Dropdown.
+// The metrics view offers: gradient donuts (CPU/RAM/Disk), CPU cores/threads,
+// RAM used/free, network graph with in/out toggle, labelled history
+// charts with a hover tooltip and a time-range dropdown.
 
 import { state, findClient } from "./state.js";
-// URL-Schema-Modul wird beim Klick dynamisch geladen (robust, falls aus/fehlend)
+// URL-scheme module is loaded dynamically on click (robust if off/missing)
 import { hasClientPerm, hasGlobalPerm, isAdmin } from "./state.js";
 import { formatBytes, formatUptime, esc, gradientDonutSvg, CPU_GRADIENT, RAM_GRADIENT, DISK_GRADIENT, interactiveChart, uiConfirm, uiPrompt, uiChoice } from "./utils.js";
 import { getHistoryRange, TIME_RANGES, seedHistory, hasSeeded } from "./metricshistory.js";
 import { openWindow } from "./windowmanager.js";
-import { isModuleOn, getClientActions, getClientWidgets, runActionHandlers } from "./modules.js";   // Optionale Modul-Funktionen (Guacamole-Knopf, Modul-Knöpfe, Widgets)
+import { isModuleOn, getClientActions, getClientWidgets, runActionHandlers } from "./modules.js";   // Optional module functions (Guacamole button, module buttons, widgets)
 import { subjectPickerHtml, readSubjectPicker, initSubjectPicker } from "./subjectpicker.js";
 import { api } from "./api.js";
 import { renderDashboard } from "../feature/dashboard.js";
@@ -25,8 +25,8 @@ import { hideFleetTip, showFleetTip, attachHoverTip, scaleToContainer } from "./
 import { renderMainByStyle } from "./styles.js";
 import { clientIconSvg, batteryHtml } from "./deviceicons.js";
 
-// Zeilen-Hover (wie Dashboard/clientmetrics): Zeile hervorheben + Tooltip
-// mit Label + VOLLSTÄNDIGEM Wert genau dieser Zeile.
+// Row hover (like dashboard/clientmetrics): highlight the row + tooltip
+// with the label + the FULL value of exactly this row.
 function bindRowHover(rowEl, tipFn) {
   rowEl.style.borderRadius = rowEl.style.borderRadius || "6px";
   rowEl.style.cursor = "default";
@@ -35,41 +35,41 @@ function bindRowHover(rowEl, tipFn) {
   rowEl.addEventListener("mouseleave", () => { rowEl.style.background = ""; hideFleetTip(); });
 }
 
-// Neueste ausgelieferte Agent-Version (einmalig laden) für den "veraltet"-Hinweis.
+// Latest shipped agent version (loaded once) for the "outdated" hint.
 let _latestAgentVersion = null;
 api.getAgentVersion().then((r) => { _latestAgentVersion = r && r.version; }).catch(() => {});
 
-// Zeigt die gemeldete Agent-Version; weicht sie von der neuesten ab, wird ein
-// deutlicher "veraltet"-Hinweis angezeigt (häufige Ursache dafür, dass
-// Update/Uninstall über das Dashboard nicht greift).
+// Shows the reported agent version; if it differs from the latest, a
+// clear "outdated" hint is shown (a common reason why
+// update/uninstall from the dashboard does not take effect).
 function agentVersionBadge(client) {
   const v = client.agent_version;
-  if (!v) return `<span style="color:var(--subtext)">unbekannt</span>`;
+  if (!v) return `<span style="color:var(--subtext)">unknown</span>`;
   if (_latestAgentVersion && v !== _latestAgentVersion) {
-    return `<span title="Neu: ${esc(_latestAgentVersion)}">${esc(v)} <span style="color:var(--warn)">⚠ veraltet</span></span>`;
+    return `<span title="New: ${esc(_latestAgentVersion)}">${esc(v)} <span style="color:var(--warn)">⚠ outdated</span></span>`;
   }
   return `<span>${esc(v)}</span>`;
 }
 import { t, osIcon, osLabel } from "./i18n.js";
 
-// Zustand der Übersicht (pro Ansicht gemerkt). Die Tab-Auswahl wird jetzt PRO
-// Ordner-Instanz gehalten (mehrere Übersicht-Ordner möglich), Default hier.
+// State of the overview (remembered per view). The tab selection is now kept PER
+// folder instance (multiple overview folders possible), default here.
 let showNetIn = true;
 let showNetOut = true;
-let timeRangeIndex = 0;           // Index in TIME_RANGES (Standard: 5 Min)
+let timeRangeIndex = 0;           // index in TIME_RANGES (default: 5 min)
 
 const content = () => document.getElementById("main-content");
 
 export function renderMainContent() {
-  // Ansicht wird gewechselt/neu gebaut: alle schwebenden Hover-Tooltips
-  // entfernen (sonst konnten sie über den Client-Wechsel hinaus stehenbleiben).
+  // View is switched/rebuilt: remove all floating hover tooltips
+  // (otherwise they could linger past the client switch).
   try { hideFleetTip(); } catch {}
   const el = content();
-  // Ein Style (Modul "styles", z.B. Classic Hard) kann den Hauptbereich selbst zeichnen
+  // A style (module "styles", e.g. Classic Hard) can draw the main area itself
   if (renderMainByStyle(el)) return;
   if (!state.selection || state.selection.type === "dashboard") {
-    // Ohne das Recht 'see_dashboard' bleibt die Dashboard-Ansicht bewusst eine
-    // leere schwarze Seite (keine Zahlen, Widgets oder Favoriten).
+    // Without the 'see_dashboard' permission the dashboard view deliberately stays a
+    // a blank black page (no numbers, widgets or favorites).
     if (!isAdmin() && !hasGlobalPerm("see_dashboard")) {
       el.innerHTML = `<div style="position:absolute;inset:0;background:#000"></div>`;
       return;
@@ -83,7 +83,7 @@ export function renderMainContent() {
 }
 
 // -----------------------------------------------------------------
-// Status-Hilfen
+// Status helpers
 // -----------------------------------------------------------------
 
 function statusInfo(client) {
@@ -93,7 +93,7 @@ function statusInfo(client) {
 }
 
 // -----------------------------------------------------------------
-// CLIENT-DETAILANSICHT
+// CLIENT DETAIL VIEW
 // -----------------------------------------------------------------
 
 function renderClientView(el, clientId) {
@@ -118,11 +118,11 @@ function renderClientView(el, clientId) {
     <div id="dash-module-widgets" style="display:flex;flex-wrap:wrap;gap:12px;margin-top:14px"></div>
   `;
 
-  // Anpassbares Layout (Status/Aktionen/Übersicht-Ordner) rendern.
+  // Render the customizable layout (status/actions/overview folders).
   renderClientLayout(el.querySelector("#dash-layout-host"),
                      el.querySelector("#dash-layout-toolbar"), client);
 
-  // Widgets aktiver Module (registerClientWidget), z.B. Standort-Karte.
+  // Widgets of active modules (registerClientWidget), e.g. the location map.
   const wHost = el.querySelector("#dash-module-widgets");
   getClientWidgets().forEach((w) => {
     let ok = false;
@@ -131,31 +131,31 @@ function renderClientView(el, clientId) {
     const box = document.createElement("div");
     box.style.cssText = "flex:1 1 320px;min-width:300px";
     wHost.appendChild(box);
-    try { w.render(box, client); } catch (e) { box.innerHTML = `<div style="color:var(--danger);font-size:12px">Widget-Fehler: ${esc(e.message)}</div>`; }
+    try { w.render(box, client); } catch (e) { box.innerHTML = `<div style="color:var(--danger);font-size:12px">Widget error: ${esc(e.message)}</div>`; }
   });
 
   maybePromptDeviceType(client);
 }
 
 // -----------------------------------------------------------------
-// Auto-Erkennung des Gerätetyps: Der Agent meldet, wenn er in einer VM oder
-// einem LXC-Container läuft. Beim ersten Öffnen des Client-Panels wird der
-// Nutzer gefragt, ob der Client als VM/LXC (mit Host-Auswahl) oder weiterhin
-// als physisch geführt werden soll. Die Antwort wird gespeichert
-// (device_type_ack), danach kommt die Frage nie wieder.
+// Auto-detection of the device type: the agent reports when it runs in a VM or
+// an LXC container. When the client panel is opened for the first time the
+// user is asked whether the client should be kept as VM/LXC (with host choice) or
+// still as physical. The answer is stored
+// (device_type_ack); after that the question never appears again.
 // -----------------------------------------------------------------
-const _dtPromptShown = new Set();   // pro Sitzung nur einmal je Client
+const _dtPromptShown = new Set();   // only once per session per client
 
 function maybePromptDeviceType(client) {
   const detected = client.detected_device_type;
   if (!detected || !["vm", "lxc"].includes(detected)) return;
   if (client.device_type_ack) return;
-  if ((client.device_type || "physical") !== "physical") return;   // schon manuell gesetzt
+  if ((client.device_type || "physical") !== "physical") return;   // already set manually
   if (_dtPromptShown.has(client.id)) return;
   _dtPromptShown.add(client.id);
 
-  const label = detected === "vm" ? "virtuelle Maschine (VM)" : "LXC-Container";
-  // Mögliche Hosts: physische Clients (außer dem Client selbst).
+  const label = detected === "vm" ? "virtual machine (VM)" : "LXC container";
+  // Possible hosts: physical clients (except the client itself).
   const hosts = state.clients.filter((c) =>
     c.id !== client.id && (c.device_type || "physical") === "physical");
 
@@ -166,7 +166,7 @@ function maybePromptDeviceType(client) {
     <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:22px;width:440px;max-width:92vw">
       <h3 style="margin:0 0 8px">${t("dt_detected", { label: esc(label) })}</h3>
       <p style="color:var(--subtext);font-size:13px;margin:0 0 12px">
-        Der Agent auf <b>${esc(client.hostname)}</b> hat erkannt, dass er in einer
+        The agent on <b>${esc(client.hostname)}</b> detected that it runs in a
         ${t("dt_question", { label: esc(label) })}
         ${t("dt_hint")}
       </p>
@@ -179,7 +179,7 @@ function maybePromptDeviceType(client) {
       </div>
       <div id="dt-error" class="form-error hidden"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
-        <button class="btn" id="dt-keep">Als physisch behalten</button>
+        <button class="btn" id="dt-keep">Keep as physical</button>
         <button class="btn-primary" id="dt-apply">${t("dt_apply", { kind: detected === "vm" ? "VM" : "LXC" })}</button>
       </div>
     </div>`;
@@ -188,13 +188,13 @@ function maybePromptDeviceType(client) {
   const finish = async (fields) => {
     try {
       const updated = await api.updateClient(client.id, { ...fields, device_type_ack: 1 });
-      Object.assign(client, updated);   // lokalen Zustand aktualisieren
+      Object.assign(client, updated);   // update local state
       overlay.remove();
       renderMainContent();
       window.notify?.(
         fields.device_type === "physical"
           ? t("dt_keep_physical", { host: client.hostname })
-          : `${client.hostname} ist jetzt als ${fields.device_type.toUpperCase()} eingeordnet.`,
+          : `${client.hostname} is now classified as ${fields.device_type.toUpperCase()}.`,
         "success");
     } catch (e) {
       const err = overlay.querySelector("#dt-error");
@@ -208,16 +208,16 @@ function maybePromptDeviceType(client) {
 }
 
 // -----------------------------------------------------------------
-// Wiederverwendbare Bausteine ("Parts") der Client-Ansicht. Jeder Part
-// rendert sich in ein übergebenes Ziel-Element und kann sowohl im Dashboard-
-// Layout als auch in einem herausgelösten Fenster (apps/panelpart.js) leben.
+// Reusable building blocks ("parts") of the client view. Each part
+// renders into a given target element and can live both in the dashboard
+// layout and in a detached window (apps/panelpart.js).
 // -----------------------------------------------------------------
 
-// --- STATUS-Part ---
-// Layout: AKTIONS-BUTTONS LINKS untereinander, TEXT (Status + Info-Zeilen)
-// RECHTS - füllt die Box gut aus. 1x1-optimiert + proportionales Mitwachsen;
-// jede Info-Zeile hat einen eigenen Hover (Highlight + Tooltip mit Label und
-// VOLLEM Wert dieser Zeile, z.B. kompletter Hostname/OS-String).
+// --- STATUS part ---
+// Layout: ACTION BUTTONS on the LEFT stacked, TEXT (status + info rows)
+// on the RIGHT - fills the box well. 1x1-optimized + grows proportionally;
+// each info row has its own hover (highlight + tooltip with the label and
+// the FULL value of that row, e.g. the complete hostname/OS string).
 export function renderStatusPart(target, client) {
   const status = statusInfo(client);
   const m = client.metrics;
@@ -230,12 +230,12 @@ export function renderStatusPart(target, client) {
     { label: "Agent", raw: client.agent_version || "–", html: agentVersionBadge(client) },
   ];
   target.innerHTML = "";
-  // STRETCH statt Skalieren: Buttons links, Text rechts - die beiden Spalten
-  // dehnen sich immer über die KOMPLETTE Panelfläche aus (gleiches Layout,
-  // voller Platz), die Schrift bleibt konstant lesbar.
+  // STRETCH instead of scaling: buttons left, text right - the two columns
+  // always stretch across the WHOLE panel area (same layout,
+  // full space), the font stays constantly readable.
   const holder = document.createElement("div");
-  // min-height statt height: Ist das Panel zu klein, waechst der Inhalt und das
-  // Panel scrollt (statt oben abgeschnitten / zusammengedrueckt zu werden).
+  // min-height instead of height: if the panel is too small, the content grows and the
+  // panel scrolls (instead of being cut off at the top / squashed).
   holder.style.cssText = "width:100%;min-height:100%;flex:1 0 auto;box-sizing:border-box;display:flex;align-items:center;gap:14px 20px;flex-wrap:wrap;min-width:0;align-content:center";
   const box = holder;
   box.innerHTML = `
@@ -248,7 +248,7 @@ export function renderStatusPart(target, client) {
       ${hasClientPerm(client.id, "manage_agent") ? `
       <button class="btn btn-danger" data-quick="uninstall" ${client.online ? "" : "disabled"} title="${t("uninstall_agent")}">🗑️ ${t("uninstall_agent")}</button>` : ""}
       ${hasClientPerm(client.id, "c_portforward") ? `
-      <button class="btn" data-quick="forward" title="Einen Dienst dieses Geräts über den Server erreichbar machen – ohne VPN und ohne offene Ports beim Kunden">🔀 Port</button>` : ""}
+      <button class="btn" data-quick="forward" title="Make a service of this device reachable through the server – without VPN and without open ports at the customer">🔀 Port</button>` : ""}
       ${hasClientPerm(client.id, "manage_clients") ? `<button class="btn" data-quick="edit">✏️ ${t("edit")}</button>` : ""}
     </div>
     <div style="flex:1;min-width:200px;display:flex;flex-direction:column;justify-content:center">
@@ -264,30 +264,30 @@ export function renderStatusPart(target, client) {
   });
   box.querySelectorAll("[data-quick]").forEach((btn) =>
     btn.addEventListener("click", () => {
-      // Fehler MÜSSEN sichtbar werden. Vorher wurde die zurückgegebene
-      // Zusage nirgends ausgewertet: Schlug etwas fehl, landete das
-      // stillschweigend als unbehandelte Ablehnung in der Konsole - der
-      // Knopf "machte einfach nichts", ohne jeden Hinweis, warum.
+      // Errors MUST become visible. Previously the returned promise was
+      // never evaluated anywhere: if something failed it ended up
+      // silently as an unhandled rejection in the console - the
+      // button "simply did nothing", with no hint as to why.
       Promise.resolve(handleQuickAction(btn.dataset.quick, client))
         .catch((e) => {
           console.error("[quick-action]", btn.dataset.quick, e);
           window.notify?.(
-            `Aktion "${btn.dataset.quick}" fehlgeschlagen: ${e?.message || e}`,
+            `Action "${btn.dataset.quick}" failed: ${e?.message || e}`,
             "error", 12000);
         });
     }));
 }
 
-// --- AKTIONEN-Part ---
-// 1x1-optimiert (feste natürliche Breite) + proportionales Mitwachsen:
-// die Aktions-Buttons skalieren mit der Panelgröße mit.
+// --- ACTIONS part ---
+// 1x1-optimized (fixed natural width) + grows proportionally:
+// the action buttons scale with the panel size.
 export function renderActionsPart(target, client) {
   target.innerHTML = "";
   const holder = document.createElement("div");
-  // KEIN Herunterskalieren mehr: Bei vielen Modul-Knoepfen wurde alles immer
-  // kleiner. Jetzt normale Groesse; passt es nicht, scrollt das Panel
-  // (.dash-lp-body / .panelpart-body haben overflow:auto). min-height statt
-  // height, damit die Zentrierung bei Ueberlauf oben nichts abschneidet.
+  // NO more scaling down: with many module buttons everything kept getting
+  // smaller. Now normal size; if it does not fit, the panel scrolls
+  // (.dash-lp-body / .panelpart-body have overflow:auto). min-height instead
+  // of height so centering does not cut anything off at the top on overflow.
   holder.className = "actions-holder";
   holder.style.cssText = "width:100%;min-height:100%;flex:1 0 auto;display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:2px 0";
   const box = document.createElement("div");
@@ -298,9 +298,9 @@ export function renderActionsPart(target, client) {
     ${hasClientPerm(client.id, "c_screen_view") ? `<button class="action-btn" data-action="vnc" ${client.online ? "" : "disabled"}>🖥️ ${t("remote_screen")}${hasClientPerm(client.id, "c_screen") ? "" : " 👁️"}</button>` : ""}
     ${isModuleOn("guacamole") && hasClientPerm(client.id, "c_guacamole") ? `<button class="action-btn" data-action="guacamole">🕹️ Guacamole</button>` : ""}
     ${hasClientPerm(client.id, "c_taskmanager_view") ? `<button class="action-btn" data-action="taskmanager" ${client.online ? "" : "disabled"}>📋 ${t("task_manager")}</button>` : ""}
-    <button class="action-btn" data-action="copylink" title="bytera://-Link zu diesem Gerät kopieren">🔗 ${t("copy_link")}</button>
+    <button class="action-btn" data-action="copylink" title="Copy a bytera:// link to this device">🔗 ${t("copy_link")}</button>
     ${(isModuleOn("temp-usb") && (isAdmin() || hasGlobalPerm("manage_temp_usb"))) ? `<button class="action-btn" data-action="tempusb" ${client.online ? "" : "disabled"} title="${t("tu_attach_dev_title")}">💾 ${t("tu_attach_dev")}</button>` : ""}`;
-  // Knöpfe aktiver Module (registerClientAction in modules.js), z.B. "🖧 Proxmox"
+  // Buttons of active modules (registerClientAction in modules.js), e.g. "🖧 Proxmox"
   getClientActions().forEach((a, i) => {
     let label = null;
     try { label = a.label(client); } catch { label = null; }
@@ -319,7 +319,7 @@ export function renderActionsPart(target, client) {
         import("/js/app/modules.js").then(({ getModuleApi }) => {
           const api = getModuleApi("url-scheme");
           if (api) api.copy(api.make("agent", client.id));
-          else window.notify?.('Das Modul „URL-Schema" ist nicht aktiv.', "warning", 6000);
+          else window.notify?.('The "URL scheme" module is not active.', "warning", 6000);
         }).catch(() => {});
         return;
       }
@@ -330,16 +330,16 @@ export function renderActionsPart(target, client) {
 
 // --- WEBSITES-Part (Quick-Access) ---
 // =================================================================
-// WEBSITES-WIDGET (vollständig)
-// Enthält ALLES, was früher unter "Client bearbeiten" stand:
-// anlegen (Name, URL, Öffnen-in, Monitoring + Modus + Intervall),
-// bearbeiten, Öffnungsart umschalten, Monitoring an/aus, Favoriten-Stern,
-// Status-Ampel mit Tooltip und Löschen.
+// WEBSITES WIDGET (complete)
+// Contains EVERYTHING that used to live under "Edit client":
+// create (name, URL, open-in, monitoring + mode + interval),
+// edit, toggle open mode, monitoring on/off, favorite star,
+// status indicator with tooltip and delete.
 // =================================================================
-const WS_NOTIFY_LABELS = { down: "bei DOWN", up: "bei UP", always: "immer" };
+const WS_NOTIFY_LABELS = { down: "on DOWN", up: "on UP", always: "always" };
 const WS_INTERVALS = [
-  [30, "30 Sekunden"], [60, "1 Minute"], [300, "5 Minuten"],
-  [900, "15 Minuten"], [1800, "30 Minuten"], [3600, "1 Stunde"],
+  [30, "30 seconds"], [60, "1 minute"], [300, "5 minutes"],
+  [900, "15 minutes"], [1800, "30 minutes"], [3600, "1 hour"],
 ];
 function wsIntervalLabel(sec) {
   if (!sec) return "–";
@@ -348,31 +348,31 @@ function wsIntervalLabel(sec) {
   return `${sec} s`;
 }
 
-// Formular für Anlegen (w = null) bzw. Bearbeiten (w = Website-Objekt).
+// Form for creating (w = null) or editing (w = website object).
 function wsFormHtml(w, client) {
   const v = w || { name: "", url: client.ip ? `http://${client.ip}:80/` : "",
                    open_mode: "external", monitor_enabled: 0,
                    monitor_notify: "down", monitor_interval_seconds: 300 };
   return `
     <div class="ws-form" style="border:1px solid var(--border);border-radius:8px;padding:8px;margin:6px 0;display:flex;flex-direction:column;gap:6px">
-      <input class="ws-f-name" type="text" placeholder="Name (z.B. Proxmox Web-UI)" value="${esc(v.name)}" />
+      <input class="ws-f-name" type="text" placeholder="Name (e.g. Proxmox Web UI)" value="${esc(v.name)}" />
       <input class="ws-f-url" type="text" placeholder="https://…" value="${esc(v.url)}" />
       <select class="ws-f-openmode">
         <option value="external" ${v.open_mode !== "internal" ? "selected" : ""}>${t("ws_open_external")}</option>
         <option value="internal" ${v.open_mode === "internal" ? "selected" : ""}>${t("ws_open_internal")}</option>
       </select>
       <label style="display:flex;gap:6px;align-items:center;font-size:12px">
-        <input class="ws-f-mon" type="checkbox" ${v.monitor_enabled ? "checked" : ""} /> Uptime-Monitoring aktivieren
+        <input class="ws-f-mon" type="checkbox" ${v.monitor_enabled ? "checked" : ""} /> Enable uptime monitoring
       </label>
       <div class="ws-f-monopts" style="${v.monitor_enabled ? "" : "display:none"};display:flex;flex-direction:column;gap:6px">
         <select class="ws-f-notify">
-          <option value="down" ${v.monitor_notify === "down" ? "selected" : ""}>Benachrichtigen: wenn DOWN</option>
-          <option value="up" ${v.monitor_notify === "up" ? "selected" : ""}>Benachrichtigen: wenn UP</option>
-          <option value="always" ${v.monitor_notify === "always" ? "selected" : ""}>Benachrichtigen: immer (jeder Scan)</option>
+          <option value="down" ${v.monitor_notify === "down" ? "selected" : ""}>Notify: when DOWN</option>
+          <option value="up" ${v.monitor_notify === "up" ? "selected" : ""}>Notify: when UP</option>
+          <option value="always" ${v.monitor_notify === "always" ? "selected" : ""}>Notify: always (every scan)</option>
         </select>
         <select class="ws-f-interval">
           ${WS_INTERVALS.map(([sec, lbl]) =>
-            `<option value="${sec}" ${Number(v.monitor_interval_seconds) === sec ? "selected" : ""}>Scan alle ${lbl}</option>`).join("")}
+            `<option value="${sec}" ${Number(v.monitor_interval_seconds) === sec ? "selected" : ""}>Scan every ${lbl}</option>`).join("")}
         </select>
         <div style="font-size:11px;color:var(--subtext)">
           ${t("ws_notify_hint")}
@@ -386,12 +386,12 @@ function wsFormHtml(w, client) {
     </div>`;
 }
 
-// Verkabelt ein Formular. onDone(fields) bekommt die eingegebenen Werte.
+// Wires up a form. onDone(fields) receives the entered values.
 function bindWsForm(formEl, onDone, onCancel) {
   const monCb = formEl.querySelector(".ws-f-mon");
   const opts = formEl.querySelector(".ws-f-monopts");
   monCb.addEventListener("change", () => { opts.style.display = monCb.checked ? "flex" : "none"; });
-  // Klicks im Formular dürfen das Panel weder ziehen noch aufklappen.
+  // Clicks in the form must neither drag nor expand the panel.
   formEl.addEventListener("mousedown", (e) => e.stopPropagation());
   formEl.addEventListener("click", (e) => e.stopPropagation());
   formEl.querySelector(".ws-f-cancel").addEventListener("click", onCancel);
@@ -414,8 +414,8 @@ function bindWsForm(formEl, onDone, onCancel) {
 }
 
 export function renderWebsitesPart(target, client) {
-  // Bei Favoriten-Änderung (Stern-Klick, auch anderswo) neu rendern, damit
-  // Favoriten sofort nach oben rutschen. Listener nur EINMAL pro Ziel binden.
+  // Re-render on favorite change (star click, also elsewhere) so that
+  // favorites move to the top immediately. Bind the listener only ONCE per target.
   if (!target._wsFavListener) {
     target._wsFavListener = (e) => {
       if (!document.body.contains(target)) {
@@ -435,9 +435,9 @@ export function renderWebsitesPart(target, client) {
     if (!sites || !sites.length) {
       target.innerHTML = `<div style="color:var(--subtext);font-size:12px;margin-bottom:6px">${t("ws_none")}</div>`;
     } else {
-      // Favoriten-Hierarchie im Widget: goldene Sterne (Seitenleiste+Dashboard)
-      // ganz oben, dann Akzent 1 (Seitenleiste), dann Akzent 2 (Dashboard),
-      // ganz unten Websites ohne Stern.
+      // Favorite hierarchy in the widget: golden stars (sidebar+dashboard)
+      // at the very top, then accent 1 (sidebar), then accent 2 (dashboard),
+      // and websites without a star at the bottom.
       const favRank = (w) => {
         const f = favState("websites", w.id);
         if (f.s && f.d) return 0;
@@ -464,9 +464,9 @@ export function renderWebsitesPart(target, client) {
                 title="${t("ws_tip_mode", { mode: w.open_mode === "internal" ? t("ws_mode_internal") : t("ws_mode_external") })}"
 >${w.open_mode === "internal" ? "🪟" : "🔗"}</button>
               <button class="btn btn-sm${w.monitor_enabled ? " active" : ""}" data-ws-mon="${esc(w.id)}"
-                title="Monitoring ${w.monitor_enabled ? `an (alle ${wsIntervalLabel(w.monitor_interval_seconds)}, ${WS_NOTIFY_LABELS[w.monitor_notify] || w.monitor_notify}) – Klick: aus` : "aus – Klick: an"}"
+                title="Monitoring ${w.monitor_enabled ? `on (every ${wsIntervalLabel(w.monitor_interval_seconds)}, ${WS_NOTIFY_LABELS[w.monitor_notify] || w.monitor_notify}) – click: off` : "off – click: on"}"
                 style="${w.monitor_enabled ? "" : "opacity:.55"}">📡</button>
-              <button class="btn btn-sm" data-ws-edit="${esc(w.id)}" title="Bearbeiten"
+              <button class="btn btn-sm" data-ws-edit="${esc(w.id)}" title="Edit"
 >✏️</button>
               <button class="btn btn-danger btn-sm" data-ws-del="${esc(w.id)}" data-ws-name="${esc(w.name)}"
                 title="${t("ws_tip_delete")}"
@@ -475,8 +475,8 @@ export function renderWebsitesPart(target, client) {
           <div class="ws-editbox" data-ws-editbox="${esc(w.id)}" style="display:none"></div>`;
       }).join("");
 
-      // Öffnen nach open_mode: 'internal' -> internes Browser-Fenster,
-      // sonst normaler externer Tab.
+      // Open by open_mode: 'internal' -> internal browser window,
+      // otherwise a normal external tab.
       target.querySelectorAll("[data-ws-openlink]").forEach((a) =>
         a.addEventListener("click", (e) => {
           e.preventDefault();
@@ -484,8 +484,8 @@ export function renderWebsitesPart(target, client) {
           if (s2) import("./modules.js").then((m) => m.openWebsiteEntry(s2));
         })
       );
-      // BUGFIX: Der Favoriten-Stern im Website-WIDGET reagierte nicht auf
-      // Klicks. Deshalb wird der Stern hier zusätzlich DIREKT verkabelt.
+      // BUGFIX: the favorite star in the website WIDGET did not react to
+      // clicks. That is why the star is additionally wired DIRECTLY here.
       target.querySelectorAll(".fav-star[data-fav]").forEach((star) => {
         star.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); });
         star.addEventListener("click", (e) => {
@@ -500,7 +500,7 @@ export function renderWebsitesPart(target, client) {
         });
       });
 
-      // Öffnungsart umschalten
+      // Toggle open mode
       target.querySelectorAll("[data-ws-openmode]").forEach((b) =>
         b.addEventListener("click", async (e) => {
           e.preventDefault(); e.stopPropagation();
@@ -512,7 +512,7 @@ export function renderWebsitesPart(target, client) {
           } catch (err) { window.notify?.(t("ws_change_failed", { err: err.message }), "error"); }
         }));
 
-      // Monitoring an/aus
+      // Monitoring on/off
       target.querySelectorAll("[data-ws-mon]").forEach((b) =>
         b.addEventListener("click", async (e) => {
           e.preventDefault(); e.stopPropagation();
@@ -523,7 +523,7 @@ export function renderWebsitesPart(target, client) {
           } catch (err) { window.notify?.(t("ws_change_failed", { err: err.message }), "error"); }
         }));
 
-      // Bearbeiten (Formular direkt unter der Zeile aufklappen)
+      // Edit (expand the form directly under the row)
       target.querySelectorAll("[data-ws-edit]").forEach((b) =>
         b.addEventListener("click", (e) => {
           e.preventDefault(); e.stopPropagation();
@@ -535,18 +535,18 @@ export function renderWebsitesPart(target, client) {
           bindWsForm(box.querySelector(".ws-form"),
             async (fields) => {
               await api.updateClientWebsite(client.id, w.id, fields);
-              window.notify?.("Website gespeichert", "success");
+              window.notify?.("Website saved", "success");
               reload();
             },
             () => { box.style.display = "none"; box.innerHTML = ""; });
         }));
 
-      // Status-Tooltip pro Zeile
+      // Status tooltip per row
       target.querySelectorAll("[data-ws]").forEach((rowEl) => {
         const w = sites.find((x) => x.id === rowEl.dataset.ws);
         if (!w) return;
         const statusTxt = !w.monitor_enabled ? t("u_kein_monitoring")
-          : w.last_status === "up" ? "erreichbar"
+          : w.last_status === "up" ? "reachable"
           : w.last_status === "down" ? t("ws_unreachable", { detail: w.last_error ? ": " + w.last_error : "" })
           : t("ws_unchecked");
         const color = !w.monitor_enabled ? "var(--subtext)"
@@ -554,29 +554,29 @@ export function renderWebsitesPart(target, client) {
           : w.last_status === "down" ? "var(--danger, #ff4d6d)" : "var(--subtext)";
         const tipHtml = () => `<b>${esc(w.name)}</b><br><span style="color:var(--subtext)">${esc(w.url)}</span>`
           + `<br><span style="color:${color}">●</span> ${esc(statusTxt)}`
-          + (w.monitor_enabled ? `<br><span style="color:var(--subtext)">Scan alle ${wsIntervalLabel(w.monitor_interval_seconds)}, benachrichtigen ${WS_NOTIFY_LABELS[w.monitor_notify] || w.monitor_notify}</span>` : "")
+          + (w.monitor_enabled ? `<br><span style="color:var(--subtext)">Scan every ${wsIntervalLabel(w.monitor_interval_seconds)}, notify ${WS_NOTIFY_LABELS[w.monitor_notify] || w.monitor_notify}</span>` : "")
           + (w.last_checked ? `<br><span style="color:var(--subtext)">${t("ws_last_check", { date: new Date(w.last_checked).toLocaleString() })}</span>` : "");
         rowEl.addEventListener("mouseenter", (e) => showFleetTip(tipHtml(), e.clientX, e.clientY));
         rowEl.addEventListener("mousemove", (e) => showFleetTip(tipHtml(), e.clientX, e.clientY));
         rowEl.addEventListener("mouseleave", () => hideFleetTip());
       });
 
-      // Löschen
+      // Delete
       target.querySelectorAll("[data-ws-del]").forEach((b) =>
         b.addEventListener("click", async (e) => {
           e.preventDefault(); e.stopPropagation();
-          if (!(await uiConfirm(`Website "${b.dataset.wsName}" entfernen?`, {
-            okText: "Entfernen", danger: true }))) return;
+          if (!(await uiConfirm(`Remove website "${b.dataset.wsName}"?`, {
+            okText: "Remove", danger: true }))) return;
           try {
             await api.deleteClientWebsite(client.id, b.dataset.wsDel);
-            window.notify?.("Website entfernt.", "success");
+            window.notify?.("Website removed.", "success");
             reload();
           } catch (err) { window.notify?.(t("ws_delete_failed", { err: err.message }), "error"); }
         }));
     }
 
-    // "+ Website hinzufügen": klappt das vollständige Formular direkt im
-    // Widget auf (Name, URL, Öffnen-in, Monitoring + Modus + Intervall).
+    // "+ Add website": expands the full form directly in the
+    // widget (name, URL, open-in, monitoring + mode + interval).
     if (!mayEdit) return;
     const addBox = document.createElement("div");
     const addBtn = document.createElement("button");
@@ -597,25 +597,25 @@ export function renderWebsitesPart(target, client) {
     });
     target.appendChild(addBtn);
     target.appendChild(addBox);
-  }).catch(() => { target.innerHTML = `<div style="color:var(--subtext);font-size:12px">Keine Websites.</div>`; });
+  }).catch(() => { target.innerHTML = `<div style="color:var(--subtext);font-size:12px">No websites.</div>`; });
 }
 
 
 // =================================================================
-// CHILDREN-WIDGET: VMs und LXC-Container, die auf DIESEM Client laufen
-// (clients mit parent_client_id === client.id). Pro Eintrag:
-//   - Status-Ampel (online/offline) + Typ-Icon (🖥️ VM / 📦 LXC)
-//   - Kurzinfo (CPU/RAM, sofern online)
-//   - Button "Öffnen": wählt den Client in der Seitenleiste aus
-//   - Button "Fenster": öffnet ihn als eigenes Fenster (wie Desktop-Drop)
+// CHILDREN WIDGET: VMs and LXC containers that run on THIS client
+// (clients with parent_client_id === client.id). Per entry:
+//   - status indicator (online/offline) + type icon (🖥️ VM / 📦 LXC)
+//   - short info (CPU/RAM, if online)
+//   - button "Open": selects the client in the sidebar
+//   - button "Window": opens it as its own window (like the desktop drop)
 // =================================================================
 export function childClientsOf(clientId) {
   return (state.clients || []).filter((c) => c.parent_client_id === clientId);
 }
 
 export function renderChildrenPart(target, client) {
-  // Live mitlaufen: kommen neue Metriken für einen der Gäste (oder ändert sich
-  // die Client-Liste), das Panel neu zeichnen. Listener nur EINMAL pro Ziel.
+  // Follow live: when new metrics arrive for one of the guests (or the client
+  // list changes), redraw the panel. Bind the listener only ONCE per target.
   if (!target._kidsListener) {
     target._kidsListener = (e) => {
       if (!document.body.contains(target)) {
@@ -643,7 +643,7 @@ export function renderChildrenPart(target, client) {
   const head = document.createElement("div");
   head.style.cssText = "font-size:11.5px;color:var(--subtext);margin-bottom:4px";
   const onlineCount = kids.filter((c) => c.online).length;
-  head.textContent = `${kids.length} Gast${kids.length === 1 ? "" : "-Systeme"} · ${onlineCount} online`;
+  head.textContent = `${kids.length} guest${kids.length === 1 ? "" : " systems"} · ${onlineCount} online`;
   target.appendChild(head);
 
   for (const kid of kids) {
@@ -672,7 +672,7 @@ export function renderChildrenPart(target, client) {
     target.appendChild(row);
   }
 
-  // "Öffnen": Client in der Seitenleiste auswählen (Hauptansicht wechselt).
+  // "Open": select the client in the sidebar (main view switches).
   target.querySelectorAll("[data-kid-open]").forEach((b) =>
     b.addEventListener("click", (e) => {
       e.preventDefault(); e.stopPropagation();
@@ -683,7 +683,7 @@ export function renderChildrenPart(target, client) {
       }).catch(() => { state.selection = { type: "client", id }; });
     }));
 
-  // "↗️": als eigenes Fenster öffnen (gleiche Ansicht wie beim Desktop-Drop).
+  // "↗️": open as its own window (same view as the desktop drop).
   target.querySelectorAll("[data-kid-win]").forEach((b) =>
     b.addEventListener("click", (e) => {
       e.preventDefault(); e.stopPropagation();
@@ -699,18 +699,18 @@ export function renderChildrenPart(target, client) {
     }));
 }
 
-// Ob ein Client überhaupt verknüpfte Websites hat (für Auto-Ausblenden im Default-Layout).
+// Whether a client has any linked websites at all (for auto-hide in the default layout).
 export function clientHasWebsites(clientId) {
   return api.getClientWebsites(clientId).then((s) => !!(s && s.length)).catch(() => false);
 }
 
 // =================================================================
-// NOTIZEN mit Sichtbarkeit + Aktivitätsprotokoll
-//   für alle           -> jeder, der den Client sehen darf
-//   nur für mich       -> ausschließlich der Verfasser
-//   für bestimmte      -> Verfasser + ausgewählte Benutzer
-// Ändern/Löschen darf der Verfasser (Admins zum Aufräumen ebenfalls, sehen
-// aber den Inhalt fremder privater Notizen nicht).
+// NOTES with visibility + activity log
+//   for everyone        -> anyone allowed to see the client
+//   only me             -> the author only
+//   for specific        -> author + selected users
+// The author may edit/delete (admins may too, for cleanup, but do
+// not see the content of other people's private notes).
 // =================================================================
 const NOTE_VIS = {
   all: { icon: "🌍", label: t("note_vis_all") },
@@ -723,7 +723,7 @@ export function renderNotesPart(target, client) {
   let showLog = false;
   let users = null;              // {users:[…], groups:[…]}
   let editingId = null;
-  let addOpen = false;           // "Notiz hinzufügen" standardmäßig zu
+  let addOpen = false;           // "Add note" collapsed by default
 
   target.innerHTML = `<div style="color:var(--subtext);font-size:12px">${t("loading")}</div>`;
 
@@ -738,7 +738,7 @@ export function renderNotesPart(target, client) {
     draw(notes);
   }
 
-  // Anzeigename einer Freigabe ({type,id} oder alte reine Benutzer-ID).
+  // Display name of a share ({type,id} or old plain user ID).
   function shareName(item) {
     const type = typeof item === "string" ? "user" : (item.type || "user");
     const id = typeof item === "string" ? item : item.id;
@@ -750,20 +750,20 @@ export function renderNotesPart(target, client) {
     return u ? u.username : id;
   }
 
-  // Formular für neue Notiz bzw. zum Bearbeiten.
+  // Form for a new note or for editing.
   function formHtml(note) {
     const v = note?.visibility || "all";
     return `
       <div class="note-form" style="border:1px solid var(--border);border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:6px;margin-bottom:8px">
-        <textarea class="nf-text" rows="3" placeholder="Notiz schreiben…"
+        <textarea class="nf-text" rows="3" placeholder="Write a note…"
           style="resize:vertical;min-height:56px">${esc(note?.text || "")}</textarea>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
           <select class="nf-vis" style="flex:1;min-width:150px">
             ${Object.entries(NOTE_VIS).map(([k, o]) =>
-              `<option value="${k}" ${v === k ? "selected" : ""}>${o.icon} Sichtbar ${o.label}</option>`).join("")}
+              `<option value="${k}" ${v === k ? "selected" : ""}>${o.icon} Visible ${o.label}</option>`).join("")}
           </select>
           <label style="display:flex;gap:5px;align-items:center;font-size:12px;color:var(--subtext)">
-            <input type="checkbox" class="nf-pin" ${note?.pinned ? "checked" : ""} /> anheften
+            <input type="checkbox" class="nf-pin" ${note?.pinned ? "checked" : ""} /> pin
           </label>
         </div>
         <div class="nf-share" style="${v === "custom" ? "" : "display:none"}">
@@ -771,8 +771,8 @@ export function renderNotesPart(target, client) {
         </div>
         <div class="nf-error form-error hidden"></div>
         <div style="display:flex;gap:6px">
-          <button class="btn-primary nf-save" style="flex:1">${note ? t("save") : "+ Notiz anlegen"}</button>
-          ${note ? `<button class="btn nf-cancel">Abbrechen</button>` : ""}
+          <button class="btn-primary nf-save" style="flex:1">${note ? t("save") : "+ Create note"}</button>
+          ${note ? `<button class="btn nf-cancel">Cancel</button>` : ""}
         </div>
       </div>`;
   }
@@ -792,7 +792,7 @@ export function renderNotesPart(target, client) {
       const err = el.querySelector(".nf-error");
       err.classList.add("hidden");
       const text = el.querySelector(".nf-text").value.trim();
-      if (!text) { err.textContent = "Die Notiz ist leer"; err.classList.remove("hidden"); return; }
+      if (!text) { err.textContent = "The note is empty"; err.classList.remove("hidden"); return; }
       const data = {
         text,
         visibility: visSel.value,
@@ -816,7 +816,7 @@ export function renderNotesPart(target, client) {
     target.innerHTML = `
       <div style="display:flex;flex-direction:column;gap:6px;min-height:0">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-          <span style="font-size:11.5px;color:var(--subtext)">${notes.length} Notiz${notes.length === 1 ? "" : "en"}</span>
+          <span style="font-size:11.5px;color:var(--subtext)">${notes.length} note${notes.length === 1 ? "" : "s"}</span>
           <button class="btn btn-sm" id="note-log">${t("note_history")}</button>
         </div>
         <div id="note-logbox" style="display:none"></div>
@@ -824,9 +824,9 @@ export function renderNotesPart(target, client) {
         <div id="note-list" style="display:flex;flex-direction:column;gap:6px"></div>
       </div>`;
 
-    // "Notiz hinzufügen" ist standardmäßig EINGEKLAPPT - das Formular nimmt
-    // sonst dauerhaft den halben Platz im Widget ein. Ein Klick öffnet es;
-    // der Zustand bleibt beim Neuzeichnen erhalten (addOpen).
+    // "Add note" is COLLAPSED by default - otherwise the form would
+    // permanently take half the space in the widget. A click opens it;
+    // the state is kept across redraws (addOpen).
     if (mayEdit && !editingId) {
       const box = target.querySelector("#note-add");
       const btn = document.createElement("button");
@@ -873,7 +873,7 @@ export function renderNotesPart(target, client) {
           </div>`;
       }).join("");
 
-      // Bearbeiten-Formular an der Stelle der Notiz einsetzen
+      // Insert the edit form in place of the note
       const editEl = listEl.querySelector("[data-edit]");
       if (editEl) {
         const note = notes.find((x) => x.id === editEl.dataset.edit);
@@ -890,7 +890,7 @@ export function renderNotesPart(target, client) {
         }));
     }
 
-    // Aktivitätsprotokoll ein-/ausklappen
+    // Expand/collapse the activity log
     const logBtn = target.querySelector("#note-log");
     const logBox = target.querySelector("#note-logbox");
     logBox.style.display = showLog ? "" : "none";
@@ -903,7 +903,7 @@ export function renderNotesPart(target, client) {
   }
 
   async function fillLog(box) {
-    box.innerHTML = `<div style="color:var(--subtext);font-size:11.5px">Lade Verlauf…</div>`;
+    box.innerHTML = `<div style="color:var(--subtext);font-size:11.5px">Loading history…</div>`;
     try {
       const log = await api.getNotesActivity(client.id);
       box.innerHTML = log.length ? `
@@ -925,10 +925,10 @@ export function renderNotesPart(target, client) {
   load();
 }
 
-// --- ÜBERSICHT-Part (einzelne Sub-Ansicht: metrics|notes|disk) ---
-// tab wählt die anzuzeigende Sub-Ansicht. rerender() erlaubt Toggles/Zeitspanne.
+// --- OVERVIEW part (single sub-view: metrics|notes|disk) ---
+// tab selects the sub-view to show. rerender() allows toggles/time range.
 export function renderOverviewSub(target, client, tab, rerender) {
-  // Historie beim ersten Anzeigen laden.
+  // Load history on first display.
   if (!hasSeeded(client.id)) {
     seedHistory(client.id, []);
     api.getMetricsHistory(client.id).then((res) => {
@@ -955,14 +955,14 @@ export function renderOverviewSub(target, client, tab, rerender) {
       return `<div class="donut-wrap" data-disk="${i}" style="border-radius:10px;padding:4px">${gradientDonutSvg(pct, DISK_GRADIENT, label, `${formatBytes(d.used)} / ${formatBytes(d.total)}`)}</div>`;
     }).join("");
     target.appendChild(row);
-    // Hover PRO Datenträger: Donut hervorheben + Tooltip mit exakten Werten
-    // GENAU DIESES Datenträgers (Gerät, belegt/gesamt, frei, Prozent).
+    // Hover PER disk: highlight the donut + tooltip with the exact values
+    // of EXACTLY this disk (device, used/total, free, percent).
     row.querySelectorAll("[data-disk]").forEach((el) => {
       const d = disks[+el.dataset.disk];
       const pct = d.total ? Math.round((d.used / d.total) * 100) : 0;
       bindRowHover(el, () => `<b>${esc(d.device || d.mountpoint || "Disk")}</b>${d.mountpoint && d.device ? ` <span style="color:var(--subtext)">(${esc(d.mountpoint)})</span>` : ""}<br>` +
-        `Belegt: <b>${formatBytes(d.used)}</b> / ${formatBytes(d.total)} (${pct}%)<br>` +
-        `<span style="color:var(--subtext)">Frei: ${formatBytes((d.total || 0) - (d.used || 0))}</span>`);
+        `Used: <b>${formatBytes(d.used)}</b> / ${formatBytes(d.total)} (${pct}%)<br>` +
+        `<span style="color:var(--subtext)">Free: ${formatBytes((d.total || 0) - (d.used || 0))}</span>`);
     });
     return;
   }
@@ -992,16 +992,16 @@ export function renderOverviewSub(target, client, tab, rerender) {
     ${swapDonut}`;
   target.appendChild(topRow);
 
-  // Hover PRO Donut: hervorheben + Tooltip mit den exakten Live-Werten
-  // GENAU DIESER Metrik (nicht nur der Panel-Name).
+  // Hover PER donut: highlight + tooltip with the exact live values
+  // of EXACTLY this metric (not just the panel name).
   {
     const donutTips = {
-      cpu: () => `<b>CPU-Auslastung</b><br><b>${Math.round(cpuPct)}%</b>` +
+      cpu: () => `<b>CPU usage</b><br><b>${Math.round(cpuPct)}%</b>` +
         (m.cpuModel ? `<br><span style="color:var(--subtext)">${esc(m.cpuModel)}</span>` : "") +
         `<br><span style="color:var(--subtext)">${m.cpuCores ?? "?"} ${t("cores")} · ${m.cpuThreads ?? "?"} ${t("threads")}${m.cpuFreq ? ` · ${Math.round(m.cpuFreq)} MHz` : ""}</span>`,
-      ram: () => `<b>RAM-Auslastung</b><br><b>${Math.round(ramPct)}%</b> — ${formatBytes(m.memUsed)} / ${formatBytes(m.memTotal)}` +
+      ram: () => `<b>RAM usage</b><br><b>${Math.round(ramPct)}%</b> — ${formatBytes(m.memUsed)} / ${formatBytes(m.memTotal)}` +
         `<br><span style="color:var(--subtext)">${t("free")}: ${formatBytes(m.memAvailable ?? (m.memTotal - m.memUsed))}</span>`,
-      swap: () => `<b>Swap-Auslastung</b><br><b>${Math.round(swapPct)}%</b> — ${formatBytes(swapUsed)} / ${formatBytes(swapTotal)}` +
+      swap: () => `<b>Swap usage</b><br><b>${Math.round(swapPct)}%</b> — ${formatBytes(swapUsed)} / ${formatBytes(swapTotal)}` +
         `<br><span style="color:var(--subtext)">${t("free")}: ${formatBytes(swapTotal - swapUsed)}</span>`,
     };
     topRow.querySelectorAll("[data-donut]").forEach((el) => bindRowHover(el, donutTips[el.dataset.donut] || (() => "")));
@@ -1053,7 +1053,7 @@ export function renderOverviewSub(target, client, tab, rerender) {
   if (rangeSel) rangeSel.addEventListener("change", () => { timeRangeIndex = parseInt(rangeSel.value); rerender?.(); });
 }
 
-// Metadaten für die einzelnen Sub-Ansichten eines Übersicht-Ordners.
+// Metadata for the individual sub-views of an overview folder.
 export const OVERVIEW_SUBS = {
   metrics: () => t("tab_metrics"),
   notes: () => t("tab_notes"),
@@ -1066,49 +1066,49 @@ export const OVERVIEW_SUBS = {
 
 export async function handleQuickAction(action, client) {
   if (action === "forward") {
-    // Port-Weiterleitung. Der praktischste Weg zu einem Dienst auf dem
-    // Gerät: Der Server macht ihn auf einem eigenen Port erreichbar und
-    // reicht alles über die bestehende Agenten-Verbindung durch. Kein VPN,
-    // kein Treiber, keine offenen Ports beim Kunden.
+    // Port forwarding. The most convenient way to a service on the
+    // device: the server makes it reachable on its own port and
+    // passes everything through the existing agent connection. No VPN,
+    // no driver, no open ports at the customer.
     let presets = [];
     try { presets = (await api.listForwards()).presets || []; } catch { }
-    const dienst = await uiChoice(`Welchen Dienst auf ${client.hostname}?`,
+    const service = await uiChoice(`Which service on ${client.hostname}?`,
       [...presets.map((p) => ({ label: `${p.name} (Port ${p.port})`, value: String(p.port) })),
-       { label: "Anderer Port …", value: "custom" }],
-      { description: "Der Dienst wird über den Server erreichbar gemacht. "
-                     + "Auf dem Gerät ändert sich nichts." });
-    if (!dienst) return;
+       { label: "Other port …", value: "custom" }],
+      { description: "The service is made reachable through the server. "
+                     + "Nothing changes on the device." });
+    if (!service) return;
 
-    let port = parseInt(dienst, 10);
-    if (dienst === "custom") {
-      const eingabe = await uiPrompt("Port auf dem Gerät", {
-        description: "Die Portnummer des Dienstes, z.B. 8080.", value: "8080" });
-      port = parseInt(eingabe, 10);
+    let port = parseInt(service, 10);
+    if (service === "custom") {
+      const input = await uiPrompt("Port on the device", {
+        description: "The port number of the service, e.g. 8080.", value: "8080" });
+      port = parseInt(input, 10);
       if (!port) return;
     }
 
-    const dauer = await uiChoice("Wie lange?", [
-      { label: "1 Stunde", value: "60" },
-      { label: "4 Stunden", value: "240" },
-      { label: "24 Stunden", value: "1440" },
-      { label: "Bis zum Schliessen", value: "0" },
-    ], { description: "Danach wird der Port automatisch wieder geschlossen." });
-    if (dauer === null || dauer === undefined) return;
+    const duration = await uiChoice("How long?", [
+      { label: "1 hour", value: "60" },
+      { label: "4 hours", value: "240" },
+      { label: "24 hours", value: "1440" },
+      { label: "Until closed", value: "0" },
+    ], { description: "After that the port is automatically closed again." });
+    if (duration === null || duration === undefined) return;
 
     try {
       const rec = await api.createForward(client.id, port,
-        { minutes: parseInt(dauer, 10), label: client.hostname });
+        { minutes: parseInt(duration, 10), label: client.hostname });
       const host = window.location.hostname;
       const preset = presets.find((p) => p.port === port);
       await uiConfirm(`✅ ${host}:${rec.listen_port}`, {
-        description: `Der Dienst (Port ${port} auf ${client.hostname}) ist jetzt `
-          + `unter ${host}:${rec.listen_port} erreichbar.\n\n`
+        description: `The service (port ${port} on ${client.hostname}) is now `
+          + `reachable at ${host}:${rec.listen_port}.\n\n`
           + (preset ? preset.hint + "\n\n" : "")
-          + `Die Weiterleitung läuft über den Server – auf dem Gerät wurde `
-          + `nichts installiert und es musste kein Port geöffnet werden.`,
-        okText: "Verstanden" });
+          + `The forwarding runs through the server – nothing was installed `
+          + `on the device and no port had to be opened.`,
+        okText: "Understood" });
     } catch (e) {
-      window.notify?.("Weiterleitung fehlgeschlagen: " + e.message, "error", 12000);
+      window.notify?.("Forwarding failed: " + e.message, "error", 12000);
     }
     return;
   }
@@ -1128,21 +1128,21 @@ export async function handleQuickAction(action, client) {
     return;
   }
   if (action === "update") {
-    // Der Update-Knopf bietet zwei Wege: das gewoehnliche Agent-Update und die
-    // Verwaltung der NODE (eigener Prozess auf dem Client, siehe feature/node.js).
-    // Angeboten wird nur, wofuer der Benutzer auf DIESEM Client das Recht hat:
-    // Agent-Update -> "manage_agent", Node -> "manage_nodes" (Client-Recht).
+    // The update button offers two paths: the ordinary agent update and the
+    // management of the NODE (a separate process on the client, see feature/node.js).
+    // Only what the user is permitted for on THIS client is offered:
+    // agent update -> "manage_agent", node -> "manage_nodes" (client permission).
     const opts = [];
     if (hasClientPerm(client.id, "manage_agent")) opts.push({ label: `⬆️ ${t("update_agent")}`, value: "agent" });
-    if (hasClientPerm(client.id, "manage_nodes")) opts.push({ label: "🧱 Node verwalten …", value: "node" });
+    if (hasClientPerm(client.id, "manage_nodes")) opts.push({ label: "🧱 Manage node …", value: "node" });
     if (!opts.length) return;
     const choice = opts.length === 1 ? opts[0].value : await uiChoice(`${client.hostname}`, opts, {
-      description: "Eine Node ist ein eigener Prozess neben dem Agenten: Er prüft Docker und führt "
-        + "Node-Module aus (z.B. VPN, Proxy, Netzlaufwerke). Ein gewöhnlicher Client braucht keine.",
+      description: "A node is a separate process alongside the agent: it checks Docker and runs "
+        + "node modules (e.g. VPN, proxy, network drives). An ordinary client does not need one.",
     });
     if (!choice) return;
     if (choice === "node") {
-      openWindow({ key: `node-${client.id}`, appId: "node", title: `Node – ${client.hostname}`,
+      openWindow({ key: `node-${client.id}`, appId: "node", title: `Node \u2013 ${client.hostname}`,
                    props: { clientId: client.id, clientName: client.hostname }, w: 820, h: 680 });
       return;
     }
@@ -1150,9 +1150,9 @@ export async function handleQuickAction(action, client) {
     if (!(await uiConfirm(t("agent_update_q", { host: client.hostname }), { description: t("agent_update_desc"), okText: t("agent_update_ok") }))) return;
     window.notify?.(t("pn_agent_updating", { host: client.hostname }), "info", 60000, { tag: "agent-update:" + client.id });
     const tag = { tag: "agent-update:" + client.id };
-    // Das Update ist ein BACKEND-JOB: Das Backend wartet auf die Rueckmeldung des
-    // Agenten. Diese Seite zeigt nur an - Neuladen bricht nichts ab, der Stand
-    // steht in der Aufgaben-Anzeige.
+    // The update is a BACKEND JOB: the backend waits for the agent's response.
+    // This page only displays - reloading aborts nothing, the state
+    // is shown in the task tray.
     let lastPhase = "";
     try {
       const res = await api.updateAgent(client.id, (job) => {
@@ -1179,31 +1179,31 @@ export async function handleQuickAction(action, client) {
     try {
       const res = await api.uninstallAgent(client.id);
       if (res && res.removed) {
-        // Aus dem Dashboard entfernt. Auswahl leeren, falls dieser Client gewählt war.
+        // Removed from the dashboard. Clear the selection if this client was selected.
         if (state.selection && state.selection.type === "client" && state.selection.id === client.id) {
           state.selection = null;
         }
         window.notify?.(t("pn_agent_removed", { host: client.hostname }), "success", 8000, { tag: "agent-uninstall:" + client.id });
         renderMainContent();
       } else {
-        window.notify?.(`Deinstallation auf ${client.hostname} abgeschlossen.`, "success", 6000, { tag: "agent-uninstall:" + client.id });
+        window.notify?.(`Uninstall on ${client.hostname} completed.`, "success", 6000, { tag: "agent-uninstall:" + client.id });
       }
     } catch (e) {
-      window.notify?.("Deinstallation fehlgeschlagen: " + e.message, "error", 12000, { tag: "agent-uninstall:" + client.id });
+      window.notify?.("Uninstall failed: " + e.message, "error", 12000, { tag: "agent-uninstall:" + client.id });
     }
   }
 }
 
 export function handleAction(action, client, ev, { forceWeb = false, params = null } = {}) {
-  // Module duerfen uebernehmen (z.B. Client-App: extern oeffnen) - mit forceWeb nicht
+  // Modules may take over (e.g. client app: open externally) - not with forceWeb
   if (!forceWeb && runActionHandlers(action, client, ev)) return;
   const colorProps = { clientColor: client.color };
-  // params (z.B. aus bytera://.../remotescreen/screen=2&fps=10) landen in props,
-  // damit die jeweilige App (z.B. Fernwartung) sie auswerten kann.
+  // params (e.g. from bytera://.../remotescreen/screen=2&fps=10) go into props,
+  // so the respective app (e.g. remote support) can evaluate them.
   const props = { clientId: client.id, clientName: client.hostname, platform: client.platform, ...(params || {}) };
   if (action === "terminal") {
-    // Stabiler Key: ein erneuter Klick holt das vorhandene Terminal nach vorne.
-    // Mit gedrückter Umschalttaste entsteht ein zweites Terminal (Suffix --2).
+    // Stable key: clicking again brings the existing terminal to the front.
+    // Holding Shift creates a second terminal (suffix --2).
     const openCount = state.windows.filter((w) => w.appId === "terminal" && w.props?.clientId === client.id).length;
     const title = openCount > 0
       ? `${t("terminal")} — ${client.hostname} (${openCount + 1})`
@@ -1248,7 +1248,7 @@ function renderAggregateView(el, type, id) {
   if (type === "tenant") {
     const tenant = state.hierarchy.tenants.find((x) => x.id === id);
     title = tenant ? tenant.name : "Tenant";
-    // Clients nach Location gruppieren, mit Überschrift pro Location
+    // Group clients by location, with a heading per location
     const locations = state.hierarchy.locations.filter((l) => l.tenant_id === id);
     let totalOnline = 0, totalCount = 0;
 
@@ -1264,7 +1264,7 @@ function renderAggregateView(el, type, id) {
         <div class="client-grid">${clients.map(clientCard).join("")}</div>`;
     }
 
-    // Clients ohne Location (aber im Tenant)
+    // Clients without a location (but in the tenant)
     const noLoc = state.clients.filter((c) => c.tenant_id === id && !c.location_id && !c.parent_client_id);
     if (noLoc.length) {
       totalCount += noLoc.length;
@@ -1282,7 +1282,7 @@ function renderAggregateView(el, type, id) {
 
   } else {
     const location = state.hierarchy.locations.find((l) => l.id === id);
-    title = location ? location.name : "Standort";
+    title = location ? location.name : "Location";
     const clients = state.clients.filter((c) => c.location_id === id && !c.parent_client_id);
     const online = clients.filter((c) => c.online).length;
     el.innerHTML = `
@@ -1297,7 +1297,7 @@ function renderAggregateView(el, type, id) {
     card.addEventListener("click", () => {
       state.selection = { type: "client", id: card.dataset.openClient };
       renderMainContent();
-      // Sidebar-Pfad zum Client aufklappen, damit er sichtbar ist
+      // Expand the sidebar path to the client so it is visible
       import("./sidebar.js").then((m) => m.revealClient(card.dataset.openClient));
     })
   );
@@ -1305,11 +1305,11 @@ function renderAggregateView(el, type, id) {
 
 
 // ==========================================================================
-// PATCH-PANEL: verfügbare Software-Updates eines Clients
+// PATCH PANEL: available software updates of a client
 // --------------------------------------------------------------------------
-// Suchen, Liste der Programme mit verfügbarer neuer Version, Installieren.
-// Der Scan läuft im Hintergrund (Reverse Proxies brechen lange Anfragen ab),
-// deshalb wird der Fortschritt abgefragt statt auf eine Antwort zu warten.
+// Scan, list of programs with a newer version available, install.
+// The scan runs in the background (reverse proxies abort long requests),
+// so the progress is polled instead of waiting for a response.
 // ==========================================================================
 
 const PATCH_LEVEL_COLORS = {
@@ -1322,7 +1322,7 @@ export function renderPatchesPart(bodyEl, client) {
   let busy = false;
 
   const stop = () => { clearTimeout(pollTimer); pollTimer = null; };
-  // Wird das Panel neu aufgebaut, darf kein Timer weiterlaufen.
+  // When the panel is rebuilt, no timer may keep running.
   bodyEl.addEventListener("DOMNodeRemovedFromDocument", stop);
 
   async function load() {
@@ -1416,8 +1416,8 @@ export function renderPatchesPart(bodyEl, client) {
       const tick = async () => {
         let job = null;
         try { job = await api.getPatchJob(client.id); } catch {}
-        // Nur abbrechen, wenn das Backend den Auftrag KENNT. Eine leere
-        // Antwort heisst "noch nicht eingetragen", nicht "schon fertig".
+        // Only stop when the backend KNOWS the job. An empty
+        // response means "not registered yet", not "already finished".
         if (job && job.known && !job.running) {
           busy = false; setStatus("");
           if (job.error) window.notify?.(job.error, "error", 9000);
@@ -1432,7 +1432,7 @@ export function renderPatchesPart(bodyEl, client) {
       pollTimer = setTimeout(tick, 600);
     }
 
-    // War beim Öffnen schon ein Auftrag unterwegs, direkt mitverfolgen.
+    // If a job was already running when opening, follow it directly.
     api.getPatchJob(client.id).then((job) => {
       if (job && job.running) { busy = true; setStatus(t("patch_scanning")); poll(); }
     }).catch(() => {});
