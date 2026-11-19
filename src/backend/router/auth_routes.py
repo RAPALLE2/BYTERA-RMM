@@ -1,7 +1,7 @@
 """
 routers/auth_routes.py
 -----------------------
-Alles rund um Login und das eigene Benutzerprofil.
+Everything around login and the user's own profile.
 
 Endpoints:
   POST /api/auth/login            -> sign in, returns a JWT token
@@ -33,8 +33,8 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 class LoginBody(BaseModel):
     username: str
     password: str
-    realm: str = "local"   # "local" oder eine Realm-ID (AD)
-    code: str = ""         # Einmalcode der Authenticator-App (falls aktiviert)
+    realm: str = "local"   # "local" or a realm ID (AD)
+    code: str = ""         # one-time code of the authenticator app (if enabled)
 
 
 class ChangePasswordBody(BaseModel):
@@ -44,11 +44,11 @@ class ChangePasswordBody(BaseModel):
 
 class ProfileBody(BaseModel):
     display_name: str | None = None
-    language: str | None = None   # "de" oder "en"
-    theme: str | None = None      # "dark" oder "light"
-    accent: str | None = None     # Farbpalette, z.B. "teal", "violet", ...
+    language: str | None = None   # "de" or "en"
+    theme: str | None = None      # "dark" or "light"
+    accent: str | None = None     # color palette, e.g. "teal", "violet", ...
     email: str | None = None
-    design: str | None = None     # Style-ID ("futuristic" = Core, weitere aus Modul "styles") | "" (= Standard der Installation)
+    design: str | None = None     # style ID ("futuristic" = core, more from module "styles") | "" (= installation default)
 
 
 def _auth_realm_of(user) -> str | None:
@@ -89,18 +89,18 @@ def _public_user(user: dict) -> dict:
 
 @router.get("/languages")
 def languages():
-    """Alle verfuegbaren Sprachen (aus allen lang-Ordnern) - ohne Anmeldung,
-    weil schon das Login-Fenster uebersetzt werden soll."""
+    """All available languages (from all lang folders) - without login, because
+    the login window itself should already be translated."""
     from app import i18n_loader
     return {"languages": i18n_loader.available()}
 
 
 @router.get("/lang/{code}")
 def language_strings(code: str):
-    """Alle Uebersetzungen einer Sprache (zusammengefuehrt aus Kern + Modulen)."""
+    """All translations of a language (merged from core + modules)."""
     from app import i18n_loader
     if not i18n_loader.has(code):
-        raise HTTPException(404, "Unbekannte Sprache")
+        raise HTTPException(404, "Unknown language")
     return {"code": code, "strings": i18n_loader.strings(code)}
 
 
@@ -119,10 +119,10 @@ def public_realms():
 
 @router.post("/login")
 async def login(body: LoginBody, request: Request = None):
-    # --- Schutz gegen Erraten von Passwoertern (BSI ORP.4.A9) -------------
-    # Die Sperre wird VOR der Passwortpruefung ausgewertet: Sonst koennte man
-    # trotz Sperre unbegrenzt weiterprobieren und aus den Antwortzeiten
-    # Rueckschluesse ziehen.
+    # --- Protection against password guessing (BSI ORP.4.A9) --------------
+    # The lock is evaluated BEFORE the password check: otherwise one could keep
+    # trying indefinitely despite the lock and draw conclusions from the
+    # response times.
     client_ip = ""
     try:
         client_ip = (request.client.host if request and request.client else "") or ""
@@ -133,13 +133,13 @@ async def login(body: LoginBody, request: Request = None):
     blocked, remaining = security_policy.lock_status(body.username, client_ip)
     if blocked:
         db.add_audit_entry(body.username, "login.blocked",
-                           details=f"gesperrt, noch {remaining}s, ip:{client_ip}")
+                           details=f"locked, {remaining}s left, ip:{client_ip}")
         raise HTTPException(
             429,
-            f"Zu viele Fehlversuche. Bitte in {max(1, remaining // 60)} Minuten "
-            f"erneut versuchen.")
+            f"Too many failed attempts. Please try again in {max(1, remaining // 60)} "
+            f"minutes.")
 
-    # Lokale Anmeldung oder Anmeldung gegen ein Verzeichnis (AD)?
+    # Local sign-in or sign-in against a directory (AD)?
     if body.realm and body.realm != "local":
         user = authenticate_realm(body.username, body.password, body.realm)
     else:
@@ -150,8 +150,8 @@ async def login(body: LoginBody, request: Request = None):
         db.add_audit_entry(
             body.username, "login.failed",
             details=f"realm:{body.realm}, ip:{client_ip}"
-                    + (f", KONTO GESPERRT fuer {lock_secs // 60} Minuten" if locked_now else ""))
-        # Benachrichtigungs-Regel: fehlgeschlagene Anmeldung
+                    + (f", ACCOUNT LOCKED for {lock_secs // 60} minutes" if locked_now else ""))
+        # Notification rule: failed sign-in
         try:
             from app import notifier
             from router.admin_routes import build_notification
@@ -166,37 +166,37 @@ async def login(body: LoginBody, request: Request = None):
         if locked_now:
             raise HTTPException(
                 429,
-                f"Zu viele Fehlversuche - der Zugang ist fuer "
-                f"{lock_secs // 60} Minuten gesperrt.")
-        raise HTTPException(401, "Benutzername oder Passwort falsch")
+                f"Too many failed attempts - access is locked for "
+                f"{lock_secs // 60} minutes.")
+        raise HTTPException(401, "Username or password is wrong")
 
-    # --- Zweiter Faktor (TOTP) -------------------------------------------
-    # Erst NACH korrektem Passwort: Sonst liesse sich ueber die Rueckfrage
-    # herausfinden, welche Benutzernamen existieren.
+    # --- Second factor (TOTP) --------------------------------------------
+    # Only AFTER a correct password: otherwise one could find out which
+    # usernames exist via the follow-up prompt.
     if user.get("totp_enabled"):
         from app import totp as _totp
         code = (body.code or "").strip()
         if not code:
-            # Kein Fehler, sondern eine Rueckfrage: Die Oberflaeche blendet
-            # daraufhin das Code-Feld ein und schickt die Anmeldung erneut.
+            # Not an error but a follow-up prompt: the UI then shows the code
+            # field and sends the sign-in again.
             raise HTTPException(401, "2fa_required")
 
         ok = _totp.verify(user.get("totp_secret") or "", code,
                           user_key=str(user["id"]))
         if not ok:
-            # Wiederherstellungscode? Der wird dabei verbraucht.
+            # Recovery code? It is consumed in the process.
             used, rest = _totp.use_backup_code(user.get("totp_backup") or "", code)
             if used:
                 db.set_user_totp(user["id"], backup=rest)
                 db.add_audit_entry(user["username"], "login.2fa_backup_used",
-                                   details=f"verbleibend: {len([x for x in rest.split(',') if x])}")
+                                   details=f"remaining: {len([x for x in rest.split(',') if x])}")
                 ok = True
 
         if not ok:
             security_policy.note_failure(body.username, client_ip)
             db.add_audit_entry(user["username"], "login.2fa_failed",
                                details=f"ip:{client_ip}")
-            raise HTTPException(401, "Der Einmalcode ist falsch oder abgelaufen")
+            raise HTTPException(401, "The one-time code is wrong or has expired")
 
     # Permission check: anyone without the 'login' permission (and not a super admin)
     # may NOT sign in, even with a correct password.
@@ -281,28 +281,26 @@ def my_effective_permissions(user: dict = Depends(get_current_user)):
 
 
 # ------------------------------------------------------------------
-# Serverseitig gespeicherte UI-Einstellungen (Layouts, Favoriten, Sprache,
-# Icon-Modus, ...). Damit sehen ALLE Browser desselben Benutzers gleich aus -
-# statt dass jede Browser-Installation (Firefox/Edge/...) ihren eigenen
-# localStorage-Stand hat.
+# Server-side stored UI settings (layouts, favorites, language, icon mode, ...).
+# This way ALL browsers of the same user look identical - instead of every
+# browser installation (Firefox/Edge/...) having its own localStorage state.
 # ------------------------------------------------------------------
 
 class UiPrefsBody(BaseModel):
-    # { "keys": { "<localStorage-Key>": "<Wert als String>" } }
+    # { "keys": { "<localStorage key>": "<value as string>" } }
     keys: dict[str, str] = {}
 
 
 @router.get("/ui-prefs")
 def get_ui_prefs(user: dict = Depends(get_current_user)):
-    # Liest aus der Tabelle user_prefs (eine Zeile je Schluessel). Alte
-    # Installationen mit dem frueheren Blob werden dabei automatisch
-    # uebernommen, siehe db.get_user_prefs().
+    # Reads from the user_prefs table (one row per key). Old installations with
+    # the former blob are migrated automatically, see db.get_user_prefs().
     return {"keys": db.get_user_prefs(user["id"])}
 
 
 @router.put("/ui-prefs")
 def put_ui_prefs(body: UiPrefsBody, user: dict = Depends(get_current_user)):
-    # Altbestand-Route: ersetzt den kompletten Satz. Das Frontend nutzt PATCH.
+    # Legacy route: replaces the whole set. The frontend uses PATCH.
     try:
         old = set(db.get_user_prefs(user["id"]).keys())
         payload = {k: v for k, v in (body.keys or {}).items()}
@@ -315,17 +313,16 @@ def put_ui_prefs(body: UiPrefsBody, user: dict = Depends(get_current_user)):
 
 
 class UiPrefsPatchBody(BaseModel):
-    # { "keys": { "<Key>": "<Wert>" | null } }  - null loescht den Schluessel.
+    # { "keys": { "<key>": "<value>" | null } }  - null deletes the key.
     keys: dict[str, str | None] = {}
 
 
 @router.patch("/ui-prefs")
 def patch_ui_prefs(body: UiPrefsPatchBody, user: dict = Depends(get_current_user)):
     """
-    Teil-Update: nur die uebergebenen Schluessel werden geaendert, alle anderen
-    bleiben unangetastet. Das Frontend benutzt ausschliesslich diesen Weg, damit
-    ein frisch geoeffneter Browser (leerer localStorage) niemals den in der
-    Datenbank gespeicherten Zustand ueberschreiben kann.
+    Partial update: only the passed keys are changed, all others stay untouched.
+    The frontend uses exclusively this path so that a freshly opened browser
+    (empty localStorage) can never overwrite the state stored in the database.
     """
     try:
         db.merge_user_prefs(user["id"], body.keys or {})
@@ -363,10 +360,10 @@ def get_silent_screen(user: dict = Depends(get_current_user)):
 
 
 # ------------------------------------------------------------------
-# Spotify-Integration: Jeder eingeloggte Benutzer darf die Client-ID der
-# Read the Spotify app (configured by the admin in the settings) - it is
-# not a secret (it is in every OAuth URL). The login runs entirely in the
-# browser via authorization code + PKCE, there is NO client secret.
+# Spotify integration: every logged-in user may read the client ID of the
+# Spotify app (configured by the admin in the settings) - it is not a secret
+# (it is in every OAuth URL). The login runs entirely in the browser via
+# authorization code + PKCE, there is NO client secret.
 # ------------------------------------------------------------------
 
 @router.get("/spotify-config")
@@ -435,18 +432,18 @@ def password_policy():
 
 
 # ==================================================================
-# ZWEI-FAKTOR-ANMELDUNG (TOTP)
+# TWO-FACTOR SIGN-IN (TOTP)
 # ------------------------------------------------------------------
-# Jeder Benutzer richtet sie selbst im Profil ein:
-#   1. POST /api/auth/2fa/setup    -> Geheimnis + QR-Code (noch NICHT aktiv)
-#   2. Authenticator-App scannt den QR-Code
-#   3. POST /api/auth/2fa/activate -> Code aus der App bestaetigt die Einrichtung
-#      und liefert einmalig die Wiederherstellungscodes
-#   4. POST /api/auth/2fa/disable  -> abschalten (Passwort erforderlich)
+# Every user sets it up themselves in their profile:
+#   1. POST /api/auth/2fa/setup    -> secret + QR code (NOT active yet)
+#   2. the authenticator app scans the QR code
+#   3. POST /api/auth/2fa/activate -> a code from the app confirms the setup
+#      and returns the recovery codes once
+#   4. POST /api/auth/2fa/disable  -> turn off (password required)
 #
-# Der zweite Schritt ist wichtig: Erst wenn ein Code aus der App wirklich
-# passt, wird die Anmeldung darauf umgestellt. Sonst koennte sich jemand
-# aussperren, dessen App das Geheimnis gar nicht aufgenommen hat.
+# The second step is important: only once a code from the app really matches is
+# sign-in switched over to it. Otherwise someone whose app never took the
+# secret could lock themselves out.
 # ==================================================================
 
 class TotpCodeBody(BaseModel):
@@ -455,22 +452,22 @@ class TotpCodeBody(BaseModel):
 
 class TotpDisableBody(BaseModel):
     password: str = ""
-    code: str = ""       # Alternative: aktueller Code aus der App
+    code: str = ""       # alternative: current code from the app
 
 
 def _confirm_identity(user: dict, password: str = "", code: str = "") -> None:
     """
-    Bestaetigt, dass wirklich der Kontoinhaber am Geraet sitzt - nicht nur ein
-    offener Browser.
+    Confirms that the account owner is really at the device - not just an open
+    browser.
 
-    Wichtig: Konten aus einem Verzeichnis (AD/LDAP/SSO) haben LOKAL gar kein
-    Passwort. Frueher wurde hier stur gegen den lokalen Hash geprueft, der bei
-    diesen Konten leer ist - die Antwort war deshalb immer "Passwort falsch",
-    egal was man eingab. Jetzt gilt:
+    Important: accounts from a directory (AD/LDAP/SSO) have NO local password at
+    all. Previously this stubbornly checked against the local hash, which is
+    empty for these accounts - so the answer was always "password wrong", no
+    matter what was entered. Now the rule is:
 
-      * lokales Konto   -> lokales Passwort ODER aktueller Code aus der App
-      * Verzeichnis-Konto -> Passwort wird gegen das Verzeichnis geprueft,
-                             ersatzweise reicht der Code aus der App
+      * local account     -> local password OR current code from the app
+      * directory account -> the password is checked against the directory,
+                             alternatively the code from the app is enough
     """
     from app import totp as _totp
 
@@ -506,7 +503,7 @@ def _confirm_identity(user: dict, password: str = "", code: str = "") -> None:
     # 2b) Local account
     if password and user.get("password_hash") and verify_password(password, user["password_hash"]):
         return
-    raise HTTPException(400, "Passwort oder Code stimmt nicht.")
+    raise HTTPException(400, "Password or code is not correct.")
 
 
 @router.get("/2fa/status")
@@ -515,8 +512,8 @@ def totp_status(user: dict = Depends(get_current_user)):
     return {
         "enabled": bool(user.get("totp_enabled")),
         "backup_left": len([h for h in backup.split(",") if h]),
-        # Sagt der Oberflaeche, wonach sie fragen soll: Verzeichnis-Konten
-        # haben lokal kein Passwort.
+        # Tells the UI what to ask for: directory accounts have no local
+        # password.
         "realm": user.get("auth_realm") or "",
     }
 
@@ -524,8 +521,8 @@ def totp_status(user: dict = Depends(get_current_user)):
 @router.post("/2fa/setup")
 def totp_setup(user: dict = Depends(get_current_user)):
     """
-    Neues Geheimnis erzeugen und als QR-Code liefern. Noch nicht aktiv - die
-    Anmeldung bleibt unveraendert, bis der naechste Schritt bestaetigt ist.
+    Generate a new secret and return it as a QR code. Not active yet - sign-in
+    stays unchanged until the next step is confirmed.
     """
     from app import totp as _totp
     secret = _totp.new_secret()
@@ -536,7 +533,7 @@ def totp_setup(user: dict = Depends(get_current_user)):
     return {
         "secret": secret,
         "uri": uri,
-        "qr": qr,          # None -> Oberflaeche zeigt das Geheimnis zum Abtippen
+        "qr": qr,          # None -> the UI shows the secret to type in manually
         "digits": _totp.DIGITS,
         "period": _totp.PERIOD,
     }
@@ -554,13 +551,13 @@ def totp_activate(body: TotpCodeBody, user: dict = Depends(get_current_user)):
     codes = _totp.new_backup_codes()
     db.set_user_totp(user["id"], enabled=True, backup=_totp.hash_backup_codes(codes))
     db.add_audit_entry(user["username"], "2fa.enabled")
-    # Die Klartextcodes gibt es GENAU EINMAL - danach liegen nur noch Hashes vor.
+    # The plaintext codes exist EXACTLY ONCE - afterwards only hashes remain.
     return {"ok": True, "backup_codes": codes}
 
 
 @router.post("/2fa/disable")
 def totp_disable(body: TotpDisableBody, user: dict = Depends(get_current_user)):
-    """Abschalten nur mit eigenem Passwort ODER Code - ein offener Browser genuegt nicht."""
+    """Turn off only with your own password OR code - an open browser is not enough."""
     _confirm_identity(user, body.password, body.code)
     db.set_user_totp(user["id"], secret="", enabled=False, backup="")
     db.add_audit_entry(user["username"], "2fa.disabled")
@@ -570,9 +567,9 @@ def totp_disable(body: TotpDisableBody, user: dict = Depends(get_current_user)):
 @router.post("/2fa/backup-codes")
 def totp_new_backup_codes(body: TotpDisableBody,
                                 user: dict = Depends(get_current_user)):
-    """Neue Wiederherstellungscodes erzeugen; die alten verfallen dabei."""
+    """Generate new recovery codes; the old ones expire in the process."""
     if not user.get("totp_enabled"):
-        raise HTTPException(400, "Zwei-Faktor-Anmeldung ist nicht aktiv")
+        raise HTTPException(400, "Two-factor sign-in is not active")
     _confirm_identity(user, body.password, body.code)
     from app import totp as _totp
     codes = _totp.new_backup_codes()

@@ -2,10 +2,10 @@
 routers/admin_routes.py
 ------------------------
 Collection router for the administration features:
-  - Gruppen & Rollen (Rechte-System)
-  - Realms (Verzeichnis-Anbindung / Active Directory - Konfiguration)
-  - Webhooks (Benachrichtigungen, Discord/Custom)
-  - Automationen (geplante Befehle)
+  - groups & roles (permission system)
+  - realms (directory connection / Active Directory configuration)
+  - webhooks (notifications, Discord/custom)
+  - automations (scheduled commands)
 
 These endpoints are admin-protected.
 """
@@ -27,7 +27,7 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
 # ==================================================================
-# Gruppen & Rollen
+# Groups & roles
 # ==================================================================
 
 class GroupBody(BaseModel):
@@ -81,8 +81,8 @@ class GroupUnmanagedBody(BaseModel):
 @router.put("/groups/{group_id}/unmanaged")
 def set_group_unmanaged(group_id: str, body: GroupUnmanagedBody,
                               user: dict = Depends(get_current_user)):
-    """(AD-)Gruppe als unverwaltet markieren – landet im eingeklappten Ordner
-    und wird AD-Benutzern nicht mehr automatisch zugewiesen."""
+    """Mark an (AD) group as unmanaged - it lands in the collapsed folder and
+    is no longer assigned to AD users automatically."""
     require_perm(user, "manage_permissions")
     g = db.set_group_unmanaged(group_id, body.unmanaged)
     db.add_audit_entry(user["username"], "group.updated", target=group_id,
@@ -261,12 +261,12 @@ def permission_catalog(user: dict = Depends(get_current_user)):
         "labels": PERM_LABELS,
         "general": db.GENERAL_PERM_KEYS,
         "client": db.CLIENT_PERM_KEYS,
-        # Implikationen (Quelle -> abgedeckte Rechte): Das Frontend nutzt sie,
-        # um beim Erlauben eines Rechts die Basis-Rechte automatisch mitzusetzen.
+        # Implications (source -> covered permissions): the frontend uses them
+        # to automatically also set the base permissions when allowing one.
         "implies": db.perm_implies_map(),
         # Pseudo client scope whose client permissions apply to EVERY client.
         "default_client_scope": db.DEFAULT_CLIENT_SCOPE,
-        # Modul "proxmox": Bereich "Standard-Proxmox" + Agenten mit verbundenem Proxmox
+        # Module "proxmox": scope "default Proxmox" + agents with a connected Proxmox
         "default_pve_scope": db.DEFAULT_PVE_SCOPE,
         "pve": [p for p in db.CLIENT_PERM_KEYS if p.startswith("pve_")],
         "pve_clients": _pve_clients(),
@@ -293,34 +293,34 @@ def _valid_subject(subject_type: str, subject_id: str) -> bool:
 
 @router.get("/grants/{subject_type}/{subject_id}")
 def get_grants(subject_type: str, subject_id: str, user: dict = Depends(get_current_user)):
-    """Alle Grants eines Subjekts (Benutzer oder Gruppe)."""
+    """All grants of a subject (user or group)."""
     require_perm(user, "see_permissions")
     if subject_type not in ("user", "group"):
-        raise HTTPException(400, "subject_type muss 'user' oder 'group' sein")
+        raise HTTPException(400, "subject_type must be 'user' or 'group'")
     if not _valid_subject(subject_type, subject_id):
-        raise HTTPException(404, "Subjekt nicht gefunden")
+        raise HTTPException(404, "Subject not found")
     return {"grants": db.get_grants(subject_type, subject_id)}
 
 
 @router.put("/grants/{subject_type}/{subject_id}")
 def put_grants(subject_type: str, subject_id: str, body: GrantsBody,
                      user: dict = Depends(get_current_user)):
-    """Ersetzt ALLE Grants eines Subjekts (tri-state; nur allow/deny werden gespeichert)."""
+    """Replaces ALL grants of a subject (tri-state; only allow/deny are stored)."""
     require_perm(user, "manage_permissions")
     if subject_type not in ("user", "group"):
-        raise HTTPException(400, "subject_type muss 'user' oder 'group' sein")
+        raise HTTPException(400, "subject_type must be 'user' or 'group'")
     if not _valid_subject(subject_type, subject_id):
-        raise HTTPException(404, "Subjekt nicht gefunden")
+        raise HTTPException(404, "Subject not found")
     db.set_grants(subject_type, subject_id, [g.model_dump() for g in body.grants])
     db.add_audit_entry(user["username"], "grants.updated",
                        target=f"{subject_type}:{subject_id}",
-                       details=f"{len(body.grants)} Grants")
+                       details=f"{len(body.grants)} grants")
     return {"ok": True, "grants": db.get_grants(subject_type, subject_id)}
 
 
 # ==================================================================
-# Realms (Verzeichnis-Anbindung / Active Directory): Modul "sso"
-# (src/modules/backend/sso/sso_routes.py) - URLs unveraendert.
+# Realms (directory connection / Active Directory): module "sso"
+# (src/modules/backend/sso/sso_routes.py) - URLs unchanged.
 # ==================================================================
 
 
@@ -340,16 +340,16 @@ async def restart_backend(user: dict = Depends(get_current_user)):
     # Full administrators have all permissions anyway.
     if not (user_has_permission(user, "admin_settings")
             or user_has_permission(user, "manage_settings")):
-        raise HTTPException(403, "Fehlendes Recht: admin_settings/manage_settings")
+        raise HTTPException(403, "Missing permission: admin_settings/manage_settings")
     db.add_audit_entry(user["username"], "backend.restart")
 
     import sys as _sys
     import asyncio as _asyncio
 
-    # Im Docker-Container mit eingebundenem docker.sock: den EIGENEN Container
-    # ueber die Docker-API neu starten (sauber inkl. Entrypoint). Dieser Weg
-    # betrifft ausschliesslich diesen einen Container - niemals Agenten, Nodes
-    # oder Proxmox. Ohne Docker/Socket: wie bisher den Prozess neu ausfuehren.
+    # In a Docker container with a mounted docker.sock: restart OUR OWN
+    # container via the Docker API (cleanly, incl. entrypoint). This path
+    # affects only this one container - never agents, nodes or Proxmox. Without
+    # Docker/socket: re-exec the process as before.
     self_id = None
     if os.getenv("RMM_INSTALL_KIND", "").lower() == "docker":
         try:
@@ -358,7 +358,7 @@ async def restart_backend(user: dict = Depends(get_current_user)):
             if info and info.get("Id"):
                 self_id = info["Id"]
         except Exception as e:
-            print(f"[admin] Eigener Container nicht ermittelbar ({e}) - Neustart des Prozesses.")
+            print(f"[admin] Own container could not be determined ({e}) - restarting the process.")
 
     async def _do_restart():
         await _asyncio.sleep(1.0)
@@ -366,17 +366,17 @@ async def restart_backend(user: dict = Depends(get_current_user)):
             print(f"[admin] Backend restart: restarting own Docker container {self_id[:12]} ...")
             try:
                 from app import docker_services as _ds
-                # Der Daemon beendet uns waehrenddessen - Fehler/Timeout hier sind normal.
+                # The daemon stops us in the meantime - errors/timeouts here are normal.
                 await _asyncio.to_thread(_ds._api, "POST", f"/containers/{self_id}/restart?t=15", None, 5)
             except Exception:
                 pass
-            await _asyncio.sleep(25)          # noch am Leben? Dann Fallback unten
+            await _asyncio.sleep(25)          # still alive? Then fallback below
             print("[admin] Container restart did not happen - restarting the process instead.")
         try:
             os.execv(_sys.executable, [_sys.executable] + _sys.argv)
         except Exception:
-            # Falls re-exec scheitert: hart beenden, damit ein Prozess-Manager
-            # (systemd Restart=always / Docker restart policy) uns neu startet.
+            # If re-exec fails: exit hard so a process manager
+            # (systemd Restart=always / Docker restart policy) restarts us.
             os._exit(0)
 
     _asyncio.create_task(_do_restart())
@@ -403,28 +403,27 @@ async def stop_backend(user: dict = Depends(get_current_user)):
         await _asyncio.sleep(1.0)
         try:
             from app import dbsync as _dbsync
-            _dbsync.periodic_sync()   # letzten Stand in die externe DB schreiben
+            _dbsync.periodic_sync()   # write the last state into the external DB
         except Exception:
             pass
-        print("[admin] Backend wird auf Nutzerwunsch GESTOPPT.")
+        print("[admin] Backend STOPPED on user request.")
         os._exit(0)
 
     _asyncio.create_task(_do_stop())
-    return {"ok": True, "message": "Backend wird in ca. 1 Sekunde gestoppt."}
+    return {"ok": True, "message": "Backend stops in about 1 second."}
 
 
 # ==================================================================
-# Benachrichtigungen: Meldungs-Aufbau (Versand/Regeln: Modul "notify")
+# Notifications: message assembly (sending/rules: module "notify")
 # ==================================================================
 
 # ------------------------------------------------------------------
-# Notification-Aufbau
+# Notification assembly
 # ------------------------------------------------------------------
-# Jede Benachrichtigung besteht IMMER aus einem "head" (Titel/Kurzfassung)
-# und einem "body" (eigentliche Nachricht), dazu ein einheitlicher Kontext
-# (tenant / location / client / service / timestamp) und ein Level, das
-# die Embed-Farbe bestimmt. Die Farben entsprechen denen im Frontend
-# (siehe notify.js: info/success/warn/error).
+# A notification ALWAYS consists of a "head" (title/short form) and a "body"
+# (the actual message), plus a uniform context (tenant / location / client /
+# service / timestamp) and a level that determines the embed color. The colors
+# match those in the frontend (see notify.js: info/success/warn/error).
 
 # Level -> Discord embed color (decimal). Hex taken from the frontend.
 LEVEL_COLORS = {
@@ -472,7 +471,7 @@ def build_notification(
     # head: short summary, e.g. "Disk Space - SRV-01"
     if not head:
         head = f"{service} - {client}"
-    # body: die eigentliche Nachricht
+    # body: the actual message
     if not body:
         body = message
 
@@ -489,18 +488,18 @@ def build_notification(
     }
 
 
-# Versand an Webhooks (Discord/Custom) und die Webhook-Verwaltung
-# (/api/admin/webhooks): Modul "notify" (src/modules/backend/notify).
-# build_notification() bleibt hier im Core - damit bauen Core UND Module
-# ihre Meldungen einheitlich zusammen.
+# Sending to webhooks (Discord/custom) and the webhook management
+# (/api/admin/webhooks): module "notify" (src/modules/backend/notify).
+# build_notification() stays here in the core - so core AND modules assemble
+# their messages uniformly.
 
 
 # ==================================================================
-# Globale Einstellungen (Allgemein-Tab)
+# Global settings (General tab)
 # ==================================================================
 
 class SettingsBody(BaseModel):
-    # Alle optional: es werden nur die mitgeschickten Felder gespeichert.
+    # All optional: only the fields that are sent are stored.
     server_url: str | None = None
     server_host: str | None = None
     server_domain: str | None = None
@@ -513,7 +512,7 @@ class SettingsBody(BaseModel):
     metrics_interval_seconds: int | None = None
     metrics_retention_hours: int | None = None
     replay_retention_days: int | None = None
-    # Aufnahme-Einstellungen (Screen-Agent + Guacamole)
+    # Recording settings (screen agent + Guacamole)
     recording_enabled: str | None = None
     screen_record_quality: int | None = None
     screen_record_fps: int | None = None
@@ -536,7 +535,7 @@ class SettingsBody(BaseModel):
     # It lets users sign in in the audio player via OAuth (PKCE, no secret)
     # and play full tracks with Premium.
     spotify_client_id: str | None = None
-    # Server-Selbst-Update (Settings -> Update)
+    # Server self-update (Settings -> Update)
     server_auto_update: str | None = None            # "1" | "0"
     server_auto_update_channel: str | None = None    # "commit" | "full" | "any"
     # UI design for users without their own choice (new users):
@@ -557,16 +556,16 @@ ADMIN_SETTING_KEYS = {
     # an admin matter, not 'manage_settings'.
     "host_lock_enabled", "host_lock_scope", "host_lock_extra",
     "host_lock_trust_proxy",
-    # Der VPN-Endpunkt oeffnet einen Port nach aussen und bestimmt, wer ins
-    # Netz der Clients kommt - das ist Admin-Sache, nicht 'manage_settings'.
+    # The VPN endpoint opens a port to the outside and decides who gets into
+    # the clients' network - that is an admin matter, not 'manage_settings'.
 }
 
 
 @router.get("/hostlock/status")
 def hostlock_status(request: Request, user: dict = Depends(get_current_user)):
     """
-    Zeigt, welchen Host der Server bei DIESER Anfrage sieht und welche
-    Adressen erlaubt sind. Erste Anlaufstelle, wenn die Sperre nicht greift.
+    Shows which host the server sees for THIS request and which addresses are
+    allowed. First place to look when the lock does not take effect.
     """
     require_perm(user, "see_settings")
     from app import hostlock
@@ -589,8 +588,8 @@ def update_settings(body: SettingsBody, user: dict = Depends(get_current_user)):
     if any(k not in ADMIN_SETTING_KEYS for k in changed):
         require_perm(user, "manage_settings")
     if "default_design" in changed and changed["default_design"] not in db.available_designs():
-        raise HTTPException(400, "Unbekannter Style (verfuegbar: " + ", ".join(db.available_designs()) + ")")
-    # server_url darf bewusst auf "" gesetzt werden (= wieder automatisch).
+        raise HTTPException(400, "Unknown style (available: " + ", ".join(db.available_designs()) + ")")
+    # server_url may deliberately be set to "" (= automatic again).
     for key, value in changed.items():
         db.set_setting(key, value)
     db.add_audit_entry(user["username"], "settings.updated", details=",".join(changed.keys()))
@@ -598,7 +597,7 @@ def update_settings(body: SettingsBody, user: dict = Depends(get_current_user)):
 
 
 # ---------------------------------------------------------------------------
-# Branding: Logos/Bilder per Upload ersetzen
+# Branding: replace logos/images via upload
 # ---------------------------------------------------------------------------
 # The files live in the frontend folder (served by StaticFiles).
 # Upload as a RAW request body (no multipart) - this way we need no extra
@@ -668,11 +667,11 @@ async def upload_branding(name: str, request: Request, user: dict = Depends(get_
     require_perm(user, "manage_branding")
     slot = BRANDING_SLOTS.get(name)
     if not slot:
-        raise HTTPException(404, f"Unbekannter Branding-Slot. Erlaubt: {', '.join(BRANDING_SLOTS)}")
+        raise HTTPException(404, f"Unknown branding slot. Allowed: {', '.join(BRANDING_SLOTS)}")
 
     data = await request.body()
     if not data:
-        raise HTTPException(400, "Leerer Upload")
+        raise HTTPException(400, "Empty upload")
     if len(data) > _MAX_BRANDING_BYTES:
         raise HTTPException(413, "File too large (max. 8 MB)")
 
@@ -691,7 +690,7 @@ async def upload_branding(name: str, request: Request, user: dict = Depends(get_
         img = Image.open(_io.BytesIO(data))
         img.load()
     except Exception as e:
-        raise HTTPException(400, f"Die Datei ist kein lesbares Bild "
+        raise HTTPException(400, f"The file is not a readable image "
                                  f"({e.__class__.__name__}: {e}).")
 
     target_ext = name.rsplit(".", 1)[-1].lower()
@@ -716,23 +715,23 @@ async def upload_branding(name: str, request: Request, user: dict = Depends(get_
             # Unknown slot type: save the original unchanged.
             out.write(data)
     except Exception as e:
-        raise HTTPException(400, f"Konvertierung nach {target_ext.upper()} "
-                                 f"fehlgeschlagen ({e.__class__.__name__}: {e}).")
+        raise HTTPException(400, f"Conversion to {target_ext.upper()} "
+                                 f"failed ({e.__class__.__name__}: {e}).")
     data = out.getvalue()
-    src_fmt = (img.format or "unbekannt")
+    src_fmt = (img.format or "unknown")
 
     try:
         _BRANDING_STORE.mkdir(parents=True, exist_ok=True)
         tmp = _BRANDING_STORE / (name + ".tmp-upload")
         tmp.write_bytes(data)
-        os.replace(tmp, _BRANDING_STORE / name)  # atomar - nie halb geschriebene Logos
+        os.replace(tmp, _BRANDING_STORE / name)  # atomic - never half-written logos
     except OSError as e:
-        # Klartext-Fehler statt generischem 500 - z.B. wenn backend/ read-only
-        # gemountet ist oder der Dienst-Benutzer keine Schreibrechte hat.
-        print(f"[branding] Upload von '{name}' fehlgeschlagen: {e}")
-        raise HTTPException(500, f"Speichern fehlgeschlagen ({e.__class__.__name__}: {e}). "
-                                 f"Hat der Backend-Prozess Schreibrechte auf {_BRANDING_STORE}?")
-    print(f"[branding] '{name}' ersetzt ({src_fmt} -> {name.rsplit('.', 1)[-1].upper()}, "
+        # Plain-text error instead of a generic 500 - e.g. when backend/ is
+        # mounted read-only or the service user has no write permission.
+        print(f"[branding] upload of '{name}' failed: {e}")
+        raise HTTPException(500, f"Saving failed ({e.__class__.__name__}: {e}). "
+                                 f"Does the backend process have write permission on {_BRANDING_STORE}?")
+    print(f"[branding] '{name}' replaced ({src_fmt} -> {name.rsplit('.', 1)[-1].upper()}, "
           f"{len(data)} bytes) -> {_BRANDING_STORE / name}")
 
     db.add_audit_entry(user["username"], "branding.updated", target=name,
@@ -788,7 +787,7 @@ def get_default_layouts(user: dict = Depends(get_current_user)):
 
 @router.post("/default-layouts")
 def set_default_layout(body: DefaultLayoutBody, user: dict = Depends(get_current_user)):
-    """Speichert ein Layout als neuen organisationsweiten Standard (nur Admin)."""
+    """Saves a layout as the new organization-wide default (admin only)."""
     require_admin(user)
     key = _LAYOUT_SETTING_KEYS.get(body.kind)
     if not key:
@@ -800,7 +799,7 @@ def set_default_layout(body: DefaultLayoutBody, user: dict = Depends(get_current
 
 @router.delete("/default-layouts/{kind}")
 def clear_default_layout(kind: str, user: dict = Depends(get_current_user)):
-    """Entfernt den organisationsweiten Standard wieder (nur Admin)."""
+    """Removes the organization-wide default again (admin only)."""
     require_admin(user)
     key = _LAYOUT_SETTING_KEYS.get(kind)
     if not key:
