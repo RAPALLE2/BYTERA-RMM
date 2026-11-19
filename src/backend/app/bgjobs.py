@@ -1,43 +1,42 @@
 """
-bgjobs.py - Hintergrund-Jobs des Backends (Core)
+bgjobs.py - background jobs of the backend (Core)
 =================================================
 
-GRUNDREGEL: Aufgaben (Scans, Updates, Skripte, Installationen, Builds ...)
-laufen NIE in der Browser-Sitzung, sondern als Job im Backend. Die Seite neu
-laden, ein zweiter Benutzer oder ein geschlossenes Fenster aendern nichts am
-Job - jeder, der hinschaut, sieht denselben Stand, und das Ergebnis haelt das
-Backend selbst fest.
+GROUND RULE: tasks (scans, updates, scripts, installs, builds ...) NEVER run in
+the browser session, but as a job in the backend. Reloading the page, a second
+user or a closed window change nothing about the job - everyone who looks sees
+the same state, and the backend itself holds on to the result.
 
-Eine Route auf einen Job umstellen (der Normalfall, eine Zeile):
+Convert a route to a job (the normal case, one line):
 
     @router.post("/{cid}/scan")
     async def scan(cid: str, background: bool = False, user=Depends(get_current_user)):
         require_perm(user, "...")
         async def work(job):
             job.update(phase="scan", pct=10, detail="...")
-            return await do_the_thing()                  # -> Ergebnis
-        return await bgjobs.run("patch.scan", key=cid, title="Update-Suche PC-01",
+            return await do_the_thing()                  # -> result
+        return await bgjobs.run("patch.scan", key=cid, title="Update search PC-01",
                                 user=user, perm="patching", work=work, background=background)
 
-  * background=1 (das Dashboard): Antwort SOFORT mit dem Job; Fortschritt live.
-  * ohne background (Skripte, REST-API /api/v1): Die Anfrage wartet wie frueher
-    auf das Ergebnis - die Arbeit laeuft aber trotzdem im Job und wird NICHT
-    abgebrochen, wenn der Aufrufer die Verbindung trennt.
-  * HTTPException im Runner -> gleicher Statuscode beim wartenden Aufrufer.
-  * key: hoechstens EIN laufender Job je (kind, key); ein zweiter Start haengt
-    sich an den laufenden an. key=None -> jeder Start ist ein eigener Job.
+  * background=1 (the dashboard): response IMMEDIATELY with the job; progress live.
+  * without background (scripts, REST API /api/v1): the request waits for the
+    result as before - but the work still runs in the job and is NOT aborted
+    when the caller drops the connection.
+  * HTTPException in the runner -> same status code for the waiting caller.
+  * key: at most ONE running job per (kind, key); a second start attaches to
+    the running one. key=None -> every start is its own job.
 
-Live: Socket-Event "bgjob:update" an /dashboard mit NUR {id, kind, key,
-status, rev} (der Dashboard-Namespace ist nicht angemeldet). Details per REST
-(/api/bgjobs), dort werden die Rechte geprueft (perm + may_see + Starter).
+Live: socket event "bgjob:update" to /dashboard with ONLY {id, kind, key,
+status, rev} (the dashboard namespace is not authenticated). Details via REST
+(/api/bgjobs), where the rights are checked (perm + may_see + starter).
 
-Verlauf: Jeder Job steht in der Tabelle "bgjobs" (Start, Ende, Ergebnis,
-Fehler). So bleibt das Ergebnis auch nach einem Neustart des Backends
-sichtbar; Jobs, die beim Neustart noch liefen, werden als "unterbrochen"
-markiert (Ausnahme: Phase "restart" = gewollter Neustart, z.B. Server-Update).
+History: every job is in the table "bgjobs" (start, end, result, error). This
+way the result stays visible even after a restart of the backend; jobs that
+were still running at the restart are marked as "interrupted" (exception:
+phase "restart" = intended restart, e.g. server update).
 
-Frontend-Helfer: /js/app/bgjobs.js (runJob, watchJobs, cancelJob);
-Uebersicht aller Jobs: Aufgaben-Anzeige in der Taskleiste.
+Frontend helper: /js/app/bgjobs.js (runJob, watchJobs, cancelJob);
+overview of all jobs: task display in the taskbar.
 """
 
 import asyncio
@@ -46,13 +45,13 @@ import time
 import uuid
 from typing import Any, Awaitable, Callable
 
-KEEP_FINISHED_SEC = 6 * 3600     # fertige Jobs so lange im Speicher
-KEEP_FINISHED_MAX = 120          # ... aber hoechstens so viele
-KEEP_DB_DAYS = 30                # Verlauf in der Datenbank
-MAX_RESULT_BYTES = 512 * 1024    # groessere Ergebnisse werden nicht gespeichert
+KEEP_FINISHED_SEC = 6 * 3600     # keep finished jobs in memory this long
+KEEP_FINISHED_MAX = 120          # ... but at most this many
+KEEP_DB_DAYS = 30                # history in the database
+MAX_RESULT_BYTES = 512 * 1024    # larger results are not stored
 MAX_LOG_LINES = 400
-EMIT_INTERVAL = 0.5              # Fortschritt hoechstens 2x pro Sekunde melden
-HARD_CANCEL_SEC = 30             # reagiert ein Job so lange nicht auf Abbruch -> Task abbrechen
+EMIT_INTERVAL = 0.5              # report progress at most 2x per second
+HARD_CANCEL_SEC = 30             # if a job does not react to a cancel this long -> abort the task
 
 _jobs: dict[str, "BgJob"] = {}
 _table_ready = False
@@ -63,7 +62,7 @@ def _now_ms() -> int:
 
 
 # ======================================================================
-# Datenbank-Verlauf
+# Database history
 # ======================================================================
 def _db():
     from app import db
@@ -106,7 +105,7 @@ def _persist(job: "BgJob") -> None:
             try:
                 res = json.dumps(job.result, default=str)
                 if len(res) > MAX_RESULT_BYTES:
-                    res = json.dumps({"_truncated": True, "note": "Ergebnis zu gross für den Verlauf"})
+                    res = json.dumps({"_truncated": True, "note": "result too large for the history"})
             except Exception:
                 res = None
         db = _db()
@@ -118,26 +117,26 @@ def _persist(job: "BgJob") -> None:
              json.dumps(job.meta, default=str), res,
              "\n".join(job.logs[-MAX_LOG_LINES:]) if job.logs else None))
         db._conn.commit()
-    except Exception as e:                       # Verlauf ist Komfort - nie den Job stoeren
-        print(f"[bgjobs] Verlauf speichern fehlgeschlagen: {e}")
+    except Exception as e:                       # history is a convenience - never disturb the job
+        print(f"[bgjobs] saving history failed: {e}")
 
 
 def startup_recover() -> None:
-    """Beim Start: Jobs, die beim letzten Stopp noch liefen, abschliessen."""
+    """At start: finish jobs that were still running at the last stop."""
     try:
         ensure_table()
         db = _db()
         now = _now_ms()
         db._conn.execute(
-            "UPDATE bgjobs SET status='done', finished=?, detail='Neustart abgeschlossen' "
+            "UPDATE bgjobs SET status='done', finished=?, detail='Restart completed' "
             "WHERE status='running' AND phase='restart'", (now,))
         db._conn.execute(
-            "UPDATE bgjobs SET status='error', finished=?, error='Unterbrochen: Das Backend wurde neu gestartet' "
+            "UPDATE bgjobs SET status='error', finished=?, error='Interrupted: the backend was restarted' "
             "WHERE status='running'", (now,))
         db._conn.execute("DELETE FROM bgjobs WHERE started < ?", (now - KEEP_DB_DAYS * 86400000,))
         db._conn.commit()
     except Exception as e:
-        print(f"[bgjobs] Wiederherstellung fehlgeschlagen: {e}")
+        print(f"[bgjobs] recovery failed: {e}")
 
 
 def _row_public(r: dict, with_result: bool = False) -> dict:
@@ -156,7 +155,7 @@ def _row_public(r: dict, with_result: bool = False) -> dict:
 
 
 def history(kind: str | None = None, key: str | None = None, limit: int = 50) -> list[dict]:
-    """Beendete Jobs aus der Datenbank (ohne die, die noch im Speicher sind)."""
+    """Finished jobs from the database (excluding those still in memory)."""
     try:
         ensure_table()
         q, args = "SELECT * FROM bgjobs WHERE status != 'running'", []
@@ -192,16 +191,16 @@ class BgJob:
         self.perm, self.by = perm, by
         self.may_see = may_see
         self.on_cancel = on_cancel
-        self.private = private           # nur Starter (+ Admins) sehen den Job
+        self.private = private           # only the starter (+ admins) see the job
         self.meta = dict(meta or {})
         self.status = "running"          # running | done | error | cancelled
         self.phase = ""
         self.pct: float | None = None
         self.detail = ""
         self.error: str | None = None
-        self.error_status = 500          # HTTP-Status fuer wartende Aufrufer
+        self.error_status = 500          # HTTP status for waiting callers
         self.result: Any = None
-        self.progress: dict = {}         # frei: Zaehler fuer die Anzeige
+        self.progress: dict = {}         # free: counters for the display
         self.logs: list[str] = []
         self.started = _now_ms()
         self.finished: int | None = None
@@ -213,14 +212,14 @@ class BgJob:
         self._last_emit = 0.0
         self._emit_pending = False
 
-    # ---------------- vom Runner benutzt ----------------
+    # ---------------- used by the runner ----------------
     @property
     def cancelled(self) -> bool:
         return self.cancel_requested
 
     def update(self, *, phase: str | None = None, pct: float | None = None,
                detail: str | None = None, **progress) -> None:
-        """Fortschritt setzen (wird gedrosselt live an die Dashboards gemeldet)."""
+        """Set progress (reported live to the dashboards, throttled)."""
         if phase is not None:
             self.phase = phase
         if pct is not None:
@@ -230,11 +229,11 @@ class BgJob:
         if progress:
             self.progress.update(progress)
         if phase == "restart":
-            _persist(self)               # vor einem gewollten Neustart festhalten
+            _persist(self)               # record before an intended restart
         self._changed()
 
     def log(self, line: str) -> None:
-        """Eine Log-Zeile anhaengen (sichtbar in der Aufgaben-Anzeige)."""
+        """Append a log line (visible in the task display)."""
         ts = time.strftime("%H:%M:%S")
         for ln in str(line).splitlines() or [""]:
             self.logs.append(f"{ts} {ln}"[:1000])
@@ -243,11 +242,11 @@ class BgJob:
         self._changed()
 
     def check_cancel(self) -> None:
-        """In Schleifen aufrufen: bricht mit CancelledError ab, wenn angefordert."""
+        """Call in loops: aborts with CancelledError if requested."""
         if self.cancel_requested:
             raise asyncio.CancelledError()
 
-    # ---------------- Ausgabe ----------------
+    # ---------------- output ----------------
     def public(self, with_result: bool = False) -> dict:
         d = {
             "id": self.id, "kind": self.kind, "key": self.key, "title": self.title,
@@ -269,7 +268,7 @@ class BgJob:
         return _visible(user, self.perm, self.by, self.private, self.may_see,
                         self.meta.get("_client"), self.meta.get("_client_perm"))
 
-    # ---------------- intern ----------------
+    # ---------------- internal ----------------
     def _changed(self, force: bool = False) -> None:
         self.rev += 1
         now = time.monotonic()
@@ -293,9 +292,9 @@ class BgJob:
 def _visible(user: dict, perm: str | None, by: str, private: bool,
              may_see: Callable[[dict], bool] | None, client_id: str | None = None,
              client_perm: str | None = None) -> bool:
-    """Wer darf einen Job sehen? Admins immer, der Starter immer. Sonst:
-    privat -> niemand; Recht/Client-Zugriff/may_see muessen passen. Ein Job ganz
-    OHNE solche Angaben ist nur fuer Starter + Admins sichtbar (sicherer Standard)."""
+    """Who may see a job? Admins always, the starter always. Otherwise:
+    private -> nobody; right/client access/may_see must match. A job entirely
+    WITHOUT such info is visible only to starter + admins (safe default)."""
     from app.auth import can_access_client, is_super_admin, user_has_permission
     try:
         if is_super_admin(user):
@@ -323,9 +322,10 @@ def _visible(user: dict, perm: str | None, by: str, private: bool,
 
 
 def row_visible_to(r: dict, user: dict) -> bool:
-    """Sichtbarkeit eines Verlaufs-Eintrags. Die may_see-Funktion des Jobs gibt es
-    nach dem Neustart nicht mehr; deshalb gelten Recht, Client(-Recht) und Starter -
-    und Jobs, die nur ueber may_see eingeschraenkt waren, sieht dann nur der Starter."""
+    """Visibility of a history entry. The job's may_see function no longer
+    exists after a restart; therefore right, client(-right) and starter apply -
+    and jobs that were restricted only via may_see are then seen only by the
+    starter."""
     meta = json.loads(r.get("meta") or "{}")
     perm = r.get("perm") or None
     client = meta.get("_client")
@@ -369,11 +369,11 @@ async def _run(job: BgJob, runner: Callable[[BgJob], Awaitable[Any]],
         job.result = await runner(job)
         job.status = "cancelled" if job.cancel_requested else "done"
     except asyncio.CancelledError:
-        # Gewollter Neustart (z.B. Server-Update) beendet die Task - das ist Erfolg.
+        # An intended restart (e.g. server update) ends the task - that is a success.
         job.status = "done" if job.phase == "restart" and not job.cancel_requested else "cancelled"
     except HTTPException as e:
         job.status, job.error, job.error_status = "error", str(e.detail), e.status_code
-    except Exception as e:                      # Fehler gehoert in den Job, nicht in den Log-Spam
+    except Exception as e:                      # the error belongs in the job, not in the log spam
         job.status = "error"
         job.error = str(e) or e.__class__.__name__
     finally:
@@ -387,9 +387,9 @@ async def _run(job: BgJob, runner: Callable[[BgJob], Awaitable[Any]],
                     await r
             except Exception as e:
                 if job.status == "done":
-                    job.status, job.error = "error", f"Ergebnis speichern fehlgeschlagen: {e}"
+                    job.status, job.error = "error", f"saving result failed: {e}"
         if job.error:
-            job.log(f"FEHLER: {job.error}")
+            job.log(f"ERROR: {job.error}")
         _persist(job)
         job.done.set()
         job._changed(force=True)
@@ -397,7 +397,7 @@ async def _run(job: BgJob, runner: Callable[[BgJob], Awaitable[Any]],
 
 
 # ======================================================================
-# Oeffentliche Funktionen
+# Public functions
 # ======================================================================
 def start(kind: str, key: str | None = None, *, title: str, user: dict | None,
           runner: Callable[[BgJob], Awaitable[Any]], perm: str | None = None,
@@ -406,22 +406,22 @@ def start(kind: str, key: str | None = None, *, title: str, user: dict | None,
           on_done: Callable[[BgJob], Any] | None = None,
           meta: dict | None = None, client_id: str | None = None,
           client_perm: str | None = None, private: bool = False) -> tuple[BgJob, bool]:
-    """Startet einen Job - oder liefert den schon laufenden fuer (kind, key)
-    (gleicher Titel = gleicher Vorgang -> anhaengen; anderer Titel -> 409).
-    client_id: Job betrifft diesen Client -> nur sichtbar fuer Benutzer mit Zugriff
-               (client_perm: zusaetzlich dieses Client-Recht, z.B. "c_terminal").
-    private: nur der Starter (und Admins) sehen den Job.
-    Rueckgabe: (job, neu_gestartet)."""
+    """Starts a job - or returns the one already running for (kind, key)
+    (same title = same operation -> attach; different title -> 409).
+    client_id: job concerns this client -> visible only to users with access
+               (client_perm: additionally this client right, e.g. "c_terminal").
+    private: only the starter (and admins) see the job.
+    Returns: (job, newly_started)."""
     if key is not None and private:
-        key = f"{(user or {}).get('username', 'system')}:{key}"   # private Jobs je Benutzer
+        key = f"{(user or {}).get('username', 'system')}:{key}"   # private jobs per user
     if key is not None:
         running = active(kind, key)
         if running:
             if running.title != title:
-                # Ein ANDERER Vorgang am selben Objekt laeuft -> nicht still anhaengen
+                # A DIFFERENT operation on the same object is running -> do not attach silently
                 from fastapi import HTTPException
-                raise HTTPException(409, f"Es läuft bereits: {running.title}"
-                                         f"{' (gestartet von ' + running.by + ')' if running.by else ''}")
+                raise HTTPException(409, f"Already running: {running.title}"
+                                         f"{' (started by ' + running.by + ')' if running.by else ''}")
             return running, False
     meta = dict(meta or {})
     if client_id:
@@ -429,7 +429,7 @@ def start(kind: str, key: str | None = None, *, title: str, user: dict | None,
         if client_perm:
             meta["_client_perm"] = client_perm
     if may_see:
-        meta["_may_see"] = True          # nach Neustart nicht pruefbar -> Verlauf nur fuer Starter
+        meta["_may_see"] = True          # not checkable after a restart -> history only for the starter
     if private:
         meta["_private"] = True
     job = BgJob(kind, key if key is not None else uuid.uuid4().hex[:10], title, perm,
@@ -442,22 +442,22 @@ def start(kind: str, key: str | None = None, *, title: str, user: dict | None,
 
 
 async def respond(job: BgJob, new: bool, background: bool) -> Any:
-    """HTTP-Antwort: background -> Job sofort; sonst auf das Ergebnis warten
-    (der Job laeuft weiter, auch wenn der Aufrufer die Verbindung trennt)."""
+    """HTTP response: background -> job immediately; otherwise wait for the
+    result (the job keeps running even if the caller drops the connection)."""
     if background:
         return {**job.public(), "attached": not new, "job": True}
     from fastapi import HTTPException
     await asyncio.shield(job.done.wait())
     if job.status == "error":
-        raise HTTPException(job.error_status or 500, job.error or "Fehler")
+        raise HTTPException(job.error_status or 500, job.error or "Error")
     if job.status == "cancelled":
-        raise HTTPException(409, f"Abgebrochen{' von ' + job.cancelled_by if job.cancelled_by else ''}")
+        raise HTTPException(409, f"Cancelled{' by ' + job.cancelled_by if job.cancelled_by else ''}")
     return job.result
 
 
 async def run(kind: str, key: str | None = None, *, title: str, user: dict | None,
               work: Callable[[BgJob], Awaitable[Any]], background: bool = False, **kw) -> Any:
-    """start() + respond() in einem Aufruf - der Normalfall in Routen."""
+    """start() + respond() in one call - the normal case in routes."""
     job, new = start(kind, key, title=title, user=user, runner=work, **kw)
     return await respond(job, new, background)
 
@@ -474,7 +474,7 @@ def active(kind: str, key: str | None = None) -> BgJob | None:
 
 
 def latest(kind: str, key: str) -> BgJob | None:
-    """Laufender Job, sonst der zuletzt beendete fuer (kind, key) (nur Speicher)."""
+    """Running job, otherwise the most recently finished for (kind, key) (memory only)."""
     run_ = active(kind, key)
     if run_:
         return run_
@@ -489,13 +489,13 @@ def list_jobs(kind: str | None = None, key: str | None = None) -> list[BgJob]:
 
 
 async def cancel(job: BgJob, user: dict | None = None) -> bool:
-    """Abbruch anfordern. Der Runner prueft job.cancelled; reagiert er nicht,
-    wird die Task nach HARD_CANCEL_SEC hart abgebrochen."""
+    """Request a cancel. The runner checks job.cancelled; if it does not react,
+    the task is hard-aborted after HARD_CANCEL_SEC."""
     if job.status != "running":
         return False
     job.cancel_requested = True
     job.cancelled_by = (user or {}).get("username")
-    job.log(f"Abbruch angefordert{' von ' + job.cancelled_by if job.cancelled_by else ''}")
+    job.log(f"Cancel requested{' by ' + job.cancelled_by if job.cancelled_by else ''}")
     job._changed(force=True)
     if job.on_cancel:
         try:
@@ -514,13 +514,13 @@ async def cancel(job: BgJob, user: dict | None = None) -> bool:
 
 
 def hard_cancel(job: BgJob) -> None:
-    """on_cancel fuer Jobs ohne Zwischenstaende: Task sofort beenden."""
+    """on_cancel for jobs without intermediate states: end the task immediately."""
     if job._task and job.status == "running":
         job._task.cancel()
 
 
 def shutdown() -> None:
-    """Beim Beenden des Backends laufende Jobs abbrechen."""
+    """Abort running jobs when the backend shuts down."""
     for j in list(_jobs.values()):
         if j.status == "running" and j._task:
             j._task.cancel()

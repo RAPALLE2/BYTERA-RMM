@@ -1,36 +1,35 @@
 """
 migrate.py
 ----------
-Umzug einer kompletten RMM-Instanz auf einen anderen Server.
+Move a complete RMM instance to another server.
 
-Was mitgenommen wird:
-  * die gesamte Datenbank (data.sqlite) - also Clients, Benutzer, Gruppen und
-    Rechte, Einstellungen, Dashboard-Widgets, Tickets, Notizen, Skripte,
-    Zeitpläne, Audit-Log … einfach alles, was das RMM speichert
-  * die Aufzeichnungen (recordings/) - die Replays der Fernsitzungen
-  * die Medien-Bibliothek (media_files/) des Audio-Players
-  * das Branding (branding/) - eigene Logos und Bilder
-  * die MODULE: welche aktiv sind + ihre Einstellungen (data/modules.json) und
-    ihre Daten (data/modules/: Spaces-Verzeichnis, Client-Geraete, Proxmox-
-    Verbindungen, Notizen, Freigaben ...)
-  * den SPEICHER (storage/): Spaces-Dateien, Deployment-Ordner, gebaute
-    Client-Pakete
-  * Geheimnisse NUR auf ausdrücklichen Wunsch: .env-Dateien (AGENT_TOKEN,
-    JWT_SECRET) und die Verbindung des SQL-Moduls (dbconfig.json). Ohne sie
-    muessen sich Agenten neu anmelden, und mit JWT_SECRET verschluesselte
-    Modul-Daten (z.B. Proxmox-Zugaenge, API-Codes) sind auf dem Ziel nicht lesbar.
-    Mit ihnen bleibt alles unveraendert erreichbar.
+What is taken along:
+  * the entire database (data.sqlite) - i.e. clients, users, groups and rights,
+    settings, dashboard widgets, tickets, notes, scripts, schedules, audit log
+    … simply everything the RMM stores
+  * the recordings (recordings/) - the replays of the remote sessions
+  * the media library (media_files/) of the audio player
+  * the branding (branding/) - custom logos and images
+  * the MODULES: which are active + their settings (data/modules.json) and
+    their data (data/modules/: spaces directory, client devices, Proxmox
+    connections, notes, shares ...)
+  * the STORAGE (storage/): spaces files, deployment folder, built client
+    packages
+  * secrets ONLY on explicit request: .env files (AGENT_TOKEN, JWT_SECRET) and
+    the connection of the SQL module (dbconfig.json). Without them agents have
+    to re-register, and module data encrypted with JWT_SECRET (e.g. Proxmox
+    credentials, API codes) is not readable on the target. With them everything
+    stays reachable unchanged.
 
-Warum eine eigene Datei und nicht einfach "Ordner kopieren":
-Die Datenbank wird im laufenden Betrieb geschrieben. Ein simples cp kann
-mitten in einer Transaktion erwischen und liefert eine beschädigte Datei.
-Deshalb nutzen wir die eingebaute Backup-Schnittstelle von SQLite
-(`Connection.backup`), die einen in sich stimmigen Stand zieht - ohne den
-Betrieb anzuhalten.
+Why a dedicated file and not simply "copy folders":
+The database is written during operation. A simple cp can catch it mid
+transaction and yields a corrupted file. Therefore we use SQLite's built-in
+backup interface (`Connection.backup`), which pulls a self-consistent state -
+without halting operation.
 
-Der Export ist ein ZIP mit einer manifest.json obenauf. Beim Einspielen wird
-diese zuerst geprüft, damit niemand versehentlich ein beliebiges Archiv über
-seine Installation kippt.
+The export is a ZIP with a manifest.json on top. On applying, it is checked
+first, so nobody accidentally dumps an arbitrary archive over their
+installation.
 """
 
 from __future__ import annotations
@@ -50,21 +49,21 @@ from app.paths import (
 )
 MANIFEST_NAME = "manifest.json"
 ARCHIVE_MARK = "bytera-rmm-migration"
-LEGACY_ARCHIVE_MARKS = (ARCHIVE_MARK, "rapalle-rmm-migration")   # Archive vom Server vor der Umbenennung
+LEGACY_ARCHIVE_MARKS = (ARCHIVE_MARK, "rapalle-rmm-migration")   # archives from the server before the rename
 
-# Ordner, die mitwandern können. Schlüssel = Name im Archiv.
+# Folders that can move along. Key = name in the archive.
 DATA_DIRS = {
     "recordings": RECORDINGS_DIR,
     "media_files": AUDIO_DIR,
     "branding": BRANDING_DIR,
-    "module_data": MODULES_DATA_DIR,    # Daten der Module (Option "modules")
-    "storage": STORAGE_DIR,             # alle Dateien (Option "storage") - ohne recordings/audio,
-}                                       # die haben eigene Optionen (siehe _skip)
+    "module_data": MODULES_DATA_DIR,    # data of the modules (option "modules")
+    "storage": STORAGE_DIR,             # all files (option "storage") - without recordings/audio,
+}                                       # those have their own options (see _skip)
 
 
 def _skip(name: str, f: Path) -> bool:
-    """Aufzeichnungen und Audio liegen jetzt IN storage/, haben aber eigene
-    Optionen - beim Ordner "storage" deshalb auslassen (sonst doppelt)."""
+    """Recordings and audio now live IN storage/, but have their own options -
+    therefore skip them for the "storage" folder (otherwise duplicated)."""
     if name != "storage":
         return False
     for sub in (RECORDINGS_DIR, AUDIO_DIR):
@@ -74,19 +73,19 @@ def _skip(name: str, f: Path) -> bool:
         except ValueError:
             pass
     return False
-# Einzelne Dateien (Option "modules"): aktivierte Module + Modul-Einstellungen
+# Individual files (option "modules"): enabled modules + module settings
 DATA_FILES = {
     "modules_state.json": MODULES_STATE_FILE,
 }
-# Welche Option schaltet welchen Ordner/welche Datei?
+# Which option toggles which folder/which file?
 OPTION_OF = {"recordings": "recordings", "media_files": "media_files", "branding": "branding",
              "module_data": "modules", "storage": "storage", "modules_state.json": "modules"}
 
-# Geheimnisse - nur auf Wunsch, siehe Modul-Beschreibung.
+# Secrets - only on request, see module description.
 SECRET_FILES = {
     "backend.env": ENV_FILE,
     "agent.env": AGENT_DIR / ".env",
-    "dbconfig.json": DBCONFIG_FILE,      # Verbindung des SQL-Moduls (enthaelt Zugangsdaten)
+    "dbconfig.json": DBCONFIG_FILE,      # connection of the SQL module (contains credentials)
 }
 
 
@@ -99,7 +98,7 @@ def _modules_state() -> dict:
 
 
 def _sql_external() -> bool:
-    """Nutzt das SQL-Modul eine EXTERNE Datenbank? Dann liegen die Daten dort."""
+    """Does the SQL module use an EXTERNAL database? Then the data is there."""
     try:
         return json.loads(DBCONFIG_FILE.read_text(encoding="utf-8")).get("mode") == "external"
     except Exception:
@@ -107,11 +106,11 @@ def _sql_external() -> bool:
 
 
 # ==========================================================================
-# Hilfsfunktionen
+# Helper functions
 # ==========================================================================
 
 def _dir_size(path: Path) -> tuple[int, int]:
-    """(Anzahl Dateien, Gesamtgröße) eines Ordners - für die Vorschau."""
+    """(number of files, total size) of a folder - for the preview."""
     count = size = 0
     if not path.is_dir():
         return 0, 0
@@ -129,11 +128,11 @@ def _version() -> str:
     try:
         return (BACKEND_VERSION_FILE).read_text(encoding="utf-8").strip()
     except OSError:
-        return "unbekannt"
+        return "unknown"
 
 
 def _table_counts() -> dict:
-    """Zeilenzahlen der wichtigsten Tabellen - Kontrolle vor und nach dem Umzug."""
+    """Row counts of the most important tables - check before and after the move."""
     out: dict[str, int] = {}
     try:
         con = sqlite3.connect(f"file:{DB_FILE}?mode=ro", uri=True)
@@ -154,7 +153,7 @@ def _table_counts() -> dict:
 
 
 def preview() -> dict:
-    """Was würde ein Export enthalten? Wird im Dashboard angezeigt."""
+    """What would an export contain? Shown in the dashboard."""
     counts = _table_counts()
     dirs = {}
     total = DB_FILE.stat().st_size if DB_FILE.is_file() else 0
@@ -184,10 +183,10 @@ def preview() -> dict:
 
 def _copy_database(dest: Path) -> None:
     """
-    Stimmigen Abzug der Datenbank ziehen - im laufenden Betrieb.
+    Pull a consistent copy of the database - during operation.
 
-    `Connection.backup` von SQLite kopiert seitenweise und beruecksichtigt
-    laufende Transaktionen. Ein einfaches Dateikopieren waere hier riskant.
+    SQLite's `Connection.backup` copies page by page and takes running
+    transactions into account. A simple file copy would be risky here.
     """
     src = sqlite3.connect(f"file:{DB_FILE}?mode=ro", uri=True)
     dst = sqlite3.connect(dest)
@@ -207,7 +206,7 @@ def build_export(target: Path, include_recordings: bool = True,
                  include_secrets: bool = False, include_modules: bool = True,
                  include_storage: bool = True) -> dict:
     """
-    Schreibt das Umzugs-Archiv nach `target` und liefert das Manifest zurück.
+    Writes the migration archive to `target` and returns the manifest.
     """
     wanted = {
         "recordings": include_recordings,
@@ -219,7 +218,7 @@ def build_export(target: Path, include_recordings: bool = True,
 
     manifest = {
         "kind": ARCHIVE_MARK,
-        "format": 2,                       # 2 = mit Modulen + Speicher
+        "format": 2,                       # 2 = with modules + storage
         "created_at": int(time.time()),
         "created_iso": time.strftime("%Y-%m-%d %H:%M:%S"),
         "version": _version(),
@@ -236,8 +235,8 @@ def build_export(target: Path, include_recordings: bool = True,
     _copy_database(tmp_db)
 
     try:
-        # ZIP_DEFLATED: Datenbank und Logs schrumpfen deutlich; Videos in den
-        # Aufzeichnungen sind bereits komprimiert, das kostet dort kaum Zeit.
+        # ZIP_DEFLATED: database and logs shrink considerably; videos in the
+        # recordings are already compressed, which costs hardly any time there.
         with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED,
                              allowZip64=True) as zf:
             zf.writestr(MANIFEST_NAME, json.dumps(manifest, indent=2))
@@ -270,35 +269,35 @@ def build_export(target: Path, include_recordings: bool = True,
 # ==========================================================================
 
 def read_manifest(archive: Path) -> dict:
-    """Manifest lesen und pruefen - VOR jeder Aenderung am Zielsystem."""
+    """Read and check the manifest - BEFORE any change to the target system."""
     if not zipfile.is_zipfile(archive):
-        raise ValueError("Das ist kein ZIP-Archiv.")
+        raise ValueError("This is not a ZIP archive.")
     with zipfile.ZipFile(archive) as zf:
         if MANIFEST_NAME not in zf.namelist():
-            raise ValueError("Im Archiv fehlt die manifest.json - das ist kein "
-                             "Umzugs-Archiv dieser Anwendung.")
+            raise ValueError("The archive is missing manifest.json - this is not "
+                             "a migration archive of this application.")
         data = json.loads(zf.read(MANIFEST_NAME).decode("utf-8"))
         if data.get("kind") not in LEGACY_ARCHIVE_MARKS:
-            raise ValueError("Das Archiv gehoert nicht zu BYTERA RMM.")
+            raise ValueError("The archive does not belong to BYTERA RMM.")
         if "data.sqlite" not in zf.namelist():
-            raise ValueError("Im Archiv fehlt die Datenbank.")
+            raise ValueError("The archive is missing the database.")
     return data
 
 
 def apply_import(archive: Path, restore_secrets: bool = False,
                  keep_backup: bool = True) -> dict:
     """
-    Spielt ein Umzugs-Archiv ein.
+    Applies a migration archive.
 
-    Reihenfolge mit Bedacht gewaehlt:
-      1. Manifest pruefen (bricht ab, BEVOR etwas angefasst wird)
-      2. Alles nach nebenan entpacken - schlaegt das fehl, ist der alte Stand
-         noch unberuehrt
-      3. Bestehenden Stand zur Seite legen (Sicherung mit Zeitstempel)
-      4. Neuen Stand an seinen Platz schieben
+    Order chosen deliberately:
+      1. Check the manifest (aborts BEFORE anything is touched)
+      2. Unpack everything to a side folder - if that fails, the old state is
+         still untouched
+      3. Set the existing state aside (backup with a timestamp)
+      4. Move the new state into place
 
-    Das Backend muss danach neu starten: die Datenbankverbindung zeigt sonst
-    weiter auf die alte, inzwischen ersetzte Datei.
+    The backend must restart afterwards: otherwise the database connection
+    still points to the old, now replaced file.
     """
     manifest = read_manifest(archive)
     stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -306,28 +305,28 @@ def apply_import(archive: Path, restore_secrets: bool = False,
     backup_dir = BACKEND_DIR / f"backup-vor-migration-{stamp}"
     report = {"manifest": manifest, "backup": None, "restored": []}
 
-    # --- 2. Entpacken -----------------------------------------------------
+    # --- 2. Unpack --------------------------------------------------------
     staging.mkdir(parents=True, exist_ok=True)
     try:
         with zipfile.ZipFile(archive) as zf:
             for info in zf.infolist():
-                # Kein Ausbrechen aus dem Zielordner (Zip-Slip).
+                # No breaking out of the target folder (zip-slip).
                 dest = (staging / info.filename).resolve()
                 if staging.resolve() not in dest.parents and dest != staging.resolve():
-                    raise ValueError(f"Unsicherer Pfad im Archiv: {info.filename}")
+                    raise ValueError(f"Unsafe path in the archive: {info.filename}")
             zf.extractall(staging)
 
         new_db = staging / "data.sqlite"
         if not new_db.is_file():
-            raise ValueError("Datenbank im Archiv nicht gefunden.")
-        # Kurzer Funktionstest, bevor der alte Stand angefasst wird.
+            raise ValueError("Database not found in the archive.")
+        # Short function test before the old state is touched.
         con = sqlite3.connect(f"file:{new_db}?mode=ro", uri=True)
         try:
             con.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()
         finally:
             con.close()
 
-        # --- 3. Sicherung des aktuellen Standes ---------------------------
+        # --- 3. Backup of the current state -------------------------------
         if keep_backup:
             backup_dir.mkdir(parents=True, exist_ok=True)
             if DB_FILE.is_file():
@@ -340,10 +339,10 @@ def apply_import(archive: Path, restore_secrets: bool = False,
                     shutil.copytree(path, backup_dir / name, dirs_exist_ok=True)
             report["backup"] = str(backup_dir)
 
-        # --- 4. Uebernehmen ------------------------------------------------
+        # --- 4. Take over --------------------------------------------------
         shutil.copy2(new_db, DB_FILE)
-        # WAL-/Journal-Reste der alten Datenbank entfernen, sonst mischt SQLite
-        # den alten Schreibpuffer in die neue Datei.
+        # Remove WAL/journal leftovers of the old database, otherwise SQLite
+        # mixes the old write buffer into the new file.
         for suffix in ("-wal", "-shm", "-journal"):
             leftover = Path(str(DB_FILE) + suffix)
             if leftover.exists():
@@ -354,12 +353,12 @@ def apply_import(archive: Path, restore_secrets: bool = False,
             src = staging / name
             if not src.is_dir():
                 continue
-            # Zielordner ZUERST leeren. Sonst blieben die Dateien der alten
-            # Instanz daneben liegen - die neue Datenbank kennt sie aber nicht
-            # mehr. Ergebnis waeren verwaiste Aufzeichnungen und Medien, die
-            # nur Platz kosten und beim Aufraeumen nie erfasst werden.
-            # Gefahrlos, weil der alte Stand oben gesichert wurde (keep_backup);
-            # ohne Sicherung wird bewusst NICHT geloescht.
+            # Empty the target folder FIRST. Otherwise the files of the old
+            # instance would remain alongside - but the new database no longer
+            # knows them. The result would be orphaned recordings and media
+            # that only cost space and are never caught during cleanup.
+            # Safe because the old state was backed up above (keep_backup);
+            # without a backup nothing is deliberately deleted.
             if keep_backup and path.is_dir():
                 for old_entry in list(path.iterdir()):
                     try:

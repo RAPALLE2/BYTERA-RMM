@@ -1,33 +1,33 @@
 """
 dbsync.py
 ---------
-Externe SQL-Datenbank als persistenter Speicher. Bedienung: Modul "sql"
-(src/modules/*/sql). Diese Technik bleibt im Core, damit das Backend auch
-ohne das Modul sauber startet und abgleicht.
+External SQL database as persistent storage. Operated via the module "sql"
+(src/modules/*/sql). This mechanism stays in the core, so the backend starts
+and syncs cleanly even without the module.
 
-Architektur ("Working-Copy"-Modell):
-  - Die Anwendung arbeitet IMMER mit der lokalen SQLite (schnell, kein
-    Dialekt-Umbau der gesamten Codebasis nötig).
-  - Modus "external": Die externe SQL-DB (MySQL/MariaDB, PostgreSQL oder eine
-    SQLite-Datei z.B. auf einer Netzwerkfreigabe) ist der persistente Speicher.
-      * Beim UMSCHALTEN lokal -> extern wird ALLES kopiert.
-      * Im Betrieb spiegelt ein Hintergrund-Sync Änderungen (alle 60 s,
-        nur wenn sich etwas geändert hat) und beim Herunterfahren.
-      * Beim START im externen Modus wird der Stand extern -> lokal geladen.
-      * Beim UMSCHALTEN extern -> lokal wird final synchronisiert und der
-        externe Stand nach lokal kopiert.
+Architecture ("working copy" model):
+  - The application ALWAYS works with the local SQLite (fast, no dialect
+    rewrite of the entire codebase needed).
+  - Mode "external": the external SQL DB (MySQL/MariaDB, PostgreSQL or a SQLite
+    file, e.g. on a network share) is the persistent storage.
+      * On SWITCHING local -> external, EVERYTHING is copied.
+      * During operation a background sync mirrors changes (every 60 s, only if
+        something changed) and on shutdown.
+      * On START in external mode the state is loaded external -> local.
+      * On SWITCHING external -> local, a final sync runs and the external
+        state is copied to local.
 
-Die Konfiguration liegt BEWUSST außerhalb der Datenbank in
-backend/dbconfig.json (Henne-Ei-Problem):
+The configuration lives DELIBERATELY outside the database in
+backend/dbconfig.json (chicken-and-egg problem):
   { "mode": "local" | "external",
     "type": "mysql" | "postgres" | "sqlite",
     "host": "...", "port": 3306, "user": "...", "password": "...",
-    "database": "...",          # bei type=sqlite: Dateipfad
+    "database": "...",          # for type=sqlite: file path
   }
 
-Beim Dump wird zusätzlich eine Meta-Tabelle __rmm_meta geschrieben, die die
-originalen SQLite-CREATE-Statements aller Tabellen enthält - damit kann die
-lokale DB beim Restore exakt (inkl. Indizes/Defaults) wiederhergestellt werden.
+On dump an additional meta table __rmm_meta is written that contains the
+original SQLite CREATE statements of all tables - this lets the local DB be
+restored exactly (incl. indexes/defaults) on restore.
 """
 
 import json
@@ -42,33 +42,33 @@ from app.paths import DBCONFIG_FILE as _CONFIG_FILE, DB_BACKUP_DIR as _DB_BACKUP
 
 _META_TABLE = "__rmm_meta"
 
-# Sicherungen der lokalen Datenbank (vor jedem Umschalten).
+# Backups of the local database (before every switch).
 _BACKUP_DIR = _DB_BACKUP_DIR
-# Die Datenbank kann leicht dreistellige MB gross sein - deshalb bewusst
-# wenige Sicherungen aufheben, sonst laeuft die Platte voll.
+# The database can easily be hundreds of MB - therefore deliberately keep few
+# backups, otherwise the disk fills up.
 _BACKUP_KEEP = 5
 
 
 # ------------------------------------------------------------------
-# Fortschritt / Fehlerprotokoll eines laufenden Wechsels
+# Progress / error log of a running switch
 # ------------------------------------------------------------------
-# Der Wechsel kopiert je nach Datenmenge dutzende Tabellen. Bisher sah man
-# davon nichts: entweder kam am Ende "ok" oder eine einzelne Fehlermeldung -
-# und beim ersten Fehler brach alles ab. Deshalb hier ein gemeinsamer
-# Zustand, den die Oberflaeche abfragen kann, waehrend der Wechsel laeuft.
+# The switch copies dozens of tables depending on the data volume. Previously
+# one saw nothing of it: either "ok" came at the end or a single error message
+# - and at the first error everything aborted. Hence a shared state here that
+# the UI can query while the switch runs.
 JOB = {
     "running": False,
-    "phase": "",            # "backup" | "dump" | "restore" | "fertig"
-    "table": "",            # gerade bearbeitete Tabelle
-    "done": 0,              # fertige Tabellen
-    "total": 0,             # Tabellen insgesamt
-    "rows": 0,              # kopierte Zeilen insgesamt
-    "errors": [],           # [{table, error}] - der Lauf geht trotzdem weiter
-    "log": [],              # kurze Textzeilen fuer die Anzeige
-    "ok": None,             # True/False, sobald fertig
+    "phase": "",            # "backup" | "dump" | "restore" | "fertig" (phase key, mapped to a label by the sql module)
+    "table": "",            # table currently being processed
+    "done": 0,              # finished tables
+    "total": 0,             # tables in total
+    "rows": 0,              # rows copied in total
+    "errors": [],           # [{table, error}] - the run continues anyway
+    "log": [],              # short text lines for the display
+    "ok": None,             # True/False once finished
     "detail": "",
-    "backup": "",           # Pfad der Sicherung, die vorher angelegt wurde
-    "restored": False,      # wurde nach einem Fehler zurueckgesichert?
+    "backup": "",           # path of the backup created beforehand
+    "restored": False,      # was it restored after an error?
     "started_at": 0,
     "finished_at": 0,
 }
@@ -83,13 +83,13 @@ def job_reset(phase: str = "") -> None:
 
 def job_log(text: str) -> None:
     JOB["log"].append(text)
-    del JOB["log"][:-200]          # nicht unbegrenzt wachsen lassen
+    del JOB["log"][:-200]          # do not let it grow unbounded
     print(f"[dbsync] {text}")
 
 
 def job_error(table: str, err: Exception | str) -> None:
     JOB["errors"].append({"table": table, "error": str(err)})
-    job_log(f"FEHLER bei '{table}': {err}")
+    job_log(f"ERROR at '{table}': {err}")
 
 
 def job_finish(ok: bool, detail: str = "") -> None:
@@ -98,17 +98,17 @@ def job_finish(ok: bool, detail: str = "") -> None:
 
 
 # ------------------------------------------------------------------
-# Sicherung der lokalen Datenbank
+# Backup of the local database
 # ------------------------------------------------------------------
 
 def backup_local(tag: str = "switch") -> str:
     """
-    Legt eine konsistente Kopie der lokalen SQLite an und gibt den Pfad zurueck.
+    Creates a consistent copy of the local SQLite and returns the path.
 
-    Bewusst ueber die sqlite3-Backup-API statt per Dateikopie: Die Verbindung
-    ist im Betrieb offen, eine simple Kopie koennte mitten in einer
-    Transaktion entstehen und waere dann unbrauchbar - also genau dann kaputt,
-    wenn man sie braucht.
+    Deliberately via the sqlite3 backup API instead of a file copy: the
+    connection is open during operation, a simple copy could be made mid
+    transaction and would then be unusable - i.e. broken exactly when it is
+    needed.
     """
     _BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -147,11 +147,11 @@ def list_backups() -> list[dict]:
 
 def restore_local_backup(path: str) -> None:
     """
-    Spielt eine Sicherung in die LAUFENDE lokale Datenbank zurueck.
+    Restores a backup into the RUNNING local database.
 
-    Auch hier die Backup-API statt Datei tauschen: Die Anwendung haelt die
-    Verbindung offen, ein Dateitausch wuerde ihr den Boden unter den Fuessen
-    wegziehen. So wird der Inhalt an Ort und Stelle ersetzt.
+    Here too the backup API instead of swapping the file: the application keeps
+    the connection open, a file swap would pull the ground out from under it.
+    This way the content is replaced in place.
     """
     src = sqlite3.connect(path)
     try:
@@ -160,7 +160,7 @@ def restore_local_backup(path: str) -> None:
     finally:
         src.close()
 
-# Für den Änderungs-Check des periodischen Syncs
+# For the change check of the periodic sync
 _last_total_changes: int | None = None
 
 
@@ -172,7 +172,7 @@ def load_config() -> dict:
     try:
         cfg = json.loads(_CONFIG_FILE.read_text(encoding="utf-8"))
         if not isinstance(cfg, dict):
-            raise ValueError("kein Objekt")
+            raise ValueError("not an object")
     except (OSError, ValueError):
         cfg = {}
     cfg.setdefault("mode", "local")
@@ -191,7 +191,7 @@ def save_config(cfg: dict) -> None:
 
 
 def public_config() -> dict:
-    """Konfiguration ohne Passwort (für die API/UI)."""
+    """Configuration without the password (for the API/UI)."""
     cfg = dict(load_config())
     cfg["password"] = "•••" if cfg.get("password") else ""
     return cfg
@@ -204,15 +204,15 @@ def public_config() -> dict:
 
 def _ensure_driver(module: str, pypi: str):
     """
-    Treiber importieren - und wenn er fehlt, selbst nachinstallieren.
+    Import the driver - and if it is missing, install it ourselves.
 
-    Beide Treiber stehen fest in requirements.txt, bestehende Installationen
-    haben sie aber oft noch nicht (das Image wurde vor der Aenderung gebaut).
-    Ein einzelner pip-Aufruf reicht dafuer nicht immer: Je nach Umgebung
-    scheitert er an einer "externally managed environment" (PEP 668) oder an
-    fehlenden Schreibrechten im System-Verzeichnis. Deshalb werden mehrere
-    Wege der Reihe nach probiert - und im Fehlerfall steht die ECHTE
-    pip-Ausgabe in der Meldung, statt nur "Treiber fehlt".
+    Both drivers are fixed in requirements.txt, but existing installations
+    often do not have them yet (the image was built before the change). A
+    single pip call is not always enough for that: depending on the
+    environment it fails on an "externally managed environment" (PEP 668) or on
+    missing write permissions in the system directory. Therefore several ways
+    are tried in turn - and on failure the REAL pip output is in the message,
+    instead of just "driver missing".
     """
     import importlib
     try:
@@ -238,8 +238,8 @@ def _ensure_driver(module: str, pypi: str):
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
             if res.returncode == 0:
                 importlib.invalidate_caches()
-                # Ein frisch nach --user installiertes Paket liegt evtl. in
-                # einem Pfad, der noch nicht in sys.path steht.
+                # A package freshly installed to --user may lie in a path that
+                # is not yet in sys.path.
                 try:
                     import site
                     for p in (site.getusersitepackages(),):
@@ -250,25 +250,24 @@ def _ensure_driver(module: str, pypi: str):
                 try:
                     return importlib.import_module(module)
                 except ImportError as e:
-                    errors.append(f"installiert, aber nicht importierbar: {e}")
+                    errors.append(f"installed, but not importable: {e}")
                     continue
             tail = (res.stderr or res.stdout or "").strip().splitlines()
-            errors.append(tail[-1] if tail else f"Exit-Code {res.returncode}")
+            errors.append(tail[-1] if tail else f"exit code {res.returncode}")
         except Exception as e:
             errors.append(str(e))
 
     raise RuntimeError(
-        f"Der Datenbank-Treiber '{pypi}' fehlt und liess sich nicht automatisch "
-        f"nachinstallieren. Letzter Fehler: {errors[-1] if errors else 'unbekannt'}. "
-        f"Abhilfe: Container-Image neu bauen (docker compose build --no-cache) "
-        f"oder im Container ausfuehren: pip install {pypi}") from None
+        f"The database driver '{pypi}' is missing and could not be installed "
+        f"automatically. Last error: {errors[-1] if errors else 'unknown'}. "
+        f"Remedy: rebuild the container image (docker compose build --no-cache) "
+        f"or run in the container: pip install {pypi}") from None
 
 
 class ExternalDB:
     """
-    Minimale Abstraktion über MySQL/PostgreSQL/SQLite für genau die
-    Operationen, die der Sync braucht: Tabellen anlegen/löschen,
-    Massen-Insert, alles lesen.
+    Minimal abstraction over MySQL/PostgreSQL/SQLite for exactly the operations
+    the sync needs: create/drop tables, bulk insert, read everything.
     """
 
     def __init__(self, cfg: dict):
@@ -298,14 +297,14 @@ class ExternalDB:
         elif self.type == "sqlite":
             path = cfg.get("database") or ""
             if not path:
-                raise RuntimeError("Bei type=sqlite muss 'database' der Dateipfad sein")
+                raise RuntimeError("For type=sqlite, 'database' must be the file path")
             Path(path).parent.mkdir(parents=True, exist_ok=True)
             self.conn = sqlite3.connect(path)
             self.ph = "?"
         else:
-            raise RuntimeError(f"Unbekannter Datenbank-Typ: {self.type}")
+            raise RuntimeError(f"Unknown database type: {self.type}")
 
-    # --- Bezeichner/Typen je Dialekt ---
+    # --- Identifiers/types per dialect ---
 
     def q(self, ident: str) -> str:
         return f"`{ident}`" if self.type == "mysql" else f'"{ident}"'
@@ -320,7 +319,7 @@ class ExternalDB:
             return "LONGBLOB" if self.type == "mysql" else ("BYTEA" if self.type == "postgres" else "BLOB")
         return "LONGTEXT" if self.type == "mysql" else "TEXT"
 
-    # --- Grundoperationen ---
+    # --- Basic operations ---
 
     def execute(self, sql: str, params: tuple = ()):  # noqa: ANN001
         cur = self.conn.cursor()
@@ -343,7 +342,7 @@ class ExternalDB:
             pass
 
     def recreate_table(self, name: str, columns: list[tuple[str, str]]) -> None:
-        """columns: Liste (name, sqlite_typdeklaration)."""
+        """columns: list of (name, sqlite_type_declaration)."""
         self.execute(f"DROP TABLE IF EXISTS {self.q(name)}")
         cols = ", ".join(f"{self.q(c)} {self.coltype(t)}" for c, t in columns)
         self.execute(f"CREATE TABLE {self.q(name)} ({cols})")
@@ -365,14 +364,14 @@ class ExternalDB:
             return True
         except Exception:
             try:
-                self.conn.rollback()   # PostgreSQL: fehlgeschlagene Query beendet die TX
+                self.conn.rollback()   # PostgreSQL: a failed query ends the TX
             except Exception:
                 pass
             return False
 
 
 def test_connection(cfg: dict) -> dict:
-    """Verbindung testen; wirft bei Problemen einen verständlichen Fehler."""
+    """Test the connection; throws an understandable error on problems."""
     ext = ExternalDB(cfg)
     try:
         ext.execute("SELECT 1")
@@ -382,11 +381,11 @@ def test_connection(cfg: dict) -> dict:
 
 
 # ------------------------------------------------------------------
-# Dump / Restore
+# Dump / restore
 # ------------------------------------------------------------------
 
 def _local_tables() -> list[dict]:
-    """Alle lokalen Tabellen mit CREATE-SQL und Spalten (Name + Typ)."""
+    """All local tables with CREATE SQL and columns (name + type)."""
     tables = []
     rows = db._conn.execute(
         "SELECT name, sql FROM sqlite_master WHERE type='table' "
@@ -404,12 +403,13 @@ def _local_tables() -> list[dict]:
 
 def dump_local_to_external(cfg: dict | None = None, track: bool = False) -> dict:
     """
-    Kopiert die KOMPLETTE lokale Datenbank in die externe (ersetzt dort alles).
+    Copies the ENTIRE local database into the external one (replaces everything
+    there).
 
-    'track=True' schreibt den Fortschritt nach JOB mit und laesst den Lauf bei
-    einem Tabellen-Fehler WEITERLAUFEN, statt sofort abzubrechen. So sieht man
-    am Ende alle Probleme auf einmal statt immer nur das erste. Der Aufrufer
-    entscheidet dann anhand von JOB["errors"], ob der Wechsel gilt.
+    'track=True' records the progress into JOB and lets the run CONTINUE on a
+    table error, instead of aborting immediately. This way one sees all
+    problems at once at the end instead of only ever the first. The caller then
+    decides, based on JOB["errors"], whether the switch counts.
     """
     cfg = cfg or load_config()
     ext = ExternalDB(cfg)
@@ -419,7 +419,7 @@ def dump_local_to_external(cfg: dict | None = None, track: bool = False) -> dict
         if track:
             JOB["phase"] = "dump"
             JOB["total"] = len(tables)
-            job_log(f"Kopiere {len(tables)} Tabellen nach {cfg.get('type')}…")
+            job_log(f"Copying {len(tables)} tables to {cfg.get('type')}…")
         for t in tables:
             colnames = [c[0] for c in t["columns"]]
             if track:
@@ -442,7 +442,7 @@ def dump_local_to_external(cfg: dict | None = None, track: bool = False) -> dict
             finally:
                 if track:
                     JOB["done"] += 1
-        # Meta: originale SQLite-Schemas + Spaltenlisten + Zeitstempel
+        # Meta: original SQLite schemas + column lists + timestamp
         ext.recreate_table(_META_TABLE, [("k", "TEXT"), ("v", "TEXT")])
         meta = {
             "schema": {t["name"]: t["sql"] for t in tables},
@@ -468,23 +468,23 @@ def _read_meta(ext: ExternalDB) -> dict | None:
 
 def restore_external_to_local(cfg: dict | None = None, track: bool = False) -> dict:
     """
-    Ersetzt die lokale Datenbank durch den Stand aus der externen DB.
-    Die Tabellen werden mit den ORIGINALEN SQLite-CREATE-Statements neu
-    angelegt (aus __rmm_meta), danach werden alle Zeilen eingespielt.
+    Replaces the local database with the state from the external DB.
+    The tables are recreated with the ORIGINAL SQLite CREATE statements (from
+    __rmm_meta), then all rows are loaded.
     """
     cfg = cfg or load_config()
     ext = ExternalDB(cfg)
     try:
         meta = _read_meta(ext)
         if not meta:
-            raise RuntimeError("Externe Datenbank enthält keinen RMM-Stand (__rmm_meta fehlt)")
+            raise RuntimeError("The external database contains no RMM state (__rmm_meta missing)")
         counts = {}
         cur = db._conn
         cur.execute("PRAGMA foreign_keys = OFF")
         if track:
             JOB["phase"] = "restore"
             JOB["total"] = len(meta["schema"])
-            job_log(f"Lade {len(meta['schema'])} Tabellen aus {cfg.get('type')}…")
+            job_log(f"Loading {len(meta['schema'])} tables from {cfg.get('type')}…")
         for name, create_sql in meta["schema"].items():
             colnames = meta["columns"][name]
             if track:
@@ -518,15 +518,15 @@ def restore_external_to_local(cfg: dict | None = None, track: bool = False) -> d
 
 
 # ------------------------------------------------------------------
-# Laufender Betrieb (Startup-Restore, periodischer Sync)
+# Running operation (startup restore, periodic sync)
 # ------------------------------------------------------------------
 
 def startup_restore_if_external() -> None:
     """
-    Wird beim Backend-Start VOR init_db() aufgerufen: Ist der externe Modus
-    aktiv, wird der Stand aus der externen DB in die lokale Working-Copy
-    geladen. Schlägt das fehl, läuft das Backend mit dem lokalen Stand weiter
-    (besser als gar nicht zu starten) und meldet den Fehler im Log.
+    Called at backend start BEFORE init_db(): if the external mode is active,
+    the state from the external DB is loaded into the local working copy. If
+    that fails, the backend continues with the local state (better than not
+    starting at all) and reports the error in the log.
     """
     cfg = load_config()
     if cfg.get("mode") != "external":
@@ -534,18 +534,18 @@ def startup_restore_if_external() -> None:
     try:
         res = restore_external_to_local(cfg)
         total = sum(res["tables"].values())
-        print(f"[dbsync] Externer Modus: {total} Zeilen aus {cfg.get('type')} geladen")
+        print(f"[dbsync] External mode: loaded {total} rows from {cfg.get('type')}")
     except Exception as e:
-        print(f"[dbsync] WARNUNG: Externe DB nicht ladbar ({e}) - arbeite mit lokalem Stand weiter")
+        print(f"[dbsync] WARNING: external DB not loadable ({e}) - continuing with local state")
     global _last_total_changes
     _last_total_changes = db._conn.total_changes
 
 
 def periodic_sync() -> None:
     """
-    Spiegelt die lokale Working-Copy in die externe DB, wenn sich seit dem
-    letzten Sync etwas geändert hat. Wird von main.py periodisch und beim
-    Herunterfahren aufgerufen. (Synchron; von main im Executor ausgeführt.)
+    Mirrors the local working copy into the external DB if something changed
+    since the last sync. Called by main.py periodically and on shutdown.
+    (Synchronous; run by main in the executor.)
     """
     global _last_total_changes
     cfg = load_config()
@@ -553,9 +553,9 @@ def periodic_sync() -> None:
         return
     changes = db._conn.total_changes
     if _last_total_changes is not None and changes == _last_total_changes:
-        return   # nichts geändert -> nichts zu tun
+        return   # nothing changed -> nothing to do
     try:
         dump_local_to_external(cfg)
         _last_total_changes = changes
     except Exception as e:
-        print(f"[dbsync] Sync in externe DB fehlgeschlagen: {e}")
+        print(f"[dbsync] sync into external DB failed: {e}")
