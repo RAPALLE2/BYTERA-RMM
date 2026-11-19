@@ -1,26 +1,27 @@
 """
 totp.py
 -------
-Zwei-Faktor-Anmeldung mit Einmalcodes (TOTP, RFC 6238) - kompatibel mit allen
-gängigen Apps: Aegis, FreeOTP, Google Authenticator, Microsoft Authenticator,
+Two-factor login with one-time codes (TOTP, RFC 6238) - compatible with all
+common apps: Aegis, FreeOTP, Google Authenticator, Microsoft Authenticator,
 1Password, Bitwarden …
 
-Warum selbst gebaut statt einer Bibliothek: Das Verfahren ist kurz und klar
-beschrieben (HMAC-SHA1 über den Zeitschritt, davon die letzten Stellen), und
-für einen so zentralen Sicherheitsbaustein ist eine Abhängigkeit weniger ein
-echter Gewinn. Alles hier stammt aus der Standardbibliothek.
+Why built in-house instead of a library: the procedure is short and clearly
+described (HMAC-SHA1 over the time step, then the last digits of it), and for
+such a central security building block one fewer dependency is a real gain.
+Everything here comes from the standard library.
 
-Zum QR-Code: Das Erzeugen eines QR-Bildes ist ungleich aufwendiger als TOTP
-selbst. Dafür wird das Paket `qrcode` benutzt - fehlt es, funktioniert die
-Einrichtung trotzdem: Die App kann das Geheimnis auch von Hand aufnehmen.
+About the QR code: generating a QR image is far more involved than TOTP itself.
+The package `qrcode` is used for it - if it is missing, setup still works: the
+app can also take the secret in by hand.
 
-Sicherheitshinweise, die in der Umsetzung berücksichtigt sind:
-  * Vergleich der Codes zeitkonstant (`hmac.compare_digest`) - sonst ließe
-    sich über Antwortzeiten Stelle für Stelle raten.
-  * Ein Code gilt nur EINMAL: Bereits benutzte Zeitfenster werden gemerkt,
-    damit ein abgefangener Code nicht sofort wiederverwendet werden kann.
-  * Ein Fenster Toleranz nach vorn und hinten (±30 s) gegen ungenaue Uhren.
-  * Wiederherstellungscodes werden nur als Hash gespeichert - wie Passwörter.
+Security notes considered in the implementation:
+  * Code comparison is time-constant (`hmac.compare_digest`) - otherwise one
+    could guess digit by digit via response times.
+  * A code is valid only ONCE: already used time windows are remembered, so an
+    intercepted code cannot be reused immediately.
+  * One window of tolerance forward and backward (±30 s) against inaccurate
+    clocks.
+  * Recovery codes are stored only as a hash - like passwords.
 """
 
 from __future__ import annotations
@@ -35,34 +36,34 @@ import time
 from urllib.parse import quote
 
 DIGITS = 6
-PERIOD = 30          # Sekunden je Code
-WINDOW = 1           # ± ein Zeitschritt Toleranz
+PERIOD = 30          # seconds per code
+WINDOW = 1           # ± one time step of tolerance
 ISSUER = "BYTERA RMM"
 
-# Bereits verbrauchte (Benutzer, Zeitschritt)-Paare. Klein und kurzlebig,
-# deshalb im Arbeitsspeicher - nach einem Neustart ist der Schutz kurz weg,
-# das ist gegenüber einer Datenbankschreiboperation pro Login vertretbar.
+# Already used (user, time step) pairs. Small and short-lived, therefore in
+# memory - after a restart the protection is briefly gone, which is acceptable
+# compared to a database write per login.
 _used: dict[str, set[int]] = {}
 
 
 # ==========================================================================
-# Geheimnis
+# Secret
 # ==========================================================================
 
 def new_secret(length: int = 20) -> str:
     """
-    Neues Geheimnis als Base32 (so erwarten es die Apps).
-    20 Byte = 160 Bit, das entspricht der Empfehlung in RFC 4226.
+    New secret as Base32 (as the apps expect it).
+    20 bytes = 160 bits, which matches the recommendation in RFC 4226.
     """
     return base64.b32encode(os.urandom(length)).decode("ascii").rstrip("=")
 
 
 def provisioning_uri(secret: str, username: str, issuer: str = ISSUER) -> str:
     """
-    Die `otpauth://`-Adresse, die im QR-Code steckt.
+    The `otpauth://` URL embedded in the QR code.
 
-    Der Aussteller steht bewusst zweimal drin - einmal im Label, einmal als
-    Parameter. Ältere Apps lesen nur das eine, neuere nur das andere.
+    The issuer is deliberately in there twice - once in the label, once as a
+    parameter. Older apps read only the one, newer ones only the other.
     """
     label = quote(f"{issuer}:{username}", safe="")
     return (f"otpauth://totp/{label}?secret={secret}"
@@ -71,32 +72,32 @@ def provisioning_uri(secret: str, username: str, issuer: str = ISSUER) -> str:
 
 
 # ==========================================================================
-# Code berechnen und prüfen
+# Compute and verify code
 # ==========================================================================
 
 def _code_at(secret: str, counter: int) -> str:
-    """Ein Einmalcode für einen bestimmten Zeitschritt (RFC 4226)."""
+    """A one-time code for a specific time step (RFC 4226)."""
     padding = "=" * (-len(secret) % 8)
     key = base64.b32decode(secret.upper() + padding, casefold=True)
     digest = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
-    # "Dynamic Truncation": die letzten 4 Bit sagen, wo die 4 Bytes anfangen.
+    # "Dynamic truncation": the last 4 bits say where the 4 bytes begin.
     offset = digest[-1] & 0x0F
     value = struct.unpack(">I", digest[offset:offset + 4])[0] & 0x7FFFFFFF
     return str(value % (10 ** DIGITS)).zfill(DIGITS)
 
 
 def current_code(secret: str, at: float | None = None) -> str:
-    """Der gerade gültige Code - nur für Tests und die Einrichtungsvorschau."""
+    """The currently valid code - only for tests and the setup preview."""
     return _code_at(secret, int((at if at is not None else time.time()) // PERIOD))
 
 
 def verify(secret: str, code: str, user_key: str = "", at: float | None = None) -> bool:
     """
-    Prüft einen eingegebenen Code.
+    Verifies an entered code.
 
-    user_key: Kennung des Benutzers. Wird sie mitgegeben, gilt jeder Code nur
-    einmal - ohne diesen Schutz könnte ein mitgelesener Code innerhalb seiner
-    30 Sekunden ein zweites Mal verwendet werden.
+    user_key: identifier of the user. If given, each code is valid only once -
+    without this protection an intercepted code could be used a second time
+    within its 30 seconds.
     """
     code = (code or "").strip().replace(" ", "")
     if not secret or not code.isdigit() or len(code) != DIGITS:
@@ -109,24 +110,24 @@ def verify(secret: str, code: str, user_key: str = "", at: float | None = None) 
             if user_key:
                 seen = _used.setdefault(user_key, set())
                 if counter in seen:
-                    return False              # schon benutzt
+                    return False              # already used
                 seen.add(counter)
-                # Alte Einträge wegräumen, sonst wächst die Menge ewig.
+                # Clean up old entries, otherwise the set grows forever.
                 _used[user_key] = {c for c in seen if c >= now - WINDOW - 2}
             return True
     return False
 
 
 # ==========================================================================
-# Wiederherstellungscodes
+# Recovery codes
 # ==========================================================================
-# Für den Fall "Handy weg". Ohne sie müsste jedes Mal eine Administratorin
-# eingreifen - und wenn es die letzte Administratorin trifft, wäre niemand
-# mehr handlungsfähig.
+# For the "phone gone" case. Without them an administrator would have to step
+# in every time - and if it hits the last administrator, nobody would be able
+# to act anymore.
 
 def new_backup_codes(count: int = 8) -> list[str]:
-    """Gut lesbare Einmalcodes, z.B. 'k3f9-2mzq'."""
-    alphabet = "abcdefghjkmnpqrstuvwxyz23456789"   # ohne i/l/1/o/0
+    """Easy-to-read one-time codes, e.g. 'k3f9-2mzq'."""
+    alphabet = "abcdefghjkmnpqrstuvwxyz23456789"   # without i/l/1/o/0
     out = []
     for _ in range(count):
         raw = "".join(secrets.choice(alphabet) for _ in range(8))
@@ -135,14 +136,14 @@ def new_backup_codes(count: int = 8) -> list[str]:
 
 
 def hash_backup_codes(codes: list[str]) -> str:
-    """Nur Hashes speichern - die Klartextcodes sieht der Benutzer genau einmal."""
+    """Store only hashes - the user sees the plaintext codes exactly once."""
     return ",".join(hashlib.sha256(c.encode()).hexdigest() for c in codes)
 
 
 def use_backup_code(stored: str, code: str) -> tuple[bool, str]:
     """
-    Prüft einen Wiederherstellungscode und entfernt ihn.
-    Rückgabe: (passte?, verbleibende Hashes).
+    Verifies a recovery code and removes it.
+    Returns: (matched?, remaining hashes).
     """
     code = (code or "").strip().lower().replace(" ", "")
     if not stored or not code:
@@ -162,9 +163,9 @@ def use_backup_code(stored: str, code: str) -> tuple[bool, str]:
 
 def qr_data_uri(uri: str) -> str | None:
     """
-    QR-Code als `data:`-Adresse, direkt in ein <img> einsetzbar.
-    Gibt None zurück, wenn das Paket `qrcode` fehlt - dann zeigt die
-    Oberfläche das Geheimnis zum Abtippen an.
+    QR code as a `data:` URL, directly usable in an <img>.
+    Returns None if the package `qrcode` is missing - then the UI shows the
+    secret to type in.
     """
     try:
         import io

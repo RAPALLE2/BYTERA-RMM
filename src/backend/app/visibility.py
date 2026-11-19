@@ -1,20 +1,20 @@
 """
 visibility.py
 -------------
-Gemeinsame Bausteine für Client-Notizen und Ticket-Kommentare:
+Shared building blocks for client notes and ticket comments:
 
-1. SICHTBARKEIT einzelner Einträge
-     'all'     -> für jeden sichtbar, der den übergeordneten Datensatz
-                  (Client bzw. Ticket) überhaupt sehen darf
-     'private' -> nur für den Verfasser
-     'custom'  -> Verfasser + ausdrücklich freigegebene Benutzer
-   Super-Admins sehen ausdrücklich NICHT automatisch private Einträge -
-   "nur für mich" soll verlässlich bedeuten, was es sagt. Löschen dürfen
-   Admins sie trotzdem (Aufräumen), sie bekommen aber den Text nicht zu sehen.
+1. VISIBILITY of individual entries
+     'all'     -> visible to anyone allowed to see the parent record (client or
+                  ticket) at all
+     'private' -> only for the author
+     'custom'  -> author + explicitly shared users
+   Super admins explicitly do NOT automatically see private entries - "only for
+   me" should reliably mean what it says. Admins may still delete them
+   (cleanup), but they do not get to see the text.
 
-2. AKTIVITÄTSPROTOKOLL (activity_log)
-   Wer hat wann was getan - für Notizen (entity_type "client_notes",
-   entity_id = client_id) und Tickets (entity_type "ticket").
+2. ACTIVITY LOG (activity_log)
+   Who did what and when - for notes (entity_type "client_notes",
+   entity_id = client_id) and tickets (entity_type "ticket").
 """
 
 import time
@@ -39,12 +39,12 @@ def normalize_visibility(value: str | None) -> str:
 
 
 # ------------------------------------------------------------------
-# Freigaben (custom)
+# Shares (custom)
 # ------------------------------------------------------------------
 
 def _norm_share(item) -> tuple[str, str] | None:
-    """Nimmt "u123" (= Benutzer), {"type":"group","id":"g1"} oder
-    "group:g1" entgegen und liefert (subject_type, id)."""
+    """Accepts "u123" (= user), {"type":"group","id":"g1"} or "group:g1" and
+    returns (subject_type, id)."""
     if isinstance(item, dict):
         t = (item.get("type") or "user").lower()
         i = item.get("id") or ""
@@ -60,7 +60,7 @@ def _norm_share(item) -> tuple[str, str] | None:
 
 
 def set_shares(table: str, id_column: str, entry_id: str, subjects: list) -> None:
-    """Ersetzt die Freigabe-Liste eines Eintrags (Benutzer UND Gruppen)."""
+    """Replaces the share list of an entry (users AND groups)."""
     c = db._conn
     c.execute(f"DELETE FROM {table} WHERE {id_column} = ?", (entry_id,))
     seen = set()
@@ -83,7 +83,7 @@ def get_shares(table: str, id_column: str, entry_id: str) -> list[dict]:
 
 
 def shares_map(table: str, id_column: str, entry_ids: list[str]) -> dict[str, list[dict]]:
-    """Freigaben für viele Einträge auf einmal (spart N Abfragen)."""
+    """Shares for many entries at once (saves N queries)."""
     if not entry_ids:
         return {}
     marks = ",".join("?" for _ in entry_ids)
@@ -98,14 +98,13 @@ def shares_map(table: str, id_column: str, entry_ids: list[str]) -> dict[str, li
 
 
 # ------------------------------------------------------------------
-# Sichtbarkeits-Prüfung
+# Visibility check
 # ------------------------------------------------------------------
 
 def may_see(user: dict, entry: dict, shared_with: list | None = None) -> bool:
-    """entry braucht die Felder 'visibility' und 'author_id'.
-    shared_with ist eine Liste aus {"type","id"} (oder reine Benutzer-IDs
-    aus Altbeständen). Freigegeben ist, wer selbst genannt ist ODER in einer
-    freigegebenen Gruppe steckt."""
+    """entry needs the fields 'visibility' and 'author_id'.
+    shared_with is a list of {"type","id"} (or plain user IDs from legacy
+    data). Shared is whoever is named themselves OR is in a shared group."""
     vis = normalize_visibility(entry.get("visibility"))
     if vis == "all":
         return True
@@ -128,14 +127,14 @@ def may_see(user: dict, entry: dict, shared_with: list | None = None) -> bool:
 
 
 def may_modify(user: dict, entry: dict) -> bool:
-    """Ändern/Löschen darf der Verfasser - und ein Admin (Aufräumen)."""
+    """The author may edit/delete - and an admin (cleanup)."""
     from app.auth import is_super_admin
     return is_super_admin(user) or (entry.get("author_id") == user["id"])
 
 
 def redact(entry: dict) -> dict:
-    """Für Admins: Eintrag ohne Inhalt, damit "nur für mich" dicht bleibt,
-    der Eintrag aber verwaltbar (löschbar) ist."""
+    """For admins: entry without content, so "only for me" stays sealed while
+    the entry remains manageable (deletable)."""
     out = dict(entry)
     out["text"] = ""
     out["hidden"] = True
@@ -143,7 +142,7 @@ def redact(entry: dict) -> dict:
 
 
 # ------------------------------------------------------------------
-# Aktivitätsprotokoll
+# Activity log
 # ------------------------------------------------------------------
 
 def log(entity_type: str, entity_id: str, user: dict | None,
@@ -166,27 +165,27 @@ def get_log(entity_type: str, entity_id: str, limit: int = 200) -> list[dict]:
 
 
 def clear_log(entity_type: str, entity_id: str) -> None:
-    """Beim Löschen des übergeordneten Datensatzes aufräumen."""
+    """Clean up when the parent record is deleted."""
     db._conn.execute("DELETE FROM activity_log WHERE entity_type = ? AND entity_id = ?",
                      (entity_type, entity_id))
     db._conn.commit()
 
 
-# Klartext-Beschreibungen für die Anzeige im Frontend.
+# Plain-text descriptions for display in the frontend.
 ACTION_LABELS = {
-    "note.created": "Notiz erstellt",
-    "note.updated": "Notiz bearbeitet",
-    "note.deleted": "Notiz gelöscht",
-    "note.visibility": "Sichtbarkeit geändert",
-    "note.pinned": "Notiz angeheftet",
-    "note.unpinned": "Notiz losgelöst",
-    "ticket.created": "Ticket erstellt",
-    "ticket.updated": "Ticket bearbeitet",
-    "ticket.status": "Status geändert",
-    "ticket.assignees": "Zuweisungen geändert",
-    "ticket.deleted": "Ticket gelöscht",
-    "comment.created": "Kommentar geschrieben",
-    "comment.deleted": "Kommentar gelöscht",
-    "file.uploaded": "Datei angehängt",
-    "file.deleted": "Datei entfernt",
+    "note.created": "Note created",
+    "note.updated": "Note edited",
+    "note.deleted": "Note deleted",
+    "note.visibility": "Visibility changed",
+    "note.pinned": "Note pinned",
+    "note.unpinned": "Note unpinned",
+    "ticket.created": "Ticket created",
+    "ticket.updated": "Ticket edited",
+    "ticket.status": "Status changed",
+    "ticket.assignees": "Assignments changed",
+    "ticket.deleted": "Ticket deleted",
+    "comment.created": "Comment written",
+    "comment.deleted": "Comment deleted",
+    "file.uploaded": "File attached",
+    "file.deleted": "File removed",
 }

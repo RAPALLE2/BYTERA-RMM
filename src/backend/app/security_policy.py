@@ -1,30 +1,30 @@
 """
 security_policy.py
 ------------------
-Zwei Schutzmechanismen, die der IT-Grundschutz des BSI ausdrücklich verlangt
-und die bisher fehlten:
+Two protection mechanisms that the BSI IT-Grundschutz explicitly requires and
+that were missing so far:
 
-  1. Passwort-Richtlinie  (ORP.4.A8 "Regelung des Passwortgebrauchs",
-     ORP.4.A22 "Regelung zur Passwortqualität")
-     Mindestlänge und Zeichenklassen werden SERVERSEITIG geprüft. Eine reine
-     Prüfung im Browser wäre wirkungslos, weil die API auch direkt ansprechbar
-     ist.
+  1. Password policy  (ORP.4.A8 "regulation of password use",
+     ORP.4.A22 "regulation of password quality")
+     Minimum length and character classes are checked SERVER-SIDE. A check in
+     the browser alone would be ineffective, because the API can be addressed
+     directly too.
 
-  2. Schutz gegen Erraten von Passwörtern (ORP.4.A9 "Identifikation und
-     Authentisierung", elementare Gefährdung G 0.34)
-     Nach mehreren Fehlversuchen wird das Konto für eine Weile gesperrt.
-     Gezählt wird pro Benutzername UND pro Quell-IP, damit weder ein einzelnes
-     Konto durchprobiert noch von einer Stelle aus breit gestreut werden kann.
+  2. Protection against password guessing (ORP.4.A9 "identification and
+     authentication", elementary threat G 0.34)
+     After several failed attempts the account is locked for a while. It is
+     counted per username AND per source IP, so neither a single account can be
+     brute-forced nor can attacks be spread widely from one place.
 
-Beides ist über die Einstellungen anpassbar - der Grundschutz schreibt keine
-festen Zahlen vor, sondern eine bewusste, dokumentierte Festlegung. Die
-Standardwerte orientieren sich an den aktuellen BSI-Empfehlungen: lieber lang
-als kompliziert, kein erzwungener regelmäßiger Wechsel.
+Both are adjustable via the settings - the Grundschutz does not prescribe fixed
+numbers, but a deliberate, documented decision. The default values follow the
+current BSI recommendations: rather long than complicated, no enforced regular
+change.
 
-WICHTIG: Diese Datei macht die Software nicht "BSI-konform" - konform ist
-immer eine Organisation mit ihrem Informationsverbund, nicht ein Programm.
-Sie sorgt dafür, dass die technischen Anforderungen erfüllbar sind.
-Siehe docs/BSI-IT-Grundschutz.md.
+IMPORTANT: this file does not make the software "BSI-compliant" - compliant is
+always an organization with its information network, not a program. It ensures
+that the technical requirements can be met.
+See docs/BSI-IT-Grundschutz.md.
 """
 
 from __future__ import annotations
@@ -35,19 +35,19 @@ import unicodedata
 
 from app import db
 
-# --- Standardwerte --------------------------------------------------------
-# Bewusst dokumentiert, damit im Sicherheitskonzept nachlesbar ist, was gilt.
+# --- Default values -------------------------------------------------------
+# Deliberately documented so the security concept records what applies.
 DEFAULTS = {
-    "pw_min_length": 12,        # BSI: Länge wirkt stärker als Sonderzeichen
-    "pw_require_classes": 3,    # aus: Kleinbuchstaben, Großbuchstaben, Ziffern, Sonderzeichen
-    "pw_block_username": 1,     # Benutzername darf nicht im Passwort stecken
-    "login_max_attempts": 5,    # danach Sperre
-    "login_lock_minutes": 15,   # Dauer der Sperre
-    "login_window_minutes": 15, # Zeitfenster, in dem Fehlversuche zählen
+    "pw_min_length": 12,        # BSI: length matters more than special characters
+    "pw_require_classes": 3,    # of: lowercase, uppercase, digits, special characters
+    "pw_block_username": 1,     # username must not be contained in the password
+    "login_max_attempts": 5,    # lock after this
+    "login_lock_minutes": 15,   # duration of the lock
+    "login_window_minutes": 15, # time window in which failed attempts count
 }
 
-# Sehr häufige Passwörter, die trotz erfüllter Regeln nicht taugen.
-# Bewusst kurz gehalten: eine echte Sperrliste gehört in die Betriebsdoku.
+# Very common passwords that are no good despite meeting the rules.
+# Deliberately kept short: a real blocklist belongs in the operations docs.
 _TRIVIAL = {
     "passwort", "password", "administrator", "admin", "willkommen",
     "welcome", "qwertz", "qwerty", "123456", "12345678", "letmein",
@@ -56,7 +56,7 @@ _TRIVIAL = {
 
 
 def setting(key: str) -> int:
-    """Wert aus den Einstellungen, sonst der dokumentierte Standard."""
+    """Value from the settings, otherwise the documented default."""
     try:
         raw = db.get_setting(key)
         if raw is not None and str(raw).strip() != "":
@@ -67,27 +67,27 @@ def setting(key: str) -> int:
 
 
 def policy() -> dict:
-    """Die geltende Richtlinie - auch für die Anzeige im Dashboard."""
+    """The applicable policy - also for display in the dashboard."""
     return {k: setting(k) for k in DEFAULTS}
 
 
 # ==========================================================================
-# 1. Passwort-Richtlinie
+# 1. Password policy
 # ==========================================================================
 
 def check_password(password: str, username: str = "") -> list[str]:
     """
-    Prüft ein Passwort. Rückgabe: Liste der Verstöße (leer = in Ordnung).
+    Checks a password. Returns: list of violations (empty = OK).
 
-    Absichtlich werden ALLE Verstöße gesammelt statt beim ersten abzubrechen -
-    sonst arbeitet man sich in mehreren Anläufen durch die Regeln.
+    Deliberately ALL violations are collected instead of stopping at the first -
+    otherwise one works through the rules in several attempts.
     """
     problems: list[str] = []
     pw = password or ""
 
     min_len = setting("pw_min_length")
     if len(pw) < min_len:
-        problems.append(f"mindestens {min_len} Zeichen (aktuell {len(pw)})")
+        problems.append(f"at least {min_len} characters (currently {len(pw)})")
 
     classes = 0
     if re.search(r"[a-zäöüß]", pw):
@@ -96,50 +96,49 @@ def check_password(password: str, username: str = "") -> list[str]:
         classes += 1
     if re.search(r"\d", pw):
         classes += 1
-    # Alles, was weder Buchstabe noch Ziffer ist, zählt als Sonderzeichen.
+    # Anything that is neither a letter nor a digit counts as a special character.
     if re.search(r"[^\wÄÖÜäöüß]|_", pw):
         classes += 1
 
     need = setting("pw_require_classes")
     if classes < need:
         problems.append(
-            f"mindestens {need} verschiedene Zeichenarten "
-            f"(Klein-, Großbuchstaben, Ziffern, Sonderzeichen) - aktuell {classes}")
+            f"at least {need} different character types "
+            f"(lower/uppercase letters, digits, special characters) - currently {classes}")
 
-    # Vergleich ohne Akzente/Groß-Klein, damit "Pa$$wort" auch auffällt.
+    # Compare without accents/case, so "Pa$$word" is also caught.
     flat = unicodedata.normalize("NFKD", pw).lower()
     flat_simple = (flat.replace("$", "s").replace("0", "o").replace("1", "i")
                        .replace("3", "e").replace("@", "a").replace("!", "i"))
     for bad in _TRIVIAL:
         if bad in flat_simple:
-            problems.append(f"enthält ein sehr gebräuchliches Wort ({bad})")
+            problems.append(f"contains a very common word ({bad})")
             break
 
     if setting("pw_block_username") and username:
         u = username.strip().lower()
         if len(u) >= 3 and u in flat:
-            problems.append("enthält den Benutzernamen")
+            problems.append("contains the username")
 
     if pw and len(set(pw)) <= 3:
-        problems.append("besteht aus zu wenigen verschiedenen Zeichen")
+        problems.append("consists of too few different characters")
 
     return problems
 
 
 def describe_policy() -> str:
-    """Einzeiler für Fehlermeldungen und Eingabefelder."""
-    return (f"Mindestens {setting('pw_min_length')} Zeichen und "
-            f"{setting('pw_require_classes')} verschiedene Zeichenarten "
-            f"(Klein-, Großbuchstaben, Ziffern, Sonderzeichen).")
+    """One-liner for error messages and input fields."""
+    return (f"At least {setting('pw_min_length')} characters and "
+            f"{setting('pw_require_classes')} different character types "
+            f"(lower/uppercase letters, digits, special characters).")
 
 
 # ==========================================================================
-# 2. Schutz gegen Erraten von Passwörtern
+# 2. Protection against password guessing
 # ==========================================================================
-# Die Fehlversuche liegen im Arbeitsspeicher: Sie sind kurzlebig, und ein
-# Neustart des Backends soll niemanden dauerhaft aussperren. Wer die Sperre
-# über Neustarts hinweg braucht, hebt sie in die Datenbank - dann aber mit
-# regelmäßigem Aufräumen.
+# The failed attempts live in memory: they are short-lived, and a backend
+# restart should not lock anyone out permanently. Whoever needs the lock across
+# restarts moves it into the database - but then with regular cleanup.
 _failed: dict[str, list[float]] = {}
 _locked: dict[str, float] = {}
 
@@ -160,8 +159,8 @@ def _prune(key: str, now: float) -> list[float]:
 
 def lock_status(username: str, ip: str = "") -> tuple[bool, int]:
     """
-    (gesperrt?, Restsekunden). Wird VOR der Passwortprüfung aufgerufen -
-    sonst könnte man die Sperre durch schnelles Weiterprobieren umgehen.
+    (locked?, remaining seconds). Called BEFORE the password check - otherwise
+    the lock could be bypassed by quickly continuing to try.
     """
     now = time.time()
     for key in (_key("user", username), _key("ip", ip) if ip else None):
@@ -177,9 +176,9 @@ def lock_status(username: str, ip: str = "") -> tuple[bool, int]:
 
 def note_failure(username: str, ip: str = "") -> tuple[bool, int]:
     """
-    Fehlversuch vermerken. Rückgabe: (jetzt gesperrt?, Restsekunden).
-    Der Aufrufer schreibt zusätzlich einen Audit-Eintrag - unbefugte
-    Anmeldeversuche müssen laut OPS.1.1.5 nachvollziehbar sein.
+    Record a failed attempt. Returns: (now locked?, remaining seconds).
+    The caller additionally writes an audit entry - unauthorized login attempts
+    must be traceable per OPS.1.1.5.
     """
     now = time.time()
     max_tries = setting("login_max_attempts")
@@ -201,7 +200,7 @@ def note_failure(username: str, ip: str = "") -> tuple[bool, int]:
 
 
 def note_success(username: str, ip: str = "") -> None:
-    """Nach erfolgreicher Anmeldung ist die Zählung hinfällig."""
+    """After a successful login the count is void."""
     for key in (_key("user", username), _key("ip", ip) if ip else None):
         if key:
             _failed.pop(key, None)
@@ -209,13 +208,13 @@ def note_success(username: str, ip: str = "") -> None:
 
 
 def unlock(username: str) -> None:
-    """Manuelle Entsperrung durch eine Administratorin."""
+    """Manual unlock by an administrator."""
     _locked.pop(_key("user", username), None)
     _failed.pop(_key("user", username), None)
 
 
 def locked_accounts() -> list[dict]:
-    """Aktuell gesperrte Konten/Adressen - für die Anzeige im Dashboard."""
+    """Currently locked accounts/addresses - for display in the dashboard."""
     now = time.time()
     out = []
     for key, until in list(_locked.items()):

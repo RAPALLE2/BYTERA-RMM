@@ -1,28 +1,26 @@
 """
 hostlock.py
 -----------
-Zugriff auf die konfigurierten Adressen beschränken.
+Restrict access to the configured addresses.
 
-Es wird der Host-Header jeder Anfrage gegen die Liste erlaubter Adressen
-geprüft. Steht in den Einstellungen nur eine Domain, kommt ein Aufruf über
-die lokale IP nicht mehr durch.
+The Host header of every request is checked against the list of allowed
+addresses. If the settings contain only a domain, a call via the local IP no
+longer gets through.
 
-WAS DAS LEISTET - UND WAS NICHT
-    Es verhindert versehentliche Zugriffe über den "falschen" Weg,
-    DNS-Rebinding und das Auffinden der Oberfläche durch Scanner, die
-    einfach IP-Bereiche abklappern.
+WHAT THIS ACHIEVES - AND WHAT NOT
+    It prevents accidental access via the "wrong" path, DNS rebinding and the
+    discovery of the UI by scanners that simply sweep IP ranges.
 
-    Es ist KEINE echte Zugriffskontrolle. Der Host-Header wird vom Client
-    geschickt und lässt sich frei setzen - wer den Port erreicht, kommt mit
-    einem gefälschten Header weiterhin durch. Wirklich absperren lässt sich
-    der Dienst nur per Firewall oder indem er nur auf der gewünschten
-    Adresse lauscht. Diese Sperre ist eine Hürde, kein Riegel.
+    It is NOT real access control. The Host header is sent by the client and
+    can be set freely - whoever reaches the port still gets through with a
+    forged header. The service can really be sealed off only via a firewall or
+    by having it listen only on the desired address. This lock is a hurdle, not
+    a bolt.
 
-AUSSPERR-SCHUTZ
-    Loopback (localhost, 127.0.0.1, ::1) ist IMMER erlaubt. Sonst könnte
-    man sich mit einem Tippfehler dauerhaft aus der eigenen Oberfläche
-    aussperren - inklusive der Einstellung, mit der man es zurückdrehen
-    würde. Vom Server selbst kommt man also immer wieder herein.
+LOCKOUT PROTECTION
+    Loopback (localhost, 127.0.0.1, ::1) is ALWAYS allowed. Otherwise a typo
+    could lock one out of one's own UI permanently - including the setting with
+    which one would undo it. So from the server itself one always gets back in.
 """
 
 import asyncio
@@ -35,20 +33,20 @@ from starlette.responses import PlainTextResponse
 
 from app import db
 
-# Diese Namen kommen immer durch - siehe Aussperr-Schutz oben.
+# These names always get through - see lockout protection above.
 ALWAYS_ALLOWED = {"localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"}
 
-# Pfade, die auch bei aktiver Sperre erreichbar bleiben. Ohne die wäre ein
-# vorgelagerter Loadbalancer nicht mehr in der Lage, den Dienst als "gesund"
-# zu erkennen, und würde ihn aus dem Verkehr nehmen.
+# Paths that stay reachable even with the lock active. Without them an
+# upstream load balancer could no longer recognize the service as "healthy"
+# and would take it out of rotation.
 EXEMPT_PATHS = ("/api/health", "/health")
 
 
 def _clean_host(value: str) -> str:
     """
-    Aus einem Eintrag den reinen Hostnamen ziehen. Die Einstellungen dürfen
-    alles enthalten, was ein Mensch dort hineinschreibt: 'https://rmm.foo.de',
-    'rmm.foo.de:4000' oder nur 'rmm.foo.de'.
+    Extract the plain hostname from an entry. The settings may contain anything
+    a human writes in there: 'https://rmm.foo.de', 'rmm.foo.de:4000' or just
+    'rmm.foo.de'.
     """
     v = (value or "").strip().lower()
     if not v:
@@ -56,14 +54,14 @@ def _clean_host(value: str) -> str:
     if "://" in v:
         v = urlparse(v).netloc or v.split("://", 1)[1]
     v = v.split("/", 1)[0]
-    # IPv6 in Klammern behalten, sonst zerlegt der Port-Split die Adresse.
+    # Keep IPv6 in brackets, otherwise the port split breaks the address.
     if v.startswith("["):
         return v.split("]", 1)[0] + "]" if "]" in v else v
     return v.rsplit(":", 1)[0] if v.count(":") == 1 else v
 
 
 def allowed_hosts() -> set[str]:
-    """Alle aktuell erlaubten Adressen aus den Einstellungen."""
+    """All currently allowed addresses from the settings."""
     hosts = set(ALWAYS_ALLOWED)
     for key in ("server_url", "server_domain", "server_host"):
         h = _clean_host(db.get_setting(key, "") or "")
@@ -80,26 +78,25 @@ def is_enabled() -> bool:
     return (db.get_setting("host_lock_enabled", "0") or "0") == "1"
 
 
-# --- Konfig-Cache -----------------------------------------------------------
-# Die Host-Sperre wird bei JEDER Anfrage geprüft. Früher las die Middleware
-# die Einstellungen dabei synchron aus der DB - und zwar im Event-Loop-Thread.
-# Jeder dieser Lesezugriffe nimmt die globale DB-Sperre; hält ein Worker-Thread
-# sie gerade (z.B. ein langsamer commit() auf einer VM-Platte), BLOCKIERT der
-# komplette Event-Loop, bis der Watchdog den Prozess beendet. Das passierte
-# sogar bei AUSGESCHALTETER Sperre (zwei get_setting-Aufrufe pro Anfrage).
-# Deshalb: die wenigen Einstellungen in einem kurzlebigen Cache halten und das
-# (seltene) Nachladen NIE im Loop-Thread ausführen. localhost bleibt davon
-# unberührt immer erlaubt (siehe allowed_hosts); eine Änderung greift nach
-# spätestens _CFG_TTL Sekunden.
+# --- Config cache -----------------------------------------------------------
+# The host lock is checked on EVERY request. Previously the middleware read the
+# settings synchronously from the DB - in the event-loop thread. Each of these
+# reads takes the global DB lock; if a worker thread holds it right now (e.g. a
+# slow commit() on a VM disk), the entire event loop is BLOCKED until the
+# watchdog ends the process. This happened even with the lock TURNED OFF (two
+# get_setting calls per request). Therefore: keep the few settings in a
+# short-lived cache and NEVER do the (rare) reload in the loop thread.
+# localhost stays always allowed regardless (see allowed_hosts); a change takes
+# effect after at most _CFG_TTL seconds.
 _CFG_TTL = 3.0
 _cfg_cache: dict = {"ts": 0.0, "enabled": False, "trust_proxy": False,
                     "scope": "ui", "hosts": frozenset(ALWAYS_ALLOWED)}
 
 
 def _load_cfg() -> dict:
-    """Liest die Host-Lock-Einstellungen frisch aus der DB.
-    NUR in einem Worker-Thread aufrufen, nie im Event-Loop-Thread - die
-    Aufrufe nehmen die globale DB-Sperre und können blockieren."""
+    """Reads the host-lock settings fresh from the DB.
+    Call ONLY in a worker thread, never in the event-loop thread - the calls
+    take the global DB lock and can block."""
     return {
         "ts": time.monotonic(),
         "enabled": (db.get_setting("host_lock_enabled", "0") or "0") == "1",
@@ -110,22 +107,21 @@ def _load_cfg() -> dict:
 
 
 def _cfg() -> dict:
-    """Gecachte Konfig; lädt höchstens alle _CFG_TTL Sekunden neu nach.
-    Ebenfalls nur außerhalb des Event-Loops aufrufen (siehe _load_cfg)."""
+    """Cached config; reloads at most every _CFG_TTL seconds.
+    Also call only outside the event loop (see _load_cfg)."""
     if time.monotonic() - _cfg_cache["ts"] >= _CFG_TTL:
         try:
             _cfg_cache.update(_load_cfg())
         except Exception:
-            pass        # bei einem DB-Fehler den letzten bekannten Stand behalten
+            pass        # on a DB error keep the last known state
     return _cfg_cache
 
 
 def _request_host(request, trust_proxy: bool) -> str:
     """
-    Den angefragten Host bestimmen. Hinter einem Reverse Proxy steht der
-    echte Name in X-Forwarded-Host - diesem Header wird aber nur vertraut,
-    wenn das ausdrücklich eingeschaltet ist. Sonst könnte ihn jeder mit-
-    schicken und die Sperre damit aushebeln.
+    Determine the requested host. Behind a reverse proxy the real name is in
+    X-Forwarded-Host - but this header is trusted only if that is explicitly
+    enabled. Otherwise anyone could send it and bypass the lock.
     """
     if trust_proxy:
         fwd = request.headers.get("x-forwarded-host")
@@ -135,10 +131,10 @@ def _request_host(request, trust_proxy: bool) -> str:
 
 
 def check(request, cfg: dict | None = None) -> tuple[bool, str]:
-    """(erlaubt?, angefragter Host) - auch von den Routen nutzbar.
-    Ohne cfg werden die Einstellungen frisch gelesen (für Routen/Diagnose);
-    die Middleware reicht den gecachten Stand herein, damit die Prüfung den
-    Event-Loop nicht blockiert."""
+    """(allowed?, requested host) - also usable by the routes.
+    Without cfg the settings are read fresh (for routes/diagnostics); the
+    middleware passes in the cached state so the check does not block the event
+    loop."""
     if cfg is None:
         cfg = _load_cfg()
     host = _request_host(request, cfg["trust_proxy"])
@@ -146,20 +142,20 @@ def check(request, cfg: dict | None = None) -> tuple[bool, str]:
         return True, host
     if request.url.path in EXEMPT_PATHS:
         return True, host
-    # Reichweite: 'ui' schützt nur die Oberfläche und die API, lässt die
-    # Agenten aber in Ruhe. Das ist wichtig, weil Agenten mit der Adresse
-    # verbunden sind, mit der sie eingerichtet wurden - meist der IP. Sperrt
-    # man auf 'nur Domain' und wählt 'all', verliert man in dem Moment die
-    # gesamte Flotte, bis jeder Agent neu eingerichtet ist.
+    # Scope: 'ui' protects only the UI and the API, but leaves the agents
+    # alone. This matters because agents are connected to the address they were
+    # set up with - usually the IP. If one locks to 'domain only' and chooses
+    # 'all', one loses the entire fleet at that moment, until every agent is
+    # set up anew.
     if cfg["scope"] == "ui" and request.url.path.startswith("/socket.io"):
         return True, host
     if not host:
-        # Anfragen ohne Host-Header sind HTTP/1.0 oder Bots. Bei aktiver
-        # Sperre gibt es keinen Grund, sie durchzulassen.
+        # Requests without a Host header are HTTP/1.0 or bots. With the lock
+        # active there is no reason to let them through.
         return False, host
     if host in cfg["hosts"]:
         return True, host
-    # Loopback zusätzlich numerisch prüfen (z.B. 127.0.0.5).
+    # Additionally check loopback numerically (e.g. 127.0.0.5).
     try:
         if ipaddress.ip_address(host.strip("[]")).is_loopback:
             return True, host
@@ -170,53 +166,53 @@ def check(request, cfg: dict | None = None) -> tuple[bool, str]:
 
 class HostLockMiddleware(BaseHTTPMiddleware):
     """
-    Prüft jede Anfrage. Die Einstellungen liegen in einem kurzlebigen Cache
-    (siehe _cfg) und werden bei Bedarf AUSSERHALB des Event-Loops nachgeladen -
-    so kann die Prüfung den Loop nie blockieren, auch wenn die DB gerade
-    beschäftigt ist. Eine Änderung greift nach spätestens _CFG_TTL Sekunden;
-    localhost bleibt immer erreichbar (Aussperr-Schutz).
+    Checks every request. The settings live in a short-lived cache (see _cfg)
+    and are reloaded when needed OUTSIDE the event loop - so the check can
+    never block the loop, even when the DB is busy. A change takes effect after
+    at most _CFG_TTL seconds; localhost stays always reachable (lockout
+    protection).
     """
 
     async def dispatch(self, request, call_next):
         try:
-            # Konfig nur nachladen, wenn der Cache abgelaufen ist - und dann im
-            # Thread-Pool, damit die globale DB-Sperre nie den Event-Loop
-            # blockiert. Die eigentliche Prüfung unten ist reines Python auf
-            # dem gecachten Stand (kein DB-Zugriff).
+            # Reload the config only when the cache has expired - and then in
+            # the thread pool, so the global DB lock never blocks the event
+            # loop. The actual check below is pure Python on the cached state
+            # (no DB access).
             if time.monotonic() - _cfg_cache["ts"] >= _CFG_TTL:
                 await asyncio.get_running_loop().run_in_executor(None, _cfg)
             ok, host = check(request, _cfg_cache)
         except Exception as e:
-            # Früher wurde hier still durchgelassen. Das ist die schlechteste
-            # aller Varianten: die Sperre sieht eingeschaltet aus, wirkt aber
-            # nicht, und niemand erfährt davon. Jetzt wird der Fehler laut
-            # protokolliert. Durchgelassen wird nur, solange die Sperre AUS
-            # ist - ist sie an, wird im Zweifel blockiert.
-            print(f"[hostlock] Prüfung fehlgeschlagen: {e!r}")
+            # Previously requests were let through silently here. That is the
+            # worst of all options: the lock looks enabled but has no effect,
+            # and nobody learns of it. Now the error is logged loudly. Requests
+            # are let through only while the lock is OFF - if it is on, in doubt
+            # it blocks.
+            print(f"[hostlock] check failed: {e!r}")
             if not _cfg_cache.get("enabled", False):
                 return await call_next(request)
             return PlainTextResponse(
-                "Host-Prüfung derzeit nicht möglich - Zugriff vorsorglich "
-                "abgelehnt. Details im Server-Log.", status_code=503)
+                "Host check currently not possible - access denied as a "
+                "precaution. Details in the server log.", status_code=503)
 
         if ok:
             return await call_next(request)
 
         return PlainTextResponse(
-            "Zugriff über diese Adresse ist nicht erlaubt.\n\n"
-            f"Angefragt: {host or '(kein Host-Header)'}\n"
-            "Bitte die in den Einstellungen hinterlegte Adresse verwenden.\n\n"
-            "Ausgesperrt? Vom Server selbst ist die Oberfläche immer über\n"
-            "http://localhost erreichbar; dort lässt sich die Sperre unter\n"
-            "Einstellungen > Allgemein wieder abschalten.",
+            "Access via this address is not allowed.\n\n"
+            f"Requested: {host or '(no Host header)'}\n"
+            "Please use the address configured in the settings.\n\n"
+            "Locked out? From the server itself the UI is always reachable via\n"
+            "http://localhost; there the lock can be turned off again under\n"
+            "Settings > General.",
             status_code=403)
 
 
 def diagnostics(request) -> dict:
     """
-    Was sieht der Server tatsächlich? Ohne diese Auskunft ist eine nicht
-    greifende Sperre kaum zu debuggen: man weiß weder, welchen Host-Header
-    der Browser schickt, noch welche Adressen gerade erlaubt sind.
+    What does the server actually see? Without this info a lock that does not
+    take effect is hard to debug: one knows neither which Host header the
+    browser sends nor which addresses are currently allowed.
     """
     ok, host = check(request)
     return {

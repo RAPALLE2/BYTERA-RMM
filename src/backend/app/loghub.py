@@ -1,16 +1,16 @@
 """
 loghub.py
 ---------
-Fängt die Konsolenausgabe des LAUFENDEN Backend-Prozesses (das, was man sieht,
-wenn man `python run.py` startet) ab und stellt sie dem Dashboard als Live-Log
-zur Verfügung (Source-Tab -> Backend-Ausgabe).
+Captures the console output of the RUNNING backend process (what you see when
+you start `python run.py`) and makes it available to the dashboard as a live
+log (Source tab -> backend output).
 
-Technik: sys.stdout / sys.stderr werden durch einen "Tee" ersetzt, der weiterhin
-in die echte Konsole schreibt UND jede Ausgabe in einen Ringpuffer legt. Neue
-Zeilen werden an eingeschriebene Dashboard-Clients (Admins) gepusht.
+Technique: sys.stdout / sys.stderr are replaced by a "tee" that still writes to
+the real console AND puts every output into a ring buffer. New lines are pushed
+to subscribed dashboard clients (admins).
 
-install() muss FRÜH aufgerufen werden (in run.py, vor uvicorn.run), damit auch
-die Log-Ausgaben von uvicorn erfasst werden.
+install() must be called EARLY (in run.py, before uvicorn.run), so that
+uvicorn's log output is captured too.
 """
 
 import sys
@@ -18,14 +18,14 @@ import asyncio
 import threading
 import collections
 
-_MAX_CHUNKS = 4000  # begrenzter Ringpuffer (letzte N Ausgabe-Stücke)
+_MAX_CHUNKS = 4000  # bounded ring buffer (last N output chunks)
 
 
 class LogHub:
     def __init__(self):
         self.chunks = collections.deque(maxlen=_MAX_CHUNKS)
         self.lock = threading.Lock()
-        self.subscribers: set[str] = set()   # Socket.IO-SIDs der Zuhörer
+        self.subscribers: set[str] = set()   # Socket.IO SIDs of the listeners
         self.loop = None
 
     def set_loop(self, loop):
@@ -34,14 +34,14 @@ class LogHub:
     def append(self, text: str):
         if not text:
             return
-        # Zeilenumbrüche auf CRLF normalisieren: viele Logger (u.a. uvicorn)
-        # schreiben nur '\n'. Im Terminal bewegt '\n' den Cursor nur nach unten,
-        # ohne an den Zeilenanfang zu springen -> "Treppen"-Effekt. Mit '\r\n'
-        # beginnt jede Meldung sauber in einer neuen Zeile ganz links.
+        # Normalize line breaks to CRLF: many loggers (incl. uvicorn) write
+        # only '\n'. In the terminal '\n' only moves the cursor down, without
+        # jumping to the start of the line -> "staircase" effect. With '\r\n'
+        # every message starts cleanly on a new line at the far left.
         text = text.replace("\r\n", "\n").replace("\n", "\r\n")
         with self.lock:
             self.chunks.append(text)
-        # Nur senden, wenn jemand zuhört und der Event-Loop bekannt ist.
+        # Only send if someone is listening and the event loop is known.
         if self.subscribers and self.loop is not None:
             try:
                 asyncio.run_coroutine_threadsafe(self._broadcast(text), self.loop)
@@ -49,7 +49,7 @@ class LogHub:
                 pass
 
     async def _broadcast(self, text: str):
-        # Lazy-Import, um einen Zirkel-Import mit sockets.py zu vermeiden.
+        # Lazy import to avoid a circular import with sockets.py.
         from app.sockets import sio
         for sid in list(self.subscribers):
             try:
@@ -66,7 +66,7 @@ hub = LogHub()
 
 
 class _Tee:
-    """Schreibt in den Original-Stream UND in den LogHub."""
+    """Writes to the original stream AND to the LogHub."""
 
     def __init__(self, orig):
         self._orig = orig
@@ -91,12 +91,12 @@ class _Tee:
             pass
 
     def __getattr__(self, name):
-        # alle übrigen Attribute (encoding, isatty, fileno, …) an das Original.
+        # all other attributes (encoding, isatty, fileno, …) to the original.
         return getattr(self._orig, name)
 
 
 def install():
-    """Ersetzt stdout/stderr durch Tees (idempotent)."""
+    """Replaces stdout/stderr with tees (idempotent)."""
     if not isinstance(sys.stdout, _Tee):
         sys.stdout = _Tee(sys.stdout)
     if not isinstance(sys.stderr, _Tee):

@@ -1,45 +1,44 @@
 """
 errors.py
 =========
-Ein Fehler darf nie spurlos verschwinden - und nie den Server mitnehmen.
+An error must never vanish without a trace - and never take the server with it.
 
-Warum dieses Modul
-------------------
-Die bisherige Fehlerbehandlung war ueber das ganze Backend verstreut: mal
-ein try/except mit print(), mal gar keines, mal ein stiller `except:
-pass`. Nach einem Vorfall stand deshalb im Protokoll entweder nichts oder
-etwas, mit dem man nichts anfangen konnte.
+Why this module
+---------------
+The previous error handling was scattered across the whole backend: sometimes
+a try/except with print(), sometimes none, sometimes a silent `except: pass`.
+After an incident the log therefore held either nothing or something useless.
 
-Hier gibt es genau eine Stelle, die Fehler aufnimmt, und sie garantiert
-drei Dinge:
+Here there is exactly one place that captures errors, and it guarantees three
+things:
 
-  1. JEDER Fehler bekommt einen KENNCODE der Form RMM-BEREICH-NNN. Danach
-     laesst sich im Protokoll suchen, und man weiss sofort, welcher Teil des
-     Systems betroffen ist - ohne den Stacktrace lesen zu muessen.
+  1. EVERY error gets a CODE of the form RMM-AREA-NNN. It can then be searched
+     in the log, and one immediately knows which part of the system is affected
+     - without having to read the stack trace.
 
-  2. JEDER Fehler landet SOFORT in der Container-Ausgabe ('docker logs').
-     Das ist der entscheidende Punkt: Die Diagnose in den Einstellungen
-     nuetzt nichts, wenn das Backend im Moment des Fehlers schon nicht mehr
-     antwortet. Die Container-Ausgabe ueberlebt das - sie geht direkt an
-     Docker, nicht durch unseren eigenen Prozess.
+  2. EVERY error lands IMMEDIATELY in the container output ('docker logs').
+     That is the decisive point: the diagnostics in the settings are useless if
+     the backend is already no longer responding at the moment of the error.
+     The container output survives that - it goes directly to Docker, not
+     through our own process.
 
-  3. Zu jedem Fehler steht KONTEXT dabei: was gerade versucht wurde, mit
-     welchen Werten, und ein Hinweis, was zu tun ist. "KeyError: 'id'" ist
-     keine Fehlermeldung, sondern ein Raetsel.
+  3. Each error carries CONTEXT: what was being attempted, with which values,
+     and a hint on what to do. "KeyError: 'id'" is not an error message but a
+     riddle.
 
-Benutzung
----------
+Usage
+-----
     from app.errors import guard, report, Codes
 
-    # a) Als Kontext: der Block darf scheitern, ohne alles mitzureissen
-    with guard(Codes.DB_QUERY, "Metrikverlauf lesen", client=client_id):
+    # a) As a context: the block may fail without tearing everything down
+    with guard(Codes.DB_QUERY, "read metric history", client=client_id):
         rows = db.get_metrics_history(client_id)
 
-    # b) Nur melden
-    report(Codes.VPN_TUNNEL, exc, "Tunnel anlegen", client=client_id)
+    # b) Just report
+    report(Codes.VPN_TUNNEL, exc, "create tunnel", client=client_id)
 
-    # c) Als Dekorator fuer Hintergrundarbeit
-    @guarded(Codes.TASK_LOOP, "Patch-Engine")
+    # c) As a decorator for background work
+    @guarded(Codes.TASK_LOOP, "patch engine")
     async def engine(): ...
 """
 
@@ -54,40 +53,39 @@ from contextlib import contextmanager
 
 class Codes:
     """
-    Kenncodes nach Bereichen.
+    Codes by area.
 
-    Die Nummern sind bewusst fest vergeben und werden NICHT neu sortiert -
-    ein Code in einem alten Protokoll soll auch in einem Jahr noch dasselbe
-    bedeuten.
+    The numbers are deliberately fixed and are NOT re-sorted - a code in an old
+    log should still mean the same thing a year later.
     """
 
-    # --- Start und Grundbetrieb ---
-    BOOT = "RMM-BOOT-001"            # Fehler beim Hochfahren
-    BOOT_ROUTER = "RMM-BOOT-002"     # Ein Router liess sich nicht laden
-    SHUTDOWN = "RMM-BOOT-003"        # Fehler beim Herunterfahren
+    # --- Start and basic operation ---
+    BOOT = "RMM-BOOT-001"            # error while booting
+    BOOT_ROUTER = "RMM-BOOT-002"     # a router could not be loaded
+    SHUTDOWN = "RMM-BOOT-003"        # error while shutting down
 
     # --- Datenbank ---
-    DB_QUERY = "RMM-DB-001"          # Abfrage fehlgeschlagen
-    DB_SLOW = "RMM-DB-002"           # Abfrage dauert zu lange
-    DB_ABORT = "RMM-DB-003"          # Abfrage wurde abgebrochen (Zeitlimit)
-    DB_LOCKED = "RMM-DB-004"         # Datenbank gesperrt
-    DB_MIGRATE = "RMM-DB-005"        # Migration fehlgeschlagen
-    DB_HUGE = "RMM-DB-006"           # Tabelle ist gefaehrlich gross
+    DB_QUERY = "RMM-DB-001"          # query failed
+    DB_SLOW = "RMM-DB-002"           # query takes too long
+    DB_ABORT = "RMM-DB-003"          # query was aborted (time limit)
+    DB_LOCKED = "RMM-DB-004"         # database locked
+    DB_MIGRATE = "RMM-DB-005"        # migration failed
+    DB_HUGE = "RMM-DB-006"           # table is dangerously large
 
     # --- HTTP ---
-    API_UNHANDLED = "RMM-API-001"    # Unbehandelte Ausnahme in einer Anfrage
-    API_SLOW = "RMM-API-002"         # Anfrage dauert zu lange
-    API_VALIDATION = "RMM-API-003"   # Eingabe unbrauchbar
+    API_UNHANDLED = "RMM-API-001"    # unhandled exception in a request
+    API_SLOW = "RMM-API-002"         # request takes too long
+    API_VALIDATION = "RMM-API-003"   # input unusable
 
     # --- Socket.IO / Agenten ---
-    SOCK_HANDLER = "RMM-SOCK-001"    # Ereignis-Behandlung fehlgeschlagen
-    SOCK_REGISTER = "RMM-SOCK-002"   # Anmeldung eines Agenten
-    SOCK_EMIT = "RMM-SOCK-003"       # Senden an einen Agenten
-    SOCK_TIMEOUT = "RMM-SOCK-004"    # Agent hat nicht geantwortet
+    SOCK_HANDLER = "RMM-SOCK-001"    # event handling failed
+    SOCK_REGISTER = "RMM-SOCK-002"   # registration of an agent
+    SOCK_EMIT = "RMM-SOCK-003"       # send to an agent
+    SOCK_TIMEOUT = "RMM-SOCK-004"    # agent did not answer
 
-    # --- Hintergrundaufgaben ---
-    TASK_LOOP = "RMM-TASK-001"       # Dauerschleife abgestuerzt
-    TASK_ONESHOT = "RMM-TASK-002"    # Einmalige Aufgabe fehlgeschlagen
+    # --- Background tasks ---
+    TASK_LOOP = "RMM-TASK-001"       # continuous loop crashed
+    TASK_ONESHOT = "RMM-TASK-002"    # one-off task failed
 
     # --- VPN / Node ---
     VPN_TUNNEL = "RMM-VPN-001"
@@ -97,60 +95,58 @@ class Codes:
     NODE_PROXY = "RMM-NODE-002"
     NODE_L2 = "RMM-NODE-003"
 
-    # --- Ereignisschleife ---
+    # --- Event loop ---
     LOOP_BLOCKED = "RMM-LOOP-001"
     LOOP_KILL = "RMM-LOOP-002"
 
-    # --- Dateien / Externes ---
+    # --- Files / external ---
     FILE_IO = "RMM-IO-001"
     EXTERNAL = "RMM-EXT-001"
 
 
-# Was ein Code bedeutet und was man dagegen tut. Steht mit im Protokoll -
-# damit muss niemand erst in der Dokumentation nachschlagen.
+# What a code means and what to do about it. Included in the log - so nobody
+# has to look it up in the documentation first.
 HINTS = {
-    Codes.DB_SLOW: "Eine Abfrage blockiert die Datenbank und damit alle "
-                   "anderen. Meist eine unbegrenzte Abfrage auf eine grosse "
-                   "Tabelle. Aufrufer im Stacktrace prüfen.",
-    Codes.DB_ABORT: "Die Abfrage wurde nach dem Zeitlimit abgebrochen, damit "
-                    "der Server weiterläuft. Das ist die Notbremse, nicht die "
-                    "Ursache - die Abfrage selbst gehört korrigiert.",
-    Codes.DB_LOCKED: "Ein anderer Vorgang hält die Datenbank. Läuft eine "
-                     "Sicherung oder ein externer Zugriff auf die Datei?",
-    Codes.DB_HUGE: "Eine Tabelle ist so gross, dass Abfragen darauf den "
-                   "Server aufhalten. Aufbewahrungsdauer in den "
-                   "Datenschutz-Einstellungen setzen.",
-    Codes.API_UNHANDLED: "Der Endpunkt hat eine Ausnahme geworfen, die er "
-                         "nicht behandelt. Der Aufrufer bekommt eine 500.",
-    Codes.SOCK_TIMEOUT: "Der Agent war online, hat aber nicht rechtzeitig "
-                        "geantwortet. Netz, Last oder ein hängender Agent.",
-    Codes.TASK_LOOP: "Eine Hintergrundschleife ist abgestürzt. Der Aufseher "
-                     "startet sie neu; ohne ihn wäre die Funktion still weg.",
-    Codes.LOOP_BLOCKED: "Etwas Synchrones läuft in der Ereignisschleife. "
-                        "Solange antwortet das Backend gar nicht.",
-    Codes.NODE_L2: "Die L2-Brücke ist nicht verfügbar. Die Tunnel laufen im "
-                   "NAT-Betrieb weiter - kein Ausfall, nur eine andere "
-                   "Absenderadresse.",
+    Codes.DB_SLOW: "A query blocks the database and thus everyone else. "
+                   "Usually an unbounded query on a large table. Check the "
+                   "caller in the stack trace.",
+    Codes.DB_ABORT: "The query was aborted after the time limit so the server "
+                    "keeps running. That is the emergency stop, not the cause "
+                    "- the query itself needs to be fixed.",
+    Codes.DB_LOCKED: "Another operation holds the database. Is a backup or an "
+                     "external access to the file running?",
+    Codes.DB_HUGE: "A table is so large that queries on it stall the server. "
+                   "Set a retention period in the privacy settings.",
+    Codes.API_UNHANDLED: "The endpoint threw an exception it does not handle. "
+                         "The caller gets a 500.",
+    Codes.SOCK_TIMEOUT: "The agent was online but did not answer in time. "
+                        "Network, load or a hanging agent.",
+    Codes.TASK_LOOP: "A background loop crashed. The supervisor restarts it; "
+                     "without it the feature would be silently gone.",
+    Codes.LOOP_BLOCKED: "Something synchronous runs in the event loop. The "
+                        "backend does not respond at all meanwhile.",
+    Codes.NODE_L2: "The L2 bridge is not available. The tunnels keep running "
+                   "in NAT mode - no outage, just a different sender address.",
 }
 
-# Zaehler je Code, fuer die Diagnose-Ansicht.
+# Counter per code, for the diagnostics view.
 counters: dict[str, int] = {}
-# Letzte Meldung je Code - gegen Wiederholungsfluten.
+# Last report per code - against repetition floods.
 _last_seen: dict[str, float] = {}
-# Kurze Historie der letzten Fehler, damit die Oberflaeche sie zeigen kann.
+# Short history of the last errors, so the UI can show them.
 recent: list[dict] = []
 MAX_RECENT = 200
-# Derselbe Code wird hoechstens alle so vielen Sekunden voll ausgegeben.
+# The same code is fully printed at most every so many seconds.
 REPEAT_WINDOW = 10.0
 
 
 def _console(text: str) -> None:
     """
-    Direkt in die Container-Ausgabe.
+    Directly into the container output.
 
-    Bewusst sys.__stderr__ und nicht print(): print() geht durch unseren
-    eigenen Mitschnitt, und der koennte im Fehlerfall selbst betroffen sein.
-    Der Originalstrom geht unmittelbar an Docker.
+    Deliberately sys.__stderr__ and not print(): print() goes through our own
+    capture, which could itself be affected in an error case. The original
+    stream goes directly to Docker.
     """
     try:
         stream = sys.__stderr__ or sys.stderr
@@ -163,12 +159,11 @@ def _console(text: str) -> None:
 def report(code: str, exc: BaseException | None = None, doing: str = "",
            **context) -> str:
     """
-    Meldet einen Fehler. Gibt den Kenncode zurueck, damit der Aufrufer ihn
-    auch dem Benutzer zeigen kann.
+    Reports an error. Returns the code so the caller can also show it to the
+    user.
 
-    Wirft NIE. Ein Fehler in der Fehlerbehandlung waere das Schlimmste, was
-    passieren kann - dann verliert man die Spur genau dann, wenn man sie
-    braucht.
+    NEVER throws. An error in the error handling would be the worst thing that
+    can happen - then one loses the trail exactly when it is needed.
     """
     try:
         counters[code] = counters.get(code, 0) + 1
@@ -179,7 +174,7 @@ def report(code: str, exc: BaseException | None = None, doing: str = "",
 
         where = f" | {doing}" if doing else ""
         details = ", ".join(f"{k}={v!r}" for k, v in context.items() if v is not None)
-        head = f"[FEHLER {code}]{where}"
+        head = f"[ERROR {code}]{where}"
         if details:
             head += f" | {details}"
         if exc is not None:
@@ -194,14 +189,14 @@ def report(code: str, exc: BaseException | None = None, doing: str = "",
             del recent[:len(recent) - MAX_RECENT]
 
         if repeated:
-            # Wiederholung. Ein Dauerfehler darf das Protokoll NICHT fluten -
-            # sonst verdeckt er genau die eine andere Meldung, auf die es
-            # ankommt. Gemeldet wird deshalb nur bei bestimmten Staenden:
-            # 2, 3, 5, 10, 25, 50, 100 - danach nur noch alle 100.
+            # Repetition. A recurring error must NOT flood the log - otherwise
+            # it hides exactly the one other message that matters. It is
+            # therefore reported only at certain counts: 2, 3, 5, 10, 25, 50,
+            # 100 - after that only every 100.
             n = counters[code]
             milestones = (2, 3, 5, 10, 25, 50, 100)
             if n in milestones or (n > 100 and n % 100 == 0):
-                _console(f"{head} (Wiederholung, {n}x insgesamt)")
+                _console(f"{head} (repetition, {n}x total)")
             return code
 
         lines = [head]
@@ -214,7 +209,7 @@ def report(code: str, exc: BaseException | None = None, doing: str = "",
             lines.append("    " + tb.rstrip().replace("\n", "\n    "))
         _console("\n".join(lines))
 
-        # Zusaetzlich in die Diagnose-Datei, falls der Wartungsmodus laeuft.
+        # Additionally into the diagnostics file if maintenance mode is running.
         try:
             from app import diagnostics
             diagnostics.write("\n".join(lines), level="ERROR", from_stream=True)
@@ -222,9 +217,9 @@ def report(code: str, exc: BaseException | None = None, doing: str = "",
             pass
         return code
     except Exception:
-        # Allerletzte Rueckfallebene.
+        # Very last fallback level.
         try:
-            _console(f"[FEHLER {code}] (Meldung selbst fehlgeschlagen)")
+            _console(f"[ERROR {code}] (reporting itself failed)")
         except Exception:
             pass
         return code
@@ -233,25 +228,24 @@ def report(code: str, exc: BaseException | None = None, doing: str = "",
 @contextmanager
 def guard(code: str, doing: str = "", reraise: bool = False, **context):
     """
-    Faengt alles ab, was in diesem Block schiefgeht.
+    Catches everything that goes wrong in this block.
 
-    'reraise=True' meldet und wirft trotzdem weiter - fuer Stellen, an denen
-    der Aufrufer den Fehler wirklich sehen muss (z.B. ein HTTP-Endpunkt, der
-    eine 500 liefern soll), man aber trotzdem den Kontext im Protokoll haben
-    will.
+    'reraise=True' reports and still re-raises - for places where the caller
+    really must see the error (e.g. an HTTP endpoint that should return a 500),
+    but one still wants the context in the log.
     """
     try:
         yield
     except (KeyboardInterrupt, SystemExit):
         raise
-    except BaseException as exc:      # noqa: BLE001 - hier ist es Absicht
+    except BaseException as exc:      # noqa: BLE001 - intentional here
         report(code, exc, doing, **context)
         if reraise:
             raise
 
 
 def guarded(code: str, doing: str = "", **context):
-    """Dekorator - funktioniert fuer gewoehnliche und fuer async-Funktionen."""
+    """Decorator - works for ordinary and for async functions."""
 
     def wrap(fn):
         if _is_async(fn):
@@ -286,7 +280,7 @@ def _is_async(fn) -> bool:
 
 
 def summary() -> dict:
-    """Fuer die Diagnose-Ansicht: welche Fehler wie oft, und die letzten."""
+    """For the diagnostics view: which errors how often, and the latest ones."""
     return {
         "counters": dict(sorted(counters.items(), key=lambda x: -x[1])),
         "recent": recent[-50:],

@@ -1,30 +1,30 @@
 """
 config.py
 ---------
-Liest alle Einstellungen aus der .env Datei (oder Umgebungsvariablen)
-und stellt sie als einfache Python-Konstanten für den Rest der App bereit.
+Reads all settings from the .env file (or environment variables) and provides
+them as simple Python constants for the rest of the app.
 
-So muss kein anderer Teil des Codes wissen, WIE die Konfiguration geladen
-wird - er importiert einfach z.B. "from app.config import AGENT_TOKEN".
+This way no other part of the code needs to know HOW the configuration is
+loaded - it simply imports e.g. "from app.config import AGENT_TOKEN".
 """
 
 import os
 from dotenv import load_dotenv
 
-# Lädt die Datei ".env" aus backend/data/ (falls vorhanden)
+# Loads the file ".env" from backend/data/ (if present)
 from app.paths import ENV_FILE
 load_dotenv(ENV_FILE)
 
-# Port, auf dem der Server läuft
+# Port the server runs on
 PORT: int = int(os.getenv("PORT", "4000"))
 
 
 def _detect_local_ip() -> str:
     """
-    Ermittelt die lokale LAN-IP dieses Rechners (die IP, über die andere Geräte
-    das Backend erreichen). Kein Paket wird wirklich gesendet - der UDP-connect
-    dient nur dazu, das Routing zu befragen. Fallbacks: Hostname-Auflösung,
-    zuletzt 0.0.0.0 (alle Interfaces), falls gar nichts klappt.
+    Determines the local LAN IP of this machine (the IP via which other devices
+    reach the backend). No packet is actually sent - the UDP connect only
+    queries the routing. Fallbacks: hostname resolution, lastly 0.0.0.0 (all
+    interfaces) if nothing works.
     """
     import socket as _socket
     try:
@@ -47,25 +47,25 @@ def _detect_local_ip() -> str:
     return "0.0.0.0"
 
 
-# Adresse, an die das Backend gebunden wird. Beim frischen Install (keine
-# HOST-Variable in der .env) wird automatisch die lokale IP des Rechners
-# verwendet - statt 0.0.0.0 / localhost / 127.0.0.1. In der .env kann HOST
-# jederzeit fest gesetzt werden (z.B. HOST=0.0.0.0 für alle Interfaces).
+# Address the backend is bound to. On a fresh install (no HOST variable in the
+# .env) the machine's local IP is used automatically - instead of 0.0.0.0 /
+# localhost / 127.0.0.1. In the .env, HOST can be set fixed at any time (e.g.
+# HOST=0.0.0.0 for all interfaces).
 HOST: str = (os.getenv("HOST", "") or "").strip() or _detect_local_ip()
 
-# Token, das jeder Agent beim Verbinden mitschicken muss
+# Token that every agent must send when connecting
 AGENT_TOKEN: str = os.getenv("AGENT_TOKEN", "change-me-super-secret")
 
-# Geheimnis zum Signieren der Login-Tokens (JWT)
+# Secret for signing the login tokens (JWT)
 JWT_SECRET: str = os.getenv("JWT_SECRET", "change-me-jwt-secret")
 
-# Wie lange ein Login-Token gültig ist (in Stunden)
+# How long a login token is valid (in hours)
 JWT_EXPIRE_HOURS: int = 12
 
-# Erlaubte Herkunft für Browser-Anfragen (CORS)
+# Allowed origin for browser requests (CORS)
 CORS_ORIGIN: str = os.getenv("CORS_ORIGIN", "*")
 
-# Apache Guacamole: Adresse des guacd-Daemons (Proxy, der RDP/VNC/SSH spricht).
-# Standard passt zu einem lokal laufenden guacd (z.B. via Docker auf Port 4822).
+# Apache Guacamole: address of the guacd daemon (proxy that speaks RDP/VNC/SSH).
+# The default suits a locally running guacd (e.g. via Docker on port 4822).
 GUACD_HOST: str = os.getenv("GUACD_HOST", "127.0.0.1")
 GUACD_PORT: int = int(os.getenv("GUACD_PORT", "4822"))

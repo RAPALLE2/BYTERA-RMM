@@ -1,13 +1,13 @@
 """
-bgjobs_routes.py - REST-Zugriff auf die Hintergrund-Jobs (Core, siehe app/bgjobs.py)
+bgjobs_routes.py - REST access to the background jobs (Core, see app/bgjobs.py)
 ----------------------------------------------------------------------------------
-  GET  /api/bgjobs?kind=&key=&running=1&history=1   Jobs, die der Benutzer sehen darf
-                                                    (history=1: auch beendete aus dem Verlauf)
-  GET  /api/bgjobs/{id}                             ein Job inkl. Ergebnis + Log
-  POST /api/bgjobs/{id}/cancel                      Abbruch anfordern
+  GET  /api/bgjobs?kind=&key=&running=1&history=1   jobs the user may see
+                                                    (history=1: also finished ones from the log)
+  GET  /api/bgjobs/{id}                             one job incl. result + log
+  POST /api/bgjobs/{id}/cancel                      request a cancel
 
-Gestartet werden Jobs von den jeweiligen Fach-Endpunkten (z.B. Netzwerk-Scan),
-weil nur die wissen, was zu tun ist und welches Recht dafuer noetig ist.
+Jobs are started by the respective domain endpoints (e.g. network scan),
+because only they know what to do and which right is needed for it.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -40,11 +40,11 @@ def get_job(job_id: str, user: dict = Depends(get_current_user)):
     job = bgjobs.get(job_id)
     if job:
         if not job.visible_to(user):
-            raise HTTPException(404, "Job nicht gefunden")
+            raise HTTPException(404, "Job not found")
         return job.public(with_result=True)
     r = bgjobs.history_get(job_id)
     if not r or not bgjobs.row_visible_to(r, user):
-        raise HTTPException(404, "Job nicht gefunden (evtl. abgelaufen)")
+        raise HTTPException(404, "Job not found (possibly expired)")
     return bgjobs._row_public(r, with_result=True)
 
 
@@ -52,9 +52,9 @@ def get_job(job_id: str, user: dict = Depends(get_current_user)):
 async def cancel_job(job_id: str, user: dict = Depends(get_current_user)):
     job = bgjobs.get(job_id)
     if not job or not job.visible_to(user):
-        raise HTTPException(404, "Job nicht gefunden")
+        raise HTTPException(404, "Job not found")
     if not await bgjobs.cancel(job, user):
-        raise HTTPException(409, "Der Job läuft nicht mehr")
+        raise HTTPException(409, "The job is no longer running")
     db.add_audit_entry(user["username"], "bgjob.cancel", target=f"{job.kind}:{job.key}",
                        details=job.title)
     return job.public()

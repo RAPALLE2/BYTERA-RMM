@@ -1,24 +1,24 @@
 """
 runtime_env.py
 --------------
-Erkennt, WIE das Backend läuft:
+Detects HOW the backend runs:
 
-  - "docker"  -> läuft in einem Container (Docker / Podman / LXC-Image)
-  - "native"  -> ganz normal per "python run.py" auf dem Host installiert
+  - "docker"  -> runs in a container (Docker / Podman / LXC image)
+  - "native"  -> installed normally via "python run.py" on the host
 
-Warum das wichtig ist:
-Im Container sind einige Dinge NICHT mehr zur Laufzeit änderbar, weil sie
-beim Container-Start festgelegt werden (Port-Mapping, gebundene Adresse,
-Volumes). Wer dort z.B. PORT in der .env ändert, erreicht das Dashboard
-danach nicht mehr - der Container mappt weiterhin den alten Port.
-Deshalb blendet die Oberfläche (Settings -> Source) einen Hinweis ein.
+Why this matters:
+In a container some things are NO longer changeable at runtime, because they
+are fixed at container start (port mapping, bound address, volumes). If one
+changes e.g. PORT in the .env there, the dashboard is no longer reachable
+afterwards - the container still maps the old port. Therefore the UI
+(Settings -> Source) shows a hint.
 
-Die Erkennung nutzt mehrere Signale, damit sie auch dann stimmt, wenn eines
-davon fehlt:
-  1. Umgebungsvariable RMM_INSTALL_KIND (wird im Dockerfile gesetzt) - stärkstes Signal
-  2. Marker-Datei /app/.docker-install (wird im Dockerfile angelegt)
-  3. /.dockerenv (legt Docker selbst an)
-  4. "docker"/"containerd"/"kubepods" in /proc/1/cgroup bzw. /proc/self/mountinfo
+The detection uses several signals, so it is correct even if one of them is
+missing:
+  1. environment variable RMM_INSTALL_KIND (set in the Dockerfile) - strongest signal
+  2. marker file /app/.docker-install (created in the Dockerfile)
+  3. /.dockerenv (created by Docker itself)
+  4. "docker"/"containerd"/"kubepods" in /proc/1/cgroup or /proc/self/mountinfo
 """
 
 import os
@@ -26,12 +26,12 @@ import platform
 import sys
 from pathlib import Path
 
-# Marker-Datei, die das Dockerfile anlegt (siehe Dockerfile im Projekt-Root).
+# Marker file created by the Dockerfile (see Dockerfile in the project root).
 _MARKER = Path("/app/.docker-install")
 
 
 def _cgroup_says_container() -> bool:
-    """Sucht in den Kernel-Dateien nach typischen Container-Spuren."""
+    """Searches the kernel files for typical container traces."""
     for path in ("/proc/1/cgroup", "/proc/self/mountinfo"):
         try:
             text = Path(path).read_text(errors="ignore")
@@ -44,7 +44,7 @@ def _cgroup_says_container() -> bool:
 
 
 def is_docker() -> bool:
-    """True, wenn das Backend in einem Container läuft."""
+    """True if the backend runs in a container."""
     kind = (os.getenv("RMM_INSTALL_KIND", "") or "").strip().lower()
     if kind == "docker":
         return True
@@ -56,16 +56,16 @@ def is_docker() -> bool:
 
 
 def install_kind() -> str:
-    """'docker' oder 'native' - der kurze Schlüssel für die Oberfläche."""
+    """'docker' or 'native' - the short key for the UI."""
     return "docker" if is_docker() else "native"
 
 
 def runtime_info() -> dict:
     """
-    Alles, was die Oberfläche über die Installationsart wissen muss.
+    Everything the UI needs to know about the installation kind.
 
-    locked_settings = Einstellungen, die im Container NICHT mehr per .env
-    geändert werden dürfen, weil sie am Container hängen.
+    locked_settings = settings that in a container may NO longer be changed via
+    .env, because they are tied to the container.
     """
     from app.config import PORT, HOST, GUACD_HOST, GUACD_PORT
 
@@ -80,8 +80,8 @@ def runtime_info() -> dict:
         "port": PORT,
         "host": HOST,
         "guacd": f"{GUACD_HOST}:{GUACD_PORT}",
-        # Im Container fest verdrahtet -> Änderungen in der .env wirken nicht
-        # bzw. sperren einen aus. Nativ ist alles frei änderbar.
+        # Hard-wired in the container -> changes in the .env have no effect or
+        # lock one out. Natively everything is freely changeable.
         "locked_settings": ["PORT", "HOST"] if docker else [],
         "data_paths": {
             "database": "src/backend/data/data.sqlite",
