@@ -1,28 +1,28 @@
 """
 agent.py
 --------
-Das Programm, das auf JEDEM Rechner läuft, den du über BYTERA RMM
-verwalten willst (dein PC, ein Server, ein anderer Windows/Linux-Rechner).
+The program that runs on EVERY machine you want to manage via BYTERA RMM
+(your PC, a server, another Windows/Linux machine).
 
-Was der Agent tut:
-  1. Verbindet sich per Socket.IO zum Backend (Namespace "/agent")
-  2. Meldet sich einmalig an ("register") mit Hostname/OS/IP
-  3. Schickt alle 5 Sekunden einen "heartbeat" mit aktuellen Metriken
-     (CPU-Last, RAM, Festplatte, Laufzeit) - dafür nutzen wir die
-     Bibliothek "psutil", die auf Windows UND Linux gleich funktioniert
-  4. Wartet auf Befehle vom Backend:
-       - "exec"    -> führt einen Shell-Befehl aus, schickt das Ergebnis zurück
-       - "fs-list" -> listet einen Ordner auf, schickt die Liste zurück
+What the agent does:
+  1. Connects to the backend via Socket.IO (namespace "/agent")
+  2. Registers once ("register") with hostname/OS/IP
+  3. Sends a "heartbeat" with current metrics every 5 seconds
+     (CPU load, RAM, disk, uptime) - for this we use the
+     "psutil" library, which works the same on Windows AND Linux
+  4. Waits for commands from the backend:
+       - "exec"    -> runs a shell command, sends the result back
+       - "fs-list" -> lists a folder, sends the list back
 
-Startet man den Agenten mehrfach hintereinander, behält er über die Datei
-".device-id" immer dieselbe eindeutige ID - so "vergisst" das Backend den
-Client nicht bei jedem Neustart.
+If the agent is started several times in a row, it keeps the same unique ID
+via the ".device-id" file - so the backend does not "forget" the client
+on every restart.
 """
 
-# WICHTIG: macht alle Typ-Annotationen "lazy" (werden als Strings gespeichert und
-# nicht zur Laufzeit ausgewertet). Dadurch funktioniert die moderne Schreibweise
-# "str | None" auch auf Python 3.8/3.9 (viele Windows-Installationen), wo sie
-# sonst einen TypeError wirft. MUSS die allererste Anweisung nach dem Docstring sein.
+# IMPORTANT: makes all type annotations "lazy" (stored as strings and not
+# evaluated at runtime). This makes the modern syntax "str | None" work on
+# Python 3.8/3.9 too (many Windows installations), where it would otherwise
+# raise a TypeError. MUST be the very first statement after the docstring.
 from __future__ import annotations
 
 import asyncio
@@ -49,13 +49,13 @@ from pathlib import Path
 
 
 # --------------------------------------------------------------
-# Selbst-Bootstrap: fehlende Bibliotheken automatisch nachinstallieren.
-# Der Agent besteht (nach Installation) aus agent.py + requirements.txt.
-# Fehlt eine Lib (z.B. weil requirements.txt erweitert wurde), installieren
-# wir sie hier NACH, bevor wir sie importieren - sonst stürzt der Import ab.
+# Self-bootstrap: automatically install missing libraries.
+# After installation the agent consists of agent.py + requirements.txt.
+# If a lib is missing (e.g. because requirements.txt was extended), we
+# install it here before importing it - otherwise the import crashes.
 # --------------------------------------------------------------
 def _bootstrap_deps() -> None:
-    # PyPI-Name -> Importname (nur wo abweichend)
+    # PyPI name -> import name (only where they differ)
     needed = {
         "python-socketio[asyncio_client]": "socketio",
         "aiohttp": "aiohttp",
@@ -66,7 +66,7 @@ def _bootstrap_deps() -> None:
         "pynput": "pynput",
         "pyperclip": "pyperclip",
     }
-    # Windows: pywinpty für das interaktive Terminal (ConPTY).
+    # Windows: pywinpty for the interactive terminal (ConPTY).
     if os.name == "nt":
         needed["pywinpty"] = "winpty"
     import importlib
@@ -78,10 +78,10 @@ def _bootstrap_deps() -> None:
             missing_specs.append(spec)
     if not missing_specs:
         return
-    print(f"[agent-bootstrap] Installiere fehlende Pakete: {', '.join(missing_specs)}")
+    print(f"[agent-bootstrap] Installing missing packages: {', '.join(missing_specs)}")
     req = Path(__file__).resolve().parent / "requirements.txt"
-    # Auch hier kein Konsolenfenster aufblitzen lassen (Windows). _run ist an
-    # dieser frühen Stelle noch nicht definiert, daher die Flags inline.
+    # Here too, do not let a console window flash up (Windows). _run is not
+    # defined this early, so the flags are inline.
     _boot_kw = {}
     if platform.system() == "Windows":
         _si = subprocess.STARTUPINFO()
@@ -96,7 +96,7 @@ def _bootstrap_deps() -> None:
             subprocess.run([sys.executable, "-m", "pip", "install", *missing_specs],
                            check=False, timeout=600, **_boot_kw)
     except Exception as e:
-        print(f"[agent-bootstrap] pip fehlgeschlagen: {e}")
+        print(f"[agent-bootstrap] pip failed: {e}")
 
 
 _bootstrap_deps()
@@ -105,9 +105,9 @@ import psutil
 import socketio
 from dotenv import load_dotenv
 
-# --- Logging einrichten: schreibt sowohl auf die Konsole als auch in eine
-# Datei "agent.log" neben diesem Skript. So kann man Fehler auch dann sehen,
-# wenn der Agent unsichtbar als Hintergrunddienst/geplante Aufgabe läuft. ---
+# --- Set up logging: writes both to the console and to a file "agent.log"
+# next to this script. This way errors can be seen even when the agent runs
+# invisibly as a background service / scheduled task. ---
 _LOG_FILE = Path(__file__).resolve().parent / "agent.log"
 logging.basicConfig(
     level=logging.INFO,
@@ -121,28 +121,28 @@ log = logging.getLogger("agent")
 
 
 # ------------------------------------------------------------------
-# WATCHDOG (Selbst-Neustart auch bei HARTEN Abstuerzen)
+# WATCHDOG (self-restart even on HARD crashes)
 # ------------------------------------------------------------------
-# Der bisherige Crash-Schutz unten (os.execv nach Traceback) faengt nur
-# PYTHON-Fehler. Stirbt der Prozess dagegen nativ (z.B. Segfault in
-# mss/Pillow beim Bildschirm-Grabben nach Sitzungswechsel/Sperrbildschirm,
-# OOM-Kill, Scheduler-Kill), steht im Log NICHTS und niemand startet neu -
-# exakt das beobachtete "am Ende gecrasht, kein Selbst-Restart".
+# The existing crash guard below (os.execv after a traceback) only catches
+# PYTHON errors. If the process instead dies natively (e.g. a segfault in
+# mss/Pillow while grabbing the screen after a session switch / lock screen,
+# OOM kill, scheduler kill), NOTHING is logged and nobody restarts it -
+# exactly the observed "crashed at the end, no self-restart".
 #
-# Loesung: Beim Start laeuft dieser Prozess zuerst als winziger WATCHDOG
-# (nur Standardbibliothek, kann selbst nicht nativ crashen) und startet den
-# eigentlichen Agenten als KINDPROZESS (Umgebungsvariable RMM_SUPERVISED=1).
-# Stirbt das Kind - egal wie -, wird der Exit-Code geloggt, in
-# last_crash.txt vermerkt und nach kurzer Wartezeit neu gestartet
-# (Backoff bei Crash-Schleifen, max. 60s). Exit-Code 0 = gewolltes Ende,
-# dann beendet sich auch der Watchdog.
-# Deaktivierbar mit RMM_NO_WATCHDOG=1 (z.B. fuer Debugging in der Konsole).
+# Solution: at startup this process first runs as a tiny WATCHDOG
+# (standard library only, cannot crash natively itself) and starts the
+# actual agent as a CHILD PROCESS (environment variable RMM_SUPERVISED=1).
+# If the child dies - no matter how - the exit code is logged, noted in
+# last_crash.txt and restarted after a short wait
+# (backoff on crash loops, max. 60s). Exit code 0 = intended shutdown,
+# then the watchdog exits too.
+# Can be disabled with RMM_NO_WATCHDOG=1 (e.g. for debugging in the console).
 def _run_watchdog() -> "int":
     import subprocess
     here = os.path.dirname(os.path.abspath(__file__))
     crash_file = os.path.join(here, "last_crash.txt")
     fast_fails = 0
-    log.info("[agent] Watchdog aktiv (PID %s) - ueberwacht den Agent-Prozess.", os.getpid())
+    log.info("[agent] Watchdog active (PID %s) - supervising the agent process.", os.getpid())
     while True:
         env = dict(os.environ)
         env["RMM_SUPERVISED"] = "1"
@@ -153,27 +153,27 @@ def _run_watchdog() -> "int":
         except KeyboardInterrupt:
             return 0
         except Exception as e:
-            log.error("[agent] Watchdog: Agent-Start fehlgeschlagen: %r", e)
+            log.error("[agent] Watchdog: agent start failed: %r", e)
             code = -1
         ran = time.time() - started
         if code == 0:
-            log.info("[agent] Watchdog: Agent regulaer beendet (Exit 0) - Watchdog endet.")
+            log.info("[agent] Watchdog: agent exited normally (exit 0) - watchdog ends.")
             return 0
-        log.error("[agent] Watchdog: Agent-Prozess gestorben (Exit-Code %s) nach %.0fs Laufzeit.", code, ran)
+        log.error("[agent] Watchdog: agent process died (exit code %s) after %.0fs runtime.", code, ran)
         try:
-            # Nur schreiben, wenn der Agent selbst keinen Traceback hinterlassen
-            # hat (harter/nativer Tod) - Python-Crashes schreiben die Datei unten.
+            # Only write if the agent itself left no traceback (hard/native
+            # death) - Python crashes write the file below.
             if ran > 2:
                 with open(crash_file, "w", encoding="utf-8") as f:
                     f.write(time.strftime("%Y-%m-%d %H:%M:%S")
-                            + f"\nHarter Prozess-Tod ohne Python-Traceback (Exit-Code {code},"
-                              f" Laufzeit {ran:.0f}s).\nTypische Ursachen: nativer Absturz in"
-                              " mss/Pillow/pynput, OOM-Kill, externes Beenden.\n")
+                            + f"\nHard process death without a Python traceback (exit code {code},"
+                              f" runtime {ran:.0f}s).\nTypical causes: native crash in"
+                              " mss/Pillow/pynput, OOM kill, external termination.\n")
         except OSError:
             pass
         fast_fails = fast_fails + 1 if ran < 300 else 0
         delay = min(60, 5 * (fast_fails + 1))
-        log.info("[agent] Watchdog: Neustart in %ss...", delay)
+        log.info("[agent] Watchdog: restarting in %ss...", delay)
         try:
             time.sleep(delay)
         except KeyboardInterrupt:
@@ -183,23 +183,22 @@ def _run_watchdog() -> "int":
 if (__name__ == "__main__"
         and os.environ.get("RMM_SUPERVISED") != "1"
         and os.environ.get("RMM_NO_WATCHDOG") != "1"
-        # Sicherheitsnetz: Sollte agent.py doch einmal mit --screen-helper
-        # aufgerufen werden (alte Aufgabe, Skript von Hand), darf daraus kein
-        # zweiter vollwertiger Agent entstehen.
+        # Safety net: should agent.py ever be called with --screen-helper
+        # (old task, script by hand), it must not spawn a second full agent.
         and "--screen-helper" not in sys.argv):
     sys.exit(_run_watchdog())
 
 
 def _print(msg):
-    """Ersetzt print() - schreibt in Konsole UND Log-Datei."""
+    """Replaces print() - writes to the console AND the log file."""
     log.info(msg)
 
 
-# --- Agent-Konsole für das Dashboard -------------------------------------
-# Rollierender Puffer ALLER Log-Zeilen dieses Agenten. Das Dashboard kann per
-# "agent-console-open" die Historie abrufen und danach live mitlesen
-# (Client-Terminal -> Schalter "Agent-Konsole"). Der Handler hängt am
-# Root-Logger, erfasst also alles, was über log/_print läuft.
+# --- Agent console for the dashboard -------------------------------------
+# Rolling buffer of ALL log lines of this agent. The dashboard can fetch the
+# history via "agent-console-open" and then read along live
+# (client terminal -> "Agent console" switch). The handler is attached to the
+# root logger, so it captures everything that goes through log/_print.
 import collections as _collections
 
 _CONSOLE_BUFFER = _collections.deque(maxlen=2000)
@@ -215,8 +214,8 @@ class _ConsoleBufferHandler(logging.Handler):
         _CONSOLE_BUFFER.append(line)
         if not _console_stream["on"]:
             return
-        # Live an das Backend weiterreichen (best effort; sio/Loop existieren
-        # erst nach dem Startup - vorher wird nur gepuffert).
+        # Forward live to the backend (best effort; sio/loop only exist
+        # after startup - before that it is only buffered).
         try:
             if "sio" in globals() and sio.connected and "_AGENT_LOOP" in globals():
                 asyncio.run_coroutine_threadsafe(
@@ -233,23 +232,23 @@ _console_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
 logging.getLogger().addHandler(_console_handler)
 
 
-# Optionale Bibliotheken für Remote Screen. Der Agent funktioniert auch ohne sie
-# (dann ist nur die Fernsteuerung deaktiviert, alles andere läuft normal weiter).
-# Wir fangen bewusst JEDEN Fehler ab (nicht nur ImportError), weil z.B. pynput
-# beim Import in einer Umgebung ohne grafische Sitzung (Windows-Dienst als
-# SYSTEM, Linux ohne X11) mit anderen Fehlern abbrechen kann - das darf den
-# Agenten NICHT komplett lahmlegen.
-# WICHTIG: Den Grund des Fehlschlags merken. Frueher wurde die Ausnahme
-# stillschweigend verschluckt - der Benutzer sah dann nur "mss/Pillow fehlen"
-# und hatte keinerlei Anhaltspunkt, WARUM. Meist fehlen die Pakete gar nicht,
-# sondern sind kaputt (halbe Installation, falscher Interpreter, fehlende
-# System-Bibliothek). Genau das steht jetzt in _SCREEN_ERROR.
+# Optional libraries for Remote Screen. The agent works without them too
+# (then only remote control is disabled, everything else keeps running).
+# We deliberately catch EVERY error (not only ImportError), because e.g. pynput
+# can fail to import in an environment without a graphical session (Windows
+# service as SYSTEM, Linux without X11) with other errors - this must NOT
+# cripple the agent completely.
+# IMPORTANT: remember the reason for the failure. Previously the exception was
+# swallowed silently - the user then only saw "mss/Pillow missing" and had no
+# clue WHY. Usually the packages are not missing at all but broken (half
+# install, wrong interpreter, missing system library). That is exactly what is
+# now in _SCREEN_ERROR.
 _SCREEN_ERROR = ""
 _INPUT_ERROR = ""
 
 try:
-    import mss  # Screenshots aufnehmen (schnell, plattformübergreifend)
-    from PIL import Image  # zum Verkleinern/Kodieren der Screenshots
+    import mss  # take screenshots (fast, cross-platform)
+    from PIL import Image  # to shrink/encode the screenshots
     _SCREEN_AVAILABLE = True
 except Exception as _e:
     _SCREEN_AVAILABLE = False
@@ -263,7 +262,7 @@ except Exception as _e:
     _INPUT_AVAILABLE = False
     _INPUT_ERROR = f"{type(_e).__name__}: {_e}"
 
-# .env Datei aus demselben Ordner wie dieses Skript laden
+# Load the .env file from the same folder as this script
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:4000")
@@ -272,18 +271,18 @@ ENROLLMENT_TOKEN = os.getenv("ENROLLMENT_TOKEN", "").strip() or None
 DEVICE_NAME = os.getenv("DEVICE_NAME") or socket.gethostname()
 
 # ---------------------------------------------------------------------------
-# Sprache der GERAETE-Dialoge (Zustimmung zum Remote-Bildschirm)
+# Language of the DEVICE dialogs (consent to the remote screen)
 # ---------------------------------------------------------------------------
-# Diese Texte sieht die Person, die VOR dem Geraet sitzt - nicht der Benutzer
-# im Dashboard. Deshalb kann hier NICHT die Dashboard-Sprache gelten: mehrere
-# Personen mit unterschiedlichen Spracheinstellungen koennen dasselbe Geraet
-# ansehen, und der Agent erfaehrt beim Verbindungsaufbau nicht, welche das ist.
+# These texts are seen by the person sitting IN FRONT OF the device - not the
+# user in the dashboard. So the dashboard language cannot apply here: several
+# people with different language settings can view the same device, and the
+# agent does not learn which one that is when the connection is established.
 #
-# Die Sprache haengt also am Geraet und wird in der .env gesetzt:
-#     AGENT_LANG=en
-# Voreinstellung ist bewusst "de" - damit aendert ein Update die Dialoge auf
-# bestehenden Geraeten NICHT stillschweigend um.
-AGENT_LANG = (os.getenv("AGENT_LANG", "de") or "de").strip().lower()[:2]
+# The language therefore belongs to the device and is set in the .env:
+#     AGENT_LANG=de
+# The default is "en" (the project standard); set AGENT_LANG=de in the .env to
+# keep the device dialogs in German.
+AGENT_LANG = (os.getenv("AGENT_LANG", "en") or "en").strip().lower()[:2]
 if AGENT_LANG not in ("de", "en"):
     AGENT_LANG = "de"
 
@@ -299,9 +298,9 @@ _AGENT_TEXTS = {
         "allow_check": "✓ Zulassen",
         "deny": "Ablehnen",
         "auto_deny_in": "Automatisch abgelehnt in {secs} s",
-        # ---- Log-Ausgaben (agent.log + Agent-Konsole im Dashboard) ----
-        # Auch die Logs folgen AGENT_LANG: Wer den Agenten auf Deutsch
-        # ausrollt, soll sie nicht auf Englisch lesen muessen.
+        # ---- Log output (agent.log + agent console in the dashboard) ----
+        # The logs follow AGENT_LANG too: whoever rolls the agent out in
+        # German should not have to read them in English.
         "log_device_name": "Gerätename : {name}",
         "log_device_id": "Geräte-ID  : {id}",
         "log_backend": "Backend    : {url}",
@@ -362,7 +361,7 @@ _AGENT_TEXTS = {
 
 
 def _at(key: str, **kw) -> str:
-    """Text fuer die Geraete-Dialoge in der Sprache aus AGENT_LANG."""
+    """Text for the device dialogs in the language from AGENT_LANG."""
     tbl = _AGENT_TEXTS.get(AGENT_LANG) or _AGENT_TEXTS["de"]
     txt = tbl.get(key) or _AGENT_TEXTS["de"].get(key) or key
     return txt.format(**kw) if kw else txt
@@ -370,11 +369,11 @@ def _at(key: str, **kw) -> str:
 IS_WINDOWS = platform.system() == "Windows"
 
 # --------------------------------------------------------------------------
-# Subprozesse IMMER ohne sichtbares Konsolenfenster starten. Unter Windows
-# öffnet subprocess.run() sonst bei jedem Aufruf kurz ein schwarzes CMD-/
-# PowerShell-Fenster - das darf beim 5-Sekunden-Heartbeat niemals passieren.
-# _run() kapselt die nötigen Flags (CREATE_NO_WINDOW + versteckte STARTUPINFO)
-# und wird ab hier ÜBERALL statt subprocess.run() verwendet.
+# ALWAYS start subprocesses without a visible console window. On Windows
+# subprocess.run() would otherwise briefly open a black CMD/PowerShell window
+# on every call - that must never happen during the 5-second heartbeat.
+# _run() wraps the necessary flags (CREATE_NO_WINDOW + hidden STARTUPINFO)
+# and is used EVERYWHERE from here on instead of subprocess.run().
 # --------------------------------------------------------------------------
 def _no_window_kwargs() -> dict:
     if not IS_WINDOWS:
@@ -388,15 +387,15 @@ def _no_window_kwargs() -> dict:
 
 def _run(cmd, **kwargs):
     """
-    subprocess.run-Ersatz, der unter Windows kein Fenster aufblitzen lässt.
+    Replacement for subprocess.run that does not flash a window on Windows.
 
-    WICHTIG - Zeichensatz: text=True allein benutzt die Locale-Codepage
-    (auf deutschen Systemen cp1252). winget und PowerShell schreiben aber
-    UTF-8 bzw. Zeichen, die es in cp1252 gar nicht gibt (0x81, 0x8d, 0x90,
-    0x9d ...). Das Ergebnis war ein UnicodeDecodeError MITTEN im Scan -
-    die aufrufende Funktion fing ihn ab und meldete brav "0 Aktualisierungen
-    gefunden". Deshalb hier fest UTF-8 mit errors='replace': lieber ein
-    kaputtes Zeichen im Namen als ein stillschweigend leeres Scan-Ergebnis.
+    IMPORTANT - character set: text=True alone uses the locale code page
+    (cp1252 on German systems). winget and PowerShell, however, write UTF-8
+    or characters that do not exist in cp1252 at all (0x81, 0x8d, 0x90,
+    0x9d ...). The result was a UnicodeDecodeError IN THE MIDDLE of the scan -
+    the calling function caught it and dutifully reported "0 updates found".
+    That is why UTF-8 with errors='replace' is forced here: better a broken
+    character in a name than a silently empty scan result.
     """
     kwargs.setdefault("capture_output", True)
     kwargs.setdefault("text", True)
@@ -408,9 +407,9 @@ def _run(cmd, **kwargs):
     return subprocess.run(cmd, **kwargs)
 
 
-# TTL-Cache: teure Abfragen (nvidia-smi, WMI, Ping) NICHT bei jedem 5s-Heartbeat
-# ausführen, sondern höchstens alle `ttl` Sekunden. Zwischenzeitlich wird der
-# gemerkte Wert zurückgegeben.
+# TTL cache: do NOT run expensive queries (nvidia-smi, WMI, ping) on every
+# 5s heartbeat, but at most every `ttl` seconds. In between the cached value
+# is returned.
 _ttl_cache: dict = {}
 
 
@@ -426,15 +425,15 @@ def _ttl(key: str, ttl: float, fn):
 
 def get_os_release() -> str:
     """
-    Ermittelt einen aussagekräftigen OS-Namen:
-    - Linux: liest /etc/os-release und gibt z.B. "Ubuntu 22.04" oder
-      "Debian GNU/Linux 12" oder "Proxmox VE" zurück (statt nur Kernel-Version).
-    - Windows: gibt z.B. "Windows 11" bzw. "Windows Server 2022" zurück.
-    - Sonst: platform.release() als Fallback.
+    Determines a meaningful OS name:
+    - Linux: reads /etc/os-release and returns e.g. "Ubuntu 22.04" or
+      "Debian GNU/Linux 12" or "Proxmox VE" (instead of just the kernel version).
+    - Windows: returns e.g. "Windows 11" or "Windows Server 2022".
+    - Otherwise: platform.release() as a fallback.
     """
     try:
         if IS_WINDOWS:
-            ver = platform.version()      # z.B. "10.0.22621"
+            ver = platform.version()      # e.g. "10.0.22621"
             release = platform.release()  # "10" / "11" / "Server..."
             try:
                 build = int(ver.split(".")[2])
@@ -466,12 +465,12 @@ def get_os_release() -> str:
 
 OS_RELEASE = get_os_release()
 
-# Datei, in der wir uns die eigene, dauerhafte Geräte-ID merken
+# File in which we remember our own, persistent device ID
 ID_FILE = Path(__file__).resolve().parent / ".device-id"
 
 
 def get_or_create_device_id() -> str:
-    """Liest die gespeicherte Geräte-ID, oder erzeugt beim allerersten Start eine neue."""
+    """Reads the stored device ID, or creates a new one on the very first start."""
     if ID_FILE.exists():
         return ID_FILE.read_text().strip()
     new_id = str(uuid.uuid4())
@@ -481,9 +480,9 @@ def get_or_create_device_id() -> str:
 
 DEVICE_ID = get_or_create_device_id()
 
-# Nach einem Update legt das Update-Skript die Markerdatei ".updated" an. Beim
-# nächsten Start liest der Agent sie, meldet dem Backend "updated: true" (damit
-# das Dashboard das Update als erfolgreich bestätigen kann) und löscht sie.
+# After an update the update script creates the marker file ".updated". On the
+# next start the agent reads it, reports "updated: true" to the backend (so the
+# dashboard can confirm the update as successful) and deletes it.
 UPDATED_MARKER = Path(__file__).resolve().parent / ".updated"
 
 
@@ -499,13 +498,13 @@ def _consume_update_marker() -> bool:
 
 _JUST_UPDATED = _consume_update_marker()
 
-# Eigene Agent-Version (aus version.txt neben diesem Skript), damit das Dashboard
-# "veraltete" Agenten erkennen kann.
+# Own agent version (from version.txt next to this script), so the dashboard
+# can detect "outdated" agents.
 def _read_agent_version() -> str:
     try:
-        return (Path(__file__).resolve().parent / "version.txt").read_text(encoding="utf-8").strip() or "unbekannt"
+        return (Path(__file__).resolve().parent / "version.txt").read_text(encoding="utf-8").strip() or "unknown"
     except Exception:
-        return "unbekannt"
+        return "unknown"
 
 
 AGENT_VERSION = _read_agent_version()
@@ -513,13 +512,14 @@ AGENT_VERSION = _read_agent_version()
 
 def _read_agent_code_hash() -> str:
     """
-    Prüfsumme des eigenen Quellcodes.
+    Checksum of our own source code.
 
-    version.txt wird beim Entwickeln regelmäßig vergessen. Steht dort weiter
-    dieselbe Nummer, hält das Backend einen uralten Agenten für aktuell und
-    schickt nie ein Update - genau deshalb fehlten auf den Clients zuletzt
-    die Patch-Handler, obwohl agent.py im Projekt längst neuer war. Die
-    Prüfsumme sagt dagegen die Wahrheit über den Code, der wirklich läuft.
+    version.txt is regularly forgotten during development. If it still holds
+    the same number, the backend considers an ancient agent up to date and
+    never sends an update - which is exactly why the patch handlers were
+    missing on the clients recently, even though agent.py in the project was
+    long newer. The checksum, by contrast, tells the truth about the code that
+    is really running.
     """
     try:
         import hashlib
@@ -531,12 +531,12 @@ def _read_agent_code_hash() -> str:
 
 AGENT_CODE_HASH = _read_agent_code_hash()
 
-# Der Socket.IO-Client, über den die gesamte Kommunikation läuft
-# EINEN festen Event-Loop erzeugen und als aktuellen setzen, BEVOR der
-# socketio-Client erstellt wird. Grund: 'sio' wird beim Import gebaut; würde man
-# main() später über asyncio.run() starten, liefe alles auf einem ANDEREN Loop
-# -> "Future attached to a different loop". Wir laufen main() unten explizit auf
-# genau diesem Loop (run_until_complete).
+# The Socket.IO client through which all communication runs.
+# Create ONE fixed event loop and set it as current BEFORE the socketio client
+# is created. Reason: 'sio' is built at import time; if main() were later
+# started via asyncio.run(), everything would run on a DIFFERENT loop
+# -> "Future attached to a different loop". We run main() below explicitly on
+# exactly this loop (run_until_complete).
 try:
     _AGENT_LOOP = asyncio.get_event_loop()
     if _AGENT_LOOP.is_closed():
@@ -545,10 +545,10 @@ except RuntimeError:
     _AGENT_LOOP = asyncio.new_event_loop()
 asyncio.set_event_loop(_AGENT_LOOP)
 
-# reconnection=False: Wir steuern das Wiederverbinden SELBST (siehe main()).
-# Sonst kämpfen die interne Auto-Reconnection und unsere Schleife gegeneinander
-# -> Fehler "Already connected" und "Future attached to a different loop", weil
-# sich zwei Verbindungs-Lebenszyklen überlappen.
+# reconnection=False: we control reconnecting OURSELVES (see main()).
+# Otherwise the internal auto-reconnection and our loop fight each other
+# -> errors "Already connected" and "Future attached to a different loop",
+# because two connection life cycles overlap.
 sio = socketio.AsyncClient(reconnection=False)
 
 
@@ -940,22 +940,21 @@ def _backend_fetch(path: str, timeout: int = 120, limit: int = 64 * 1024 * 1024)
         raise RuntimeError("download unexpectedly large")
     return data
 
-# Wird gesetzt, sobald das Backend unsere Anmeldung BESTÄTIGT hat
-# ('register-ack'). Solange es nicht gesetzt ist, schweigt der Agent -
-# er belegt dann keine Server-Kapazität, die gerade ein anderer Agent
-# für seine Anmeldung braucht.
+# Set as soon as the backend has CONFIRMED our registration
+# ('register-ack'). As long as it is not set, the agent stays silent -
+# so it does not occupy server capacity that another agent currently
+# needs for its own registration.
 _REGISTERED = asyncio.Event()
 
-# Damit nicht alle Agenten im selben Moment anklopfen (typisch nach einem
-# Server-Neustart), verzögert jeder Agent seinen ERSTEN Versuch um eine
-# feste, aus der eigenen Geräte-ID abgeleitete Spanne. Fest statt zufällig,
-# damit die Reihenfolge über Neustarts hinweg stabil bleibt und sich die
-# Agenten nicht immer wieder gegenseitig in die Quere kommen.
+# So that not all agents knock at the same moment (typical after a server
+# restart), each agent delays its FIRST attempt by a fixed span derived from
+# its own device ID. Fixed instead of random, so the order stays stable across
+# restarts and the agents do not keep getting in each other's way.
 CONNECT_SPREAD_S = max(0, int(os.getenv("AGENT_CONNECT_SPREAD_S", "30") or 30))
 
 
 def get_local_ip() -> str | None:
-    """Ermittelt die eigene lokale IP-Adresse (siehe Erklärung in network_scan.py im Backend)."""
+    """Determines our own local IP address (see the explanation in network_scan.py in the backend)."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(("8.8.8.8", 80))
@@ -967,21 +966,21 @@ def get_local_ip() -> str | None:
 
 
 # --------------------------------------------------------------
-# Verbindungsaufbau & Registrierung
+# Connection setup & registration
 # --------------------------------------------------------------
 
 def _detect_device_type():
     """
-    Best-effort-Erkennung, ob dieser Rechner eine VM, ein LXC-Container oder
-    physische Hardware ist. Ergebnis: "vm" | "lxc" | "physical" | None
-    (None = unbekannt, dann wird am Backend NICHTS geändert).
-    Damit ist im Bearbeiten-Dialog automatisch der richtige Gerätetyp
-    vorausgewählt, statt fälschlich "Physisches Gerät".
+    Best-effort detection of whether this machine is a VM, an LXC container or
+    physical hardware. Result: "vm" | "lxc" | "physical" | None
+    (None = unknown, then NOTHING is changed on the backend).
+    This way the edit dialog automatically preselects the correct device type
+    instead of wrongly defaulting to "Physical device".
     """
     try:
         sysname = platform.system().lower()
         if sysname == "linux":
-            # 1) systemd-detect-virt ist die zuverlässigste Quelle.
+            # 1) systemd-detect-virt is the most reliable source.
             try:
                 out = subprocess.run(["systemd-detect-virt"], capture_output=True,
                                      text=True, timeout=5).stdout.strip().lower()
@@ -993,14 +992,14 @@ def _detect_device_type():
                     return "physical"
             except Exception:
                 pass
-            # 2) Container-Marker (PID 1-Umgebung / /run-Dateien)
+            # 2) container markers (PID 1 environment / /run files)
             try:
                 env = Path("/proc/1/environ").read_bytes()
                 if b"container=lxc" in env or Path("/run/systemd/container").exists():
                     return "lxc"
             except Exception:
                 pass
-            # 3) Hypervisor-Flag der CPU + DMI-Produktname
+            # 3) CPU hypervisor flag + DMI product name
             try:
                 if "hypervisor" in Path("/proc/cpuinfo").read_text(errors="ignore"):
                     return "vm"
@@ -1016,7 +1015,7 @@ def _detect_device_type():
                 pass
             return None
         if sysname == "windows":
-            # Hersteller/Modell abfragen - typische VM-Signaturen matchen.
+            # Query manufacturer/model - match typical VM signatures.
             try:
                 out = subprocess.run(
                     ["wmic", "computersystem", "get", "manufacturer,model"],
@@ -1114,9 +1113,9 @@ DETECTED_DEVICE_KIND = _detect_device_kind()
 
 def _read_and_clear_last_crash():
     """
-    Liest last_crash.txt (vom Crash-Schutz in __main__ geschrieben), löscht
-    die Datei und gibt den Inhalt (gekürzt) zurück - wird beim Registrieren
-    ans Backend gemeldet und dort dem Nutzer angezeigt.
+    Reads last_crash.txt (written by the crash guard in __main__), deletes the
+    file and returns its (truncated) content - reported to the backend during
+    registration and shown to the user there.
     """
     try:
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "last_crash.txt")
@@ -1135,7 +1134,7 @@ def _read_and_clear_last_crash():
 
 @sio.event(namespace="/agent")
 async def connect():
-    """Wird automatisch aufgerufen, sobald die Verbindung zum Backend steht."""
+    """Called automatically as soon as the connection to the backend is up."""
     global _JUST_UPDATED
     _print(f"[agent] {_at('log_connected', url=BACKEND_URL, name=DEVICE_NAME, id=DEVICE_ID)}")
     await sio.emit(
@@ -1143,82 +1142,81 @@ async def connect():
         {
             "id": DEVICE_ID,
             "hostname": DEVICE_NAME,
-            "platform": platform.system(),       # "Windows" oder "Linux"
-            "arch": platform.machine(),           # z.B. "AMD64", "x86_64"
-            "release": OS_RELEASE,                # z.B. "Ubuntu 22.04" / "Windows 11"
+            "platform": platform.system(),       # "Windows" or "Linux"
+            "arch": platform.machine(),           # e.g. "AMD64", "x86_64"
+            "release": OS_RELEASE,                # e.g. "Ubuntu 22.04" / "Windows 11"
             "ip": get_local_ip(),
-            # Die Netze, in denen dieses Geraet haengt - fuer Site-to-Site.
-            # Ohne diese Angabe muesste das Backend das Netz raten (bisher:
-            # pauschal /24). Bei einem /16 oder /22 fehlten dann Teile des
-            # Netzes in den Routen, und der Benutzer erreichte einen Teil
-            # der Geraete nicht - ohne erkennbaren Grund.
+            # The networks this device is attached to - for site-to-site.
+            # Without this the backend would have to guess the network (so far:
+            # a blanket /24). With a /16 or /22, parts of the network were then
+            # missing from the routes, and the user could not reach some of the
+            # devices - with no discernible reason.
             "subnets": get_local_subnets(),
-            "enrollment_token": ENROLLMENT_TOKEN,  # nur beim ersten Mal relevant
-            "updated": _JUST_UPDATED,              # true = kommt frisch aus einem Update
-            "agent_version": AGENT_VERSION,        # eigene Version (für "veraltet"-Hinweis)
-            "agent_code_hash": AGENT_CODE_HASH,     # Prüfsumme des laufenden Codes
-            # Merkmal dieser Fassung: Kennt der Agent den Bildschirm-Helfer
-            # fuer Windows-Sitzung 0? Damit sieht man im Dashboard sofort, ob
-            # auf dem Client wirklich die neue Datei laeuft - eine Versions-
-            # nummer allein hat das zuletzt nicht verlaesslich gezeigt.
+            "enrollment_token": ENROLLMENT_TOKEN,  # only relevant the first time
+            "updated": _JUST_UPDATED,              # true = just came out of an update
+            "agent_version": AGENT_VERSION,        # own version (for the "outdated" hint)
+            "agent_code_hash": AGENT_CODE_HASH,     # checksum of the running code
+            # Trait of this build: does the agent know the screen helper
+            # for Windows session 0? This shows in the dashboard immediately
+            # whether the client is really running the new file - a version
+            # number alone did not reliably show that recently.
             "screen_helper": True,
-            # Laeuft gerade eine Fernwartung? Nach einem Neuverbinden weiss das
-            # Backend so, ob der Stream weiterlaeuft oder neu gestartet werden muss.
+            # Is a remote session currently running? After a reconnect this lets
+            # the backend know whether the stream continues or must be restarted.
             "screen_active": bool(_screen_stream.get("active")),
             "screen_flow": 1,                      # kennt ACK-Flusskontrolle
             "vdisplay": _vdisplay_status() if IS_WINDOWS else {"supported": False},
             "multiuser_select": IS_WINDOWS,
             "registry": IS_WINDOWS,
             "wu_auto": wu_auto_status() if IS_WINDOWS else {"supported": False},
-            # Patch-Fähigkeit ungefragt mitteilen. Das Backend muss dadurch
-            # nicht erst einen Ping schicken, um zu wissen, ob ein
-            # Patch-Auftrag auf diesem Client überhaupt Sinn ergibt.
+            # Announce patch capability unprompted. This way the backend does
+            # not have to send a ping first to know whether a patch job on this
+            # client makes sense at all.
             "patch_protocol": PATCH_PROTOCOL,
             "patch_sources": _patch_sources(),
-            "device_type": DETECTED_DEVICE_TYPE,   # "vm"/"lxc"/"physical"/None (Auto-Erkennung)
+            "device_type": DETECTED_DEVICE_TYPE,   # "vm"/"lxc"/"physical"/None (auto-detection)
             "device_kind": DETECTED_DEVICE_KIND,   # icon: laptop/pc/server/hypervisor/vm/lxc/docker
-            "last_crash": _read_and_clear_last_crash(),  # Traceback des letzten Absturzes (falls vorhanden)
+            "last_crash": _read_and_clear_last_crash(),  # traceback of the last crash (if any)
         },
         namespace="/agent",
     )
     if _JUST_UPDATED:
         _print(f"[agent] {_at('log_update_sent')}")
-        _JUST_UPDATED = False  # nur einmal melden, nicht bei jedem Reconnect
+        _JUST_UPDATED = False  # report only once, not on every reconnect
 
 
 @sio.on("register-ack", namespace="/agent")
 async def on_register_ack(data=None):
     """
-    Das Backend hat unsere Anmeldung verarbeitet - erfolgreich ODER NICHT.
+    The backend has processed our registration - successfully OR NOT.
 
-    Erst nach einer ERFOLGREICHEN Anmeldung schicken wir Heartbeats. Vorher
-    waere jeder Heartbeat nur zusaetzliche Last auf einem Server, der gerade
-    reihum alle anderen Agenten aufnimmt.
+    Only after a SUCCESSFUL registration do we send heartbeats. Before that,
+    every heartbeat would be nothing but extra load on a server that is
+    currently taking on all the other agents in turn.
 
-    GEAENDERT (2026-09-20): Frueher stand hier nur '_REGISTERED.set()' - die
-    Bestaetigung wurde ungeprueft geglaubt. Das Backend schickte aber auch
-    dann ok=True, wenn die Anmeldung in Wahrheit gescheitert war. Ergebnis:
-    Der Agent lief zufrieden weiter und meldete Heartbeats, waehrend es im
-    Dashboard gar keinen Client-Datensatz gab. Genau das Bild von
-    "installiert sich sauber, taucht nie auf".
+    CHANGED (2026-09-20): Previously this only did '_REGISTERED.set()' - the
+    acknowledgement was believed unchecked. But the backend also sent ok=True
+    when the registration had in fact failed. Result: the agent happily kept
+    running and reported heartbeats while there was no client record in the
+    dashboard at all. Exactly the picture of "installs cleanly, never shows up".
 
-    Jetzt wird der Inhalt ausgewertet. Bei einem Fehlschlag sagt der Agent
-    deutlich, WARUM, und meldet sich nach kurzer Pause erneut an - der
-    haeufigste Grund (Server gerade unter Last) erledigt sich von selbst.
+    Now the content is evaluated. On a failure the agent says clearly WHY and
+    registers again after a short pause - the most common cause (server under
+    load right now) resolves itself.
     """
     data = data or {}
     if data.get("ok", True):
         _REGISTERED.set()
-        _print("[agent] Anmeldung vom Server bestaetigt - Heartbeats starten")
-        # Marker fuer das Update-Skript: "die neue Version ist am Server
-        # angekommen" (Gesundheitspruefung, sonst Rollback auf die alte Version).
+        _print("[agent] Registration confirmed by the server - starting heartbeats")
+        # Marker for the update script: "the new version has arrived at the
+        # server" (health check, otherwise rollback to the old version).
         try:
             (Path(__file__).resolve().parent / ".connected").write_text(str(int(time.time())), encoding="utf-8")
         except Exception:
             pass
         await _report_update_failure()
-        # USB-Wächter: Konfiguration abholen (antwortet nur, wenn das Modul
-        # "usbguard" am Backend aktiv ist - sonst bleibt der Monitor aus).
+        # USB guard: fetch the configuration (only answers if the "usbguard"
+        # module is active on the backend - otherwise the monitor stays off).
         try:
             await sio.emit("usb-config-get", {"id": DEVICE_ID}, namespace="/agent")
         except Exception:
@@ -1226,46 +1224,46 @@ async def on_register_ack(data=None):
         return
 
     _REGISTERED.clear()
-    reason = data.get("reason") or "kein Grund angegeben"
-    _print(f"[agent] ANMELDUNG ABGELEHNT: {reason}. "
-           f"Dieses Geraet erscheint deshalb NICHT im Dashboard. "
-           f"Neuer Versuch in 15 Sekunden.")
+    reason = data.get("reason") or "no reason given"
+    _print(f"[agent] REGISTRATION REJECTED: {reason}. "
+           f"This device therefore does NOT appear in the dashboard. "
+           f"Retrying in 15 seconds.")
     await asyncio.sleep(15)
     try:
-        await connect()          # schickt dasselbe 'register' noch einmal
+        await connect()          # sends the same 'register' again
     except Exception as e:
-        _print(f"[agent] Erneute Anmeldung fehlgeschlagen: {e!r}")
+        _print(f"[agent] Re-registration failed: {e!r}")
 
 
 @sio.event(namespace="/agent")
 async def disconnect():
-    """Verbindung weg -> Heartbeats pausieren, bis wir wieder angemeldet sind."""
+    """Connection gone -> pause heartbeats until we are registered again."""
     _REGISTERED.clear()
 
 
 @sio.event(namespace="/agent")
 async def connect_error(data):
-    _print(f"[agent] Verbindungsfehler zu {BACKEND_URL}: {data!r} "
+    _print(f"[agent] Connection error to {BACKEND_URL}: {data!r} "
            f"(check: reachable? TLS certificate valid? does the proxy forward /socket.io?)")
 
 
 # --------------------------------------------------------------
-# Regelmäßige Metriken (Heartbeat)
+# Regular metrics (heartbeat)
 # --------------------------------------------------------------
 
-# Merker für die Netzwerk-Durchsatz-Berechnung (Differenz zwischen zwei Messungen)
+# Marker for the network throughput calculation (difference between two measurements)
 _last_net = {"ts": None, "bytes_sent": 0, "bytes_recv": 0}
 
 
 # ------------------------------------------------------------------
-# Erweiterte Hardware-/Telemetrie-Erfassung
+# Extended hardware / telemetry collection
 # ------------------------------------------------------------------
-# Alle Zusatzwerte sind BEST-EFFORT: Fehlt ein Sensor/Modul auf einer
-# Plattform, wird der Wert einfach weggelassen statt einen Fehler zu werfen.
-# Statische Infos (CPU-/RAM-/GPU-Modell) werden einmalig ermittelt und
-# zwischengespeichert, dynamische Werte (Temp, Takt, IO, Ping) je Zyklus.
+# All extra values are BEST-EFFORT: if a sensor/module is missing on a
+# platform, the value is simply omitted instead of raising an error.
+# Static info (CPU/RAM/GPU model) is determined once and cached, dynamic
+# values (temp, clock, IO, ping) each cycle.
 
-_static_hw_cache = None            # einmalig ermittelte, unveränderliche Infos
+_static_hw_cache = None            # info determined once, unchanging
 _last_diskio = {"ts": None, "read": 0, "write": 0}
 _ping_targets = {"google": "8.8.8.8", "cloudflare": "1.1.1.1"}
 
@@ -1278,10 +1276,10 @@ def _safe(fn, default=None):
 
 
 def _cpu_model() -> str:
-    # Plattformübergreifend den CPU-Namen ermitteln.
+    # Determine the CPU name across platforms.
     if IS_WINDOWS:
-        # platform.processor() liefert nur die Kennung ("AMD64 Family 25 ...").
-        # Der echte Marketing-Name steht in der Registry - ohne Subprozess/Fenster.
+        # platform.processor() only returns the identifier ("AMD64 Family 25 ...").
+        # The real marketing name is in the registry - without a subprocess/window.
         try:
             import winreg
             k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
@@ -1292,23 +1290,23 @@ def _cpu_model() -> str:
                 return name.strip()
         except Exception:
             pass
-        # Fallback: WMI-Name (hidden window über _run).
+        # Fallback: WMI name (hidden window via _run).
         txt = _safe(lambda: _run(["powershell", "-NoProfile", "-Command",
                                   "(Get-CimInstance Win32_Processor).Name"], timeout=6).stdout) or ""
         for line in txt.splitlines():
             if line.strip():
                 return line.strip()
-        return _safe(lambda: __import__("platform").processor()) or "unbekannt"
+        return _safe(lambda: __import__("platform").processor()) or "unknown"
     else:
         info = _safe(lambda: open("/proc/cpuinfo").read()) or ""
         for line in info.splitlines():
             if "model name" in line:
                 return line.split(":", 1)[1].strip()
-    return _safe(lambda: __import__("platform").processor()) or "unbekannt"
+    return _safe(lambda: __import__("platform").processor()) or "unknown"
 
 
 def _gpu_models() -> list:
-    # GPU-Namen best effort. Auf Linux via lspci, auf Windows via WMI/cim.
+    # GPU names best effort. On Linux via lspci, on Windows via WMI/cim.
     out = []
     if IS_WINDOWS:
         txt = _safe(lambda: _run(
@@ -1326,7 +1324,7 @@ def _gpu_models() -> list:
 
 
 def _ram_modules() -> list:
-    # RAM-Riegel (Hersteller/Größe/Takt) best effort.
+    # RAM sticks (vendor/size/clock) best effort.
     mods = []
     if IS_WINDOWS:
         txt = _safe(lambda: _run(
@@ -1338,15 +1336,15 @@ def _ram_modules() -> list:
             if len(p) >= 3 and p[1].isdigit():
                 vendor = (p[0] or "").strip()
                 part = (p[3].strip() if len(p) > 3 else "")
-                # Manufacturer ist bei vielen Riegeln "Unknown"/leer -> dann die
-                # Teilenummer als aussagekräftigeren Namen verwenden.
+                # Manufacturer is "Unknown"/empty on many sticks -> then use the
+                # part number as a more meaningful name.
                 if not vendor or vendor.lower() in ("unknown", "n/a", "0"):
                     vendor = part or vendor or "?"
                 mods.append({"vendor": vendor, "size": int(p[1]),
                              "speed": _safe(lambda: int(p[2])) or 0,
                              "part": part})
     else:
-        # dmidecode braucht i.d.R. root; nur nutzen, wenn verfügbar.
+        # dmidecode usually needs root; only use it if available.
         txt = _safe(lambda: _run(["dmidecode", "-t", "memory"],
                     capture_output=True, text=True, timeout=6).stdout) or ""
         cur = {}
@@ -1367,14 +1365,14 @@ def _ram_modules() -> list:
 
 def _mac_and_interfaces() -> dict:
     """
-    Ermittelt die primäre MAC-Adresse und eine Liste der Netzwerk-Interfaces
-    (Name, MAC, IPv4). Rein informativ für die Client-Panels.
+    Determines the primary MAC address and a list of the network interfaces
+    (name, MAC, IPv4). Purely informational for the client panels.
     """
     result = {"mac": None, "interfaces": []}
     try:
         import uuid as _uuid
         node = _uuid.getnode()
-        # getnode() liefert bei zufälligem Fallback ein Bit gesetzt -> dann unklar.
+        # getnode() sets a bit on a random fallback -> then unclear.
         mac = ":".join(f"{(node >> ele) & 0xff:02x}" for ele in range(40, -8, -8))
         result["mac"] = mac
     except Exception:
@@ -1392,7 +1390,7 @@ def _mac_and_interfaces() -> dict:
                     nic["ipv4"] = e.address
             if nic["ipv4"] or nic["mac"]:
                 result["interfaces"].append(nic)
-        # Primäre MAC bevorzugt vom Interface mit der Standard-IP nehmen.
+        # Prefer taking the primary MAC from the interface with the default IP.
         primary_ip = get_local_ip()
         for nic in result["interfaces"]:
             if nic["ipv4"] == primary_ip and nic["mac"]:
@@ -1426,7 +1424,7 @@ def _static_hardware() -> dict:
 def _cpu_temp() -> float | None:
     temps = _safe(lambda: psutil.sensors_temperatures())
     if temps:
-        # Bevorzugt CPU-nahe Sensoren, sonst den ersten verfügbaren.
+        # Prefer CPU-related sensors, otherwise the first available one.
         for key in ("coretemp", "k10temp", "cpu_thermal", "acpitz", "zenpower"):
             if key in temps and temps[key]:
                 return round(temps[key][0].current, 1)
@@ -1434,11 +1432,11 @@ def _cpu_temp() -> float | None:
             if arr:
                 return round(arr[0].current, 1)
     if IS_WINDOWS:
-        # Windows: psutil kann keine Temperaturen -> WMI-Thermalzone (Zehntel-
-        # Kelvin). Teuer -> nur alle 30 s (TTL-Cache). Für echte CPU-Temperatur
-        # auf AMD/Intel-Desktops zusätzlich LibreHardwareMonitor (siehe _win_hw_sensors).
+        # Windows: psutil cannot read temperatures -> WMI thermal zone (tenths
+        # of a Kelvin). Expensive -> only every 30 s (TTL cache). For a real CPU
+        # temperature on AMD/Intel desktops also LibreHardwareMonitor (see _win_hw_sensors).
         return _ttl("cputemp_win", 30, _cpu_temp_windows)
-    # Linux-Fallback: hwmon direkt (k10temp/coretemp liefern hier Tctl/Package).
+    # Linux fallback: hwmon directly (k10temp/coretemp provide Tctl/Package here).
     hw_temps, _ = _read_hwmon()
     for pref in ("tctl", "tdie", "package", "cpu"):
         for name, v in hw_temps.items():
@@ -1456,14 +1454,14 @@ def _cpu_temp_windows() -> float | None:
         capture_output=True, text=True, timeout=6).stdout) or ""
     v = _safe(lambda: int(txt.strip()))
     if v and v > 0:
-        return round(v / 10.0 - 273.15, 1)   # Zehntel-Kelvin -> °C
+        return round(v / 10.0 - 273.15, 1)   # tenths of a Kelvin -> °C
     return None
 
 
 def _read_hwmon():
-    """Linux-Fallback: Temperaturen & Lüfter direkt aus /sys/class/hwmon lesen
-    (falls psutil.sensors_* nichts liefert, z.B. ohne lm-sensors-Konfig).
-    Gibt (temps{Name:°C}, fans{Name:U/min}) zurück."""
+    """Linux fallback: read temperatures & fans directly from /sys/class/hwmon
+    (if psutil.sensors_* returns nothing, e.g. without an lm-sensors config).
+    Returns (temps{name:°C}, fans{name:rpm})."""
     import glob as _glob
     temps, fans = {}, {}
     for hw in _glob.glob("/sys/class/hwmon/hwmon*"):
@@ -1484,7 +1482,7 @@ def _read_hwmon():
 
 
 def _all_temps() -> dict:
-    """Alle Temperatur-Sensoren als {Name: °C}. Erst psutil, dann hwmon-Fallback."""
+    """All temperature sensors as {name: °C}. psutil first, then hwmon fallback."""
     out = {}
     temps = _safe(lambda: psutil.sensors_temperatures()) or {}
     for chip, arr in temps.items():
@@ -1500,7 +1498,7 @@ def _all_temps() -> dict:
 
 
 def _all_fans() -> dict:
-    """Alle Lüfter als {Name: U/min}. Erst psutil, dann hwmon-Fallback."""
+    """All fans as {name: rpm}. psutil first, then hwmon fallback."""
     out = {}
     fans = _safe(lambda: psutil.sensors_fans()) or {}
     for chip, arr in fans.items():
@@ -1517,7 +1515,7 @@ def _all_fans() -> dict:
 def _fan_speed() -> int | None:
     fans = _safe(lambda: psutil.sensors_fans())
     if not fans:
-        # Linux-Fallback aus hwmon
+        # Linux fallback from hwmon
         if not IS_WINDOWS:
             _, hw_fans = _read_hwmon()
             if hw_fans:
@@ -1530,9 +1528,9 @@ def _fan_speed() -> int | None:
 
 
 def _gpus() -> list:
-    """GPU-Telemetrie über nvidia-smi (falls vorhanden): Name, Auslastung %,
-    VRAM belegt/gesamt, Temperatur, Leistungsaufnahme. Funktioniert plattform-
-    übergreifend, wenn NVIDIA-Treiber installiert sind."""
+    """GPU telemetry via nvidia-smi (if present): name, utilization %,
+    VRAM used/total, temperature, power draw. Works across platforms when
+    NVIDIA drivers are installed."""
     txt = _safe(lambda: _run(
         ["nvidia-smi",
          "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw",
@@ -1560,8 +1558,8 @@ def _gpus() -> list:
 
 
 def _amd_gpus_sysfs() -> list:
-    """AMD-GPU-Telemetrie über sysfs (Linux, amdgpu-Treiber): Auslastung,
-    Temperatur, Leistungsaufnahme, VRAM. Keine externen Tools nötig."""
+    """AMD GPU telemetry via sysfs (Linux, amdgpu driver): utilization,
+    temperature, power draw, VRAM. No external tools needed."""
     if IS_WINDOWS:
         return []
     import glob as _glob
@@ -1570,7 +1568,7 @@ def _amd_gpus_sysfs() -> list:
         dev = card + "/device"
         busy = _safe(lambda dev=dev: int(open(dev + "/gpu_busy_percent").read().strip()))
         if busy is None:
-            continue   # kein amdgpu-Sensor -> überspringen
+            continue   # no amdgpu sensor -> skip
         temp = power = None
         for hw in _glob.glob(dev + "/hwmon/hwmon*"):
             t = _safe(lambda hw=hw: int(open(hw + "/temp1_input").read().strip()))
@@ -1588,13 +1586,12 @@ def _amd_gpus_sysfs() -> list:
 
 
 def _win_hw_sensors() -> dict:
-    """Windows: Sensoren (CPU-Temp, Lüfter, Package-Power, GPU von AMD/NVIDIA/
-    Intel) über LibreHardwareMonitor bzw. OpenHardwareMonitor auslesen - die
-    zuverlässigste Quelle für diese Werte unter Windows. Voraussetzung: eines
-    der Tools läuft. Ohne das kann Windows CPU-Temperatur, Lüfter und
-    Leistungsaufnahme technisch nicht bereitstellen (psutil unterstützt keine
-    Windows-Sensoren). Rückgabe (nur vorhandene Schlüssel): cpuTemp, temps{},
-    fans{}, powerWatts, gpus[]."""
+    """Windows: read sensors (CPU temp, fans, package power, GPU from AMD/NVIDIA/
+    Intel) via LibreHardwareMonitor or OpenHardwareMonitor - the most reliable
+    source for these values on Windows. Requirement: one of the tools is
+    running. Without it, Windows technically cannot provide CPU temperature,
+    fans and power draw (psutil does not support Windows sensors). Returns
+    (only keys that exist): cpuTemp, temps{}, fans{}, powerWatts, gpus[]."""
     if not IS_WINDOWS:
         return {}
     data = None
@@ -1687,13 +1684,13 @@ def _battery() -> dict | None:
 
 
 def _power_watts() -> float | None:
-    # Momentane Leistungsaufnahme (W), best effort. Zwei Quellen (Linux):
-    #  1) RAPL-Energiezähler ALLER Pakete (intel-rapl:0, :1, ...) -> dJ/dt.
-    #  2) hwmon power*_input (Mikrowatt, momentan) als Fallback.
+    # Instantaneous power draw (W), best effort. Two sources (Linux):
+    #  1) RAPL energy counters of ALL packages (intel-rapl:0, :1, ...) -> dJ/dt.
+    #  2) hwmon power*_input (microwatts, instantaneous) as a fallback.
     if IS_WINDOWS:
         return None
     import glob as _glob
-    # (1) RAPL: nur die Paket-Zonen (intel-rapl:N), nicht die Sub-Domains :N:M.
+    # (1) RAPL: only the package zones (intel-rapl:N), not the sub-domains :N:M.
     pkgs = sorted(p for p in _glob.glob("/sys/class/powercap/intel-rapl:*/energy_uj")
                   if p.count(":") == 1)
     total_uj = 0
@@ -1712,8 +1709,8 @@ def _power_watts() -> float | None:
             dj = (total_uj - prev[1]) / 1_000_000.0
             if dt > 0 and dj >= 0:
                 return round(dj / dt, 1)
-        # beim ersten Aufruf noch kein dt -> auf hwmon ausweichen
-    # (2) hwmon momentane Leistung (Mikrowatt).
+        # no dt yet on the first call -> fall back to hwmon
+    # (2) hwmon instantaneous power (microwatts).
     watts = 0.0
     any_hw = False
     for path in _glob.glob("/sys/class/hwmon/hwmon*/power*_input"):
@@ -1727,7 +1724,7 @@ def _power_watts() -> float | None:
 
 
 def _disk_io_speed() -> dict:
-    # Lese-/Schreibrate (Bytes/s) aus den Gesamt-Zählern ableiten.
+    # Derive read/write rate (bytes/s) from the total counters.
     io = _safe(lambda: psutil.disk_io_counters())
     if not io:
         return {}
@@ -1745,8 +1742,8 @@ def _disk_io_speed() -> dict:
 
 
 def _ping_ms(host: str) -> float | None:
-    # Ein einzelner Ping über das System-Tool. Parsing mehrsprachig
-    # (time=/Zeit=/tiempo=/temps=) mit Durchschnitts- und Zahl-Fallback.
+    # A single ping via the system tool. Multilingual parsing
+    # (time=/Zeit=/tiempo=/temps=) with average and number fallbacks.
     param = "-n" if IS_WINDOWS else "-c"
     timeout_param = "-w" if IS_WINDOWS else "-W"
     tval = "1000" if IS_WINDOWS else "1"
@@ -1758,7 +1755,7 @@ def _ping_ms(host: str) -> float | None:
         if not m:
             m = _re.search(r"(?:average|mittelwert|moyenne|promedio|media)\s*[=:]\s*([\d.,]+)\s*ms", out)
         if not m:
-            m = _re.search(r"[=<]\s*([\d.,]+)\s*ms", out)   # letzter Ausweg
+            m = _re.search(r"[=<]\s*([\d.,]+)\s*ms", out)   # last resort
         if m:
             return round(float(m.group(1).replace(",", ".")), 1)
     except Exception:
@@ -1767,16 +1764,16 @@ def _ping_ms(host: str) -> float | None:
 
 
 def collect_extended_metrics() -> dict:
-    """Zusatz-Telemetrie (Hardware, Temperaturen, IO, Ping). Alles best effort;
-    fehlende Sensoren erscheinen einfach nicht im Ergebnis."""
+    """Extra telemetry (hardware, temperatures, IO, ping). All best effort;
+    missing sensors simply do not appear in the result."""
     ext = {}
     ext.update(_static_hardware())          # cpuModel, gpuModels, ramModules, ...
 
     freq = _safe(lambda: psutil.cpu_freq())
     if freq:
         ext["cpuFreq"] = round(freq.current)
-    # Takt je Kern. Windows liefert meist nur einen Wert -> auf alle Kerne
-    # spiegeln, damit das Panel Daten zeigt (Näherung).
+    # Clock per core. Windows usually returns only one value -> mirror it onto
+    # all cores so the panel shows data (approximation).
     per = _safe(lambda: psutil.cpu_freq(percpu=True))
     if per and len(per) > 1:
         ext["cpuFreqPerCore"] = [round(f.current) for f in per]
@@ -1785,9 +1782,9 @@ def collect_extended_metrics() -> dict:
         if n:
             ext["cpuFreqPerCore"] = [round(freq.current)] * n
 
-    # Load Average: Linux nativ; Windows als eigener EWMA-Schätzer (psutil.get-
-    # loadavg ist dort nur emuliert und anfangs 0). Wird in collect_metrics
-    # gesetzt; hier nur für Nicht-Windows aus psutil.
+    # Load average: native on Linux; on Windows our own EWMA estimator
+    # (psutil.getloadavg is only emulated there and 0 at first). Set in
+    # collect_metrics; here only for non-Windows from psutil.
     if not IS_WINDOWS:
         la = _safe(lambda: psutil.getloadavg())
         if la:
@@ -1799,21 +1796,21 @@ def collect_extended_metrics() -> dict:
         v = fn()
         if v is not None:
             ext[name] = v
-    # Alle Temperatur-/Lüftersensoren (Linux via psutil).
+    # All temperature/fan sensors (Linux via psutil).
     temps = _all_temps()
     if temps:
         ext["temps"] = temps
     fans = _all_fans()
     if fans:
         ext["fans"] = fans
-    # GPU-Telemetrie: nvidia-smi (teuer, alle 15 s) oder AMD-sysfs (Linux, günstig).
+    # GPU telemetry: nvidia-smi (expensive, every 15 s) or AMD sysfs (Linux, cheap).
     gpus = _ttl("gpus", 15, _gpus) or _amd_gpus_sysfs()
     if gpus:
         ext["gpus"] = gpus
 
-    # Windows-Sensoren via LibreHardwareMonitor/OpenHardwareMonitor (CPU-Temp,
-    # Lüfter, Package-Power, AMD-/NVIDIA-GPU). Alle 10 s (WMI-Aufruf). Ergänzt
-    # bzw. überschreibt die obigen Felder, wenn dort nichts kam.
+    # Windows sensors via LibreHardwareMonitor/OpenHardwareMonitor (CPU temp,
+    # fans, package power, AMD/NVIDIA GPU). Every 10 s (WMI call). Supplements
+    # or overrides the fields above if nothing came from there.
     if IS_WINDOWS:
         hw = _ttl("winhw", 10, _win_hw_sensors)
         if hw:
@@ -1832,10 +1829,10 @@ def collect_extended_metrics() -> dict:
     if pw is not None:
         ext["powerWatts"] = pw
 
-    ext.update(_disk_io_speed())            # diskRead, diskWrite (Bytes/s)
+    ext.update(_disk_io_speed())            # diskRead, diskWrite (bytes/s)
 
-    # Ping-Ziele (Netzqualität) - startet je Ziel einen ping-Prozess, daher
-    # nur alle 15 s messen (dazwischen letzten Wert wiederverwenden).
+    # Ping targets (network quality) - starts one ping process per target, so
+    # only measure every 15 s (reuse the last value in between).
     def _measure_pings():
         out = {}
         for label, host in _ping_targets.items():
@@ -1852,14 +1849,13 @@ def collect_extended_metrics() -> dict:
 
 def get_local_subnets() -> list:
     """
-    Ermittelt die IPv4-Netze, in denen dieses Geraet haengt.
+    Determines the IPv4 networks this device is attached to.
 
-    Beispiel: Adresse 192.168.178.79 mit Maske 255.255.255.0 ergibt
+    Example: address 192.168.178.79 with mask 255.255.255.0 gives
     "192.168.178.0/24".
 
-    Ausgelassen werden Loopback (127.x), automatische Adressen (169.254.x)
-    und die Tunnel-Netze selbst - Letztere wuerden eine Route auf sich
-    selbst erzeugen.
+    Loopback (127.x), automatic addresses (169.254.x) and the tunnel networks
+    themselves are omitted - the latter would create a route to themselves.
     """
     out = []
     try:
@@ -1877,30 +1873,30 @@ def get_local_subnets() -> list:
                     net = _ip.ip_network(f"{ip}/{mask}", strict=False)
                 except ValueError:
                     continue
-                # Ein /32 ist kein Netz, sondern eine einzelne Adresse.
+                # A /32 is not a network but a single address.
                 if net.prefixlen >= 31:
                     continue
                 text = str(net)
                 if text not in out:
                     out.append(text)
     except Exception as e:
-        _print(f"[agent] Netze nicht ermittelbar: {e}")
+        _print(f"[agent] Could not determine networks: {e}")
     return out[:8]
 
 
 def collect_metrics() -> dict:
     """
-    Sammelt die aktuellen System-Metriken. Läuft in einem Hintergrund-Thread
-    (siehe heartbeat_loop), weil psutil.cpu_percent() kurz "blockiert"
-    (es misst die Last über ein kleines Zeitfenster).
+    Collects the current system metrics. Runs in a background thread
+    (see heartbeat_loop) because psutil.cpu_percent() briefly "blocks"
+    (it measures the load over a small time window).
     """
-    # CPU-Last gesamt UND pro Kern in einem Rutsch messen (percpu teilt das
-    # 0,5s-Fenster auf alle Kerne auf; der Gesamtwert ist deren Mittel).
+    # Measure total CPU load AND per core in one go (percpu splits the 0.5s
+    # window across all cores; the total is their mean).
     per_core = psutil.cpu_percent(interval=0.5, percpu=True) or []
     cpu_percent = round(sum(per_core) / len(per_core)) if per_core else psutil.cpu_percent()
     memory = psutil.virtual_memory()
-    # Swap / Auslagerungsspeicher (auf Linux die "swap partition/file", auf
-    # Windows die Auslagerungsdatei). swap_memory() gibt es auf beiden Systemen.
+    # Swap / paging memory (on Linux the "swap partition/file", on Windows the
+    # page file). swap_memory() exists on both systems.
     try:
         swap = psutil.swap_memory()
         swap_used = int(swap.used)
@@ -1912,8 +1908,8 @@ def collect_metrics() -> dict:
     disk = psutil.disk_usage(disk_path)
 
     # --- Netzwerk-Durchsatz berechnen ---
-    # psutil liefert Gesamt-Zähler (Bytes seit Systemstart). Der Durchsatz ist
-    # die Differenz zum letzten Messwert, geteilt durch die vergangene Zeit.
+    # psutil returns total counters (bytes since system start). The throughput
+    # is the difference from the last measurement divided by the elapsed time.
     net = psutil.net_io_counters()
     now = time.time()
     net_in_per_s = 0.0
@@ -1927,7 +1923,7 @@ def collect_metrics() -> dict:
     _last_net["bytes_recv"] = net.bytes_recv
     _last_net["bytes_sent"] = net.bytes_sent
 
-    # --- Alle Festplatten/Partitionen einzeln (für den Disk-Tab im Dashboard) ---
+    # --- All disks/partitions individually (for the disk tab in the dashboard) ---
     disks = []
     for part in psutil.disk_partitions(all=False):
         try:
@@ -1939,29 +1935,29 @@ def collect_metrics() -> dict:
                 "total": usage.total,
             })
         except (PermissionError, OSError):
-            continue  # z.B. nicht bereite CD-Laufwerke überspringen
+            continue  # e.g. skip CD drives that are not ready
 
     base = {
         "cpuLoad": round(cpu_percent),
-        "cpuPerCore": [round(x) for x in per_core],           # Last je Kern (%)
-        "cpuCores": psutil.cpu_count(logical=False) or 0,   # physische Kerne
-        "cpuThreads": psutil.cpu_count(logical=True) or 0,  # logische Kerne (Threads)
+        "cpuPerCore": [round(x) for x in per_core],           # load per core (%)
+        "cpuCores": psutil.cpu_count(logical=False) or 0,   # physical cores
+        "cpuThreads": psutil.cpu_count(logical=True) or 0,  # logical cores (threads)
         "memUsed": memory.total - memory.available,
         "memTotal": memory.total,
-        "memAvailable": memory.available,   # freier/verfügbarer RAM
-        "memCached": int(getattr(memory, "cached", 0) or 0),     # Cache (Linux)
-        "memBuffers": int(getattr(memory, "buffers", 0) or 0),   # Puffer (Linux)
-        "swapUsed": swap_used,               # belegter Auslagerungsspeicher (Bytes)
-        "swapTotal": swap_total,             # gesamter Auslagerungsspeicher (Bytes)
+        "memAvailable": memory.available,   # free/available RAM
+        "memCached": int(getattr(memory, "cached", 0) or 0),     # cache (Linux)
+        "memBuffers": int(getattr(memory, "buffers", 0) or 0),   # buffers (Linux)
+        "swapUsed": swap_used,               # used swap/page memory (bytes)
+        "swapTotal": swap_total,             # total swap/page memory (bytes)
         "diskUsed": disk.used,
         "diskTotal": disk.total,
         "disks": disks,
-        "netIn": round(net_in_per_s),      # Bytes pro Sekunde empfangen
-        "netOut": round(net_out_per_s),    # Bytes pro Sekunde gesendet
+        "netIn": round(net_in_per_s),      # bytes per second received
+        "netOut": round(net_out_per_s),    # bytes per second sent
         "uptime": int(time.time() - psutil.boot_time()),
     }
-    # Load Average unter Windows selbst schätzen (EWMA aus der CPU-Auslastung *
-    # Kernzahl), da es dort kein echtes Load-Average gibt.
+    # Estimate load average on Windows ourselves (EWMA from CPU load * core
+    # count), since there is no real load average there.
     if IS_WINDOWS:
         try:
             ncpu = psutil.cpu_count(logical=True) or 1
@@ -1979,7 +1975,7 @@ def collect_metrics() -> dict:
             base["load15"] = round(nl["15"], 2)
         except Exception:
             pass
-    # Erweiterte Telemetrie anhängen (best effort, darf den Heartbeat nie stören).
+    # Append extended telemetry (best effort, must never disturb the heartbeat).
     try:
         base.update(collect_extended_metrics())
     except Exception:
@@ -1988,39 +1984,39 @@ def collect_metrics() -> dict:
 
 
 async def heartbeat_loop():
-    """Läuft dauerhaft im Hintergrund und schickt alle 5 Sekunden Metriken."""
+    """Runs permanently in the background and sends metrics every 5 seconds."""
     loop = asyncio.get_event_loop()
     while True:
-        # Nur senden, wenn die Verbindung steht UND die Anmeldung bestätigt
-        # ist. Beides zusammen verhindert, dass ein frisch verbundener Agent
-        # dem Server in die laufende Aufnahme anderer Agenten hineinfunkt.
+        # Only send if the connection is up AND the registration is confirmed.
+        # Both together prevent a freshly connected agent from interfering with
+        # the server while it is onboarding other agents.
         if sio.connected and _REGISTERED.is_set():
             try:
-                # collect_metrics() blockiert kurz -> in einem Thread ausführen,
-                # damit der Rest des Programms (z.B. eingehende Befehle) nicht wartet
+                # collect_metrics() briefly blocks -> run it in a thread so the
+                # rest of the program (e.g. incoming commands) does not wait
                 metrics = await loop.run_in_executor(None, collect_metrics)
                 await sio.emit("heartbeat", {"id": DEVICE_ID, "metrics": metrics}, namespace="/agent")
             except Exception as e:
                 _print(f"[agent] {_at('log_metrics_failed', err=e)}")
-        # Kleiner Zufalls-Anteil im Takt: Ohne ihn treffen die Heartbeats
-        # aller Agenten dauerhaft im selben Sekundentakt ein und erzeugen
-        # regelmässige Lastspitzen statt gleichmässiger Grundlast.
+        # Small random jitter in the cadence: without it the heartbeats of all
+        # agents keep arriving on the same second and create regular load spikes
+        # instead of a steady baseline load.
         await asyncio.sleep(5 + random.uniform(0, 1.5))
 
 
 # --------------------------------------------------------------
-# Fernbefehle: Shell-Kommandos ausführen (Terminal-App im Dashboard)
+# Remote commands: run shell commands (terminal app in the dashboard)
 # --------------------------------------------------------------
 
-# Pro Terminal-Session (= ein Terminal-Fenster im Dashboard) merken wir uns das
-# aktuelle Arbeitsverzeichnis, damit "cd" & Co. über mehrere Befehle hinweg
-# erhalten bleiben - genau wie in einer echten Shell.
+# Per terminal session (= one terminal window in the dashboard) we remember the
+# current working directory, so that "cd" & co. persist across several commands
+# - exactly like in a real shell.
 _terminal_sessions: dict[str, dict] = {}
 _terminal_sessions_lock = threading.Lock()
 
 
 def _session_cwd(session_id: str | None) -> str | None:
-    """Aktuelles Arbeitsverzeichnis einer Terminal-Session (legt sie bei Bedarf an)."""
+    """Current working directory of a terminal session (creates it if needed)."""
     if not session_id:
         return None
     with _terminal_sessions_lock:
@@ -2032,7 +2028,7 @@ def _session_cwd(session_id: str | None) -> str | None:
 
 
 def _update_session_cwd(session_id: str | None, new_cwd: str) -> None:
-    """Speichert das neue Arbeitsverzeichnis nach einem Befehl (falls es sich änderte)."""
+    """Stores the new working directory after a command (if it changed)."""
     if not session_id or not new_cwd:
         return
     with _terminal_sessions_lock:
@@ -2042,14 +2038,14 @@ def _update_session_cwd(session_id: str | None, new_cwd: str) -> None:
 def _run_shell_command(command: str, session_id: str | None = None,
                        shell: str = "auto", elevated: bool = False) -> tuple[str, str, int]:
     """
-    Führt einen Shell-Befehl aus und gibt (stdout, stderr, exit_code) zurück.
+    Runs a shell command and returns (stdout, stderr, exit_code).
 
-    shell:    'cmd' | 'powershell' | 'auto' (auto = cmd auf Windows, sh auf POSIX)
-    elevated: True -> auf Windows als Administrator ausführen (UAC-Elevation).
+    shell:    'cmd' | 'powershell' | 'auto' (auto = cmd on Windows, sh on POSIX)
+    elevated: True -> run as Administrator on Windows (UAC elevation).
 
-    Ist eine session_id gesetzt, läuft der Befehl im gemerkten Arbeitsverzeichnis
-    dieser Terminal-Session, und ein evtl. per "cd" geändertes Verzeichnis wird
-    für den nächsten Befehl übernommen.
+    If a session_id is set, the command runs in the remembered working
+    directory of that terminal session, and a directory possibly changed via
+    "cd" is carried over to the next command.
     """
     start_cwd = _session_cwd(session_id)
     cwd_file = None
@@ -2060,17 +2056,17 @@ def _run_shell_command(command: str, session_id: str | None = None,
         fd, cwd_file = tempfile.mkstemp(prefix="rmm_cwd_")
         os.close(fd)
 
-        # Windows + Administrator: eigener Elevations-Pfad (UAC).
+        # Windows + Administrator: dedicated elevation path (UAC).
         if is_win and elevated:
             return _run_elevated_windows(command, start_cwd, use_ps)
 
         if is_win and use_ps:
-            # PowerShell robust ausführen: -EncodedCommand (Base64/UTF-16LE)
-            # umgeht ExecutionPolicy, Quoting- UND Encoding-Probleme, die bei
-            # "-File script.ps1" auf gesperrten/lokalisierten Maschinen dazu
-            # führen, dass Befehle wie 'irm' scheinbar "nicht gefunden" werden.
-            # Wir kapseln den Nutzerbefehl, hängen Exit-Code- und CWD-Ausgabe an
-            # und setzen die Konsolen-Ausgabe explizit auf UTF-8.
+            # Run PowerShell robustly: -EncodedCommand (Base64/UTF-16LE) bypasses
+            # ExecutionPolicy, quoting AND encoding problems that, with
+            # "-File script.ps1" on locked-down/localized machines, cause
+            # commands like 'irm' to appear "not found". We wrap the user command,
+            # append exit-code and CWD output, and set the console output
+            # explicitly to UTF-8.
             ps_script = (
                 "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\r\n"
                 + (f'Set-Location -LiteralPath "{start_cwd}"\r\n' if start_cwd else "")
@@ -2083,7 +2079,7 @@ def _run_shell_command(command: str, session_id: str | None = None,
             argv = ["powershell", "-NoProfile", "-NonInteractive",
                     "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded]
         elif is_win:
-            # cmd: temporäre .bat.
+            # cmd: temporary .bat.
             fd, script_file = tempfile.mkstemp(prefix="rmm_cmd_", suffix=".bat")
             os.close(fd)
             with open(script_file, "w", encoding="utf-8") as f:
@@ -2094,7 +2090,7 @@ def _run_shell_command(command: str, session_id: str | None = None,
                 f.write("exit /b %__rmm_rc%\r\n")
             argv = ["cmd", "/c", script_file]
         else:
-            # POSIX: sh -c mit Wrapper, der nach dem Befehl das PWD wegschreibt.
+            # POSIX: sh -c with a wrapper that writes out the PWD after the command.
             wrapper = (
                 f"{command}\n"
                 f"__rmm_rc=$?\n"
@@ -2113,7 +2109,7 @@ def _run_shell_command(command: str, session_id: str | None = None,
             cwd=start_cwd if start_cwd else None,
         )
 
-        # Neues Arbeitsverzeichnis übernehmen (falls sich etwas geändert hat).
+        # Adopt the new working directory (if anything changed).
         try:
             with open(cwd_file, "r", encoding="utf-8", errors="replace") as f:
                 new_cwd = f.read().strip().strip('"')
@@ -2124,7 +2120,7 @@ def _run_shell_command(command: str, session_id: str | None = None,
 
         return result.stdout, result.stderr, result.returncode
     except subprocess.TimeoutExpired:
-        return "", "Zeitüberschreitung: Befehl hat zu lange gedauert (>15s)", 1
+        return "", "Timeout: command took too long (>15s)", 1
     except Exception as e:
         return "", str(e), 1
     finally:
@@ -2137,18 +2133,18 @@ def _run_shell_command(command: str, session_id: str | None = None,
 
 
 def _ps_single_quote(s: str) -> str:
-    """Escaped einen String für PowerShell-Single-Quotes ('' verdoppeln)."""
+    """Escapes a string for PowerShell single quotes (double up '')."""
     return "'" + s.replace("'", "''") + "'"
 
 
 def _run_elevated_windows(command: str, start_cwd: str | None, use_ps: bool) -> tuple[str, str, int]:
     """
-    Führt einen Befehl auf Windows ALS ADMINISTRATOR aus (UAC-Elevation via
-    PowerShell Start-Process -Verb RunAs). Da der elevierte Prozess ein eigener
-    ist, werden stdout/stderr/Exit-Code über Temp-Dateien eingesammelt.
+    Runs a command on Windows AS ADMINISTRATOR (UAC elevation via PowerShell
+    Start-Process -Verb RunAs). Since the elevated process is a separate one,
+    stdout/stderr/exit code are collected via temp files.
 
-    Läuft der Agent bereits als SYSTEM/Administrator (Autostart als Dienst),
-    erscheint KEIN UAC-Dialog - die Elevation ist dann transparent.
+    If the agent already runs as SYSTEM/Administrator (autostart as a service),
+    NO UAC dialog appears - the elevation is then transparent.
     """
     out_file = tempfile.mkstemp(prefix="rmm_out_", suffix=".txt")[1]
     err_file = tempfile.mkstemp(prefix="rmm_err_", suffix=".txt")[1]
@@ -2172,9 +2168,9 @@ def _run_elevated_windows(command: str, start_cwd: str | None, use_ps: bool) -> 
                 f.write(f'echo %ERRORLEVEL% > "{rc_file}"\r\n')
             inner_exec = f'cmd /c "{inner}"'
 
-        # Start-Process -Verb RunAs hebt den inneren Befehl auf Admin-Rechte an.
-        # Der Launcher selbst wird als EncodedCommand übergeben, damit die
-        # verschachtelten Anführungszeichen sauber bleiben.
+        # Start-Process -Verb RunAs raises the inner command to admin rights.
+        # The launcher itself is passed as EncodedCommand so that the nested
+        # quotes stay clean.
         launch_script = (
             f"$p = Start-Process -FilePath cmd.exe -ArgumentList '/c',{_ps_single_quote(inner_exec)} "
             f"-Verb RunAs -WindowStyle Hidden -PassThru -Wait; exit $p.ExitCode"
@@ -2200,12 +2196,12 @@ def _run_elevated_windows(command: str, start_cwd: str | None, use_ps: bool) -> 
         except ValueError:
             code = 0
         if not stdout and not stderr and code != 0:
-            stderr = "(Elevierter Befehl fehlgeschlagen oder UAC abgelehnt.)"
+            stderr = "(Elevated command failed or UAC denied.)"
         return stdout, stderr, code
     except subprocess.TimeoutExpired:
-        return "", "Zeitüberschreitung beim elevierten Befehl (>120s)", 1
+        return "", "Timeout on the elevated command (>120s)", 1
     except Exception as e:
-        return "", f"Elevation fehlgeschlagen: {e}", 1
+        return "", f"Elevation failed: {e}", 1
     finally:
         for path in (out_file, err_file, rc_file, inner):
             try:
@@ -2216,7 +2212,7 @@ def _run_elevated_windows(command: str, start_cwd: str | None, use_ps: bool) -> 
 
 @sio.on("exec", namespace="/agent")
 async def on_exec(data):
-    """Wird aufgerufen, wenn das Backend einen Terminal-Befehl schicken will."""
+    """Called when the backend wants to send a terminal command."""
     request_id = data.get("requestId")
     command = data.get("command", "")
     session_id = data.get("session")
