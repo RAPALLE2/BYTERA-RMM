@@ -1,21 +1,20 @@
 """
 routers/enrollment_routes.py
 ------------------------------
-Deckt die 3 gewünschten Wege ab, einen neuen Client anzulegen:
+Covers the 3 desired ways to add a new client:
 
-  1. Download-Seite mit Link (+ Schritt-für-Schritt-Code daneben)
-  2. Fertiger wget/curl-Einzeiler (installiert den Agenten inkl. Autostart)
-  3. Manueller ZIP-Download
+  1. Download page with a link (+ step-by-step code next to it)
+  2. Ready-made wget/curl one-liner (installs the agent incl. autostart)
+  3. Manual ZIP download
 
-Ablauf: Der Admin klickt im Dashboard auf "Client hinzufügen" (ggf. mit
-vorausgewähltem Tenant/Standort) -> das Frontend ruft POST /api/enrollment/tokens
-auf -> bekommt einen Token zurück -> zeigt dann die Landing-Page-URL,
-die install.sh/install.ps1-URLs und den Rein-Download-Link an.
+Flow: the admin clicks "Add client" in the dashboard (optionally with a
+preselected tenant/location) -> the frontend calls POST /api/enrollment/tokens
+-> gets a token back -> then shows the landing page URL, the
+install.sh/install.ps1 URLs and the plain download link.
 
-Diese Routen liegen bewusst NICHT unter /api und brauchen KEIN Login-Token,
-da sie ja gerade von einem brandneuen Rechner ohne Zugang zum Dashboard
-aufgerufen werden - die Sicherheit kommt stattdessen vom zufälligen,
-schwer zu erratenden Token in der URL selbst.
+These routes are deliberately NOT under /api and need NO login token, because
+they are called from a brand-new machine without access to the dashboard - the
+security comes instead from the random, hard-to-guess token in the URL itself.
 """
 
 import io
@@ -32,14 +31,14 @@ from pydantic import BaseModel
 from app import bgjobs, db
 from app.auth import get_current_user, require_admin, require_perm
 from app.config import AGENT_TOKEN
-# Sprache der erzeugten Skripte: Die laufen SPAETER auf einem fremden
-# Rechner - dort gibt es weder Anmeldung noch Servereinstellung. Die
-# Sprache muss deshalb beim Erzeugen feststehen (?lang=de|en).
+# Language of the generated scripts: they run LATER on a foreign machine -
+# where there is neither login nor server setting. The language must therefore
+# be fixed at generation time (?lang=de|en).
 from app.i18n import t as _t, _norm as _lang, server_lang
 
 router = APIRouter(tags=["enrollment"])
 
-# Pfad zum Agent-Quellcode-Ordner (wird für den ZIP-Download eingepackt)
+# Path to the agent source code folder (packed for the ZIP download)
 from app.paths import (
     AGENT_DIR as AGENT_SOURCE_DIR, PROJECT_ROOT as _PROJ_ROOT, BRANDING_DIR as _BRANDING,
     DIST_DIR as _DIST, APP_DIR as _APP_DIR,
@@ -55,15 +54,15 @@ class CreateEnrollmentBody(BaseModel):
 @router.post("/api/enrollment/tokens")
 def create_enrollment_token(body: CreateEnrollmentBody, request: Request, user: dict = Depends(get_current_user)):
     """
-    Erzeugt einen neuen Onboarding-Token und gibt fertige URLs dafür zurück.
+    Creates a new onboarding token and returns ready-made URLs for it.
 
-    WICHTIG: Die URLs werden hier ABSOLUT gebaut (via _backend_url: Settings
-    server_url/server_domain/server_host haben Vorrang). Vorher hat das
-    Frontend window.location.origin vorangestellt - wer das Dashboard über
-    localhost/127.0.0.1 öffnet, bekam damit unbrauchbare "localhost"-Links.
+    IMPORTANT: the URLs are built ABSOLUTELY here (via _backend_url: settings
+    server_url/server_domain/server_host take precedence). Previously the
+    frontend prepended window.location.origin - whoever opens the dashboard via
+    localhost/127.0.0.1 got unusable "localhost" links that way.
     """
-    # Eigenes Recht statt Admin-Zwang: 'add_client' erlaubt das Aufnehmen
-    # neuer Clients, ohne sonstige Admin-Befugnisse zu vergeben.
+    # Own permission instead of forced admin: 'add_client' allows adding new
+    # clients without granting other admin privileges.
     require_perm(user, "add_client")
     token = db.create_enrollment_token(body.tenant_id, body.location_id, body.client_name)
     base = _backend_url(request)
@@ -80,16 +79,16 @@ def create_enrollment_token(body: CreateEnrollmentBody, request: Request, user: 
 def _require_valid_token(token: str) -> dict:
     row = db.get_enrollment_token(token)
     if not row:
-        raise HTTPException(404, "Unbekannter oder abgelaufener Onboarding-Link")
+        raise HTTPException(404, "Unknown or expired onboarding link")
     return row
 
 
 def _ensure_scheme(url: str) -> str:
     """
-    Sorgt dafür, dass eine URL ein Schema hat. Ohne 'http(s)://' kann weder
-    Invoke-WebRequest (Windows) noch curl (Linux) eine Verbindung aufbauen -
-    genau daran scheitert der Client-Install, wenn im Feld 'Server-URL' nur
-    eine nackte IP/Domain steht.
+    Ensures that a URL has a scheme. Without 'http(s)://' neither
+    Invoke-WebRequest (Windows) nor curl (Linux) can establish a connection -
+    exactly what the client install fails at when the 'Server URL' field holds
+    only a bare IP/domain.
     """
     url = url.strip().rstrip("/")
     if url and "://" not in url:
@@ -113,13 +112,13 @@ def _is_ip_literal(host: str) -> bool:
 
 
 def _forwarded_scheme(request: Request) -> str:
-    """Schema, unter dem uns der Client WIRKLICH erreicht hat.
+    """Scheme under which the client REALLY reached us.
 
-    Hinter einem Reverse-Proxy (nginx, Traefik, Cloudflare) kommt die Anfrage
-    intern als http an, von aussen war sie aber https. Ohne diese Auswertung
-    baut man Adressen, die nur im internen Netz funktionieren. Fehlt der
-    Header ganz, ist https die sichere Annahme fuer eine Domain - ein
-    oeffentlich erreichbarer RMM-Server ohne TLS waere ohnehin ein Problem.
+    Behind a reverse proxy (nginx, Traefik, Cloudflare) the request arrives
+    internally as http, but from outside it was https. Without this evaluation
+    one builds addresses that only work on the internal network. If the header
+    is missing entirely, https is the safe assumption for a domain - a publicly
+    reachable RMM server without TLS would be a problem anyway.
     """
     fproto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
     if fproto in ("http", "https"):
@@ -129,20 +128,20 @@ def _forwarded_scheme(request: Request) -> str:
 
 
 def _update_target(request: Request) -> str:
-    """Adresse, die die Agent-UPDATE-Skripte in die .env schreiben.
+    """Address that the agent UPDATE scripts write into the .env.
 
-    Normalerweise die eigene Adresse. Waehrend eines Server-Umzugs (Einstellung
-    "migration_target_url", gesetzt unter Source -> Migration -> "Agenten umziehen")
-    die Adresse des NEUEN Servers: Jeder Agent, der sich aktualisiert, verbindet
-    sich danach automatisch mit dem neuen Backend - ohne Agent-Update vorab.
+    Normally the own address. During a server move (setting
+    "migration_target_url", set under Source -> Migration -> "Move agents") the
+    address of the NEW server: every agent that updates itself then connects to
+    the new backend automatically - without a prior agent update.
     """
     target = (db.get_setting("migration_target_url") or "").strip()
     return _ensure_scheme(target).rstrip("/") if target else _backend_url(request)
 
 
 def _migration_token() -> str:
-    """Optional: AGENT_TOKEN des neuen Servers (nur noetig, wenn die Geheimnisse
-    beim Umzug NICHT mitgenommen wurden)."""
+    """Optional: AGENT_TOKEN of the new server (only needed if the secrets were
+    NOT carried over during the move)."""
     if not (db.get_setting("migration_target_url") or "").strip():
         return ""
     tok = (db.get_setting("migration_agent_token") or "").strip()
@@ -151,26 +150,26 @@ def _migration_token() -> str:
 
 def _backend_url(request: Request) -> str:
     """
-    Liefert die Basis-Adresse, die in Install-Befehle/Skripte eingebaut wird.
+    Returns the base address that is built into install commands/scripts.
 
-    Reihenfolge:
-      1. Vollständige URL (server_url) - falls gesetzt, hat Vorrang.
-      2. Domain oder IP/Host + Backend-Port (aus den Allgemein-Einstellungen).
-      3. Automatisch aus dem Request abgeleitet (ergab bisher oft "localhost").
+    Order:
+      1. Full URL (server_url) - takes precedence if set.
+      2. Domain or IP/host + backend port (from the general settings).
+      3. Derived automatically from the request (often gave "localhost" before).
     """
     full = (db.get_setting("server_url") or "").strip()
     if full:
-        # Fehlendes Schema ergänzen (sonst kann Invoke-WebRequest/curl nicht verbinden).
+        # Add a missing scheme (otherwise Invoke-WebRequest/curl cannot connect).
         full = _ensure_scheme(full)
         parts = urlsplit(full)
         has_port = parts.port is not None
         has_path = parts.path not in ("", "/")
-        # Häufigster Konfig-Fehler: im Feld "Server-URL" steht nur eine nackte IP
-        # (z.B. 10.10.32.249) ohne Port -> landet sonst auf Port 80, das Backend
-        # hört aber auf 4000. Bei einer BLANKEN IP ohne Port/Pfad ergänzen wir
-        # daher automatisch den konfigurierten Backend-Port. Domains bleiben
-        # unangetastet (dort steckt praktisch immer ein Reverse-Proxy dahinter),
-        # ebenso bereits mit Port/Pfad angegebene URLs und https://.
+        # Most common config mistake: the "Server URL" field holds only a bare
+        # IP (e.g. 10.10.32.249) without a port -> would otherwise land on port
+        # 80, but the backend listens on 4000. For a BARE IP without port/path
+        # we therefore add the configured backend port automatically. Domains
+        # stay untouched (there is practically always a reverse proxy behind
+        # them), as do URLs already given with port/path and https://.
         if (parts.scheme == "http" and not has_port and not has_path
                 and parts.hostname and _is_ip_literal(parts.hostname)):
             bport = _configured_backend_port()
@@ -182,45 +181,45 @@ def _backend_url(request: Request) -> str:
     host = (db.get_setting("server_host") or "").strip()
     target = domain or host
     if target:
-        # Ein evtl. mit eingegebenes Schema entfernen (bauen wir selbst).
+        # Remove any scheme that was entered too (we build it ourselves).
         target = target.replace("https://", "").replace("http://", "").rstrip("/")
         try:
             port = int(db.get_setting("server_backend_port"))
         except (TypeError, ValueError):
             port = 4000
 
-        # Steht hier eine DOMAIN (keine nackte IP), sitzt praktisch immer ein
-        # Reverse-Proxy davor - bei Cloudflare zwingend, denn Cloudflare
-        # proxyt nur 80/443 und einige wenige Alternativports; 4000 gehoert
-        # NICHT dazu.
+        # If this is a DOMAIN (not a bare IP), there is practically always a
+        # reverse proxy in front - mandatory with Cloudflare, because Cloudflare
+        # only proxies 80/443 and a few alternative ports; 4000 is NOT among
+        # them.
         #
-        # Bisher wurde hier stur "http://domain:<backend_port>" gebaut. Bei der
-        # Standard-Kombination server_domain=meine.domain + backend_port=4000
-        # entstand daraus http://meine.domain:4000 - eine Adresse, die vom
-        # Internet aus NIE erreichbar ist. Der Installer lief trotzdem durch
-        # (er selbst wurde ja ueber die richtige Adresse geladen), der Agent
-        # bekam die kaputte URL in seine .env und tauchte nie im Dashboard auf.
+        # Previously this stubbornly built "http://domain:<backend_port>". With
+        # the default combination server_domain=my.domain + backend_port=4000
+        # that gave http://my.domain:4000 - an address that is NEVER reachable
+        # from the internet. The installer ran through anyway (it was loaded via
+        # the correct address), the agent got the broken URL into its .env and
+        # never appeared in the dashboard.
         #
-        # Deshalb: Bei einer Domain wird der INTERNE Backend-Port ignoriert und
-        # das Schema aus der laufenden Anfrage uebernommen (X-Forwarded-Proto
-        # setzt jeder gaengige Proxy, Cloudflare eingeschlossen).
+        # Therefore: for a domain the INTERNAL backend port is ignored and the
+        # scheme is taken from the running request (every common proxy sets
+        # X-Forwarded-Proto, Cloudflare included).
         if not _is_ip_literal(target.split(":")[0]):
             if ":" in target:
-                # Der Admin hat selbst einen Port angegeben - der gilt.
+                # The admin specified a port themselves - that one applies.
                 return f"{_forwarded_scheme(request)}://{target}"
             return f"{_forwarded_scheme(request)}://{target}"
 
-        # Nackte IP: hier gibt es keinen Proxy, der Port muss mit.
+        # Bare IP: there is no proxy here, the port must be included.
         scheme = "https" if port == 443 else "http"
         if port in (80, 443):
             return f"{scheme}://{target}"
         return f"{scheme}://{target}:{port}"
 
-    # 3. Automatisch aus dem Request ableiten - dabei Reverse-Proxy-Header
-    #    beachten. Läuft das Backend hinter einem Proxy (https://domain ->
-    #    http://ip:4000), setzt der Proxy üblicherweise X-Forwarded-Proto/Host.
-    #    Ohne diese Header sähe request.base_url nur die interne Adresse
-    #    (http://ip:4000), die ein öffentlicher Client NICHT erreichen kann.
+    # 3. Derive automatically from the request - respecting reverse-proxy
+    #    headers. If the backend runs behind a proxy (https://domain ->
+    #    http://ip:4000), the proxy usually sets X-Forwarded-Proto/Host.
+    #    Without these headers request.base_url would see only the internal
+    #    address (http://ip:4000), which a public client CANNOT reach.
     fproto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
     fhost = (request.headers.get("x-forwarded-host") or "").split(",")[0].strip()
     host = fhost or request.headers.get("host") or request.url.netloc
@@ -233,20 +232,19 @@ def _backend_url(request: Request) -> str:
 @router.get("/api/public-base")
 def public_base(request: Request, user: dict = Depends(get_current_user)):
     """
-    Die KANONISCHE Adresse dieser Installation - also die, unter der Clients
-    und Netzlaufwerke den Server erreichen sollen.
+    The CANONICAL address of this installation - i.e. the one at which clients
+    and network drives should reach the server.
 
-    Warum das nicht im Browser bestimmt werden kann: `location.host` ist nur
-    die Adresse, ueber die der Admin GERADE zufaellig zugreift. Wer das
-    Dashboard intern per IP oeffnet, bekaeme im Relay-Manager eine WebDAV-
-    Adresse, die von aussen niemand erreicht - und in den Installations-
-    befehlen eine, die der neue Client nicht kennt. Hier gilt dieselbe
-    Reihenfolge wie fuer die Installations-Skripte (siehe _backend_url):
-    konfigurierte Server-URL, dann Domain/Host + Port, dann die Anfrage
-    selbst (inklusive X-Forwarded-*).
+    Why this cannot be determined in the browser: `location.host` is only the
+    address through which the admin HAPPENS to access it right now. Whoever
+    opens the dashboard internally via IP would get a WebDAV address in the
+    relay manager that nobody reaches from outside - and install commands that
+    the new client does not know. The same order as for the install scripts
+    applies here (see _backend_url): configured server URL, then domain/host +
+    port, then the request itself (including X-Forwarded-*).
 
-    Absichtlich nur `get_current_user` und kein Admin-Recht: Auch normale
-    Benutzer sehen Relay-Adressen und brauchen deshalb den richtigen Wert.
+    Deliberately only `get_current_user` and no admin permission: ordinary users
+    see relay addresses too and therefore need the correct value.
     """
     base = _backend_url(request)
     parts = urlsplit(base)
@@ -256,12 +254,12 @@ def public_base(request: Request, user: dict = Depends(get_current_user)):
         "scheme": parts.scheme,
         "host": parts.hostname or "",
         "port": port,
-        # netloc enthaelt den Port nur, wenn er nicht der Standard ist - genau
-        # das, was man fuer eine anzeigbare Adresse braucht.
+        # netloc contains the port only if it is not the default - exactly what
+        # one needs for a displayable address.
         "netloc": parts.netloc,
-        # Ist die Adresse geraten (kein server_url/server_domain gesetzt)?
-        # Das Dashboard kann darauf hinweisen, statt eine falsche Adresse
-        # kommentarlos als Wahrheit auszugeben.
+        # Is the address guessed (no server_url/server_domain set)? The
+        # dashboard can point this out instead of presenting a wrong address as
+        # the truth without comment.
         "configured": bool((db.get_setting("server_url") or "").strip()
                            or (db.get_setting("server_domain") or "").strip()
                            or (db.get_setting("server_host") or "").strip()),
@@ -271,14 +269,14 @@ def public_base(request: Request, user: dict = Depends(get_current_user)):
 @router.get("/enroll/{token}", response_class=HTMLResponse)
 def enrollment_landing_page(token: str, request: Request):
     """
-    Die eigentliche Download-Seite: zeigt Download-Button UND die
-    Schritt-für-Schritt-Befehle für Linux/Windows direkt daneben an.
+    The actual download page: shows a download button AND the step-by-step
+    commands for Linux/Windows right next to it.
     """
     _require_valid_token(token)
     backend_url = _backend_url(request)
 
-    # Fertige Installationspakete (falls lokal gebaut) direkt mit anbieten -
-    # der neue Rechner hat ja keinen Zugang zum Dashboard.
+    # Also offer ready-made installer packages (if built locally) directly -
+    # the new machine has no access to the dashboard.
     pkgs = _installer_entries()
     if pkgs:
         rows = []
@@ -333,8 +331,8 @@ def enrollment_landing_page(token: str, request: Request):
          agent has connected successfully for the first time.</p>
 
       <script>
-        // Nach Klick auf den Download-Button kurz Bescheid geben,
-        // dass die Seite jetzt geschlossen werden kann.
+        // After clicking the download button, briefly note that the page can
+        // be closed now.
         document.getElementById('dl').addEventListener('click', function () {{
           setTimeout(function () {{
             document.body.innerHTML = '<h1>Done!</h1><p>The download has started. You can close this window now.</p>';
@@ -349,16 +347,16 @@ def enrollment_landing_page(token: str, request: Request):
 
 
 def _build_agent_zip_bytes(backend_url: str, enrollment_token: str = "") -> io.BytesIO:
-    """Baut das Agent-ZIP inkl. vorausgefüllter .env (Backend-URL/Token)."""
+    """Builds the agent ZIP incl. a pre-filled .env (backend URL/token)."""
     env_content = (
         f"BACKEND_URL={backend_url}\n"
         f"AGENT_TOKEN={AGENT_TOKEN}\n"
         f"ENROLLMENT_TOKEN={enrollment_token}\n"
         f"DEVICE_NAME=\n"
-        # Sprache der Dialoge AM GERAET (Zustimmung zum Remote-Bildschirm).
-        # Das ist NICHT die Dashboard-Sprache: den Dialog sieht die Person vor
-        # dem Geraet, und mehrere Dashboard-Benutzer mit verschiedenen Sprachen
-        # koennen dasselbe Geraet ansehen. de|en, Voreinstellung de.
+        # Language of the dialogs ON THE DEVICE (consent to the remote screen).
+        # This is NOT the dashboard language: the dialog is seen by the person
+        # in front of the device, and several dashboard users with different
+        # languages can view the same device. de|en, default de.
         f"AGENT_LANG=de\n"
     )
     # End-to-end encryption from the very first connection: the server's PUBLIC
@@ -373,16 +371,16 @@ def _build_agent_zip_bytes(backend_url: str, enrollment_token: str = "") -> io.B
         for file_path in AGENT_SOURCE_DIR.rglob("*"):
             if file_path.is_file() and ".env" not in file_path.name and "__pycache__" not in str(file_path):
                 _rel = str(file_path.relative_to(AGENT_SOURCE_DIR)).replace("\\", "/")
-                # Quelle heisst src/agent/main.py, auf dem Client bleibt es agent.py
-                # (Dienste, Updates und Deinstallation haengen an diesem Namen).
+                # Source is src/agent/main.py, on the client it stays agent.py
+                # (services, updates and uninstall depend on this name).
                 if _rel == "main.py":
                     _rel = "agent.py"
                 zf.write(file_path, arcname=f"agent/{_rel}")
         zf.writestr("agent/.env", env_content)
-        # Logo mitliefern: logo_r.png (bevorzugt die Branding-Version) landet
-        # als agent/logo.png neben agent.py und wird vom Tkinter-Zustimmungs-
-        # fenster als Icon/Logo benutzt. Hinweis: favicon.ico ist in Wahrheit
-        # ein PNG und wird von Tk-iconbitmap nicht gelesen (blankes Icon).
+        # Ship the logo: logo_r.png (prefers the branding version) lands as
+        # agent/logo.png next to agent.py and is used by the Tkinter consent
+        # window as icon/logo. Note: favicon.ico is actually a PNG and is not
+        # read by Tk iconbitmap (blank icon).
         for _cand in (_BRANDING / "logo_r.png",):
             if _cand.is_file():
                 zf.write(_cand, arcname="agent/logo.png")
@@ -399,7 +397,7 @@ def _build_agent_zip_bytes(backend_url: str, enrollment_token: str = "") -> io.B
 
 @router.get("/enroll/{token}/agent.zip")
 async def download_agent_zip(token: str, request: Request):
-    """Packt den Agent-Ordner inkl. einer vorausgefüllten .env-Datei in ein ZIP."""
+    """Packs the agent folder incl. a pre-filled .env file into a ZIP."""
     _require_valid_token(token)
     buffer = _build_agent_zip_bytes(_backend_url(request), token)
     return StreamingResponse(
@@ -411,24 +409,24 @@ async def download_agent_zip(token: str, request: Request):
 
 @router.get("/enroll/{token}/install.sh", response_class=PlainTextResponse)
 def install_script_linux(token: str, request: Request, lang: str = ""):
-    """Fertiger Bash-Einzeiler: installiert den Agenten inkl. systemd-Autostart (Linux)."""
+    """Ready-made bash one-liner: installs the agent incl. systemd autostart (Linux)."""
     _require_valid_token(token)
     backend_url = _backend_url(request)
 
-    # Sprache dieses Skripts: ?lang=de|en, sonst die Server-Sprache.
+    # Language of this script: ?lang=de|en, otherwise the server language.
     _L = _lang(lang) if lang else server_lang()
     def L(key, **kw):
         return _t(key, _L, **kw)
 
     script = f"""#!/bin/bash
-# BYTERA RMM - automatische Agent-Installation (Linux)
+# BYTERA RMM - automatic agent installation (Linux)
 set -e
 INSTALL_DIR="/opt/bytera-rmm-agent"
 
-# --- Rootrechte: notfalls SELBST ueber sudo neu starten -------------------
-# Wird das Skript aus einer Pipe gelesen ("curl ... | bash"), gibt es kein $0
-# zum Neustarten - dann nur ein klarer Hinweis. Ansonsten starten wir uns
-# selbst mit sudo neu ("-E" haelt RMM_*-Variablen am Leben).
+# --- Root rights: restart via sudo ourselves if necessary -----------------
+# If the script is read from a pipe ("curl ... | bash"), there is no $0 to
+# restart - then just a clear hint. Otherwise we restart ourselves with sudo
+# ("-E" keeps RMM_* variables alive).
 if [ "$(id -u)" != "0" ]; then
   if [ -f "$0" ] && command -v sudo >/dev/null 2>&1; then
     echo "Restarting with root privileges (sudo) ..."
@@ -440,20 +438,20 @@ if [ "$(id -u)" != "0" ]; then
   echo "Note: started without root - the individual steps use sudo."
 fi
 
-# --- Systemvoraussetzungen automatisch installieren -----------------------
-# Benötigt: python3, python3-venv (ensurepip!), python3-pip, unzip, curl.
-# Wir erkennen den Paketmanager und installieren fehlende Pakete selbst, damit
-# der bekannte Fehler "ensurepip is not available / install python3-venv"
-# nicht mehr auftritt.
+# --- Install system prerequisites automatically ---------------------------
+# Needs: python3, python3-venv (ensurepip!), python3-pip, unzip, curl.
+# We detect the package manager and install missing packages ourselves, so the
+# known error "ensurepip is not available / install python3-venv" no longer
+# occurs.
 ensure_pkgs() {{
-  # Python-Minor bestimmen (z.B. 3.13) für das passende venv-Paket auf Debian/Ubuntu.
+  # Determine the Python minor (e.g. 3.13) for the matching venv package on Debian/Ubuntu.
   PYV="$(python3 -c 'import sys;print(f"{{sys.version_info.major}}.{{sys.version_info.minor}}")' 2>/dev/null || echo 3)"
   if command -v apt-get >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
     export DEBCONF_NONINTERACTIVE_SEEN=true
     export TERM="${{TERM:-dumb}}"
     sudo -E apt-get update -y -qq >/dev/null 2>&1 || true
-    # Erst das versionsspezifische venv-Paket, sonst das generische.
+    # First the version-specific venv package, otherwise the generic one.
     sudo -E apt-get install -y -qq "python${{PYV}}-venv" >/dev/null 2>&1 \
       || sudo -E apt-get install -y -qq python3-venv >/dev/null 2>&1 || true
     sudo -E apt-get install -y -qq python3-pip unzip curl >/dev/null 2>&1 || true
@@ -476,10 +474,10 @@ ensure_pkgs
 echo "Downloading agent..."
 sudo mkdir -p "$INSTALL_DIR"
 
-# --- Umbenennung: Altinstallation (RAPALLE.net RMM) uebernehmen -----------
-# Laeuft hier noch ein Agent unter dem alten Namen, wird er gestoppt und
-# entfernt. Die Geraete-ID (.device-id) wandert mit, damit das Geraet im
-# Dashboard KEIN neuer Client wird.
+# --- Rename: adopt a legacy install (RAPALLE.net RMM) ---------------------
+# If an agent still runs here under the old name, it is stopped and removed.
+# The device ID (.device-id) is carried over so the device does NOT become a
+# new client in the dashboard.
 LEGACY_DIR="/opt/rapalle-rmm-agent"
 if [ -d "$LEGACY_DIR" ] || [ -f /etc/systemd/system/rapalle-agent.service ]; then
   echo "Legacy install (RAPALLE.net RMM) found - migrating to $INSTALL_DIR..."
@@ -496,19 +494,19 @@ if [ -d "$LEGACY_DIR" ] || [ -f /etc/systemd/system/rapalle-agent.service ]; the
 fi
 curl -sSL "{backend_url}/enroll/{token}/agent.zip" -o /tmp/bytera-agent.zip
 sudo unzip -o /tmp/bytera-agent.zip -d /tmp/bytera-agent-extract
-# Laufenden Agenten stoppen, bevor Dateien ersetzt werden (sonst bleibt die
-# alte Version aktiv, bis der Dienst manuell neu startet).
+# Stop a running agent before files are replaced (otherwise the old version
+# stays active until the service is restarted manually).
 sudo systemctl stop bytera-agent 2>/dev/null || true
 sudo cp -r /tmp/bytera-agent-extract/agent/. "$INSTALL_DIR/"
 
-# .env auf die echte Backend-Adresse setzen (der Rechner, der dieses Skript ausführt,
-# kennt die Backend-Adresse ja schon, weil er sie gerade aufgerufen hat)
+# Set .env to the real backend address (the machine running this script
+# already knows the backend address, because it just called it)
 sudo sed -i "s#BACKEND_URL=.*#BACKEND_URL={backend_url}#" "$INSTALL_DIR/.env"
 
 echo "Installing Python dependencies..."
 cd "$INSTALL_DIR"
-# venv anlegen; falls das trotz Paketinstallation scheitert, ohne venv direkt
-# ins System installieren (--break-system-packages für PEP-668-Distributionen).
+# Create venv; if that fails despite package installation, install directly
+# into the system without venv (--break-system-packages for PEP-668 distros).
 if sudo python3 -m venv venv; then
   sudo ./venv/bin/python -m pip install --quiet --upgrade pip || true
   sudo ./venv/bin/pip install --quiet -r requirements.txt
@@ -539,20 +537,20 @@ EOF
 sudo systemctl daemon-reload
 sudo systemctl enable --now bytera-agent
 
-# --- Abschluss-Pruefung -----------------------------------------------------
-# Bisher stand hier bedingungslos "Fertig!". Das war eine Behauptung, keine
-# Feststellung: systemctl enable --now meldet Erfolg, sobald der Prozess
-# GESTARTET wurde - ob er eine Sekunde spaeter am Backend scheitert oder sich
-# gleich wieder beendet, sieht der Installer damit nicht. Genau deshalb las
-# man "fehlerfrei durchgelaufen", waehrend im Dashboard nie ein Client auftauchte.
+# --- Final check ------------------------------------------------------------
+# Previously this unconditionally said "Done!". That was a claim, not a
+# finding: systemctl enable --now reports success as soon as the process has
+# STARTED - whether it fails against the backend a second later or exits again
+# right away, the installer does not see that. Exactly why one read "ran
+# without errors" while a client never appeared in the dashboard.
 FAIL=0
 
 echo ""
 echo "--- Checking installation ---"
 
-# 1. Ist die Backend-Adresse von DIESEM Geraet aus ueberhaupt erreichbar?
-#    Das faengt den haeufigsten Fall ab: eine BACKEND_URL mit internem Port,
-#    die hinter einem Reverse-Proxy/Cloudflare von aussen nicht existiert.
+# 1. Is the backend address reachable from THIS device at all?
+#    This catches the most common case: a BACKEND_URL with an internal port
+#    that does not exist from outside behind a reverse proxy/Cloudflare.
 if curl -fsS --max-time 15 "{backend_url}/api/agent/version" >/dev/null 2>&1; then
   echo "[OK]     Backend reachable: {backend_url}"
 else
@@ -562,8 +560,8 @@ else
   FAIL=1
 fi
 
-# 2. Laeuft der Dienst nach ein paar Sekunden noch? Ein Absturz beim Start
-#    (fehlende Abhaengigkeit, falsches Token) zeigt sich genau hier.
+# 2. Is the service still running after a few seconds? A crash at startup
+#    (missing dependency, wrong token) shows up exactly here.
 sleep 6
 if sudo systemctl is-active --quiet bytera-agent; then
   echo "[OK]     Service bytera-agent is running"
@@ -572,8 +570,8 @@ else
   FAIL=1
 fi
 
-# 3. Was sagt der Agent selbst? Seine letzten Zeilen sind aussagekraeftiger
-#    als jede Vermutung des Installers.
+# 3. What does the agent itself say? Its last lines are more meaningful than
+#    any guess by the installer.
 if sudo journalctl -u bytera-agent -n 15 --no-pager 2>/dev/null | grep -qiE "Ungueltiges Agent-Token|Ungültiges Agent-Token|Invalid.*token"; then
   echo "[ERROR]  The backend rejects the AGENT_TOKEN."
   FAIL=1
@@ -597,7 +595,7 @@ exit $FAIL
 
 @router.get("/enroll/{token}/install.ps1", response_class=PlainTextResponse)
 def install_script_windows(token: str, request: Request, lang: str = ""):
-    """Fertiges PowerShell-Skript: installiert den Agenten inkl. Autostart (Windows)."""
+    """Ready-made PowerShell script: installs the agent incl. autostart (Windows)."""
     _require_valid_token(token)
     backend_url = _backend_url(request)
 
@@ -606,14 +604,14 @@ def install_script_windows(token: str, request: Request, lang: str = ""):
     def L(key, **kw):
         return _t(key, _L, **kw)
 
-    script = f"""# BYTERA RMM - automatische Agent-Installation (Windows)
+    script = f"""# BYTERA RMM - automatic agent installation (Windows)
 $ErrorActionPreference = "Stop"
 $InstallDir = "C:\\Program Files\\ByteraRmmAgent"
 
-# --- Adminrechte: notfalls SELBST per UAC neu starten ---------------------
-# Wichtig fuer den Ein-Zeiler "iwr ... | iex": dabei gibt es keine Skriptdatei,
-# die man neu starten koennte. Deshalb laden wir das Skript in der erhoehten
-# Sitzung einfach noch einmal vom Server.
+# --- Admin rights: restart via UAC ourselves if necessary -----------------
+# Important for the one-liner "iwr ... | iex": there is no script file that
+# could be restarted. So in the elevated session we simply load the script
+# from the server once more.
 $id = [Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
         [Security.Principal.WindowsBuiltInRole]::Administrator)) {{
@@ -630,21 +628,21 @@ if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
     }}
 }}
 
-# --- 1. Pruefen ob Python vorhanden ist, sonst automatisch installieren ---
+# --- 1. Check whether Python is present, otherwise install automatically ---
 $python = Get-Command python -ErrorAction SilentlyContinue
 if (-not $python) {{
     Write-Host "Python not found - installing it automatically..." -ForegroundColor Yellow
     try {{
-        # Bevorzugt ueber winget (auf aktuellen Windows-Versionen vorhanden)
+        # Preferably via winget (present on current Windows versions)
         if (Get-Command winget -ErrorAction SilentlyContinue) {{
             winget install -e --id Python.Python.3.12 --silent --accept-package-agreements --accept-source-agreements
         }} else {{
-            # Fallback: offiziellen Installer herunterladen und still installieren
+            # Fallback: download the official installer and install silently
             $pyUrl = "https://www.python.org/ftp/python/3.12.4/python-3.12.4-amd64.exe"
             Invoke-WebRequest -Uri $pyUrl -OutFile "$env:TEMP\\python-setup.exe"
             Start-Process -Wait -FilePath "$env:TEMP\\python-setup.exe" -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1"
         }}
-        # PATH der aktuellen Sitzung aktualisieren
+        # Update the PATH of the current session
         $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
     }} catch {{
         Write-Host "Automatic Python installation failed." -ForegroundColor Red
@@ -654,12 +652,12 @@ if (-not $python) {{
     }}
 }}
 
-# --- 2. Agent herunterladen und entpacken ---
+# --- 2. Download and unpack the agent ---
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
-# --- Umbenennung: Altinstallation (RAPALLE.net RMM) uebernehmen -----------
-# Laeuft noch ein Agent unter dem alten Namen, wird er gestoppt und entfernt.
-# Die Geraete-ID (.device-id) wandert mit -> kein neuer Client im Dashboard.
+# --- Rename: adopt a legacy install (RAPALLE.net RMM) ---------------------
+# If an agent still runs under the old name, it is stopped and removed.
+# The device ID (.device-id) is carried over -> no new client in the dashboard.
 $LegacyDir = "C:\\Program Files\\RapalleRmmAgent"
 $LegacyFound = (Test-Path $LegacyDir) -or [bool](Get-ScheduledTask -TaskName "RapalleRmmAgent" -ErrorAction SilentlyContinue)
 if ($LegacyFound) {{
@@ -682,10 +680,10 @@ Invoke-WebRequest -Uri "{backend_url}/enroll/{token}/agent.zip" -OutFile "$env:T
 if (Test-Path "$env:TEMP\\bytera-agent-extract") {{ Remove-Item -Recurse -Force "$env:TEMP\\bytera-agent-extract" }}
 Expand-Archive -Path "$env:TEMP\\bytera-agent.zip" -DestinationPath "$env:TEMP\\bytera-agent-extract" -Force
 
-# --- Laufenden Agenten STOPPEN, bevor Dateien ersetzt werden ---------------
-# WICHTIG: Sonst laeuft nach dem Update weiter die ALTE agent.py im Speicher
-# (neue Funktionen wie das interaktive Terminal fehlen dann). Erst Task
-# anhalten, dann alle pythonw/python-Prozesse killen, die agent.py ausfuehren.
+# --- STOP a running agent before files are replaced ------------------------
+# IMPORTANT: otherwise the OLD agent.py keeps running in memory after the
+# update (new features like the interactive terminal are then missing). First
+# pause the task, then kill all pythonw/python processes running agent.py.
 Write-Host "Stopping a running agent (if any)..."
 try {{ Stop-ScheduledTask -TaskName "ByteraRmmAgent" -ErrorAction SilentlyContinue }} catch {{}}
 try {{
@@ -697,10 +695,10 @@ Start-Sleep -Seconds 2
 
 Copy-Item -Path "$env:TEMP\\bytera-agent-extract\\agent\\*" -Destination $InstallDir -Recurse -Force
 
-# .env auf die echte Backend-Adresse setzen
+# Set .env to the real backend address
 (Get-Content "$InstallDir\\.env") -replace 'BACKEND_URL=.*', 'BACKEND_URL={backend_url}' | Set-Content "$InstallDir\\.env"
 
-# --- 3. Python-Abhaengigkeiten installieren ---
+# --- 3. Install Python dependencies ---
 Write-Host "Installing Python dependencies (may take 1-2 minutes)..."
 python -m venv "$InstallDir\\venv"
 & "$InstallDir\\venv\\Scripts\\python.exe" -m pip install --upgrade pip --quiet
@@ -710,32 +708,31 @@ if ($LASTEXITCODE -ne 0) {{
     exit 1
 }}
 
-# --- 4. Autostart als DIENST einrichten (SYSTEM, beim Systemstart) ---
-# WICHTIG (Server!): Frueher lief der Task unter dem installierenden Benutzer
-# mit Trigger "AtLogOn". Auf Servern, an denen sich niemand (oder ein anderer
-# Benutzer) anmeldet, startete der Agent dadurch NIE.
-# Jetzt: Principal = SYSTEM (LogonType ServiceAccount), Trigger = AtStartup.
-# Der Agent laeuft damit ab dem Boot - ganz ohne Anmeldung.
+# --- 4. Set up autostart as a SERVICE (SYSTEM, at system start) ---
+# IMPORTANT (servers!): previously the task ran under the installing user with
+# trigger "AtLogOn". On servers where nobody (or another user) logs on, the
+# agent therefore NEVER started.
+# Now: Principal = SYSTEM (LogonType ServiceAccount), Trigger = AtStartup.
+# The agent thus runs from boot - without any login.
 #
-# Bildschirmaufnahme: SYSTEM sitzt in Session 0 und hat keinen Desktop. Der
-# Agent startet deshalb bei Bedarf selbst einen Helfer-Prozess in der aktiven
-# Benutzersitzung (agent.py --screen-helper, siehe session_bridge.py). Nur
-# SYSTEM darf das (WTSQueryUserToken) - der Dienst-Betrieb ist also sogar
-# Voraussetzung dafuer.
-# pythonw.exe = Python OHNE Konsolenfenster -> laeuft unsichtbar im Hintergrund.
+# Screen capture: SYSTEM sits in session 0 and has no desktop. The agent
+# therefore starts a helper process in the active user session itself when
+# needed (agent.py --screen-helper, see session_bridge.py). Only SYSTEM may do
+# that (WTSQueryUserToken) - so service operation is even a prerequisite.
+# pythonw.exe = Python WITHOUT a console window -> runs invisibly in the background.
 Write-Host "Setting up autostart as a service (SYSTEM, starts at boot)..."
 $Action = New-ScheduledTaskAction -Execute "$InstallDir\\venv\\Scripts\\pythonw.exe" -Argument "`"$InstallDir\\agent.py`"" -WorkingDirectory $InstallDir
-# Zwei Trigger: beim Systemstart + alle 5 Minuten als Wiederanlauf-Netz.
-# MultipleInstances=IgnoreNew verhindert dabei doppelte Agenten.
+# Two triggers: at system start + every 5 minutes as a restart safety net.
+# MultipleInstances=IgnoreNew prevents duplicate agents.
 $TrigBoot  = New-ScheduledTaskTrigger -AtStartup
 $TrigWatch = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
 $Principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0)  # 0 = KEIN Zeitlimit! Ohne das killt der Task-Scheduler die Aufgabe nach 72h LAUTLOS (kein Log, kein Neustart, da kein "Fehler")
-# Alten (benutzergebundenen) Task entfernen, damit kein zweiter Agent startet.
+$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0)  # 0 = NO time limit! Without it the task scheduler kills the task after 72h SILENTLY (no log, no restart, since no "error")
+# Remove the old (user-bound) task so no second agent starts.
 try {{ Unregister-ScheduledTask -TaskName "ByteraRmmAgent" -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
 Register-ScheduledTask -TaskName "ByteraRmmAgent" -Action $Action -Trigger $TrigBoot,$TrigWatch -Principal $Principal -Settings $Settings -Force | Out-Null
 
-# --- 5. Agent SOFORT starten (unsichtbar, als SYSTEM) ---
+# --- 5. Start the agent IMMEDIATELY (invisible, as SYSTEM) ---
 Start-ScheduledTask -TaskName "ByteraRmmAgent"
 Start-Sleep -Seconds 3
 $chk = Get-ScheduledTask -TaskName "ByteraRmmAgent" -ErrorAction SilentlyContinue
@@ -743,10 +740,10 @@ if ($chk -and $chk.Principal.UserId -notmatch "SYSTEM") {{
     Write-Host "WARNING: autostart is not running as SYSTEM - the agent will only start after a user logs on." -ForegroundColor Yellow
 }}
 
-# --- 6. Elevated Wartungs-Tasks (Update/Uninstall als SYSTEM, per Event) ---
-# Rueckfallebene: der Agent laeuft zwar bereits als SYSTEM, aber diese Tasks
-# erlauben Update/Uninstall auch dann, wenn der Agent-Prozess selbst gerade
-# nicht mehr laeuft oder (Altinstallation) nur in einer Benutzersitzung haengt.
+# --- 6. Elevated maintenance tasks (update/uninstall as SYSTEM, via event) ---
+# Fallback: the agent already runs as SYSTEM, but these tasks allow
+# update/uninstall even when the agent process itself is no longer running or
+# (legacy install) only hangs in a user session.
 Write-Host "Setting up elevated maintenance tasks (update/uninstall)..."
 try {{ iwr "{backend_url}/agent-dist/elevate.ps1" -UseBasicParsing | iex }} catch {{ Write-Host "  (maintenance tasks could not be set up: $_)" }}
 
@@ -759,9 +756,9 @@ Write-Host "The client should appear in the dashboard within a few seconds."
 Write-Host ""
 Write-Host "(Log file for troubleshooting: $InstallDir\\agent.log)"
 
-# --- Umbenennung: Reste der Altinstallation (RAPALLE.net RMM) entfernen ----
-# Bewusst ganz am Ende: das alte Wartungs-Task kann genau dieses Skript
-# gestartet haben. Was hier haengen bleibt, raeumt der neue Agent beim Start auf.
+# --- Rename: remove remnants of the legacy install (RAPALLE.net RMM) -------
+# Deliberately at the very end: the old maintenance task may have started this
+# very script. Whatever remains here is cleaned up by the new agent at startup.
 if ($LegacyFound) {{
     Remove-Item -LiteralPath $LegacyDir -Recurse -Force -ErrorAction SilentlyContinue
     try {{ if ([System.Diagnostics.EventLog]::SourceExists("RapalleRMM")) {{ Remove-EventLog -Source "RapalleRMM" }} }} catch {{}}
@@ -772,26 +769,26 @@ if ($LegacyFound) {{
 
 
 # ==========================================================================
-# TOKENLOSE AGENT-DISTRIBUTION: Update & Uninstall
+# TOKENLESS AGENT DISTRIBUTION: update & uninstall
 # --------------------------------------------------------------------------
-# Diese Routen liegen bewusst unter /agent-dist/... (NICHT unter /enroll/{token},
-# sonst würde "agent-dist" als Token interpretiert). Sie brauchen keinen
-# Onboarding-Token, weil ein bereits installierter Agent seine Identität über
-# die Datei ".device-id" behält - ein Update/Deinstall ändert daran nichts.
-# Der Agent ruft diese Skripte selbst auf, wenn er die Events "update-agent"
-# bzw. "uninstall-agent" empfängt (siehe agent.py, _run_dist_command).
+# These routes are deliberately under /agent-dist/... (NOT under /enroll/{token},
+# otherwise "agent-dist" would be interpreted as a token). They need no
+# onboarding token, because an already installed agent keeps its identity via
+# the file ".device-id" - an update/uninstall does not change that.
+# The agent calls these scripts itself when it receives the events "update-agent"
+# resp. "uninstall-agent" (see agent.py, _run_dist_command).
 #
-# WICHTIG (Zuverlässigkeit):
-#  - Update MUSS den Dienst am Ende NEU STARTEN (Autostart-Unit ggf. neu
-#    schreiben, dann restart/Start-ScheduledTask).
-#  - Uninstall läuft SYNCHRON (kein Hintergrund-Job): Der Agent startet das
-#    Skript in einem eigenen systemd-Scope bzw. als losgelöster Prozess, sodass
-#    es den Stop des eigenen Dienstes überlebt und die Dateien wirklich löscht.
+# IMPORTANT (reliability):
+#  - Update MUST RESTART the service at the end (rewrite the autostart unit if
+#    needed, then restart/Start-ScheduledTask).
+#  - Uninstall runs SYNCHRONOUSLY (no background job): the agent starts the
+#    script in its own systemd scope resp. as a detached process, so that it
+#    survives the stop of its own service and really deletes the files.
 # ==========================================================================
 
 @router.get("/agent-dist/agent.zip")
 async def agent_dist_zip(request: Request):
-    """Aktuelles Agent-ZIP OHNE Onboarding-Token (für Selbst-Update)."""
+    """Current agent ZIP WITHOUT an onboarding token (for self-update)."""
     buffer = _build_agent_zip_bytes(_backend_url(request), "")
     return StreamingResponse(
         buffer,
@@ -803,15 +800,14 @@ async def agent_dist_zip(request: Request):
 @router.get("/agent-dist/update.sh", response_class=PlainTextResponse)
 def agent_update_sh(request: Request, lang: str = ""):
     """
-    Aktualisiert den Agenten (Linux) und startet den Autostart-Dienst NEU.
-    Die systemd-Unit wird sicherheitshalber neu geschrieben, damit der Neustart
-    auch dann klappt, wenn die Unit fehlte/veraltet war. Bestehende .device-id
-    bleibt erhalten -> gleiche Client-Identität.
-    Waehrend eines Server-Umzugs: neue Adresse (+ ggf. neuer Token), siehe _update_target.
+    Updates the agent (Linux) and RESTARTS the autostart service. The systemd
+    unit is rewritten for safety so that the restart works even if the unit was
+    missing/outdated. An existing .device-id is kept -> same client identity.
+    During a server move: new address (+ possibly new token), see _update_target.
     """
     backend_url = _update_target(request)
     new_token = _migration_token()
-    # Sprache dieses Skripts: ?lang=de|en, sonst die Server-Sprache.
+    # Language of this script: ?lang=de|en, otherwise the server language.
     _L = _lang(lang) if lang else server_lang()
     def L(key, **kw):
         return _t(key, _L, **kw)
@@ -1021,13 +1017,13 @@ echo "Update finished - agent restarted."
 
 @router.get("/agent-dist/update.ps1", response_class=PlainTextResponse)
 def agent_update_ps1(request: Request, lang: str = ""):
-    """Aktualisiert den Agenten (Windows) und startet den Autostart-Task NEU
-    (Task wird bei Bedarf neu registriert). Waehrend eines Server-Umzugs:
-    neue Adresse (+ ggf. neuer Token), siehe _update_target."""
+    """Updates the agent (Windows) and RESTARTS the autostart task (the task is
+    re-registered if needed). During a server move: new address (+ possibly new
+    token), see _update_target."""
     backend_url = _update_target(request)
-    self_url = _backend_url(request)          # UAC-Neustart holt das Skript wieder von HIER
+    self_url = _backend_url(request)          # UAC restart fetches the script from HERE again
     new_token = _migration_token()
-    # Sprache dieses Skripts: ?lang=de|en, sonst die Server-Sprache.
+    # Language of this script: ?lang=de|en, otherwise the server language.
     _L = _lang(lang) if lang else server_lang()
     def L(key, **kw):
         return _t(key, _L, **kw)
@@ -1271,7 +1267,7 @@ Write-Host "=== {L('ins_done')} ==="
 try {{ Stop-Transcript | Out-Null }} catch {{}}
 Copy-Item $LogFile "$InstallDir\\update.log" -Force -ErrorAction SilentlyContinue
 """
-    # Waehrend eines Umzugs mit neuem Token: exakt dieselbe Zeile wie fuer BACKEND_URL, nur fuer AGENT_TOKEN
+    # During a move with a new token: exactly the same line as for BACKEND_URL, just for AGENT_TOKEN
     if new_token:
         def _add_token(m):
             line = m.group(0)
@@ -1284,19 +1280,19 @@ Copy-Item $LogFile "$InstallDir\\update.log" -Force -ErrorAction SilentlyContinu
 @router.get("/agent-dist/elevate.ps1", response_class=PlainTextResponse)
 def agent_elevate_ps1(request: Request):
     """
-    Richtet EINMALIG (elevated auszuführen) zwei vorautorisierte SYSTEM-Tasks ein,
-    die per Windows-Event ausgelöst werden:
+    Sets up ONCE (to be run elevated) two pre-authorized SYSTEM tasks that are
+    triggered by a Windows event:
         ByteraRmmUpdate    (EventID 812)  -> update.ps1
         ByteraRmmUninstall (EventID 811)  -> uninstall.ps1
-    Danach kann der Agent Update/Uninstall auslösen, indem er nur ein Event
-    schreibt - die Aufgabenplanung führt das Skript dann als SYSTEM aus.
+    After that the agent can trigger update/uninstall by just writing an event -
+    the task scheduler then runs the script as SYSTEM.
 
-    Hinweis: Seit der Agent selbst als SYSTEM-Dienst läuft (Autostart-Task mit
-    Trigger "AtStartup"), braucht er diesen Umweg nicht mehr zwingend. Die
-    Tasks bleiben als Rückfallebene bestehen - z.B. für Altinstallationen, die
-    noch in einer Benutzersitzung laufen.
+    Note: since the agent itself runs as a SYSTEM service (autostart task with
+    trigger "AtStartup"), it no longer strictly needs this detour. The tasks
+    remain as a fallback - e.g. for legacy installs that still run in a user
+    session.
 
-    Aufruf auf dem Client (als Administrator):
+    Call on the client (as administrator):
         powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr '<BACKEND>/agent-dist/elevate.ps1' -UseBasicParsing | iex"
     """
     backend_url = _backend_url(request)
@@ -1305,8 +1301,8 @@ $Backend = "__BACKEND__"
 
 Write-Host "ByteraRMM: setting up elevated update/uninstall (SYSTEM, event-triggered)..."
 
-# Event-Quelle anlegen (idempotent). Der Agent schreibt spaeter Events dieser
-# Quelle; die SYSTEM-Tasks werden dadurch getriggert.
+# Create the event source (idempotent). The agent later writes events of this
+# source; the SYSTEM tasks are triggered by that.
 try {
     if (-not [System.Diagnostics.EventLog]::SourceExists("ByteraRMM")) {
         New-EventLog -LogName Application -Source "ByteraRMM" -ErrorAction Stop
@@ -1319,9 +1315,9 @@ try {
 }
 
 function Register-RmmSystemTask($name, $eventId, $scriptName) {
-    # Task-Definition als XML (robust ueber alle Windows-Versionen; kein CIM noetig).
-    # SYSTEM = SID S-1-5-18. EventTrigger horcht auf Application-Events der Quelle
-    # 'ByteraRMM' mit der passenden EventID.
+    # Task definition as XML (robust across all Windows versions; no CIM needed).
+    # SYSTEM = SID S-1-5-18. EventTrigger listens for Application events of the
+    # source 'ByteraRMM' with the matching EventID.
     $argLine = "-NoProfile -ExecutionPolicy Bypass -Command ""iwr '$Backend/agent-dist/$scriptName' -UseBasicParsing | iex"""
     $xml = @"
 <?xml version="1.0" encoding="UTF-16"?>
@@ -1363,11 +1359,11 @@ function Register-RmmSystemTask($name, $eventId, $scriptName) {
 "@
     $tmp = Join-Path $env:TEMP ("rmm_task_" + $name + ".xml")
     [System.IO.File]::WriteAllText($tmp, $xml, [System.Text.Encoding]::Unicode)
-    # Vorhandenen Task entfernen, dann neu aus XML anlegen (als SYSTEM).
+    # Remove an existing task, then recreate it from XML (as SYSTEM).
     schtasks /delete /tn $name /f 2>$null | Out-Null
     $out = schtasks /create /tn $name /xml "$tmp" /ru "SYSTEM" /f 2>&1
     Remove-Item $tmp -Force -ErrorAction SilentlyContinue
-    # Verifizieren.
+    # Verify.
     schtasks /query /tn $name 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) {
         Write-Host "  -> Task '$name' (EventID $eventId) OK."
@@ -1396,10 +1392,10 @@ Write-Host "Check with:  schtasks /query /tn ByteraRmmUninstall"
 @router.get("/agent-dist/uninstall.sh", response_class=PlainTextResponse)
 def agent_uninstall_sh(request: Request, lang: str = ""):
     """
-    Deinstalliert den Agenten (Linux) SYNCHRON: Dienst stoppen/entfernen,
-    Prozesse killen, dann Programmordner löschen. Läuft in einem eigenen
-    systemd-Scope (siehe agent.py), daher überlebt das Skript den Stop des
-    eigenen Dienstes und löscht die Dateien tatsächlich. KEIN Hintergrund-Job.
+    Uninstalls the agent (Linux) SYNCHRONOUSLY: stop/remove the service, kill
+    processes, then delete the program folder. Runs in its own systemd scope
+    (see agent.py), so the script survives the stop of its own service and
+    really deletes the files. NO background job.
     """
     # Sprache dieses Skripts: ?lang=de|en, sonst die Server-Sprache.
     _L = _lang(lang) if lang else server_lang()
@@ -1407,10 +1403,10 @@ def agent_uninstall_sh(request: Request, lang: str = ""):
         return _t(key, _L, **kw)
 
     script = """#!/bin/bash
-# BYTERA RMM - Agent-Deinstallation (Linux)
-# Laeuft in einem eigenen systemd-Scope (siehe agent.py) und ueberlebt daher
-# den Stop des eigenen Dienstes. Reihenfolge: Dienst stoppen/entfernen ->
-# Prozesse killen -> Programmordner loeschen (mit Wiederholung).
+# BYTERA RMM - agent uninstall (Linux)
+# Runs in its own systemd scope (see agent.py) and therefore survives the stop
+# of its own service. Order: stop/remove the service -> kill processes ->
+# delete the program folder (with retries).
 INSTALL_DIR="/opt/bytera-rmm-agent"
 
 echo "1) Stopping and removing the agent service..."
@@ -1420,7 +1416,7 @@ sudo systemctl kill bytera-agent 2>/dev/null || true
 sudo rm -f /etc/systemd/system/bytera-agent.service
 sudo systemctl daemon-reload 2>/dev/null || true
 sudo systemctl reset-failed bytera-agent 2>/dev/null || true
-# Installation unter altem Namen (RAPALLE.net RMM) gleich mit entfernen
+# Remove an install under the old name (RAPALLE.net RMM) as well
 LEGACY_DIR="/opt/rapalle-rmm-agent"
 for u in rapalle-agent rapalle-node; do
   sudo systemctl disable --now "$u" 2>/dev/null || true
@@ -1431,8 +1427,8 @@ sudo pkill -9 -f "$LEGACY_DIR" 2>/dev/null || true
 sudo rm -rf "$LEGACY_DIR" 2>/dev/null || true
 
 echo "2) Ending agent processes..."
-# Mehrere Muster, damit der Prozess sicher getroffen wird (venv-Pfad, agent.py,
-# Installationsordner). Zwei Runden, dann Kontrolle.
+# Several patterns so the process is hit reliably (venv path, agent.py,
+# install folder). Two rounds, then a check.
 for i in 1 2 3; do
   sudo pkill -9 -f "$INSTALL_DIR/agent.py" 2>/dev/null || true
   sudo pkill -9 -f "$INSTALL_DIR" 2>/dev/null || true
@@ -1442,7 +1438,7 @@ for i in 1 2 3; do
 done
 
 echo "3) Deleting all agent data..."
-# Bis zu 5 Versuche, falls eine Datei noch kurz gehalten wird.
+# Up to 5 attempts in case a file is still briefly held.
 for i in 1 2 3 4 5; do
   sudo rm -rf "$INSTALL_DIR" 2>/dev/null || true
   [ ! -e "$INSTALL_DIR" ] && break
@@ -1461,23 +1457,23 @@ fi
 @router.get("/agent-dist/uninstall.ps1", response_class=PlainTextResponse)
 def agent_uninstall_ps1(request: Request, lang: str = ""):
     """
-    Deinstalliert den Agenten (Windows) SYNCHRON: Task entfernen, Prozesse
-    killen, dann Programmordner löschen (kein Start-Job, der beim Beenden der
-    Shell abgebrochen würde).
+    Uninstalls the agent (Windows) SYNCHRONOUSLY: remove the task, kill
+    processes, then delete the program folder (no Start-Job that would be
+    aborted when the shell exits).
     """
     # Sprache dieses Skripts: ?lang=de|en, sonst die Server-Sprache.
     _L = _lang(lang) if lang else server_lang()
     def L(key, **kw):
         return _t(key, _L, **kw)
 
-    script = """# BYTERA RMM - Agent-Deinstallation (Windows)
-# Wird bevorzugt als SYSTEM-Task ausgefuehrt (elevated). Reihenfolge:
-# Autostart entfernen -> Prozesse hart beenden -> alle Daten loeschen.
+    script = """# BYTERA RMM - agent uninstall (Windows)
+# Preferably run as a SYSTEM task (elevated). Order:
+# remove autostart -> hard-kill processes -> delete all data.
 $ErrorActionPreference = "SilentlyContinue"
 $InstallDir = "C:\\Program Files\\ByteraRmmAgent"
 
-# Adminrechte: notfalls per UAC neu starten. Als SYSTEM-Task laeuft das Skript
-# ohnehin schon erhoeht - dann greift der Block nicht.
+# Admin rights: restart via UAC if needed. As a SYSTEM task the script already
+# runs elevated anyway - then this block does not apply.
 $id = [Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
         [Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -1495,7 +1491,7 @@ Write-Host "1) Stopping and removing the agent autostart..."
 schtasks /end /tn "ByteraRmmAgent" 2>$null | Out-Null
 schtasks /delete /tn "ByteraRmmAgent" /f 2>$null | Out-Null
 Unregister-ScheduledTask -TaskName "ByteraRmmAgent" -Confirm:$false
-# Installation unter altem Namen (RAPALLE.net RMM) gleich mit entfernen
+# Remove an install under the old name (RAPALLE.net RMM) as well
 $LegacyDir = "C:\\Program Files\\RapalleRmmAgent"
 foreach ($t in @("RapalleRmmAgent", "RapalleNode")) {
     schtasks /end /tn $t 2>$null | Out-Null
@@ -1527,14 +1523,14 @@ Start-Sleep -Seconds 2
 Write-Host "3) Deleting all agent data..."
 for ($i = 0; $i -lt 6; $i++) {
     if (-not (Test-Path $InstallDir)) { break }
-    # Schreibschutz/Attribute entfernen, dann mit zwei Methoden loeschen.
+    # Remove read-only/attributes, then delete using two methods.
     cmd /c "attrib -r -s -h `"$InstallDir\\*.*`" /s /d" 2>$null | Out-Null
     Remove-Item -LiteralPath $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
     if (Test-Path $InstallDir) { cmd /c "rmdir /s /q `"$InstallDir`"" 2>$null | Out-Null }
     Start-Sleep -Seconds 2
 }
 
-# Falls per SYSTEM-Task/Event gestartet: Hilfstasks + Event-Quelle wieder entfernen.
+# If started via SYSTEM task/event: remove the helper tasks + event source again.
 schtasks /delete /tn "ByteraRmmUninstall" /f 2>$null | Out-Null
 schtasks /delete /tn "ByteraRmmUpdate" /f 2>$null | Out-Null
 try { Remove-EventLog -Source "ByteraRMM" -ErrorAction SilentlyContinue } catch {}
@@ -1552,33 +1548,32 @@ if (Test-Path $InstallDir) {
 
 
 # ==========================================================================
-# FERTIGE INSTALLATIONSPAKETE (.exe / .msi / .deb / .rpm / .run)
+# READY-MADE INSTALLER PACKAGES (.exe / .msi / .deb / .rpm / .run)
 # --------------------------------------------------------------------------
-# Gebaut werden sie lokal mit "python src/backend/app/build_installers.py" - die Pakete
-# landen im Ordner dist/ im Projekt-Root. Diese Routen machen sie im Dashboard
-# nutzbar: auflisten, per Knopfdruck bauen und über die Onboarding-Seite
-# herunterladen.
+# They are built locally with "python src/backend/app/build_installers.py" - the
+# packages land in the dist/ folder at the project root. These routes make them
+# usable in the dashboard: list them, build them at the push of a button and
+# download them via the onboarding page.
 #
-# Der Onboarding-Token steckt NICHT im Paket (das wäre pro Token ein eigener
-# Build). Stattdessen bekommt der Installer ihn beim Aufruf mit:
+# The onboarding token is NOT baked into the package (that would be a separate
+# build per token). Instead the installer gets it at call time:
 #     Windows:  ByteraRmmAgent-Setup.exe /S /TOKEN=<token>
 #     Linux:    sudo RMM_ENROLLMENT_TOKEN=<token> ./bytera-rmm-agent.run
-# Ohne Token landet das Gerät in "Uncategorized" und kann später zugeordnet
-# werden.
+# Without a token the device lands in "Uncategorized" and can be assigned later.
 # ==========================================================================
 
 def _installer_hint(name: str, token: str, backend_url: str = "") -> str:
     """
-    Passender Aufrufbefehl je Paketart - mit den ECHTEN Werten dieser
-    Installation (Backend-Adresse, Onboarding-Token). Der Befehl laesst sich
-    also unveraendert kopieren; niemand muss noch Platzhalter ersetzen.
+    Matching call command per package kind - with the REAL values of this
+    installation (backend address, onboarding token). The command can thus be
+    copied unchanged; nobody has to replace placeholders anymore.
     """
     n = name.lower()
     if n.endswith(".exe"):
         return f"ByteraRmmAgent-Setup.exe /S /TOKEN={token}"
     if n.endswith(".msi"):
-        # Der Windows Installer reicht eigene Eigenschaften nicht an die
-        # (deferred) Aktion durch -> das Geraet landet in "Uncategorized".
+        # The Windows Installer does not pass custom properties to the
+        # (deferred) action -> the device lands in "Uncategorized".
         return f"msiexec /i {name} /qn"
     if n.endswith(".bat"):
         return f"{name} {backend_url} {token}"
@@ -1596,28 +1591,28 @@ def _installer_hint(name: str, token: str, backend_url: str = "") -> str:
 
 
 PROJECT_ROOT_DIR = _PROJ_ROOT
-INSTALLER_DIST_DIR = _DIST / "agent"  # storage/dist/agent -> erscheint unter /dist/agent
+INSTALLER_DIST_DIR = _DIST / "agent"  # storage/dist/agent -> appears under /dist/agent
 BUILD_SCRIPT = _APP_DIR / "build_installers.py"
 
-# Dateiname-Muster -> Anzeige im Dashboard.
-# Reihenfolge zaehlt: die spezielleren Endungen zuerst pruefen.
+# File-name pattern -> display in the dashboard.
+# Order matters: check the more specific endings first.
 _INSTALLER_KINDS = [
-    (".exe", "Windows-Setup", "🪟", "exe"),
+    (".exe", "Windows setup", "🪟", "exe"),
     (".msi", "Windows MSI (GPO/Intune)", "🪟", "msi"),
-    (".bat", "Windows-Batch (Doppelklick)", "🪟", "bat"),
-    (".ps1", "Windows PowerShell-Skript", "🪟", "ps1"),
+    (".bat", "Windows batch (double-click)", "🪟", "bat"),
+    (".ps1", "Windows PowerShell script", "🪟", "ps1"),
     (".pkg.tar.xz", "Arch / Manjaro", "🐧", "pkg"),
     (".deb", "Debian / Ubuntu", "🐧", "deb"),
     (".rpm", "Fedora / RHEL / SUSE", "🐧", "rpm"),
-    (".tar.gz", "Linux-Archiv (tar.gz)", "🐧", "tgz"),
-    (".tgz", "Linux-Archiv (tgz)", "🐧", "tgz"),
-    (".sh", "Linux (selbstentpackend)", "🐧", "sh"),
-    (".run", "Linux (selbstentpackend, .run)", "🐧", "sh"),
+    (".tar.gz", "Linux archive (tar.gz)", "🐧", "tgz"),
+    (".tgz", "Linux archive (tgz)", "🐧", "tgz"),
+    (".sh", "Linux (self-extracting)", "🐧", "sh"),
+    (".run", "Linux (self-extracting, .run)", "🐧", "sh"),
 ]
 
 
 def _installer_entries() -> list[dict]:
-    """Alle gebauten Pakete in dist/ (neueste zuerst)."""
+    """All built packages in dist/ (newest first)."""
     out = []
     if not INSTALLER_DIST_DIR.is_dir():
         return out
@@ -1643,17 +1638,17 @@ def _installer_entries() -> list[dict]:
 @router.get("/api/enrollment/installers")
 def list_installers(user: dict = Depends(get_current_user)):
     """
-    Was liegt an fertigen Paketen bereit - und was liesse sich hier bauen?
-    Wird vom "Client hinzufügen"-Fenster benutzt.
+    What ready-made packages are available - and what could be built here?
+    Used by the "Add client" window.
     """
     require_perm(user, "add_client")
     can = {}
     try:
         import shutil as _sh
         import platform as _pl
-        # exe/msi: die Werkzeuge zieht das Build-Skript bei Bedarf selbst nach
-        # (PyInstaller per pip, WiX als Download) - Windows genuegt also.
-        # Skript-/Archivpakete brauchen gar kein Werkzeug.
+        # exe/msi: the build script pulls in the tools itself when needed
+        # (PyInstaller via pip, WiX as a download) - so Windows is enough.
+        # Script/archive packages need no tool at all.
         is_win = _pl.system() == "Windows"
         can = {
             "exe": is_win,
@@ -1677,41 +1672,41 @@ def list_installers(user: dict = Depends(get_current_user)):
 
 
 class BuildInstallersBody(BaseModel):
-    targets: str = "auto"       # "auto" oder z.B. "sh,deb"
+    targets: str = "auto"       # "auto" or e.g. "sh,deb"
 
 
 @router.post("/api/enrollment/installers/build")
 async def build_installers(body: BuildInstallersBody, request: Request, background: bool = False,
                            user: dict = Depends(get_current_user)):
     """
-    Startet src/backend/app/build_installers.py als BACKEND-JOB (app/bgjobs.py):
-    Die Ausgabe laeuft live ins Job-Log, Neuladen bricht den Build nicht ab.
-    Ohne ?background=1 wartet die Anfrage wie frueher auf das Ergebnis.
-    Nur für Admins - hier wird ein Prozess auf dem Server gestartet.
+    Starts src/backend/app/build_installers.py as a BACKEND JOB (app/bgjobs.py):
+    the output streams live into the job log, reloading does not abort the build.
+    Without ?background=1 the request waits for the result as before.
+    Admins only - a process is started on the server here.
     """
     require_admin(user)
     if not BUILD_SCRIPT.is_file():
-        raise HTTPException(404, "src/backend/app/build_installers.py nicht gefunden")
+        raise HTTPException(404, "src/backend/app/build_installers.py not found")
 
     import asyncio as _asyncio
     import sys as _sys
 
     targets = (body.targets or "auto").strip()
     if not all(c.isalnum() or c in ",_-" for c in targets):
-        raise HTTPException(400, "Ungültige Ziel-Angabe")
+        raise HTTPException(400, "Invalid target specification")
 
     cmd = [_sys.executable, str(BUILD_SCRIPT),
            "--targets", targets,
            "--backend-url", _backend_url(request),
            "--out", str(INSTALLER_DIST_DIR)]
     async def work(job):
-        job.update(phase="build", detail=f"Ziele: {targets}")
+        job.update(phase="build", detail=f"targets: {targets}")
         try:
             proc = await _asyncio.create_subprocess_exec(
                 *cmd, cwd=str(PROJECT_ROOT_DIR),
                 stdout=_asyncio.subprocess.PIPE, stderr=_asyncio.subprocess.STDOUT)
         except Exception as e:
-            raise HTTPException(500, f"Build konnte nicht gestartet werden: {e}")
+            raise HTTPException(500, f"Build could not be started: {e}")
         lines: list[str] = []
 
         async def pump():
@@ -1724,18 +1719,18 @@ async def build_installers(body: BuildInstallersBody, request: Request, backgrou
             await _asyncio.wait_for(_asyncio.gather(pump(), proc.wait()), timeout=1800)
         except _asyncio.TimeoutError:
             proc.kill()
-            raise HTTPException(504, "Build-Zeitlimit (30 Minuten) überschritten")
+            raise HTTPException(504, "Build time limit (30 minutes) exceeded")
         except _asyncio.CancelledError:
             proc.kill()
             raise
         db.add_audit_entry(user["username"], "enrollment.build_installers",
                            details=f"targets={targets} rc={proc.returncode}")
         if proc.returncode != 0:
-            job.update(detail=f"Build mit Fehlercode {proc.returncode} beendet")
+            job.update(detail=f"Build ended with error code {proc.returncode}")
         return {"ok": proc.returncode == 0, "returncode": proc.returncode,
                 "log": "\n".join(lines)[-8000:], "installers": _installer_entries()}
 
-    return await bgjobs.run("installers.build", "all", title=f"Installer bauen ({targets})", user=user,
+    return await bgjobs.run("installers.build", "all", title=f"Build installers ({targets})", user=user,
                             work=work, background=background, perm="admin",
                             on_cancel=bgjobs.hard_cancel, meta={"targets": targets})
 
@@ -1743,13 +1738,13 @@ async def build_installers(body: BuildInstallersBody, request: Request, backgrou
 @router.get("/enroll/{token}/installer/{name}")
 def download_installer(token: str, name: str):
     """
-    Download eines fertigen Pakets über die Onboarding-URL (kein Login nötig -
-    der Token in der URL ist der Nachweis, genau wie bei agent.zip).
+    Download a ready-made package via the onboarding URL (no login needed -
+    the token in the URL is the proof, just like for agent.zip).
     """
     _require_valid_token(token)
-    # Kein Pfad-Ausbruch: nur genau die Dateien, die in dist/ als Paket gelten.
+    # No path escape: only exactly the files that count as a package in dist/.
     if name not in {e["name"] for e in _installer_entries()}:
-        raise HTTPException(404, "Paket nicht gefunden")
+        raise HTTPException(404, "Package not found")
     path = INSTALLER_DIST_DIR / name
     from fastapi.responses import FileResponse
     return FileResponse(path, filename=name, media_type="application/octet-stream")
