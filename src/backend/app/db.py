@@ -1,28 +1,28 @@
 """
 db.py
 -----
-Kompletter Datenbank-Layer für BYTERA RMM.
+Complete database layer for BYTERA RMM.
 
-Wir benutzen SQLite (in Python fest eingebaut, "import sqlite3" - keine
-Installation nötig, kein Server nötig). Die Datenbank ist einfach eine
-Datei "data.sqlite" im backend-Ordner.
+We use SQLite (built into Python, "import sqlite3" - no installation needed,
+no server needed). The database is simply a file "data.sqlite" in the backend
+folder.
 
-Tabellen-Übersicht (siehe auch die CREATE TABLE Blöcke weiter unten):
-- users:      Login-Benutzer des Dashboards (Admins/Techniker)
-- tenants:    Kunden/Firmen (oberste Ebene der Hierarchie)
-- locations:  Standorte eines Tenants (z.B. "Büro Regensburg")
-- folders:    Frei anlegbare, verschachtelbare Ordner INNERHALB einer Location
-              (z.B. "Rack 1" -> "Server" -> ...). parent_folder_id verweist
-              auf einen anderen Ordner, oder ist NULL wenn es ein Ordner
-              direkt unter der Location ist.
-- clients:    Die eigentlichen verwalteten Geräte (PCs, Server, VMs/CTs).
-              parent_client_id wird gesetzt, wenn ein Client eine VM/CT
-              eines anderen (physischen) Clients ist - dadurch muss das
-              Backend VMs/CTs nicht als eigenes Konzept behandeln, sie
-              sind einfach "Clients mit einem Eltern-Client".
+Table overview (see also the CREATE TABLE blocks further below):
+- users:      dashboard login users (admins/technicians)
+- tenants:    customers/companies (top level of the hierarchy)
+- locations:  locations of a tenant (e.g. "Office Regensburg")
+- folders:    freely creatable, nestable folders INSIDE a location
+              (e.g. "Rack 1" -> "Server" -> ...). parent_folder_id points
+              to another folder, or is NULL when it is a folder directly
+              under the location.
+- clients:    the actual managed devices (PCs, servers, VMs/CTs).
+              parent_client_id is set when a client is a VM/CT of another
+              (physical) client - this way the backend does not have to treat
+              VMs/CTs as a separate concept, they are simply "clients with a
+              parent client".
 
-Alle Funktionen hier sind bewusst einfach gehalten (SQL direkt, kein ORM),
-damit man als Python-Einsteiger genau sieht, was passiert.
+All functions here are deliberately kept simple (SQL directly, no ORM), so a
+Python beginner can see exactly what happens.
 """
 
 import re
@@ -33,41 +33,41 @@ import pathlib
 import threading
 import uuid
 
-# Pfad zur Datenbank-Datei: liegt im backend-Ordner, eine Ebene über "app/"
+# Path to the database file: in the backend folder, one level above "app/"
 from app.paths import DB_FILE as DB_PATH
 
 
 # ------------------------------------------------------------------
-# Thread-sichere SQLite-Verbindung
+# Thread-safe SQLite connection
 # ------------------------------------------------------------------
-# Es gibt EINE geteilte Verbindung für die ganze App. FastAPI/Uvicorn führt
-# Request-Handler aber in mehreren Worker-Threads aus, und zusätzlich greifen
-# Hintergrund-Tasks (Automation, Uptime, Relay-Auto-Close, DB-Sync, …) aus dem
-# Event-Loop-Thread zu. Eine sqlite3.Connection darf NICHT gleichzeitig aus
-# mehreren Threads benutzt werden – sonst kommt es zu sporadischen Abstürzen
-# wie „sqlite3.InterfaceError: bad parameter or other API misuse".
+# There is ONE shared connection for the whole app. But FastAPI/Uvicorn runs
+# request handlers in several worker threads, and in addition background tasks
+# (automation, uptime, relay auto-close, DB sync, …) access it from the
+# event-loop thread. An sqlite3.Connection must NOT be used from several
+# threads at once - otherwise sporadic crashes occur like
+# "sqlite3.InterfaceError: bad parameter or other API misuse".
 #
-# Deshalb kapseln wir die echte Verbindung in einen dünnen Wrapper, der ALLE
-# Zugriffe mit EINEM (reentranten) Lock serialisiert und Abfrage-Ergebnisse
-# sofort (noch unter dem Lock) materialisiert. So bleibt jede Operation atomar
-# und die eine Verbindung ist gefahrlos aus beliebig vielen Threads nutzbar.
+# Therefore we wrap the real connection in a thin wrapper that serializes ALL
+# accesses with ONE (reentrant) lock and materializes query results
+# immediately (still under the lock). This way every operation stays atomic
+# and the one connection can be used safely from any number of threads.
 
 class _CursorResult:
-    """Ergebnis eines execute(): Zeilen sind bereits (unter Lock) geladen und
-    daher thread-sicher weiterverwendbar (fetchone/fetchall/Iteration)."""
+    """Result of an execute(): rows are already loaded (under the lock) and can
+    therefore be used thread-safely (fetchone/fetchall/iteration)."""
 
     def __init__(self, rows, rowcount, lastrowid, description=None):
         self._rows = rows
         self._i = 0
         self.rowcount = rowcount
         self.lastrowid = lastrowid
-        # Spalten-Beschreibung des echten Cursors (7-Tupel je Spalte, wie bei
-        # sqlite3). Wird gebraucht, um Spaltennamen zu ermitteln - z.B. im
-        # Source-DB-Werkzeug. Ohne das schlug "cur.description" fehl.
+        # Column description of the real cursor (7-tuple per column, as in
+        # sqlite3). Needed to determine column names - e.g. in the source-DB
+        # tool. Without it "cur.description" failed.
         self.description = description
 
     def keys(self):
-        """Spaltennamen als Liste (wie bei sqlite3.Row / SQLAlchemy-Result)."""
+        """Column names as a list (like sqlite3.Row / SQLAlchemy result)."""
         return [d[0] for d in (self.description or [])]
 
     def fetchone(self):
@@ -93,7 +93,7 @@ class _CursorResult:
             self._i += 1
 
 
-# Ab dieser Dauer gilt eine Abfrage als auffaellig. 0 schaltet die Messung ab.
+# From this duration on, a query counts as notable. 0 disables the measurement.
 import os as _os_slow
 
 try:
@@ -107,7 +107,7 @@ _slow_seen: dict[str, float] = {}
 
 
 def _report_slow_query(seconds: float, sql: str) -> None:
-    """Meldet eine langsame Abfrage - hoechstens einmal pro Minute je Abfrage."""
+    """Reports a slow query - at most once per minute per query."""
     if SLOW_QUERY_S <= 0 or seconds < SLOW_QUERY_S:
         return
     short = " ".join(str(sql).split())[:160]
@@ -116,61 +116,57 @@ def _report_slow_query(seconds: float, sql: str) -> None:
     if now - _slow_seen.get(short, 0.0) < 60:
         return
     _slow_seen[short] = now
-    # Der Hinweistext haengt davon ab, WO die Abfrage lief. Seit die
-    # Endpunkte in Arbeits-Threads liegen und die Hintergrundschleifen
-    # db.call() benutzen, blockiert eine langsame Abfrage die
-    # Ereignisschleife normalerweise NICHT mehr - sie belegt "nur" die
-    # Datenbank fuer alle anderen. Laeuft sie dagegen im Hauptthread, ist
-    # es der ernste Fall, und der Text muss das auch sagen.
+    # The hint text depends on WHERE the query ran. Since the endpoints are in
+    # worker threads and the background loops use db.call(), a slow query
+    # normally NO longer blocks the event loop - it "only" occupies the
+    # database for everyone else. If it runs in the main thread, however, that
+    # is the serious case, and the text must say so.
     on_loop = threading.current_thread() is threading.main_thread()
-    folge = ("Sie lief im HAUPTTHREAD - solange stand der ganze Server."
+    folge = ("It ran in the MAIN THREAD - the whole server was stalled meanwhile."
              if on_loop else
-             "Sie belegte die Datenbank; andere Zugriffe mussten warten.")
-    message = f"LANGSAME ABFRAGE: {seconds:.2f}s - {short}\n  ({folge})"
+             "It occupied the database; other accesses had to wait.")
+    message = f"SLOW QUERY: {seconds:.2f}s - {short}\n  ({folge})"
     try:
         from app.errors import report, Codes
         report(Codes.DB_SLOW, None, f"{seconds:.2f}s",
-               sql=short, im_hauptthread=on_loop)
+               sql=short, on_main_thread=on_loop)
     except Exception:
         print(f"[db] {message}")
 
 
 # ======================================================================
-# Datenbankzugriff AUSSERHALB der Ereignisschleife
+# Database access OUTSIDE the event loop
 # ======================================================================
-# Der Absturz vom 23.08. (16:23) in einer Kette:
+# The crash on 23.08. (16:23) in a chain:
 #
-#   1. Jemand zog im Dashboard ein Docker-Abbild (guacd). Der Download
-#      saettigte die Platte.
-#   2. Ein gleichzeitiges commit() aus einem Arbeits-Thread wartete
-#      deshalb 91 Sekunden auf sein fsync - und hielt dabei die
-#      Datenbanksperre.
-#   3. Die Relay-Ablaufschleife lief im HAUPTTHREAD und rief dort
-#      db.list_expired_relay_clients() auf. Die wartete auf dieselbe
-#      Sperre - und damit stand die gesamte Ereignisschleife.
-#   4. Nach 90 Sekunden beendete der Waechter den Prozess.
+#   1. Someone pulled a Docker image (guacd) in the dashboard. The download
+#      saturated the disk.
+#   2. A concurrent commit() from a worker thread therefore waited 91 seconds
+#      for its fsync - holding the database lock the whole time.
+#   3. The relay-expiry loop ran in the MAIN THREAD and called
+#      db.list_expired_relay_clients() there. It waited on the same lock -
+#      and thus the entire event loop was stalled.
+#   4. After 90 seconds the watchdog ended the process.
 #
-# Die HTTP-Endpunkte waren zu diesem Zeitpunkt bereits in Arbeits-Threads
-# ausgelagert. Die HINTERGRUNDSCHLEIFEN aber nicht - sie sind 'async def'
-# und rufen die Datenbank direkt auf. Genau eine solche Schleife hat hier
-# alles blockiert.
+# The HTTP endpoints were already offloaded to worker threads at that time.
+# The BACKGROUND LOOPS, however, were not - they are 'async def' and call the
+# database directly. Exactly one such loop blocked everything here.
 #
-# 'call()' verlagert einen Datenbankaufruf in einen Arbeits-Thread. Damit
-# kann keine Hintergrundschleife die Ereignisschleife mehr aufhalten, egal
-# wie lange die Datenbank braucht.
+# 'call()' moves a database call into a worker thread. This way no background
+# loop can stall the event loop anymore, no matter how long the database takes.
 #
 #     rows = await db.call(db.list_expired_relay_clients, now_ms)
 
 async def call(fn, *args, **kwargs):
-    """Fuehrt einen Datenbankaufruf in einem Arbeits-Thread aus."""
+    """Runs a database call in a worker thread."""
     import asyncio as _asyncio
     return await _asyncio.to_thread(fn, *args, **kwargs)
 
 
-# Wie lange auf die Datenbanksperre gewartet wird, bevor aufgegeben wird.
-# Ohne Grenze wartet ein Aufrufer beliebig lange - und wenn er auf der
-# Ereignisschleife sitzt, steht solange der ganze Server. Ein Fehler nach
-# 30 Sekunden ist immer besser als ein stehendes Backend.
+# How long to wait for the database lock before giving up. Without a limit a
+# caller waits indefinitely - and if it sits on the event loop, the whole
+# server is stalled meanwhile. An error after 30 seconds is always better than
+# a stalled backend.
 try:
     LOCK_TIMEOUT_S = float(_os_slow.getenv("RMM_DB_LOCK_TIMEOUT_S", "30") or 30)
 except (ValueError, NameError):
@@ -178,18 +174,17 @@ except (ValueError, NameError):
 
 
 class _LockTimeout(RuntimeError):
-    """Die Datenbanksperre war zu lange belegt."""
+    """The database lock was held for too long."""
 
 
 class _TimedLock:
     """
-    Wie ein RLock, aber mit Zeitlimit und Meldung.
+    Like an RLock, but with a time limit and a report.
 
-    Wird das Limit ueberschritten, ist das eine wertvolle Information: Es
-    bedeutet, dass ein anderer Vorgang die Datenbank ungewoehnlich lange
-    haelt. Frueher hat man das nur indirekt gemerkt - an einer Abfrage, die
-    angeblich 109 Sekunden brauchte, obwohl sie in Wahrheit 109 Sekunden
-    gewartet hat.
+    If the limit is exceeded, that is valuable information: it means another
+    operation is holding the database unusually long. Previously this was only
+    noticed indirectly - from a query that supposedly took 109 seconds, when in
+    truth it had waited 109 seconds.
     """
 
     def __init__(self):
@@ -204,22 +199,22 @@ class _TimedLock:
             try:
                 from app.errors import report, Codes
                 report(Codes.DB_LOCKED, None,
-                       f"Sperre nach {_perf() - waited_from:.0f}s nicht bekommen",
-                       gehalten_von=self.holder or "unbekannt",
-                       gehalten_seit=f"{held:.0f}s")
+                       f"lock not obtained after {_perf() - waited_from:.0f}s",
+                       held_by=self.holder or "unknown",
+                       held_since=f"{held:.0f}s")
             except Exception:
                 pass
             raise _LockTimeout(
-                f"Datenbank seit {held:.0f}s belegt von '{self.holder}' - "
-                f"Aufruf abgebrochen, damit der Server weiterlaeuft")
+                f"database held for {held:.0f}s by '{self.holder}' - "
+                f"call aborted so the server keeps running")
         waited = _perf() - waited_from
         self.since = _perf()
         if waited > 5.0:
             try:
                 from app.errors import report, Codes
                 report(Codes.DB_LOCKED, None,
-                       f"{waited:.0f}s auf die Datenbank gewartet",
-                       vorher_belegt_von=self.holder or "unbekannt")
+                       f"waited {waited:.0f}s for the database",
+                       previously_held_by=self.holder or "unknown")
             except Exception:
                 pass
         self.holder = threading.current_thread().name
@@ -233,11 +228,11 @@ class _TimedLock:
 
 
 class _SafeConn:
-    """Dünner, thread-sicherer Wrapper um die geteilte SQLite-Verbindung."""
+    """Thin, thread-safe wrapper around the shared SQLite connection."""
 
     def __init__(self, conn):
         object.__setattr__(self, "_conn", conn)
-        # _TimedLock statt RLock: mit Zeitlimit und Meldung, wer sie haelt.
+        # _TimedLock instead of RLock: with a time limit and a report of who holds it.
         object.__setattr__(self, "_lock", _TimedLock())
 
     @property
@@ -245,22 +240,22 @@ class _SafeConn:
         return object.__getattribute__(self, "_lock")
 
     def _run(self, method, sql, arg):
-        # ZEITMESSUNG: Alle Datenbankzugriffe laufen SYNCHRON in derselben
-        # Ereignisschleife, die auch die HTTP-Anfragen bedient. Solange eine
-        # Abfrage Millisekunden braucht, merkt das niemand. Braucht sie eine
-        # Sekunde, steht in dieser Sekunde der ganze Server - inklusive
-        # Healthcheck und aller Agentenverbindungen.
+        # TIMING: all database accesses run SYNCHRONOUSLY in the same event
+        # loop that also serves the HTTP requests. As long as a query takes
+        # milliseconds, nobody notices. If it takes a second, the whole server
+        # is stalled during that second - including the health check and all
+        # agent connections.
         #
-        # Die HTTP-Endpunkte liegen inzwischen in Arbeits-Threads, die
-        # Hintergrundschleifen benutzen db.call(). Diese Messung bleibt
-        # trotzdem: Sie nennt die Abfragen, die zu lange brauchen, und
-        # unterscheidet dank _TimedLock jetzt zwischen "rechnet lange" und
-        # "wartet auf die Sperre" - frueher sah beides gleich aus.
+        # The HTTP endpoints are now in worker threads, the background loops
+        # use db.call(). This measurement stays anyway: it names the queries
+        # that take too long, and thanks to _TimedLock now distinguishes
+        # between "computes long" and "waits for the lock" - previously both
+        # looked the same.
         _t0 = _perf()
         with self.lock:
             real = object.__getattribute__(self, "_conn")
-            # Der Notbremsen-Rueckruf braucht diese Angaben, um zu wissen,
-            # WAS gerade laeuft und seit wann.
+            # The emergency-stop callback needs this info to know WHAT is
+            # running right now and since when.
             _current["sql"] = str(sql)
             _current["started"] = _t0
             _current["warned"] = False
@@ -271,19 +266,19 @@ class _SafeConn:
                 waited = _perf() - _t0
                 text = str(exc).lower()
                 if "interrupt" in text:
-                    # Von unserer eigenen Notbremse abgebrochen.
+                    # Aborted by our own emergency stop.
                     from app.errors import report, Codes
                     report(Codes.DB_ABORT, exc,
-                           f"Abfrage nach {waited:.0f}s abgebrochen "
-                           f"(Grenze {QUERY_DEADLINE_S:.0f}s)",
+                           f"query aborted after {waited:.0f}s "
+                           f"(limit {QUERY_DEADLINE_S:.0f}s)",
                            sql=str(sql)[:200])
                 elif "locked" in text or "busy" in text:
                     from app.errors import report, Codes
-                    report(Codes.DB_LOCKED, exc, f"nach {waited:.1f}s",
+                    report(Codes.DB_LOCKED, exc, f"after {waited:.1f}s",
                            sql=str(sql)[:200])
                 else:
                     from app.errors import report, Codes
-                    report(Codes.DB_QUERY, exc, "Abfrage fehlgeschlagen",
+                    report(Codes.DB_QUERY, exc, "query failed",
                            sql=str(sql)[:200])
                 raise
             finally:
@@ -292,8 +287,8 @@ class _SafeConn:
                 rows = cur.fetchall()
             except Exception:
                 rows = []
-            # description MUSS hier (noch unter dem Lock) gelesen werden -
-            # nach dem nächsten execute() auf derselben Verbindung ist sie weg.
+            # description MUST be read here (still under the lock) - after the
+            # next execute() on the same connection it is gone.
             try:
                 desc = cur.description
             except Exception:
@@ -327,7 +322,7 @@ class _SafeConn:
             return object.__getattribute__(self, "_conn").backup(target, *a, **k)
 
     def cursor(self):
-        # Direkter Cursor umgeht die Serialisierung; nur unter .lock verwenden.
+        # A direct cursor bypasses the serialization; only use it under .lock.
         with self.lock:
             return object.__getattribute__(self, "_conn").cursor()
 
@@ -336,7 +331,7 @@ class _SafeConn:
         with self.lock:
             return object.__getattribute__(self, "_conn").total_changes
 
-    # Sonstige Attribute (z.B. row_factory) an die echte Verbindung durchreichen.
+    # Pass other attributes (e.g. row_factory) through to the real connection.
     def __getattr__(self, name):
         return getattr(object.__getattribute__(self, "_conn"), name)
 
@@ -345,20 +340,19 @@ class _SafeConn:
 
 
 def _apply_pending_migration() -> None:
-    """Backend-Migration (Settings -> Migration): Wendet eine vom Migrations-
-    Import gestagte Übernahme an, BEVOR die Datenbank geöffnet wird.
+    """Backend migration (Settings -> Migration): applies a transfer staged by
+    the migration import BEFORE the database is opened.
 
-    router/migration_routes.py lädt vom alten Backend ein Archiv herunter und
-    entpackt es nach <backend>/migration_incoming/ (+ apply.json als Marker);
-    danach startet das Backend neu. Hier werden die Teile an ihren Platz
-    geschoben:
-      data/     -> DATA_DIR   (DB, .env, Modul-Einstellungen; version.txt und
-                               requirements.txt des NEUEN Backends bleiben)
-      storage/  -> STORAGE_DIR (Dateien, Websites, Recordings, dist, /storage)
-      branding/ -> frontend/image (Logos/Bilder)
-      modules/  -> MODULES_DIR (nur Module, die hier noch nicht existieren)
-    Die bisherige DB/.env wird als premigration-* gesichert. Fehler brechen den
-    Start NICHT ab - der Rest wird angewendet und geloggt."""
+    router/migration_routes.py downloads an archive from the old backend and
+    extracts it to <backend>/migration_incoming/ (+ apply.json as a marker);
+    then the backend restarts. Here the parts are moved into place:
+      data/     -> DATA_DIR   (DB, .env, module settings; version.txt and
+                               requirements.txt of the NEW backend stay)
+      storage/  -> STORAGE_DIR (files, websites, recordings, dist, /storage)
+      branding/ -> frontend/image (logos/images)
+      modules/  -> MODULES_DIR (only modules that do not yet exist here)
+    The existing DB/.env is backed up as premigration-*. Errors do NOT abort the
+    start - the rest is applied and logged."""
     import shutil
     from app.paths import (BACKEND_DIR, DATA_DIR, STORAGE_DIR, MODULES_DIR,
                            BRANDING_DIR)
@@ -366,7 +360,7 @@ def _apply_pending_migration() -> None:
     marker = staging / "apply.json"
     if not marker.exists():
         return
-    print("[migration] Wende migrierte Daten des alten Backends an …")
+    print("[migration] Applying the migrated data of the old backend …")
 
     def _replace(src: pathlib.Path, dst: pathlib.Path) -> None:
         if dst.is_dir() and not dst.is_symlink():
@@ -376,7 +370,7 @@ def _apply_pending_migration() -> None:
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(src), str(dst))
 
-    # ---- data/ (DB, .env, modules.json, Modul-Daten) ----
+    # ---- data/ (DB, .env, modules.json, module data) ----
     src_data = staging / "data"
     if src_data.is_dir():
         for keepname, backup in (("data.sqlite", "premigration-data.sqlite"),
@@ -386,10 +380,10 @@ def _apply_pending_migration() -> None:
                 try:
                     shutil.copy2(cur, DATA_DIR / backup)
                 except OSError as e:
-                    print(f"[migration] Sicherung {backup} fehlgeschlagen: {e}")
+                    print(f"[migration] backup {backup} failed: {e}")
         for item in src_data.iterdir():
             if item.name in ("version.txt", "requirements.txt", "backup"):
-                continue  # gehören zum NEUEN Backend-Stand
+                continue  # belong to the NEW backend version
             try:
                 _replace(item, DATA_DIR / item.name)
             except OSError as e:
@@ -413,7 +407,7 @@ def _apply_pending_migration() -> None:
             except OSError as e:
                 print(f"[migration] branding/{item.name}: {e}")
 
-    # ---- modules/ (nur hier unbekannte, z.B. eigene Module) ----
+    # ---- modules/ (only ones unknown here, e.g. custom modules) ----
     src_mods = staging / "modules"
     if src_mods.is_dir():
         for item in src_mods.iterdir():
@@ -424,47 +418,45 @@ def _apply_pending_migration() -> None:
                 continue  # Standard-/vorhandenes Modul: Code des neuen Stands behalten
             try:
                 shutil.move(str(item), str(target))
-                print(f"[migration] Eigenes Modul übernommen: {item.name}")
+                print(f"[migration] Custom module taken over: {item.name}")
             except OSError as e:
                 print(f"[migration] modules/{item.name}: {e}")
 
     shutil.rmtree(staging, ignore_errors=True)
-    print("[migration] Übernahme abgeschlossen - alte Daten liegen als "
+    print("[migration] Transfer complete - old data is kept as "
           "premigration-* in data/.")
 
 
 try:
     _apply_pending_migration()
-except Exception as _mig_exc:   # Migration darf den Start nie verhindern
-    print(f"[migration] FEHLER beim Anwenden: {_mig_exc}")
+except Exception as _mig_exc:   # migration must never prevent the start
+    print(f"[migration] ERROR while applying: {_mig_exc}")
 
-# Eine einzige, geteilte Verbindung für die ganze App.
-# check_same_thread=False, weil FastAPI/Uvicorn mehrere Threads nutzen kann;
-# die Serialisierung übernimmt _SafeConn (siehe oben).
+# A single, shared connection for the whole app.
+# check_same_thread=False, because FastAPI/Uvicorn can use several threads;
+# _SafeConn handles the serialization (see above).
 _raw_conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30.0)
 
 
 # ----------------------------------------------------------------------
-# NOTBREMSE FUER ABFRAGEN
+# EMERGENCY STOP FOR QUERIES
 # ----------------------------------------------------------------------
-# Der Vorfall vom 23.08. in einem Satz: EINE Abfrage lief 125 Sekunden
-# (der komplette Metrikverlauf eines Clients, unbegrenzt). Weil alle
-# Abfragen durch dieselbe Sperre gehen, stand damit das GESAMTE Backend -
-# Anmeldung, Einstellungen, Agenten, Healthcheck. Nach 90 Sekunden hat der
-# Waechter den Prozess beendet.
+# The incident on 23.08. in one sentence: ONE query ran for 125 seconds
+# (a client's complete metric history, unbounded). Because all queries go
+# through the same lock, the ENTIRE backend was stalled - login, settings,
+# agents, health check. After 90 seconds the watchdog ended the process.
 #
-# Die betroffene Abfrage ist weiter unten korrigiert. Aber sich darauf zu
-# verlassen, dass keine zweite dieser Art existiert, waere naiv - es gibt
-# ueber 300 Abfragestellen. Deshalb hier eine Grenze, die fuer ALLE gilt:
+# The query in question is fixed further below. But relying on there being no
+# second one of this kind would be naive - there are over 300 query sites.
+# Hence a limit here that applies to ALL:
 #
-# SQLite ruft waehrend einer laufenden Abfrage regelmaessig einen
-# Rueckruf auf. Gibt dieser etwas anderes als 0 zurueck, wird die Abfrage
-# ABGEBROCHEN. Damit kann keine einzelne Abfrage den Server mehr aufhalten,
-# egal wie sie aussieht oder wer sie schreibt.
+# SQLite regularly calls a callback during a running query. If it returns
+# anything other than 0, the query is ABORTED. This way no single query can
+# stall the server anymore, no matter how it looks or who writes it.
 #
-# Der Aufrufer bekommt dann eine gewoehnliche Ausnahme und kann darauf
-# reagieren. Eine abgebrochene Abfrage ist immer besser als ein stehender
-# Server: Beim Abbruch fehlt eine Anzeige, beim Stillstand fehlt alles.
+# The caller then gets an ordinary exception and can react to it. An aborted
+# query is always better than a stalled server: on an abort one display is
+# missing, on a stall everything is missing.
 
 import os as _os_db
 
@@ -473,91 +465,89 @@ try:
 except ValueError:
     QUERY_DEADLINE_S = 20.0
 
-# Wie oft SQLite nachfragt. 20000 Anweisungen sind wenige Millisekunden -
-# oft genug fuer eine genaue Grenze, selten genug, um nicht zu bremsen.
+# How often SQLite checks. 20000 instructions are a few milliseconds - often
+# enough for a precise limit, rare enough not to slow things down.
 _PROGRESS_STEPS = 20000
 
-# Wann die laufende Abfrage begonnen hat (nur ein Wert, weil die Sperre
-# ohnehin nur eine Abfrage gleichzeitig zulaesst).
+# When the running query started (only one value, since the lock allows only
+# one query at a time anyway).
 _current = {"sql": "", "started": 0.0, "warned": False}
 
 
 def _progress_handler() -> int:
-    """Laeuft WAEHREND einer Abfrage. Bricht sie nach dem Zeitlimit ab."""
+    """Runs DURING a query. Aborts it after the time limit."""
     started = _current["started"]
     if not started:
         return 0
     elapsed = _perf() - started
-    # Fruehwarnung noch WAEHREND die Abfrage laeuft. Bisher erschien die
-    # Meldung erst danach - bei 125 Sekunden also viel zu spaet, um zu
-    # verstehen, was das Backend gerade aufhaelt.
+    # Early warning still WHILE the query runs. Previously the message only
+    # appeared afterwards - at 125 seconds far too late to understand what is
+    # stalling the backend right now.
     if not _current["warned"] and elapsed > 3.0:
         _current["warned"] = True
         try:
             from app.errors import report, Codes
             report(Codes.DB_SLOW, None,
-                   f"Abfrage laeuft seit {elapsed:.0f}s UND BLOCKIERT GERADE",
+                   f"query has been running for {elapsed:.0f}s AND IS BLOCKING RIGHT NOW",
                    sql=_current["sql"][:200])
         except Exception:
             pass
     if QUERY_DEADLINE_S > 0 and elapsed > QUERY_DEADLINE_S:
-        return 1      # != 0 -> SQLite bricht ab
+        return 1      # != 0 -> SQLite aborts
     return 0
 
 
 try:
     _raw_conn.set_progress_handler(_progress_handler, _PROGRESS_STEPS)
 except Exception as _e:
-    print(f"[db] Abfrage-Zeitlimit nicht aktivierbar: {_e}")
+    print(f"[db] query time limit could not be enabled: {_e}")
 
 
 # ----------------------------------------------------------------------
-# SQLite für langsame Dateisysteme einstellen
+# Tune SQLite for slow file systems
 # ----------------------------------------------------------------------
-# Warum das wichtig ist: Die Datenbank liegt in backend/ und damit im
-# Bind-Mount. Auf einem NAS ist das ein Netz- bzw. Btrfs-Dateisystem, und
-# jedes commit() löst dort in der Voreinstellung ein fsync aus. Bei 81
-# commit-Stellen im Code und sieben Agenten, die alle fünf Sekunden einen
-# Heartbeat schreiben, sind das dauernd Plattensynchronisationen - und die
-# laufen im Event-Loop-Thread.
+# Why this matters: the database lives in backend/ and thus in the bind mount.
+# On a NAS that is a network or Btrfs file system, and every commit() triggers
+# an fsync there by default. With 81 commit sites in the code and seven agents
+# writing a heartbeat every five seconds, that is constant disk syncs - and
+# they run in the event-loop thread.
 #
-# Braucht ein einziges fsync einmal mehrere Sekunden (NAS im Spindown, ein
-# Snapshot, ein laufender Scrub), steht das GESAMTE Backend so lange still:
-# keine Antwort auf HTTP, keine Socket.IO-Pings. Der Docker-Healthcheck
-# läuft nach 5 s in sein Zeitlimit, Cloudflare meldet 524, und alle Agenten
-# verlieren gleichzeitig die Verbindung - genau das Muster aus dem Log vom
-# 22.08. um 23:38:29 (agents 7 -> 0, Prozess lebte weiter).
+# If a single fsync takes several seconds once (NAS in spindown, a snapshot, a
+# running scrub), the ENTIRE backend is stalled that long: no HTTP response,
+# no Socket.IO pings. The Docker health check times out after 5 s, Cloudflare
+# reports 524, and all agents lose the connection at once - exactly the pattern
+# from the log on 22.08. at 23:38:29 (agents 7 -> 0, process stayed alive).
 #
-# Die folgenden Einstellungen ändern nichts an der Datensicherheit im
-# laufenden Betrieb, machen commit() aber um Größenordnungen billiger.
+# The following settings change nothing about data safety in operation, but
+# make commit() cheaper by orders of magnitude.
 def _tune_sqlite(conn) -> None:
-    """Setzt die PRAGMAs. Fehler hier dürfen den Start nie verhindern."""
+    """Sets the PRAGMAs. Errors here must never prevent the start."""
     settings = [
-        # WAL: Schreibvorgänge landen in einer Journaldatei statt die
-        # Hauptdatei umzuschreiben. Leser blockieren Schreiber nicht mehr.
+        # WAL: writes land in a journal file instead of rewriting the main
+        # file. Readers no longer block writers.
         ("journal_mode", "WAL"),
-        # NORMAL statt FULL: fsync nur noch beim Checkpoint, nicht bei
-        # jedem commit. Im Fehlerfall kann die allerletzte Transaktion
-        # verlorengehen - bei einem Monitoring-Werkzeug ist das gegenüber
-        # einem eingefrorenen Backend die klar bessere Wahl.
+        # NORMAL instead of FULL: fsync only on checkpoint, not on every
+        # commit. On a failure the very last transaction may be lost - for a
+        # monitoring tool that is clearly the better choice over a frozen
+        # backend.
         ("synchronous", "NORMAL"),
-        # Statt sofort "database is locked" zu werfen, bis zu 15 s warten.
+        # Instead of throwing "database is locked" immediately, wait up to 15 s.
         ("busy_timeout", "15000"),
-        # Temporäre Tabellen im Arbeitsspeicher, nicht auf dem NAS.
+        # Temporary tables in memory, not on the NAS.
         ("temp_store", "MEMORY"),
-        # ~64 MB Cache: deutlich weniger Lesezugriffe auf das Dateisystem.
+        # ~64 MB cache: significantly fewer reads on the file system.
         ("cache_size", "-64000"),
-        # WAL-Datei bei ~4 MB zusammenführen, damit sie nicht unbegrenzt wächst.
+        # Merge the WAL file at ~4 MB so it does not grow unbounded.
         ("wal_autocheckpoint", "1000"),
     ]
     for key, value in settings:
         try:
             conn.execute(f"PRAGMA {key}={value}")
         except sqlite3.Error as e:
-            print(f"[db] PRAGMA {key}={value} nicht gesetzt: {e}")
+            print(f"[db] PRAGMA {key}={value} not set: {e}")
     try:
         mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
-        print(f"[db] SQLite bereit: journal_mode={mode}, synchronous=NORMAL, "
+        print(f"[db] SQLite ready: journal_mode={mode}, synchronous=NORMAL, "
               f"busy_timeout=15s")
     except sqlite3.Error:
         pass
@@ -565,28 +555,28 @@ def _tune_sqlite(conn) -> None:
 
 _tune_sqlite(_raw_conn)
 
-# row_factory sorgt dafür, dass wir Zeilen wie Dictionaries ansprechen können
-# (z.B. row["hostname"] statt row[3]), das ist deutlich lesbarer.
+# row_factory lets us access rows like dictionaries (e.g. row["hostname"]
+# instead of row[3]), which is much more readable.
 _raw_conn.row_factory = sqlite3.Row
 
 _conn = _SafeConn(_raw_conn)
 
 
 def _new_id() -> str:
-    """Erzeugt eine neue, eindeutige ID (UUID) für neue Datensätze."""
+    """Creates a new, unique ID (UUID) for new records."""
     return str(uuid.uuid4())
 
 
 def _now_ms() -> int:
-    """Aktuelle Zeit in Millisekunden seit 1970 (praktisch für Zeitstempel)."""
+    """Current time in milliseconds since 1970 (handy for timestamps)."""
     return int(time.time() * 1000)
 
 
 def _migrate_add_column(table: str, column: str, definition: str) -> None:
     """
-    Fügt eine Spalte hinzu, falls sie noch nicht existiert (einfache Migration).
-    So können bestehende Datenbanken aus älteren Versionen aktualisiert werden,
-    ohne dass man data.sqlite löschen muss.
+    Adds a column if it does not yet exist (simple migration). This way
+    existing databases from older versions can be upgraded without having to
+    delete data.sqlite.
     """
     existing = [row["name"] for row in _conn.execute(f"PRAGMA table_info({table})").fetchall()]
     if column not in existing:
@@ -596,39 +586,39 @@ def _migrate_add_column(table: str, column: str, definition: str) -> None:
 
 def init_db() -> None:
     """
-    Legt alle Tabellen an, falls sie noch nicht existieren.
-    Wird beim Start des Backends einmal aufgerufen (siehe main.py).
+    Creates all tables if they do not yet exist.
+    Called once at backend startup (see main.py).
     """
     _conn.executescript(
         """
-        -- Login-Benutzer des Dashboards
+        -- dashboard login users
         CREATE TABLE IF NOT EXISTS users (
             id TEXT PRIMARY KEY,
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
             display_name TEXT NOT NULL,
-            role TEXT NOT NULL DEFAULT 'admin',   -- 'admin' oder 'viewer' (Vorbereitung für spätere feinere Rechte)
-            must_change_pw INTEGER NOT NULL DEFAULT 0,  -- 1 = muss beim nächsten Login neues Passwort setzen
-            language TEXT NOT NULL DEFAULT 'en',   -- Sprach-Präferenz: 'en' (Standard) oder 'de'
-            theme TEXT NOT NULL DEFAULT 'dark',    -- 'dark' oder 'light'
+            role TEXT NOT NULL DEFAULT 'admin',   -- 'admin' or 'viewer' (preparation for finer rights later)
+            must_change_pw INTEGER NOT NULL DEFAULT 0,  -- 1 = must set a new password at next login
+            language TEXT NOT NULL DEFAULT 'en',   -- language preference: 'en' (default) or 'de'
+            theme TEXT NOT NULL DEFAULT 'dark',    -- 'dark' or 'light'
             created_at INTEGER NOT NULL
         );
 
-        -- Kunden/Firmen (oberste Hierarchie-Ebene)
+        -- customers/companies (top hierarchy level)
         CREATE TABLE IF NOT EXISTS tenants (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             color TEXT NOT NULL DEFAULT '#2dd4bf'
         );
 
-        -- Standorte eines Tenants
+        -- locations of a tenant
         CREATE TABLE IF NOT EXISTS locations (
             id TEXT PRIMARY KEY,
             tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
             name TEXT NOT NULL
         );
 
-        -- Frei anlegbare, verschachtelbare Ordner innerhalb einer Location
+        -- freely creatable, nestable folders inside a location
         CREATE TABLE IF NOT EXISTS folders (
             id TEXT PRIMARY KEY,
             location_id TEXT NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
@@ -636,39 +626,39 @@ def init_db() -> None:
             name TEXT NOT NULL
         );
 
-        -- Die eigentlichen verwalteten Geräte
+        -- the actual managed devices
         CREATE TABLE IF NOT EXISTS clients (
             id TEXT PRIMARY KEY,
             hostname TEXT NOT NULL,
             tenant_id TEXT REFERENCES tenants(id) ON DELETE SET NULL,
             location_id TEXT REFERENCES locations(id) ON DELETE SET NULL,
             folder_id TEXT REFERENCES folders(id) ON DELETE SET NULL,
-            parent_client_id TEXT REFERENCES clients(id) ON DELETE CASCADE, -- gesetzt bei VM/CT
+            parent_client_id TEXT REFERENCES clients(id) ON DELETE CASCADE, -- set for VM/CT
             platform TEXT,
             arch TEXT,
             release TEXT,
             ip TEXT,
             color TEXT NOT NULL DEFAULT '#38bdf8',
             notes TEXT NOT NULL DEFAULT '',
-            status_override TEXT,        -- z.B. 'maintenance', manuell vom Admin gesetzt
-            active INTEGER NOT NULL DEFAULT 1,  -- 0 = deaktiviert (bleibt aber sichtbar/historisch)
+            status_override TEXT,        -- e.g. 'maintenance', set manually by the admin
+            active INTEGER NOT NULL DEFAULT 1,  -- 0 = disabled (but stays visible/historical)
             first_seen INTEGER NOT NULL,
             last_seen INTEGER NOT NULL
         );
 
-        -- Audit-Log: hält fest, wer wann was gemacht hat (Basis, wird noch erweitert)
+        -- audit log: records who did what and when (basic, to be extended)
         CREATE TABLE IF NOT EXISTS audit_log (
             id TEXT PRIMARY KEY,
             ts INTEGER NOT NULL,
             username TEXT,
-            action TEXT NOT NULL,     -- z.B. "login", "exec", "client.update"
-            target TEXT,              -- z.B. Client-ID oder Username eines betroffenen Datensatzes
-            details TEXT              -- freier Text/JSON mit weiteren Infos
+            action TEXT NOT NULL,     -- e.g. "login", "exec", "client.update"
+            target TEXT,              -- e.g. client ID or username of an affected record
+            details TEXT              -- free text/JSON with further info
         );
 
-        -- Einmal-Tokens fürs Client-Onboarding ("Client hinzufügen" in der Sidebar).
-        -- Ein Token wird beim Klick auf "Client hinzufügen" erzeugt und enthält
-        -- schon Tenant/Location, damit der neue Agent gleich richtig einsortiert ist.
+        -- one-time tokens for client onboarding ("Add client" in the sidebar).
+        -- A token is created on clicking "Add client" and already contains
+        -- tenant/location, so the new agent is sorted in correctly right away.
         CREATE TABLE IF NOT EXISTS enrollment_tokens (
             token TEXT PRIMARY KEY,
             tenant_id TEXT REFERENCES tenants(id) ON DELETE SET NULL,
@@ -677,15 +667,15 @@ def init_db() -> None:
             used_at INTEGER
         );
 
-        -- Offline-Warteschlange: Aktionen, die ausgefuehrt werden, sobald der
-        -- Agent (wieder) online ist - z.B. "installiere Software XY" oder ein
-        -- Shell-Befehl. Abgearbeitet beim Agent-Anmelden (sockets.py, KUER).
+        -- offline queue: actions run as soon as the agent is (back) online -
+        -- e.g. "install software XY" or a shell command. Processed when the
+        -- agent registers (sockets.py).
         CREATE TABLE IF NOT EXISTS client_queue (
             id TEXT PRIMARY KEY,
             client_id TEXT NOT NULL,
             kind TEXT NOT NULL,               -- 'shell' | 'software' | ...
-            label TEXT NOT NULL DEFAULT '',   -- Anzeige ("Installiere 7-Zip")
-            payload TEXT NOT NULL DEFAULT '{}', -- JSON je nach kind
+            label TEXT NOT NULL DEFAULT '',   -- display ("Installing 7-Zip")
+            payload TEXT NOT NULL DEFAULT '{}', -- JSON depending on kind
             created_by TEXT,
             created_at INTEGER NOT NULL,
             status TEXT NOT NULL DEFAULT 'pending', -- pending|running|done|failed
@@ -694,20 +684,20 @@ def init_db() -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_queue_client ON client_queue (client_id, status);
 
-        -- Aktivierungscodes (Settings -> Aktivierung). Noch ohne Funktion:
-        -- Der Code wird nur mit Einlösedatum gespeichert; später fragt das RMM
-        -- damit den Lizenzserver ab (Premium-Features / Zusatz-Module).
-        -- Jede Einlösung ist eine eigene Zeile - die neueste ist die aktive.
+        -- activation codes (Settings -> Activation). No function yet: the
+        -- code is only stored with its redemption date; later the RMM uses it
+        -- to query the license server (premium features / add-on modules).
+        -- Each redemption is its own row - the newest is the active one.
         CREATE TABLE IF NOT EXISTS activation_keys (
             id TEXT PRIMARY KEY,
             key TEXT NOT NULL,
-            redeemed_at INTEGER NOT NULL,     -- Unix-ms der Einlösung
-            redeemed_by TEXT                  -- Benutzername, der eingelöst hat
+            redeemed_at INTEGER NOT NULL,     -- Unix ms of the redemption
+            redeemed_by TEXT                  -- username that redeemed it
         );
 
-        -- Paketquellen des Modul-Stores (wie Community-Quellen bei Synology DSM):
-        -- eine Server-Adresse, unter der Modul-ZIPs liegen (Verzeichnis-Listing
-        -- oder JSON-Manifest). Verwaltet in Settings -> Modul-Store.
+        -- package sources of the module store (like community sources in
+        -- Synology DSM): a server address holding module ZIPs (directory
+        -- listing or JSON manifest). Managed in Settings -> Module Store.
         CREATE TABLE IF NOT EXISTS module_sources (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL DEFAULT '',
@@ -715,21 +705,21 @@ def init_db() -> None:
             added_at INTEGER NOT NULL
         );
 
-        -- Aufzeichnungen von Remote-Screen-Sessions.
-        -- Die eigentlichen Frames liegen als Datei auf der Platte (Pfad in file_path),
-        -- hier stehen nur die Metadaten. Auto-Löschung nach X Tagen (siehe cleanup).
+        -- recordings of remote-screen sessions.
+        -- The actual frames are stored as a file on disk (path in file_path),
+        -- here only the metadata. Auto-deletion after X days (see cleanup).
         CREATE TABLE IF NOT EXISTS screen_recordings (
             id TEXT PRIMARY KEY,
             client_id TEXT,
             client_hostname TEXT,
-            username TEXT,             -- wer die Session gestartet hat
+            username TEXT,             -- who started the session
             started_at INTEGER NOT NULL,
             ended_at INTEGER,
             frame_count INTEGER NOT NULL DEFAULT 0,
             file_path TEXT NOT NULL
         );
 
-        -- Gespeicherte Skripte (Scripts-App): benannte Befehle mit Plattform-Tag.
+        -- saved scripts (Scripts app): named commands with a platform tag.
         CREATE TABLE IF NOT EXISTS scripts (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -738,9 +728,9 @@ def init_db() -> None:
             created_at INTEGER NOT NULL
         );
 
-        -- Gruppen/Rollen mit Rechten. permissions ist eine kommagetrennte Liste
-        -- von Rechte-Schlüsseln (z.B. "login,screen,terminal"). is_ad_group=1
-        -- markiert Gruppen, die aus einem Verzeichnis (AD) stammen.
+        -- groups/roles with rights. permissions is a comma-separated list of
+        -- permission keys (e.g. "login,screen,terminal"). is_ad_group=1 marks
+        -- groups that originate from a directory (AD).
         CREATE TABLE IF NOT EXISTS groups (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -749,16 +739,16 @@ def init_db() -> None:
             created_at INTEGER NOT NULL
         );
 
-        -- Zuordnung Benutzer <-> Gruppe (ein Benutzer kann in mehreren Gruppen sein).
+        -- mapping user <-> group (a user can be in several groups).
         CREATE TABLE IF NOT EXISTS user_groups (
             user_id TEXT NOT NULL,
             group_id TEXT NOT NULL,
             PRIMARY KEY (user_id, group_id)
         );
 
-        -- Feingranulare Rechte-Vergabe (tri-state: allow/deny, sonst = keine Angabe).
-        -- subject_type: 'user' oder 'group'; scope: 'global' oder eine client_id.
-        -- Deny gewinnt immer, 'admin' ist ein Wildcard-Recht (siehe auth.py Resolver).
+        -- fine-grained permission grants (tri-state: allow/deny, else = unset).
+        -- subject_type: 'user' or 'group'; scope: 'global' or a client_id.
+        -- Deny always wins, 'admin' is a wildcard right (see the auth.py resolver).
         CREATE TABLE IF NOT EXISTS permission_grants (
             id TEXT PRIMARY KEY,
             subject_type TEXT NOT NULL,   -- 'user' | 'group'
@@ -771,8 +761,8 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_perm_grants_subject
             ON permission_grants (subject_type, subject_id);
 
-        -- Verzeichnis-Anbindungen (Realms), z.B. Active Directory via LDAP/LDAPS.
-        -- Voll funktionsfähig: Benutzer können sich gegen diese Realms anmelden.
+        -- directory connections (realms), e.g. Active Directory via LDAP/LDAPS.
+        -- Fully functional: users can sign in against these realms.
         CREATE TABLE IF NOT EXISTS realms (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -780,33 +770,33 @@ def init_db() -> None:
             base_dn TEXT,
             bind_user TEXT,
             bind_password TEXT,
-            port INTEGER,                         -- NULL = Standard (389, bzw. 636 bei SSL)
+            port INTEGER,                         -- NULL = default (389, or 636 with SSL)
             use_ssl INTEGER NOT NULL DEFAULT 0,   -- 1 = LDAPS
-            user_filter TEXT,                     -- optionaler zusätzlicher LDAP-Filter
+            user_filter TEXT,                     -- optional additional LDAP filter
             enabled INTEGER NOT NULL DEFAULT 1,
             created_at INTEGER NOT NULL
         );
 
-        -- Websites, die an einen Client "gebunden" sind (Quick Access).
-        -- Optional mit Uptime-Monitoring: das Backend ruft die URL im
-        -- gewählten Intervall auf und benachrichtigt je nach notify-Modus.
+        -- websites "bound" to a client (quick access).
+        -- Optionally with uptime monitoring: the backend calls the URL at the
+        -- chosen interval and notifies depending on the notify mode.
         CREATE TABLE IF NOT EXISTS client_websites (
             id TEXT PRIMARY KEY,
             client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
             name TEXT NOT NULL,
             url TEXT NOT NULL,
-            favorite INTEGER NOT NULL DEFAULT 0,          -- 1 = als Favorit angeheftet
-            monitor_enabled INTEGER NOT NULL DEFAULT 0,   -- 1 = Uptime-Monitoring aktiv
+            favorite INTEGER NOT NULL DEFAULT 0,          -- 1 = pinned as a favorite
+            monitor_enabled INTEGER NOT NULL DEFAULT 0,   -- 1 = uptime monitoring active
             monitor_notify TEXT NOT NULL DEFAULT 'down',  -- 'up' | 'down' | 'always'
-            monitor_interval_seconds INTEGER NOT NULL DEFAULT 300, -- Delay zwischen Scans
-            last_status TEXT,                             -- 'up' | 'down' | NULL (noch nie geprüft)
-            last_checked INTEGER,                         -- Zeitstempel (ms) des letzten Scans
-            last_status_change INTEGER,                   -- wann der Status zuletzt wechselte (ms)
-            last_error TEXT,                              -- letzte Fehlermeldung (bei down)
+            monitor_interval_seconds INTEGER NOT NULL DEFAULT 300, -- delay between scans
+            last_status TEXT,                             -- 'up' | 'down' | NULL (never checked)
+            last_checked INTEGER,                         -- timestamp (ms) of the last scan
+            last_status_change INTEGER,                   -- when the status last changed (ms)
+            last_error TEXT,                              -- last error message (when down)
             created_at INTEGER NOT NULL
         );
 
-        -- Webhook-Ziele für Benachrichtigungen (Discord oder custom).
+        -- webhook targets for notifications (Discord or custom).
         CREATE TABLE IF NOT EXISTS webhooks (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -816,24 +806,24 @@ def init_db() -> None:
             created_at INTEGER NOT NULL
         );
 
-        -- Automationen: Befehl/Skript, das auf Clients zu festen Intervallen läuft.
+        -- automations: command/script that runs on clients at fixed intervals.
         CREATE TABLE IF NOT EXISTS automations (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             command TEXT NOT NULL,
-            client_ids TEXT NOT NULL DEFAULT '',   -- kommagetrennte Client-IDs
+            client_ids TEXT NOT NULL DEFAULT '',   -- comma-separated client IDs
             interval_seconds INTEGER NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1,
             last_run INTEGER,
             created_at INTEGER NOT NULL
         );
 
-        -- Automation-Läufe: EIN Eintrag pro Client pro Durchlauf. Damit lässt
-        -- sich im Dashboard eine Ergebnisliste je Durchlauf einsehen (Ausgabe,
-        -- Fehler, Exit-Code, Zeit). run_id gruppiert alle Clients EINES Laufs.
+        -- automation runs: ONE entry per client per run. This lets the
+        -- dashboard show a result list per run (output, error, exit code,
+        -- time). run_id groups all clients of ONE run.
         CREATE TABLE IF NOT EXISTS automation_runs (
             id TEXT PRIMARY KEY,
-            run_id TEXT NOT NULL,               -- gruppiert einen Durchlauf
+            run_id TEXT NOT NULL,               -- groups one run
             automation_id TEXT NOT NULL,
             client_id TEXT NOT NULL,
             client_hostname TEXT,
@@ -841,37 +831,36 @@ def init_db() -> None:
             stdout TEXT,
             stderr TEXT,
             exit_code INTEGER,
-            ok INTEGER NOT NULL DEFAULT 0       -- 1 = erfolgreich ausgeführt
+            ok INTEGER NOT NULL DEFAULT 0       -- 1 = ran successfully
         );
 
-        -- Globale Einstellungen als einfacher Schlüssel/Wert-Speicher.
-        -- Wird u.a. für die Install-Server-Adresse und die Metrik-/Replay-
-        -- Aufbewahrung genutzt (siehe DEFAULT_SETTINGS weiter unten).
+        -- Global settings as a simple key/value store.
+        -- Used among other things for the install server address and the
+        -- metric/replay retention (see DEFAULT_SETTINGS further below).
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
 
-        -- WireGuard-kompatible VPN-Tunnel. Ein Datensatz = eine ausgestellte
-        -- Tunnel-Datei fuer genau einen Benutzer auf genau einen Client.
-        -- Der PRIVATE Schluessel steht hier bewusst NICHT: er existiert nur
-        -- einmal, in der heruntergeladenen .conf-Datei.
-        -- Mitglieder des virtuellen Netzes. Ein Mitglied ist entweder ein
-        -- CLIENT (bekommt eine feste Adresse, merkt selbst nichts davon)
-        -- oder ein BENUTZER-Tunnel. Die Adresse bleibt gleich, damit man
-        -- sie sich merken und aufschreiben kann.
+        -- WireGuard-compatible VPN tunnels. One record = one issued tunnel
+        -- file for exactly one user on exactly one client.
+        -- The PRIVATE key is deliberately NOT stored here: it exists only
+        -- once, in the downloaded .conf file.
+        -- Members of the virtual network. A member is either a CLIENT (gets a
+        -- fixed address, notices nothing of it itself) or a USER tunnel. The
+        -- address stays the same so one can remember and write it down.
         CREATE TABLE IF NOT EXISTS vpn_members (
-            kind TEXT NOT NULL,          -- 'client' oder 'user'
-            ref TEXT NOT NULL,           -- client_id bzw. tunnel_id
+            kind TEXT NOT NULL,          -- 'client' or 'user'
+            ref TEXT NOT NULL,           -- client_id or tunnel_id
             address TEXT NOT NULL UNIQUE,
             label TEXT NOT NULL DEFAULT '',
             created_at INTEGER NOT NULL,
             PRIMARY KEY (kind, ref)
         );
 
-        -- Port-Weiterleitungen: ein Lauschport am Backend zeigt auf einen
-        -- Dienst eines Clients. Braucht weder VPN noch offene Ports beim
-        -- Kunden - es laeuft ueber die bestehende Agenten-Verbindung.
+        -- port forwards: a listening port on the backend points to a service
+        -- of a client. Needs neither a VPN nor open ports at the customer -
+        -- it runs over the existing agent connection.
         CREATE TABLE IF NOT EXISTS port_forwards (
             id TEXT PRIMARY KEY,
             client_id TEXT NOT NULL,
@@ -891,46 +880,46 @@ def init_db() -> None:
             client_id TEXT NOT NULL,
             name TEXT NOT NULL DEFAULT '',
             username TEXT NOT NULL DEFAULT '',
-            address TEXT NOT NULL,            -- Adresse im Tunnel-Netz
-            public_key TEXT NOT NULL,         -- oeffentlicher Schluessel des Benutzers
+            address TEXT NOT NULL,            -- address in the tunnel network
+            public_key TEXT NOT NULL,         -- public key of the user
             preshared_key TEXT NOT NULL DEFAULT '',
             allowed_ips TEXT NOT NULL DEFAULT '',
             created_at INTEGER NOT NULL,
-            expires_at INTEGER NOT NULL DEFAULT 0,   -- 0 = unbegrenzt
-            closed_at INTEGER NOT NULL DEFAULT 0,    -- 0 = noch offen
+            expires_at INTEGER NOT NULL DEFAULT 0,   -- 0 = unlimited
+            closed_at INTEGER NOT NULL DEFAULT 0,    -- 0 = still open
             last_handshake INTEGER NOT NULL DEFAULT 0,
-            -- 'client' = nur das Geraet selbst erreichbar
-            -- 'site'   = ganzes Netz hinter der Node erreichbar
+            -- 'client' = only the device itself reachable
+            -- 'site'   = whole network behind the node reachable
             mode TEXT NOT NULL DEFAULT 'client',
-            -- 'direct' = Tunnel endet auf der Node, 'relay' = im Backend
+            -- 'direct' = tunnel ends on the node, 'relay' = in the backend
             transport TEXT NOT NULL DEFAULT 'relay',
-            -- 1 = echte LAN-Adresse ueber die L2-Bruecke der Node
+            -- 1 = real LAN address via the L2 bridge of the node
             l2 INTEGER NOT NULL DEFAULT 0
         );
 
-        -- Langzeit-Historie der Client-Metriken (persistiert, damit die
-        -- Graphen nach einem Seiten-Neuladen nicht bei 0 anfangen).
+        -- long-term history of client metrics (persisted so the graphs do
+        -- not start at 0 after a page reload).
         CREATE TABLE IF NOT EXISTS metrics_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             client_id TEXT NOT NULL,
-            ts INTEGER NOT NULL,            -- Zeitstempel in ms
-            cpu REAL NOT NULL DEFAULT 0,    -- Prozent
-            ram REAL NOT NULL DEFAULT 0,    -- Prozent
-            net_in REAL NOT NULL DEFAULT 0, -- Bytes/s
-            net_out REAL NOT NULL DEFAULT 0,-- Bytes/s
-            extra TEXT                      -- JSON: komplette Metrik-Momentaufnahme
-                                            -- (damit AUCH Ping/Temp/Power/... eine
-                                            --  Historie haben, nicht nur cpu/ram/net)
+            ts INTEGER NOT NULL,            -- timestamp in ms
+            cpu REAL NOT NULL DEFAULT 0,    -- percent
+            ram REAL NOT NULL DEFAULT 0,    -- percent
+            net_in REAL NOT NULL DEFAULT 0, -- bytes/s
+            net_out REAL NOT NULL DEFAULT 0,-- bytes/s
+            extra TEXT                      -- JSON: complete metric snapshot
+                                            -- (so that Ping/Temp/Power/... ALSO
+                                            --  have a history, not only cpu/ram/net)
         );
         CREATE INDEX IF NOT EXISTS idx_metrics_history_client_ts
             ON metrics_history (client_id, ts);
 
         -- ----------------------------------------------------------
-        -- AI-Chat: gespeicherte API-Verbindungen (URL/Key/Modell).
-        -- visibility: 'private' (nur Ersteller), 'all' (alle Benutzer),
-        -- 'shared' (nur die in ai_connection_shares gelisteten User/Gruppen).
-        -- Der API-Key wird NIE an Nicht-Eigentümer ausgeliefert - der Chat
-        -- läuft immer als Proxy über das Backend.
+        -- AI chat: stored API connections (URL/key/model).
+        -- visibility: 'private' (creator only), 'all' (all users),
+        -- 'shared' (only the users/groups listed in ai_connection_shares).
+        -- The API key is NEVER delivered to non-owners - the chat always runs
+        -- as a proxy via the backend.
         -- ----------------------------------------------------------
         CREATE TABLE IF NOT EXISTS ai_connections (
             id TEXT PRIMARY KEY,
@@ -950,8 +939,8 @@ def init_db() -> None:
         );
 
         -- ----------------------------------------------------------
-        -- Ticket-System. Sichtbar sind Tickets nur für Admins, den Ersteller,
-        -- direkt zugewiesene Benutzer und Mitglieder zugewiesener Gruppen.
+        -- Ticket system. Tickets are visible only to admins, the creator,
+        -- directly assigned users and members of assigned groups.
         -- ----------------------------------------------------------
         CREATE TABLE IF NOT EXISTS tickets (
             id TEXT PRIMARY KEY,
@@ -962,7 +951,7 @@ def init_db() -> None:
             created_by TEXT NOT NULL,                 -- username
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
-            due_date INTEGER,                         -- Fälligkeit (ms) oder NULL
+            due_date INTEGER,                         -- due date (ms) or NULL
             resolved_at INTEGER,
             resolved_by TEXT
         );
@@ -997,30 +986,30 @@ def init_db() -> None:
     )
     _conn.commit()
 
-    # Migration: Spalten für VM/LXC-Kennzeichnung nachrüsten, falls die
-    # clients-Tabelle noch aus einer älteren Version stammt.
+    # Migration: add columns for VM/LXC marking if the clients table still
+    # comes from an older version.
     _migrate_add_column("clients", "device_type", "TEXT DEFAULT 'physical'")  # 'physical' | 'vm' | 'lxc'
-    # "Alle Agents aktualisieren" mit Offline-Option: Flag merkt sich, dass der
-    # Client ein Agent-Update bekommen soll, sobald er wieder online ist.
+    # "Update all agents" with an offline option: the flag remembers that the
+    # client should receive an agent update as soon as it is back online.
     _migrate_add_column("clients", "pending_agent_update", "INTEGER DEFAULT 0")
-    # Silent-Modus für den Remote-Bildschirm (einmalig, siehe sockets.py) und
-    # serverseitig gespeicherte UI-Einstellungen (Layouts, Favoriten, ...),
-    # damit sie in JEDEM Browser gleich sind (nicht pro Browser/localStorage).
+    # Silent mode for the remote screen (one-off, see sockets.py) and
+    # server-side stored UI settings (layouts, favorites, ...), so they are the
+    # same in EVERY browser (not per browser/localStorage).
     _migrate_add_column("users", "silent_screen", "INTEGER DEFAULT 0")
     _migrate_add_column("users", "ui_prefs", "TEXT")
     _migrate_add_column("users", "email", "TEXT")
-    # Oberflaechen-Design je Benutzer: '' = Standard der Installation
-    # (Einstellung "default_design"), 'futuristic' = Desktop mit Fenstern,
-    # 'standard' = klassisch (feste Navigation links, Inhalte als Tabs).
+    # UI design per user: '' = installation default (setting "default_design"),
+    # 'futuristic' = desktop with windows, 'standard' = classic (fixed
+    # navigation on the left, content as tabs).
     _migrate_add_column("users", "design", "TEXT DEFAULT ''")
-    # Client-Websites: Öffnen im internen Browser-Fenster oder externen Tab.
+    # Client websites: open in the internal browser window or an external tab.
     _migrate_add_column("client_websites", "open_mode", "TEXT DEFAULT 'external'")
-    _migrate_add_column("clients", "agent_version", "TEXT")  # gemeldete Agent-Version (für "veraltet"-Hinweis)
-    # Automatisches Agent-Update pro Client: 'global' = folgt der Einstellung
-    # in den Settings, 'on' = immer, 'off' = nie.
+    _migrate_add_column("clients", "agent_version", "TEXT")  # reported agent version (for the "outdated" hint)
+    # Automatic agent update per client: 'global' = follows the setting in
+    # Settings, 'on' = always, 'off' = never.
     _migrate_add_column("clients", "auto_update", "TEXT NOT NULL DEFAULT 'global'")
-    # Auto-Erkennung des Gerätetyps: Der Agent meldet vm/lxc - übernommen wird
-    # das aber erst nach BESTÄTIGUNG durch den Nutzer im Client-Panel.
+    # Auto-detection of the device type: the agent reports vm/lxc - but this
+    # is applied only after CONFIRMATION by the user in the client panel.
     _migrate_add_column("clients", "detected_device_type", "TEXT")
     _migrate_add_column("clients", "device_type_ack", "INTEGER NOT NULL DEFAULT 0")
     # Device icon: the agent reports its kind (laptop/pc/server/hypervisor/vm/lxc/docker),
@@ -1028,34 +1017,34 @@ def init_db() -> None:
     # the topology map (frontend js/app/deviceicons.js).
     _migrate_add_column("clients", "detected_kind", "TEXT")
     _migrate_add_column("clients", "icon_type", "TEXT NOT NULL DEFAULT ''")
-    # --- NODE-STUFE -------------------------------------------------
-    # Ein normaler Client meldet Metriken und fuehrt Befehle aus. Eine NODE
-    # kann zusaetzlich als Brueckenkopf ins Netz dienen: eigener
-    # VPN-Endpunkt, Reverse Proxy, optional L2-Bruecke. Die dafuer noetigen
-    # Zusatzmodule werden AUSSCHLIESSLICH auf Nodes nachgeladen - ein
-    # gewoehnlicher Client bekommt davon nichts zu sehen.
-    # Die IPv4-Netze, in denen der Client haengt (JSON-Liste, vom Agenten
-    # gemeldet). Grundlage fuer Site-to-Site-Routen - vorher wurde pauschal
-    # /24 angenommen, was bei /16 oder /22 falsche Routen ergab.
+    # --- NODE TIER --------------------------------------------------
+    # A normal client reports metrics and runs commands. A NODE can
+    # additionally serve as a bridgehead into the network: its own VPN
+    # endpoint, reverse proxy, optionally an L2 bridge. The add-on modules
+    # needed for that are loaded EXCLUSIVELY on nodes - an ordinary client
+    # sees nothing of it.
+    # The IPv4 networks the client is attached to (JSON list, reported by the
+    # agent). Basis for site-to-site routes - previously /24 was assumed
+    # across the board, which produced wrong routes with /16 or /22.
     _migrate_add_column("clients", "lan_subnets", "TEXT")
     _migrate_add_column("clients", "is_node", "INTEGER NOT NULL DEFAULT 0")
-    # Selbstauskunft der Node: welche Module laufen, welcher UDP-Port, ob die
-    # L2-Bruecke (Treiber) verfuegbar ist. JSON, nur informativ.
+    # Self-report of the node: which modules run, which UDP port, whether the
+    # L2 bridge (driver) is available. JSON, informational only.
     _migrate_add_column("clients", "node_caps", "TEXT")
-    # Oeffentlich erreichbare UDP-Adresse der Node ("host:port"), vom Backend
-    # aus dem Probe-Paket der Node ermittelt. Leer = nur ueber das Backend
-    # erreichbar (Relay-Betrieb).
+    # Publicly reachable UDP address of the node ("host:port"), determined by
+    # the backend from the node's probe packet. Empty = reachable only via the
+    # backend (relay operation).
     _migrate_add_column("clients", "node_endpoint", "TEXT")
-    # Zeitpunkt der letzten erfolgreichen Erreichbarkeitspruefung (ms).
+    # Time of the last successful reachability check (ms).
     _migrate_add_column("clients", "node_endpoint_checked", "INTEGER NOT NULL DEFAULT 0")
-    # VPN-Tunnel: Betriebsart, Transportweg und L2-Bruecke nachruesten.
+    # VPN tunnels: add operating mode, transport path and L2 bridge.
     _migrate_add_column("vpn_tunnels", "mode", "TEXT NOT NULL DEFAULT 'client'")
     _migrate_add_column("vpn_tunnels", "transport", "TEXT NOT NULL DEFAULT 'relay'")
     _migrate_add_column("vpn_tunnels", "l2", "INTEGER NOT NULL DEFAULT 0")
 
-    # Nodes (neu): ein eigener Prozess auf dem Client, unabhaengig vom Agenten.
-    # Siehe app/node_manager.py. Die alten Spalten clients.is_node/node_* sind
-    # Altlast des frueheren Node-Konzepts und werden nicht mehr benutzt.
+    # Nodes (new): a separate process on the client, independent of the agent.
+    # See app/node_manager.py. The old columns clients.is_node/node_* are
+    # legacy of the earlier node concept and are no longer used.
     _conn.execute("""
         CREATE TABLE IF NOT EXISTS nodes (
             client_id   TEXT PRIMARY KEY,
@@ -1063,77 +1052,77 @@ def init_db() -> None:
             state       TEXT NOT NULL DEFAULT 'installing',  -- installing|installed|removing|error
             error       TEXT,
             version     TEXT,
-            info        TEXT,       -- JSON: Betriebssystem, Docker-Zustand ...
-            modules     TEXT,       -- JSON: auf der Node installierte Node-Module
+            info        TEXT,       -- JSON: operating system, Docker state ...
+            modules     TEXT,       -- JSON: node modules installed on the node
             created_at  INTEGER NOT NULL DEFAULT 0,
             last_seen   INTEGER NOT NULL DEFAULT 0
         )""")
     _conn.commit()
-    _migrate_add_column("enrollment_tokens", "client_name", "TEXT")  # optionaler Wunschname beim Onboarding
-    _migrate_add_column("users", "accent", "TEXT DEFAULT 'teal'")  # persönliche Farbpalette
-    _migrate_add_column("users", "auth_realm", "TEXT")  # NULL = lokaler User, sonst Realm-ID (AD)
-    _migrate_add_column("users", "relay_password", "TEXT")  # (alt, ungenutzt) - früheres Einmalpasswort
-    _migrate_add_column("users", "relay_ha1", "TEXT")  # Digest-HA1 = MD5(user:realm:konto-passwort), bei Login gesetzt
-    _migrate_add_column("clients", "relay_enabled", "INTEGER NOT NULL DEFAULT 0")  # 1 = im Explorer-Relay freigegeben
-    # Automatisches Schließen des Relays: Unix-Zeit in ms, zu der die Freigabe
-    # automatisch aufgehoben wird. 0 = nie (bleibt dauerhaft offen).
+    _migrate_add_column("enrollment_tokens", "client_name", "TEXT")  # optional desired name during onboarding
+    _migrate_add_column("users", "accent", "TEXT DEFAULT 'teal'")  # personal color palette
+    _migrate_add_column("users", "auth_realm", "TEXT")  # NULL = local user, else realm ID (AD)
+    _migrate_add_column("users", "relay_password", "TEXT")  # (old, unused) - former one-time password
+    _migrate_add_column("users", "relay_ha1", "TEXT")  # digest HA1 = MD5(user:realm:account-password), set at login
+    _migrate_add_column("clients", "relay_enabled", "INTEGER NOT NULL DEFAULT 0")  # 1 = released in the explorer relay
+    # Automatic closing of the relay: Unix time in ms at which the release is
+    # lifted automatically. 0 = never (stays permanently open).
     _migrate_add_column("clients", "relay_expires_at", "INTEGER NOT NULL DEFAULT 0")
-    # Favorisierter Arbeitsordner pro Client (erscheint im Web-Explorer in der
-    # Laufwerks-/Wurzel-Ansicht, z.B. /var/www bei einem Webhost). '' = keiner.
+    # Favorite working folder per client (appears in the web explorer in the
+    # drive/root view, e.g. /var/www on a web host). '' = none.
     _migrate_add_column("clients", "fav_dir", "TEXT NOT NULL DEFAULT ''")
-    # AD-Gruppen, die nichts mit dem RMM zu tun haben, können als "unmanaged"
-    # markiert werden: sie landen in einem standardmäßig eingeklappten Ordner
-    # in der Rechte-/Gruppenauswahl und werden AD-Benutzern nicht zugewiesen.
+    # AD groups that have nothing to do with the RMM can be marked as
+    # "unmanaged": they land in a folder that is collapsed by default in the
+    # rights/group selection and are not assigned to AD users.
     _migrate_add_column("groups", "unmanaged", "INTEGER NOT NULL DEFAULT 0")
-    # Standard-Gruppen: '' = normale Gruppe, 'user' = jeder neue Benutzer kommt
-    # automatisch hinein, 'admin' = jeder neue Administrator.
+    # Default groups: '' = normal group, 'user' = every new user is added
+    # automatically, 'admin' = every new administrator.
     _migrate_add_column("groups", "auto_assign", "TEXT NOT NULL DEFAULT ''")
-    _migrate_add_column("screen_recordings", "format", "TEXT NOT NULL DEFAULT 'frames'")  # 'frames' (alt) | 'video' (Client-Aufnahme)
-    _migrate_add_column("scripts", "folder", "TEXT NOT NULL DEFAULT ''")  # Ordner-Name für die Scripts-App ('' = kein Ordner)
-    _migrate_add_column("metrics_history", "extra", "TEXT")  # JSON-Snapshot aller Metriken (Historie für Ping/Temp/Power/...)
-    # Garantie-Ende pro Client (Unix-ms, NULL = keine Garantie hinterlegt).
+    _migrate_add_column("screen_recordings", "format", "TEXT NOT NULL DEFAULT 'frames'")  # 'frames' (old) | 'video' (client recording)
+    _migrate_add_column("scripts", "folder", "TEXT NOT NULL DEFAULT ''")  # folder name for the Scripts app ('' = no folder)
+    _migrate_add_column("metrics_history", "extra", "TEXT")  # JSON snapshot of all metrics (history for Ping/Temp/Power/...)
+    # Warranty end per client (Unix ms, NULL = no warranty stored).
     _migrate_add_column("clients", "warranty_until", "INTEGER")
-    # "Essentielles" Gerät: 1 = kritisch - wird es offline, zeigt die Sidebar
-    # das Geräte-Icon ROT (statt grau). Gesetzt im Client-Edit-Dialog.
+    # "Essential" device: 1 = critical - if it goes offline, the sidebar shows
+    # the device icon RED (instead of gray). Set in the client edit dialog.
     _migrate_add_column("clients", "essential", "INTEGER NOT NULL DEFAULT 0")
-    # Kurzname (Anzeige in Sidebar/Topologie/Inventar statt des Hostnamens)
-    # und freie Tags (kommagetrennt, z.B. "produktion,halle2,drucker").
+    # Short name (shown in sidebar/topology/inventory instead of the hostname)
+    # and free tags (comma-separated, e.g. "production,hall2,printer").
     _migrate_add_column("clients", "short_name", "TEXT NOT NULL DEFAULT ''")
     _migrate_add_column("clients", "tags", "TEXT NOT NULL DEFAULT ''")
-    # Wartungsmodus (Core): Ende als Unix-ms, 0 = "bis ich es selbst ausmache".
-    # Aktiv ist er, solange status_override = 'maintenance' ist (siehe
-    # client_maintenance()). Waehrend der Wartung schweigen Alarme, und
-    # Schutzmechanismen (USB-Sperre, Patch-Zeitfenster ...) sind ausgesetzt.
+    # Maintenance mode (Core): end as Unix ms, 0 = "until I turn it off
+    # myself". It is active as long as status_override = 'maintenance' (see
+    # client_maintenance()). During maintenance alarms stay silent, and
+    # protection mechanisms (USB lock, patch windows ...) are suspended.
     _migrate_add_column("clients", "maintenance_until", "INTEGER NOT NULL DEFAULT 0")
-    # Ticket-Kommentare: Sichtbarkeit wie bei den Notizen ('all' | 'private' |
-    # 'custom') und die Benutzer-ID des Verfassers (bisher nur der Anzeigename).
+    # Ticket comments: visibility like the notes ('all' | 'private' | 'custom')
+    # and the user ID of the author (previously only the display name).
     _migrate_add_column("ticket_comments", "visibility", "TEXT DEFAULT 'all'")
     _migrate_add_column("ticket_comments", "author_id", "TEXT")
 
-    # Custom-Webhooks: eigene HTTP-Header (JSON-Objekt als Text) und ein
-    # frei definierbares Body-Template mit Platzhaltern ({head}, {body}, ...).
+    # Custom webhooks: custom HTTP headers (JSON object as text) and a freely
+    # definable body template with placeholders ({head}, {body}, ...).
     _migrate_add_column("webhooks", "headers", "TEXT")
     _migrate_add_column("webhooks", "body_template", "TEXT")
 
     # ------------------------------------------------------------------
-    # Chat (WhatsApp-artig): Direktnachrichten + Gruppen mit Gruppen-Admins.
-    # Benachrichtigungs-Regeln: welcher Trigger löst welchen Kanal aus.
+    # Chat (WhatsApp-like): direct messages + groups with group admins.
+    # Notification rules: which trigger fires which channel.
     # ------------------------------------------------------------------
     _conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS chat_conversations (
             id TEXT PRIMARY KEY,
             type TEXT NOT NULL DEFAULT 'dm',        -- 'dm' | 'group'
-            name TEXT,                              -- Gruppenname (bei dm NULL)
-            created_by TEXT,                        -- user_id des Erstellers
+            name TEXT,                              -- group name (NULL for dm)
+            created_by TEXT,                        -- user_id of the creator
             created_at INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS chat_members (
             conversation_id TEXT NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
             user_id TEXT NOT NULL,
-            is_admin INTEGER NOT NULL DEFAULT 0,    -- Gruppen-Admin (bei dm irrelevant)
+            is_admin INTEGER NOT NULL DEFAULT 0,    -- group admin (irrelevant for dm)
             joined_at INTEGER NOT NULL,
-            last_read_at INTEGER NOT NULL DEFAULT 0,-- für Ungelesen-Zähler
+            last_read_at INTEGER NOT NULL DEFAULT 0,-- for the unread counter
             PRIMARY KEY (conversation_id, user_id)
         );
         CREATE TABLE IF NOT EXISTS chat_messages (
@@ -1147,12 +1136,12 @@ def init_db() -> None:
             ON chat_messages(conversation_id, created_at);
 
         -- ----------------------------------------------------------
-        -- Client-Notizen als EINZELNE Einträge mit Sichtbarkeit:
-        --   'all'     -> für alle sichtbar, die den Client sehen dürfen
-        --   'private' -> nur für den Verfasser
-        --   'custom'  -> Verfasser + ausgewählte Benutzer (note_shares)
-        -- Das alte Freitextfeld clients.notes bleibt bestehen und wird
-        -- einmalig als Eintrag mit Sichtbarkeit 'all' übernommen.
+        -- Client notes as INDIVIDUAL entries with visibility:
+        --   'all'     -> visible to everyone allowed to see the client
+        --   'private' -> only for the author
+        --   'custom'  -> author + selected users (note_shares)
+        -- The old free-text field clients.notes stays and is taken over once
+        -- as an entry with visibility 'all'.
         -- ----------------------------------------------------------
         CREATE TABLE IF NOT EXISTS client_notes (
             id TEXT PRIMARY KEY,
@@ -1173,7 +1162,7 @@ def init_db() -> None:
             PRIMARY KEY (note_id, user_id)
         );
 
-        -- Gleiche Sichtbarkeitslogik für Ticket-Kommentare.
+        -- Same visibility logic for ticket comments.
         CREATE TABLE IF NOT EXISTS ticket_comment_shares (
             comment_id TEXT NOT NULL,
             user_id TEXT NOT NULL,
@@ -1181,10 +1170,10 @@ def init_db() -> None:
         );
 
         -- ----------------------------------------------------------
-        -- Aktivitätsprotokoll für Notizen und Tickets.
+        -- Activity log for notes and tickets.
         -- entity_type: 'client_notes' | 'ticket'
         -- entity_id:   client_id      | ticket_id
-        -- action:      z.B. 'note.created', 'ticket.status', 'comment.created'
+        -- action:      e.g. 'note.created', 'ticket.status', 'comment.created'
         -- ----------------------------------------------------------
         CREATE TABLE IF NOT EXISTS activity_log (
             id TEXT PRIMARY KEY,
@@ -1200,12 +1189,12 @@ def init_db() -> None:
             ON activity_log(entity_type, entity_id, created_at);
 
         -- ----------------------------------------------------------
-        -- Medien-Bibliothek des Audio-Players (Media-Hub):
-        --   kind 'local'   -> hochgeladene MP3/MP4 (Datei unter media_files/)
-        --   kind 'youtube' -> gemerkter YouTube-Link (Video oder Playlist)
-        --   kind 'spotify' -> gemerkter Spotify-Link
-        --   kind 'radio'   -> eigener Stream/Sender
-        -- shared = 1: für alle Benutzer sichtbar, sonst nur für den Besitzer.
+        -- Media library of the audio player (media hub):
+        --   kind 'local'   -> uploaded MP3/MP4 (file under media_files/)
+        --   kind 'youtube' -> saved YouTube link (video or playlist)
+        --   kind 'spotify' -> saved Spotify link
+        --   kind 'radio'   -> custom stream/station
+        -- shared = 1: visible to all users, otherwise only to the owner.
         -- ----------------------------------------------------------
         CREATE TABLE IF NOT EXISTS media_items (
             id TEXT PRIMARY KEY,
@@ -1224,8 +1213,8 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_media_owner
             ON media_items(owner_id, kind, created_at);
 
-        -- Wiedergabelisten: buendeln beliebige Eintraege der Bibliothek -
-        -- Radiosender, hochgeladene Dateien, YouTube- und Spotify-Links.
+        -- playlists: bundle arbitrary library entries - radio stations,
+        -- uploaded files, YouTube and Spotify links.
         CREATE TABLE IF NOT EXISTS media_playlists (
             id TEXT PRIMARY KEY,
             owner_id TEXT,
@@ -1236,7 +1225,7 @@ def init_db() -> None:
             favorite INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL
         );
-        -- Zuordnung Liste -> Eintrag. "position" haelt die Reihenfolge fest.
+        -- mapping list -> entry. "position" keeps the order.
         CREATE TABLE IF NOT EXISTS media_playlist_items (
             playlist_id TEXT NOT NULL,
             item_id TEXT NOT NULL,
@@ -1247,17 +1236,16 @@ def init_db() -> None:
             ON media_playlist_items(playlist_id, position);
 
         -- ----------------------------------------------------------
-        -- ORGANISATIONS-HIERARCHIE
-        -- Jeder Knoten (Benutzer ODER Gruppe) kann GENAU EINEN Vorgesetzten
-        -- haben - ebenfalls ein Benutzer oder eine Gruppe. Daraus ergibt sich
-        -- ein Baum: "Wer ist wem unterstellt?".
-        -- Vorgesetzte dürfen die Kalender ihrer Untergebenen sehen und dort
-        -- Termine eintragen (siehe calendar_routes).
+        -- ORGANIZATION HIERARCHY
+        -- Each node (user OR group) can have EXACTLY ONE superior - also a user
+        -- or a group. This yields a tree: "who reports to whom?".
+        -- Superiors may see the calendars of their subordinates and enter
+        -- appointments there (see calendar_routes).
         -- ----------------------------------------------------------
         CREATE TABLE IF NOT EXISTS org_hierarchy (
             child_type TEXT NOT NULL,      -- 'user' | 'group'
             child_id TEXT NOT NULL,
-            parent_type TEXT,              -- NULL = oberste Ebene
+            parent_type TEXT,              -- NULL = top level
             parent_id TEXT,
             updated_at INTEGER NOT NULL,
             PRIMARY KEY (child_type, child_id)
@@ -1266,8 +1254,8 @@ def init_db() -> None:
             ON org_hierarchy(parent_type, parent_id);
 
         -- ----------------------------------------------------------
-        -- KALENDER
-        -- Ein Termin kann sich an Benutzer, Gruppen UND Clients richten
+        -- CALENDAR
+        -- An appointment can target users, groups AND clients
         -- (calendar_targets). importance: low | normal | high | critical
         -- ----------------------------------------------------------
         CREATE TABLE IF NOT EXISTS calendar_events (
@@ -1275,8 +1263,8 @@ def init_db() -> None:
             title TEXT NOT NULL,
             description TEXT NOT NULL DEFAULT '',
             location TEXT NOT NULL DEFAULT '',
-            start_at INTEGER NOT NULL,     -- Unix-ms
-            end_at INTEGER NOT NULL,       -- Unix-ms
+            start_at INTEGER NOT NULL,     -- Unix ms
+            end_at INTEGER NOT NULL,       -- Unix ms
             all_day INTEGER NOT NULL DEFAULT 0,
             importance TEXT NOT NULL DEFAULT 'normal',
             created_by TEXT,
@@ -1294,29 +1282,29 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_cal_target
             ON calendar_targets(target_type, target_id);
 
-        -- Benachrichtigungs-Regeln: "Wenn <trigger> (auf Clients X/Y/Z),
-        -- dann <channel> an <target>". params = JSON (z.B. days_before,
-        -- threshold). last_fired = JSON {key: ts} fuer Cooldown/Dedupe.
+        -- notification rules: "If <trigger> (on clients X/Y/Z), then
+        -- <channel> to <target>". params = JSON (e.g. days_before,
+        -- threshold). last_fired = JSON {key: ts} for cooldown/dedupe.
         CREATE TABLE IF NOT EXISTS notification_rules (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1,
             trigger TEXT NOT NULL,
-            client_ids TEXT NOT NULL DEFAULT '',    -- kommagetrennt, '' = alle Clients
+            client_ids TEXT NOT NULL DEFAULT '',    -- comma-separated, '' = all clients
             channel TEXT NOT NULL,                  -- 'email' | 'webhook' | 'dashboard'
-            target TEXT NOT NULL DEFAULT '',        -- E-Mail-Adresse(n) bzw. webhook_id
+            target TEXT NOT NULL DEFAULT '',        -- email address(es) or webhook_id
             params TEXT NOT NULL DEFAULT '{}',
             last_fired TEXT NOT NULL DEFAULT '{}',
             created_at INTEGER NOT NULL
         );
 
         -- ----------------------------------------------------------
-        -- TODOS (persönliche Aufgabenliste, "Mini-Notion")
-        -- Streng privat: jeder Datensatz hängt an user_id, es gibt keine
-        -- Freigaben. Kategorien sind die Wichtigkeits-Spalten; vier davon
-        -- werden pro Benutzer automatisch angelegt (builtin: high | mid |
-        -- low | archive), weitere kann sich jeder selbst anlegen.
-        -- rank = manuelle Sortierung, kleiner = weiter oben/vorne.
+        -- TODOS (personal task list, "mini Notion")
+        -- Strictly private: every record hangs on user_id, there are no
+        -- shares. Categories are the importance columns; four of them are
+        -- created automatically per user (builtin: high | mid | low |
+        -- archive), everyone can create more themselves.
+        -- rank = manual ordering, smaller = further up/front.
         -- ----------------------------------------------------------
         CREATE TABLE IF NOT EXISTS todo_categories (
             id TEXT PRIMARY KEY,
@@ -1324,7 +1312,7 @@ def init_db() -> None:
             name TEXT NOT NULL,
             color TEXT NOT NULL DEFAULT '#38bdf8',
             rank INTEGER NOT NULL DEFAULT 0,
-            builtin TEXT NOT NULL DEFAULT '',   -- '' = selbst angelegt
+            builtin TEXT NOT NULL DEFAULT '',   -- '' = self-created
             created_at INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_todo_cat_user
@@ -1334,15 +1322,15 @@ def init_db() -> None:
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
             category_id TEXT NOT NULL,
-            prev_category_id TEXT NOT NULL DEFAULT '',  -- Kategorie vor dem Archivieren
+            prev_category_id TEXT NOT NULL DEFAULT '',  -- category before archiving
             title TEXT NOT NULL,
             notes TEXT NOT NULL DEFAULT '',
             done INTEGER NOT NULL DEFAULT 0,
             done_at INTEGER,
-            recurring INTEGER NOT NULL DEFAULT 0,       -- 1 = täglich neu abhaken
-            last_reset TEXT NOT NULL DEFAULT '',        -- 'YYYY-MM-DD' des letzten Tages-Resets
-            last_done_day TEXT NOT NULL DEFAULT '',     -- 'YYYY-MM-DD' des letzten Abhakens
-            streak INTEGER NOT NULL DEFAULT 0,          -- Serie erledigter Tage
+            recurring INTEGER NOT NULL DEFAULT 0,       -- 1 = re-check daily
+            last_reset TEXT NOT NULL DEFAULT '',        -- 'YYYY-MM-DD' of the last daily reset
+            last_done_day TEXT NOT NULL DEFAULT '',     -- 'YYYY-MM-DD' of the last check-off
+            streak INTEGER NOT NULL DEFAULT 0,          -- streak of completed days
             due_at INTEGER,
             rank INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL,
@@ -1352,9 +1340,9 @@ def init_db() -> None:
             ON todos(user_id, category_id, done, rank);
 
         -- ----------------------------------------------------------
-        -- DSGVO: Löschanträge Betroffener (Art. 17).
-        -- Wird nicht sofort ausgeführt - Art. 17 Abs. 3 kennt Ausnahmen,
-        -- deshalb prüft ein Admin. status: open | done | rejected
+        -- GDPR: erasure requests of data subjects (Art. 17).
+        -- Not executed immediately - Art. 17 (3) has exceptions, so an admin
+        -- reviews it. status: open | done | rejected
         -- ----------------------------------------------------------
         CREATE TABLE IF NOT EXISTS erasure_requests (
             id TEXT PRIMARY KEY,
@@ -1363,7 +1351,7 @@ def init_db() -> None:
             kind TEXT NOT NULL DEFAULT 'account',   -- 'account' | 'content'
             reason TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT 'open',
-            note TEXT NOT NULL DEFAULT '',          -- Begründung der Entscheidung
+            note TEXT NOT NULL DEFAULT '',          -- reason for the decision
             created_at INTEGER NOT NULL,
             handled_at INTEGER,
             handled_by TEXT NOT NULL DEFAULT ''
@@ -1372,17 +1360,17 @@ def init_db() -> None:
             ON erasure_requests(status, created_at);
 
         -- ----------------------------------------------------------
-        -- SOFTWARE-PATCHING
-        -- patches = Bestand je Client aus dem letzten Scan. Wird bei jedem
-        -- Scan für den Client ersetzt, nicht ergänzt - sonst stehen längst
-        -- installierte Updates ewig in der Liste.
+        -- SOFTWARE PATCHING
+        -- patches = inventory per client from the last scan. Replaced for the
+        -- client on every scan, not appended - otherwise long-installed
+        -- updates stay in the list forever.
         -- level: security | critical | important | moderate | low | feature | other
         -- source: windows-update | winget | apt | dnf
         -- ----------------------------------------------------------
         CREATE TABLE IF NOT EXISTS patches (
             id TEXT PRIMARY KEY,
             client_id TEXT NOT NULL,
-            uid TEXT NOT NULL,              -- Kennung beim Paketmanager
+            uid TEXT NOT NULL,              -- identifier in the package manager
             name TEXT NOT NULL,
             current_version TEXT NOT NULL DEFAULT '',
             available_version TEXT NOT NULL DEFAULT '',
@@ -1400,21 +1388,21 @@ def init_db() -> None:
         CREATE UNIQUE INDEX IF NOT EXISTS idx_patches_unique
             ON patches(client_id, source, uid);
 
-        -- Auto-Patch-Regeln. scope='global' gilt für alle Clients, die auf
-        -- 'global' stehen; scope='client' mit client_id sticht die globale
-        -- Regel. Gleiche Logik wie beim Agent-Auto-Update.
+        -- auto-patch rules. scope='global' applies to all clients set to
+        -- 'global'; scope='client' with client_id overrides the global rule.
+        -- Same logic as the agent auto-update.
         CREATE TABLE IF NOT EXISTS patch_rules (
             id TEXT PRIMARY KEY,
             scope TEXT NOT NULL DEFAULT 'global',   -- 'global' | 'client'
             client_id TEXT,
             enabled INTEGER NOT NULL DEFAULT 0,
-            levels TEXT NOT NULL DEFAULT 'security,critical',  -- kommagetrennt
-            sources TEXT NOT NULL DEFAULT '',       -- leer = alle Quellen
+            levels TEXT NOT NULL DEFAULT 'security,critical',  -- comma-separated
+            sources TEXT NOT NULL DEFAULT '',       -- empty = all sources
             window_start TEXT NOT NULL DEFAULT '02:00',
             window_end TEXT NOT NULL DEFAULT '05:00',
-            weekdays TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7',    -- 1=Mo
+            weekdays TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7',    -- 1=Mon
             auto_reboot INTEGER NOT NULL DEFAULT 0,
-            exclusions TEXT NOT NULL DEFAULT '',    -- kommagetrennte uids
+            exclusions TEXT NOT NULL DEFAULT '',    -- comma-separated uids
             scan_interval_hours INTEGER NOT NULL DEFAULT 24,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
@@ -1422,7 +1410,7 @@ def init_db() -> None:
         CREATE UNIQUE INDEX IF NOT EXISTS idx_patch_rules_client
             ON patch_rules(scope, COALESCE(client_id, ''));
 
-        -- Verlauf: was wurde wann von wem (oder automatisch) installiert.
+        -- history: what was installed when, by whom (or automatically).
         CREATE TABLE IF NOT EXISTS patch_runs (
             id TEXT PRIMARY KEY,
             client_id TEXT NOT NULL,
@@ -1439,12 +1427,11 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_patch_runs_client
             ON patch_runs(client_id, started_at);
 
-        -- Hosts, deren Zertifikat ein Benutzer im internen Browser
-        -- ausdrücklich akzeptiert hat. Bewusst PRO BENUTZER: eine
-        -- Ausnahme, die einer setzt, darf nicht stillschweigend für alle
-        -- anderen gelten. 'reason' hält fest, WAS am Zertifikat nicht
-        -- stimmte, damit später nachvollziehbar bleibt, wofür die
-        -- Ausnahme einmal gedacht war.
+        -- hosts whose certificate a user explicitly accepted in the
+        -- internal browser. Deliberately PER USER: an exception one user sets
+        -- must not silently apply to everyone else. 'reason' records WHAT was
+        -- wrong with the certificate, so it stays traceable later what the
+        -- exception was once meant for.
         CREATE TABLE IF NOT EXISTS webproxy_trusted_hosts (
             id TEXT PRIMARY KEY,
             username TEXT NOT NULL,
@@ -1458,15 +1445,15 @@ def init_db() -> None:
     )
     _conn.commit()
 
-    # Freigaben ("für bestimmte") gelten auch für GRUPPEN. Die Spalte user_id
-    # trägt weiterhin die ID - subject_type sagt, ob Benutzer oder Gruppe.
-    # MUSS NACH dem CREATE-TABLE-Skript stehen - weiter oben gibt es die
-    # Tabellen note_shares/ticket_comment_shares noch nicht.
-    # Arbeitsbereich / Abteilung eines Benutzers (frei wählbarer Text).
+    # Shares ("for specific") also apply to GROUPS. The user_id column still
+    # carries the ID - subject_type says whether user or group.
+    # MUST come AFTER the CREATE TABLE script - further above the tables
+    # note_shares/ticket_comment_shares do not yet exist.
+    # Workspace / department of a user (free text).
     _migrate_add_column("users", "workspace", "TEXT")
     _migrate_add_column("erasure_requests", "note", "TEXT NOT NULL DEFAULT ''")
-    # Patch-Zusammenfassung direkt am Client: list_clients() macht SELECT *,
-    # damit stehen die Werte ohne Zusatzabfrage in jedem Dashboard-Widget.
+    # Patch summary directly on the client: list_clients() does SELECT *, so
+    # the values are available in every dashboard widget without an extra query.
     _migrate_add_column("clients", "patch_policy", "TEXT NOT NULL DEFAULT 'global'")
     _migrate_add_column("clients", "patch_count", "INTEGER NOT NULL DEFAULT 0")
     _migrate_add_column("clients", "patch_security", "INTEGER NOT NULL DEFAULT 0")
@@ -1477,32 +1464,32 @@ def init_db() -> None:
     _migrate_add_column("ticket_comment_shares", "subject_type", "TEXT NOT NULL DEFAULT 'user'")
     _conn.commit()
 
-    # Migration: Realms um Port, SSL (LDAPS) und einen optionalen zusätzlichen
-    # Benutzer-Filter erweitern (für produktive AD-Anbindungen).
-    _migrate_add_column("realms", "port", "INTEGER")                 # NULL = Standard (389 / 636 bei SSL)
+    # Migration: extend realms with port, SSL (LDAPS) and an optional
+    # additional user filter (for production AD connections).
+    _migrate_add_column("realms", "port", "INTEGER")                 # NULL = default (389 / 636 with SSL)
     _migrate_add_column("realms", "use_ssl", "INTEGER NOT NULL DEFAULT 0")  # 1 = LDAPS
-    _migrate_add_column("realms", "user_filter", "TEXT")            # optionaler zusätzlicher LDAP-Filter
+    _migrate_add_column("realms", "user_filter", "TEXT")            # optional additional LDAP filter
 
-    # Audio-Player: Favoriten-Markierung an Bibliothekseinträgen.
+    # Audio player: favorite marking on library entries.
     _migrate_add_column("media_items", "favorite", "INTEGER NOT NULL DEFAULT 0")
 
-    # Zwei-Faktor-Anmeldung (TOTP). Das Geheimnis wird beim Einrichten erzeugt
-    # und erst nach erfolgreicher Prüfung scharf geschaltet (totp_enabled=1) -
-    # sonst könnte man sich aussperren, wenn die App den Code nicht liefert.
+    # Two-factor login (TOTP). The secret is generated during setup and armed
+    # only after a successful check (totp_enabled=1) - otherwise one could lock
+    # oneself out if the app does not deliver the code.
     _migrate_add_column("users", "totp_secret", "TEXT")
     _migrate_add_column("users", "totp_enabled", "INTEGER NOT NULL DEFAULT 0")
-    _migrate_add_column("users", "totp_backup", "TEXT")   # nur Hashes
+    _migrate_add_column("users", "totp_backup", "TEXT")   # hashes only
 
-    # Migration Metrik-Einstellungen: Wer die ALTEN Defaults (60 s Intervall /
-    # 1 h Aufbewahrung) unverändert gespeichert hat, wird auf die neuen Werte
-    # (10 s / unbegrenzt) gehoben. Bewusst abweichend gesetzte Werte bleiben.
+    # Migration of metric settings: whoever stored the OLD defaults (60 s
+    # interval / 1 h retention) unchanged is lifted to the new values (10 s /
+    # unlimited). Deliberately differing values are kept.
     _conn.execute("DELETE FROM settings WHERE key = 'metrics_interval_seconds' AND value = '60'")
     _conn.execute("DELETE FROM settings WHERE key = 'metrics_retention_hours' AND value = '1'")
 
-    # Falls noch kein Benutzer existiert: Standard-Login admin/admin anlegen,
-    # mit must_change_pw=1, damit beim ersten Login ein neues Passwort gesetzt werden MUSS.
+    # If no user exists yet: create the default login admin/admin, with
+    # must_change_pw=1, so a new password MUST be set at the first login.
     if _conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"] == 0:
-        from app.auth import hash_password  # lokal importiert, um Zirkel-Import zu vermeiden
+        from app.auth import hash_password  # imported locally to avoid a circular import
 
         _conn.execute(
             """
@@ -1512,40 +1499,40 @@ def init_db() -> None:
             (_new_id(), "admin", hash_password("admin"), "Administrator", "admin", 1, _now_ms()),
         )
         _conn.commit()
-        print("[db] Standard-Login angelegt: Benutzername 'admin', Passwort 'admin' (Änderung beim ersten Login erforderlich)")
+        print("[db] default login created: username 'admin', password 'admin' (change required at first login)")
 
-    # Standard-Gruppen (Alle Benutzer / Alle Administratoren) einmalig anlegen
-    # und bestehende Konten nachtragen.
+    # Create the default groups (All users / All administrators) once and
+    # backfill existing accounts.
     _seed_default_groups()
 
-    # Standard-Skripte (Agent-Update, App-Updates) einmalig einspielen.
+    # Seed the default scripts (agent update, app updates) once.
     _seed_default_scripts()
 
-    # Einmalig: Englisch wird die Standardsprache (Server-Texte, Skripte,
-    # Oberflaeche). Bestehende Konten werden umgestellt; wer Deutsch will,
-    # waehlt es danach im Profil (bzw. server_language fuer Server-Texte).
+    # One-off: English becomes the default language (server texts, scripts,
+    # UI). Existing accounts are switched over; whoever wants German selects it
+    # afterwards in the profile (or server_language for server texts).
     if not get_setting("lang_default_en_done"):
         set_setting("server_language", "en")
         _conn.execute("UPDATE users SET language = 'en' WHERE language = 'de' OR language = '' OR language IS NULL")
         set_setting("lang_default_en_done", "1")
         _conn.commit()
-        print("[db] Standardsprache auf Englisch umgestellt (einmalig).")
+        print("[db] default language switched to English (one-off).")
 
 
 # ------------------------------------------------------------------
-# STANDARD-GRUPPEN
+# DEFAULT GROUPS
 # ------------------------------------------------------------------
-# Zwei Gruppen, in die neue Konten automatisch aufgenommen werden:
-#   "Alle Benutzer"          -> jeder Account
-#   "Alle Administratoren"   -> jeder Account mit der Rolle 'admin'
+# Two groups into which new accounts are added automatically:
+#   "Alle Benutzer"          -> every account
+#   "Alle Administratoren"   -> every account with the role 'admin'
 #
-# Sie sind ganz normale Gruppen: Rechte lassen sich in der Rechte-Verwaltung
-# frei anpassen, und sie duerfen geloescht werden - der Seed laeuft nur EINMAL
-# (Settings-Flag 'default_groups_seeded'), sie tauchen also nicht wieder auf.
+# They are perfectly normal groups: rights can be adjusted freely in the
+# rights management, and they may be deleted - the seed runs only ONCE
+# (settings flag 'default_groups_seeded'), so they do not reappear.
 #
-# Die Startrechte sind bewusst zurueckhaltend gewaehlt: anmelden, eigenes
-# Dashboard, Profilname, persoenliche Werkzeuge. NICHTS, was fremde Geraete
-# oder Daten sichtbar macht ('access_clients' fehlt absichtlich).
+# The starting rights are deliberately conservative: login, own dashboard,
+# profile name, personal tools. NOTHING that reveals other people's devices
+# or data ('access_clients' is intentionally missing).
 DEFAULT_GROUP_USER = "Alle Benutzer"
 DEFAULT_GROUP_ADMIN = "Alle Administratoren"
 DEFAULT_GROUP_SUPPORT = "Alle Support"
@@ -1553,53 +1540,52 @@ DEFAULT_GROUP_SUPPORT = "Alle Support"
 _DEFAULT_USER_PERMS = [
     "login", "see_dashboard", "restore_session", "customize_dashboard",
     "edit_profile_name", "use_todos", "use_calendar",
-    # Tickets: JEDER muss ein Ticket aufmachen und mitlesen koennen. Sonst
-    # laeuft der "Rechte fehlen -> Ticket erstellen"-Weg ins Leere: Genau die
-    # Leute, denen ein Recht fehlt, koennten sich dann nicht einmal melden.
+    # Tickets: EVERYONE must be able to open and read a ticket. Otherwise the
+    # "rights missing -> create a ticket" path leads nowhere: exactly the
+    # people who lack a right could then not even report it.
     "ticket_read", "ticket_create", "ticket_comment",
-    # Modul "spaces" (seit Seed 3): eigener Space + Public Spaces
+    # module "spaces" (since seed 3): own space + public spaces
     "get_user_space", "use_public_space",
 ]
-# Der Admin-Gruppe reicht das Wildcard-Recht: es deckt alle anderen ab.
+# The wildcard right suffices for the admin group: it covers all others.
 _DEFAULT_ADMIN_PERMS = ["admin"]
 
-# Support: bearbeitet die Tickets, die aus fehlenden Rechten entstehen.
-# Bewusst OHNE 'access_clients' - Support soll Tickets bearbeiten koennen,
-# nicht automatisch alle Geraete sehen. Das vergibt man bei Bedarf dazu.
+# Support: works on the tickets that arise from missing rights. Deliberately
+# WITHOUT 'access_clients' - support should be able to work on tickets, not
+# automatically see all devices. That is granted additionally if needed.
 _DEFAULT_SUPPORT_PERMS = _DEFAULT_USER_PERMS + [
     "ticket_edit", "ticket_assign", "ticket_resolve", "see_org",
 ]
 
-# Seed-Version: bei Erhoehung werden fehlende Gruppen angelegt und GENAU DIE
-# in dieser Version neu dazugekommenen Rechte nachgetragen. Absichtlich nicht
-# die komplette Liste - sonst bekaeme ein Administrator Rechte zurueck, die er
-# bewusst aus der Gruppe entfernt hat.
+# Seed version: on an increase, missing groups are created and EXACTLY the
+# rights newly added in this version are backfilled. Deliberately not the
+# complete list - otherwise an administrator would get back rights they
+# deliberately removed from the group.
 _DEFAULT_GROUPS_SEED = "3"
 _SEED_ADD_V2 = {
     DEFAULT_GROUP_USER: ["ticket_read", "ticket_create", "ticket_comment"],
     DEFAULT_GROUP_ADMIN: [],
-    # Die Support-Gruppe ist in dieser Version NEU - sie wird komplett angelegt.
+    # The support group is NEW in this version - it is created completely.
     DEFAULT_GROUP_SUPPORT: _DEFAULT_SUPPORT_PERMS,
 }
-# Seed 3: Modul "spaces" - normale Benutzer (und Support) duerfen ihren eigenen
-# Space und die Public Spaces benutzen.
+# Seed 3: module "spaces" - normal users (and support) may use their own
+# space and the public spaces.
 _SEED_ADD_V3 = {
     DEFAULT_GROUP_USER: ["get_user_space", "use_public_space"],
     DEFAULT_GROUP_ADMIN: [],
     DEFAULT_GROUP_SUPPORT: ["get_user_space", "use_public_space"],
 }
-# Version -> nachzutragende Rechte. Beim Update werden alle Versionen NACH der
-# gespeicherten angewendet.
+# Version -> rights to backfill. On an update all versions AFTER the stored
+# one are applied.
 _SEED_ADDS = {"2": _SEED_ADD_V2, "3": _SEED_ADD_V3}
 
 
 def _seed_default_groups() -> None:
-    # Selbstheilend statt "einmal und nie wieder": Wurde der Seed frueher schon
-    # gesetzt, die Gruppen aber sind nicht (mehr) da - etwa weil sie in einer
-    # aelteren Version gar nicht erst angelegt wurden oder beim Datenbank-
-    # Wechsel verloren gingen -, werden sie erneut erzeugt. Nur wenn beide
-    # Gruppen existieren, bleibt alles unangetastet (dann darf man sie auch
-    # loeschen, ohne dass sie zurueckkommen... siehe unten).
+    # Self-healing instead of "once and never again": if the seed was already
+    # set earlier but the groups are not (or no longer) there - e.g. because an
+    # older version never created them, or they were lost on a database switch
+    # - they are created again. Only if both groups exist does everything stay
+    # untouched (then they may also be deleted without coming back... see below).
     version = get_setting("default_groups_seeded") or ""
     wanted = (
         (DEFAULT_GROUP_USER, _DEFAULT_USER_PERMS, "user"),
@@ -1610,11 +1596,10 @@ def _seed_default_groups() -> None:
         _backfill_default_groups()
         return
     if version:
-        # Aeltere Version: nur ERGAENZEN. Vorhandene Gruppen behalten ihre
-        # Rechte; es werden lediglich fehlende Erlaubnisse dazugelegt und
-        # fehlende Gruppen neu erzeugt. Wer eine Gruppe bewusst geloescht hat,
-        # bekommt sie nicht zurueck - ausser die Support-Gruppe, die es vorher
-        # ueberhaupt nicht gab.
+        # Older version: only EXTEND. Existing groups keep their rights; only
+        # missing permissions are added and missing groups are recreated.
+        # Whoever deliberately deleted a group does not get it back - except
+        # the support group, which did not exist before at all.
         for name, perms, kind in wanted:
             grp = get_group_by_name(name)
             fresh = False
@@ -1635,13 +1620,13 @@ def _seed_default_groups() -> None:
                            get_grants("group", grp["id"]) + add)
         _conn.commit()
         set_setting("default_groups_seeded", _DEFAULT_GROUPS_SEED)
-        print("[db] Standard-Gruppen ergaenzt (inkl. '%s')" % DEFAULT_GROUP_SUPPORT)
+        print("[db] default groups extended (incl. '%s')" % DEFAULT_GROUP_SUPPORT)
         _backfill_default_groups()
         return
     for name, perms, kind in wanted:
         grp = get_group_by_name(name)
-        # Die alte Rechte-Spalte mitfuellen: einige Pruefungen laufen noch
-        # ueber get_user_permissions() statt ueber die Grants.
+        # Also fill the old rights column: some checks still go through
+        # get_user_permissions() instead of the grants.
         legacy = [p for p in perms if p in ALL_PERMISSIONS]
         if not grp:
             grp = create_group(name, legacy)
@@ -1652,13 +1637,13 @@ def _seed_default_groups() -> None:
                    [{"scope": "global", "perm": p, "effect": "allow"} for p in perms])
     _conn.commit()
     set_setting("default_groups_seeded", _DEFAULT_GROUPS_SEED)
-    print(f"[db] Standard-Gruppen angelegt: '{DEFAULT_GROUP_USER}', "
+    print(f"[db] default groups created: '{DEFAULT_GROUP_USER}', "
           f"'{DEFAULT_GROUP_ADMIN}', '{DEFAULT_GROUP_SUPPORT}'")
     _backfill_default_groups()
 
 
 def auto_assign_groups(user_id: str, role: str) -> None:
-    """Traegt einen Benutzer in alle passenden Standard-Gruppen ein."""
+    """Adds a user to all matching default groups."""
     try:
         rows = _conn.execute(
             "SELECT id, auto_assign FROM groups WHERE auto_assign IS NOT NULL "
@@ -1667,8 +1652,9 @@ def auto_assign_groups(user_id: str, role: str) -> None:
         return
     for r in rows:
         kind = (r["auto_assign"] or "").strip()
-        # "user" gilt fuer ALLE Rollen, "admin"/"support"/"api" nur fuer die jeweilige
-        # ("api" = Vorlage "API-Benutzer", Gruppe legt das Modul "api" an).
+        # "user" applies to ALL roles, "admin"/"support"/"api" only to the
+        # respective one ("api" = template "API user", the module "api" creates
+        # the group).
         if kind == "user" or (kind == role and role in ("admin", "support", "api")):
             _conn.execute(
                 "INSERT OR IGNORE INTO user_groups (user_id, group_id) VALUES (?, ?)",
@@ -1677,7 +1663,7 @@ def auto_assign_groups(user_id: str, role: str) -> None:
 
 
 def _backfill_default_groups() -> None:
-    """Bestehende Konten nachtragen - idempotent (INSERT OR IGNORE)."""
+    """Backfill existing accounts - idempotent (INSERT OR IGNORE)."""
     try:
         users = _conn.execute("SELECT id, role FROM users").fetchall()
     except Exception:
@@ -1688,19 +1674,19 @@ def _backfill_default_groups() -> None:
 
 def _seed_default_scripts() -> None:
     """
-    Legt die mitgelieferten Standard-Skripte EINMALIG an (Settings-Flag
-    'default_scripts_seeded'). Dadurch bleiben sie löschbar/bearbeitbar,
-    ohne bei jedem Backend-Start wieder aufzutauchen.
+    Creates the bundled default scripts ONCE (settings flag
+    'default_scripts_seeded'). This keeps them deletable/editable without
+    reappearing on every backend start.
 
-    Enthalten:
-      - Agent Update (Linux)   -> offizielles /agent-dist/update.sh, losgelöst
-      - Agent Update (Windows) -> SYSTEM-Wartungstask (Event 812), Fallback update.ps1
-      - Windows-Apps aktualisieren (winget upgrade --all)
-      - Linux-Pakete aktualisieren (apt/dnf/yum/pacman/zypper)
+    Contains:
+      - Agent Update (Linux)   -> official /agent-dist/update.sh, detached
+      - Agent Update (Windows) -> SYSTEM maintenance task (event 812), fallback update.ps1
+      - Update Windows apps (winget upgrade --all)
+      - Update Linux packages (apt/dnf/yum/pacman/zypper)
     """
-    # Versionierter Seed: "2" = aktueller Stand (mit Ordnern + Ping-Skript).
-    # Bestehende Installationen mit Wert "1" bekommen die Ordner nachgetragen
-    # und fehlende Skripte ergänzt; gelöschte Skripte bleiben gelöscht.
+    # Versioned seed: "2" = current state (with folders + ping script).
+    # Existing installations with value "1" get the folders backfilled and
+    # missing scripts added; deleted scripts stay deleted.
     row = _conn.execute(
         "SELECT value FROM settings WHERE key = 'default_scripts_seeded'"
     ).fetchone()
@@ -1714,39 +1700,39 @@ def _seed_default_scripts() -> None:
             "Agent Update (Linux)",
             "linux",
             "Linux",
-            "# Startet das offizielle Agent-Update. WICHTIG: losgelöst vom\n"
-            "# Agent-Prozess (systemd-run), denn das Update stoppt den\n"
-            "# Agent-Dienst - sonst würde das Update sich selbst mit abschießen.\n"
+            "# Starts the official agent update. IMPORTANT: detached from the\n"
+            "# agent process (systemd-run), because the update stops the agent\n"
+            "# service - otherwise the update would kill itself along with it.\n"
             "BACKEND_URL=$(sed -n 's/^BACKEND_URL=//p' /opt/bytera-rmm-agent/.env | tr -d '\\r')\n"
-            "if [ -z \"$BACKEND_URL\" ]; then echo 'BACKEND_URL nicht gefunden (/opt/bytera-rmm-agent/.env)'; exit 1; fi\n"
+            "if [ -z \"$BACKEND_URL\" ]; then echo 'BACKEND_URL not found (/opt/bytera-rmm-agent/.env)'; exit 1; fi\n"
             "if command -v systemd-run >/dev/null 2>&1; then\n"
             "  systemd-run --collect --quiet bash -c \"curl -fsSL \\\"$BACKEND_URL/agent-dist/update.sh\\\" | bash >/tmp/bytera-agent-update.log 2>&1\"\n"
             "else\n"
             "  nohup bash -c \"curl -fsSL \\\"$BACKEND_URL/agent-dist/update.sh\\\" | bash >/tmp/bytera-agent-update.log 2>&1\" >/dev/null 2>&1 &\n"
             "fi\n"
-            "echo \"Agent-Update gestartet (Log: /tmp/bytera-agent-update.log)\"",
+            "echo \"Agent update started (log: /tmp/bytera-agent-update.log)\"",
         ),
         (
             "Agent Update (Windows)",
             "windows",
             "Windows",
-            "REM Loest das offizielle Agent-Update aus. Bevorzugt ueber den vor-\n"
-            "REM installierten SYSTEM-Wartungstask (Event 812, elevated). Fallback:\n"
-            "REM update.ps1 losgeloest starten (Log: %TEMP%\\bytera-agent-update.log).\n"
-            "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$ok=$false; try { Write-EventLog -LogName Application -Source 'ByteraRMM' -EventId 812 -EntryType Information -Message 'rmm update'; $ok=$true; Write-Host 'Agent-Update per SYSTEM-Task (Event 812) ausgeloest.' } catch {}; if (-not $ok) { $b=(Select-String -Path 'C:\\Program Files\\ByteraRmmAgent\\.env' -Pattern '^BACKEND_URL=(.+)$').Matches[0].Groups[1].Value.Trim(); $cmd='iwr ' + $b + '/agent-dist/update.ps1 -UseBasicParsing | iex > $env:TEMP\\bytera-agent-update.log 2>&1'; Start-Process powershell -WindowStyle Hidden -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-Command',$cmd); Write-Host 'Agent-Update gestartet (update.ps1).' }\"",
+            "REM Triggers the official agent update. Preferably via the pre-\n"
+            "REM installed SYSTEM maintenance task (event 812, elevated). Fallback:\n"
+            "REM start update.ps1 detached (log: %TEMP%\\bytera-agent-update.log).\n"
+            "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$ok=$false; try { Write-EventLog -LogName Application -Source 'ByteraRMM' -EventId 812 -EntryType Information -Message 'rmm update'; $ok=$true; Write-Host 'Agent update triggered via SYSTEM task (event 812).' } catch {}; if (-not $ok) { $b=(Select-String -Path 'C:\\Program Files\\ByteraRmmAgent\\.env' -Pattern '^BACKEND_URL=(.+)$').Matches[0].Groups[1].Value.Trim(); $cmd='iwr ' + $b + '/agent-dist/update.ps1 -UseBasicParsing | iex > $env:TEMP\\bytera-agent-update.log 2>&1'; Start-Process powershell -WindowStyle Hidden -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-Command',$cmd); Write-Host 'Agent update started (update.ps1).' }\"",
         ),
         (
-            "Windows-Apps aktualisieren (winget)",
+            "Update Windows apps (winget)",
             "windows",
             "Windows",
-            "REM Aktualisiert ALLE per winget verwalteten Programme unbeaufsichtigt.\n"
+            "REM Updates ALL programs managed by winget unattended.\n"
             "winget upgrade --all --silent --disable-interactivity --accept-source-agreements --accept-package-agreements --include-unknown",
         ),
         (
-            "Linux-Pakete aktualisieren",
+            "Update Linux packages",
             "linux",
             "Linux",
-            "# Aktualisiert alle Systempakete - erkennt den Paketmanager automatisch.\n"
+            "# Updates all system packages - detects the package manager automatically.\n"
             "export DEBIAN_FRONTEND=noninteractive\n"
             "if command -v apt-get >/dev/null 2>&1; then\n"
             "  apt-get update && apt-get upgrade -y\n"
@@ -1759,17 +1745,17 @@ def _seed_default_scripts() -> None:
             "elif command -v zypper >/dev/null 2>&1; then\n"
             "  zypper --non-interactive update\n"
             "else\n"
-            "  echo 'Kein bekannter Paketmanager gefunden'; exit 1\n"
+            "  echo 'No known package manager found'; exit 1\n"
             "fi",
         ),
     ]
 
     defaults.append((
-        "Ping-Test (1.1.1.1)",
+        "Ping test (1.1.1.1)",
         "any",
         "Test",
-        # Läuft auf BEIDEN Plattformen: Linux nimmt -c 4; unter Windows schlägt
-        # -c fehl und der zweite Aufruf mit -n 4 greift.
+        # Runs on BOTH platforms: Linux takes -c 4; on Windows -c fails and the
+        # second call with -n 4 takes effect.
         "ping -c 4 1.1.1.1 || ping -n 4 1.1.1.1",
     ))
 
@@ -1777,15 +1763,15 @@ def _seed_default_scripts() -> None:
     created = updated = 0
     for name, os_target, folder, command in defaults:
         if name in existing:
-            # Upgrade von Seed-Version 1: Ordner nachtragen, falls der Nutzer
-            # das Skript noch nicht selbst einsortiert hat.
+            # Upgrade from seed version 1: add the folder if the user has not
+            # yet sorted the script themselves.
             if seed_version == "1" and not (existing[name]["folder"] or "").strip():
                 _conn.execute("UPDATE scripts SET folder = ? WHERE id = ?",
                               (folder, existing[name]["id"]))
                 updated += 1
             continue
-        if seed_version == "1" and name != "Ping-Test (1.1.1.1)":
-            continue   # bei Upgrade nur das NEUE Skript ergänzen (gelöschte bleiben weg)
+        if seed_version == "1" and name != "Ping test (1.1.1.1)":
+            continue   # on upgrade only add the NEW script (deleted ones stay gone)
         _conn.execute(
             "INSERT INTO scripts (id, name, command, os, folder, created_at) VALUES (?, ?, ?, ?, ?, ?)",
             (_new_id(), name, command, os_target, folder, _now_ms()),
@@ -1797,7 +1783,7 @@ def _seed_default_scripts() -> None:
     )
     _conn.commit()
     if created or updated:
-        print(f"[db] Standard-Skripte: {created} angelegt, {updated} in Ordner einsortiert")
+        print(f"[db] default scripts: {created} created, {updated} sorted into folders")
 
 
 # ------------------------------------------------------------------
@@ -1820,22 +1806,22 @@ def list_users() -> list[dict]:
 
 
 # ------------------------------------------------------------------
-# Explorer-Relay: Anmeldung + Freigabe pro Client
+# Explorer relay: login + release per client
 # ------------------------------------------------------------------
-# Für die Digest-Authentifizierung (damit Windows sich OHNE Registry-Änderung
-# über HTTP anmelden kann) braucht der Server das HA1 = MD5(user:realm:passwort).
-# Da wir Passwörter nur als bcrypt speichern, berechnen wir das HA1 EINMAL bei
-# der normalen Dashboard-Anmeldung (dort liegt das Klartext-Passwort vor) und
-# legen es ab. So kann sich der Nutzer am Netzlaufwerk mit seinem GANZ NORMALEN
-# Konto-Passwort anmelden.
+# For digest authentication (so Windows can sign in over HTTP WITHOUT a
+# registry change) the server needs the HA1 = MD5(user:realm:password). Since
+# we store passwords only as bcrypt, we compute the HA1 ONCE during the normal
+# dashboard login (where the plaintext password is available) and store it.
+# This way the user can sign in to the network drive with their PERFECTLY
+# NORMAL account password.
 RELAY_REALM = "BYTERA RMM Relay"
 
 
 def _relay_fernet():
-    """Fernet-Instanz, deren Schlüssel aus dem JWT_SECRET abgeleitet wird.
-    Damit wird das Konto-Passwort für die Netzlaufwerk-Anmeldung (Digest)
-    verschlüsselt abgelegt - nötig, weil Digest das Klartext-Passwort braucht,
-    um HA1 für den vom Client gesendeten Benutzernamen zu berechnen."""
+    """Fernet instance whose key is derived from the JWT_SECRET. Used to
+    store the account password for the network-drive login (digest) encrypted
+    - needed because digest requires the plaintext password to compute HA1 for
+    the username sent by the client."""
     import base64, hashlib
     from cryptography.fernet import Fernet
     from app.config import JWT_SECRET
@@ -1844,7 +1830,7 @@ def _relay_fernet():
 
 
 def store_relay_secret(user_id: str, plain_password: str) -> None:
-    """Verschlüsseltes Konto-Passwort für den Relay speichern (im Feld relay_password)."""
+    """Store the encrypted account password for the relay (in the field relay_password)."""
     try:
         token = _relay_fernet().encrypt(plain_password.encode()).decode("ascii")
         _conn.execute("UPDATE users SET relay_password = ? WHERE id = ?", (token, user_id))
@@ -1854,7 +1840,7 @@ def store_relay_secret(user_id: str, plain_password: str) -> None:
 
 
 def get_relay_secret(user_id: str) -> str | None:
-    """Entschlüsseltes Konto-Passwort für die Digest-Berechnung (oder None)."""
+    """Decrypted account password for the digest computation (or None)."""
     row = _conn.execute("SELECT relay_password FROM users WHERE id = ?", (user_id,)).fetchone()
     if not row or not row["relay_password"]:
         return None
@@ -1864,7 +1850,7 @@ def get_relay_secret(user_id: str) -> str | None:
         return None
 
 
-# Rückwärtskompatible Namen (falls anderswo referenziert)
+# Backward-compatible names (in case referenced elsewhere)
 def store_relay_ha1(user_id: str, username: str, plain_password: str) -> None:
     store_relay_secret(user_id, plain_password)
 
@@ -1874,13 +1860,13 @@ def get_relay_ha1(user_id: str) -> str | None:
 
 
 def get_user_by_username_any(username: str) -> dict | None:
-    """Benutzer nur anhand des Benutzernamens (ohne Realm-Suffix) suchen."""
+    """Look up a user only by username (without a realm suffix)."""
     return get_user_by_username(username)
 
 
 def set_client_relay_enabled(client_id: str, enabled: bool, expires_at: int = 0) -> None:
-    """Relay-Freigabe setzen. expires_at = Unix-ms für automatisches Schließen
-    (0 = nie). Beim Sperren wird der Ablaufzeitpunkt immer zurückgesetzt."""
+    """Set the relay release. expires_at = Unix ms for automatic closing
+    (0 = never). When locking, the expiry time is always reset."""
     if enabled:
         _conn.execute(
             "UPDATE clients SET relay_enabled = 1, relay_expires_at = ? WHERE id = ?",
@@ -1893,7 +1879,7 @@ def set_client_relay_enabled(client_id: str, enabled: bool, expires_at: int = 0)
 
 
 def set_client_relay_expiry(client_id: str, expires_at: int) -> None:
-    """Nur den Auto-Schließen-Zeitpunkt eines (bereits freigegebenen) Clients setzen."""
+    """Set only the auto-close time of an (already released) client."""
     _conn.execute("UPDATE clients SET relay_expires_at = ? WHERE id = ?",
                   (int(expires_at or 0), client_id))
     _conn.commit()
@@ -1911,7 +1897,7 @@ def list_relay_enabled_clients() -> list[dict]:
 
 
 def list_expired_relay_clients(now_ms: int) -> list[dict]:
-    """Freigegebene Clients, deren Auto-Schließen-Zeitpunkt erreicht ist (>0)."""
+    """Released clients whose auto-close time has been reached (>0)."""
     rows = _conn.execute(
         "SELECT * FROM clients WHERE relay_enabled = 1 AND relay_expires_at > 0 "
         "AND relay_expires_at <= ?", (int(now_ms),)).fetchall()
@@ -1919,11 +1905,11 @@ def list_expired_relay_clients(now_ms: int) -> list[dict]:
 
 
 # ------------------------------------------------------------------
-# VPN-Tunnel (WireGuard-kompatibel)
+# VPN tunnels (WireGuard-compatible)
 # ------------------------------------------------------------------
 
 # ------------------------------------------------------------------
-# Virtuelles Netz: Mitglieder
+# Virtual network: members
 # ------------------------------------------------------------------
 
 def set_vpn_member(kind: str, ref: str, address: str, label: str = "") -> None:
@@ -1964,7 +1950,7 @@ def remove_vpn_member(kind: str, ref: str) -> None:
 
 
 # ------------------------------------------------------------------
-# Port-Weiterleitungen
+# Port forwards
 # ------------------------------------------------------------------
 
 def create_port_forward(rec: dict) -> None:
@@ -2009,7 +1995,7 @@ def close_port_forward(forward_id: str) -> None:
 
 
 def create_vpn_tunnel(rec: dict) -> None:
-    """Legt einen neuen Tunnel an (Altlast des frueheren VPN)."""
+    """Creates a new tunnel (legacy of the earlier VPN)."""
     _conn.execute(
         """
         INSERT INTO vpn_tunnels
@@ -2036,7 +2022,7 @@ def get_vpn_tunnel(tunnel_id: str) -> dict | None:
 
 def list_vpn_tunnels(active_only: bool = True,
                      client_id: str | None = None) -> list[dict]:
-    """Tunnel-Liste. 'active_only' blendet geschlossene Tunnel aus."""
+    """Tunnel list. 'active_only' hides closed tunnels."""
     sql = "SELECT * FROM vpn_tunnels"
     where, params = [], []
     if active_only:
@@ -2051,7 +2037,7 @@ def list_vpn_tunnels(active_only: bool = True,
 
 
 def list_expired_vpn_tunnels(now_ms: int) -> list[dict]:
-    """Offene Tunnel, deren Ablaufzeitpunkt erreicht ist (expires_at > 0)."""
+    """Open tunnels whose expiry time has been reached (expires_at > 0)."""
     rows = _conn.execute(
         "SELECT * FROM vpn_tunnels WHERE closed_at = 0 AND expires_at > 0 "
         "AND expires_at <= ?", (int(now_ms),)).fetchall()
@@ -2065,18 +2051,18 @@ def close_vpn_tunnel(tunnel_id: str) -> None:
 
 
 def touch_vpn_tunnel(tunnel_id: str, ts_ms: int) -> None:
-    """Merkt den letzten erfolgreichen Handshake (fuer die Uebersicht)."""
+    """Remembers the last successful handshake (for the overview)."""
     _conn.execute("UPDATE vpn_tunnels SET last_handshake = ? WHERE id = ?",
                   (int(ts_ms), tunnel_id))
     _conn.commit()
 
 
 # ------------------------------------------------------------------
-# Node-Stufe
+# Node tier
 # ------------------------------------------------------------------
 
 def set_client_subnets(client_id: str, subnets) -> None:
-    """Merkt die Netze, die der Agent gemeldet hat."""
+    """Remembers the networks the agent reported."""
     import json as _json
     value = _json.dumps([str(x) for x in (subnets or [])][:8])
     _conn.execute("UPDATE clients SET lan_subnets = ? WHERE id = ?",
@@ -2097,7 +2083,7 @@ def get_client_subnets(client_id: str) -> list:
 
 
 # ----------------------------------------------------------------------
-# Nodes (siehe app/node_manager.py)
+# Nodes (see app/node_manager.py)
 # ----------------------------------------------------------------------
 _NODE_JSON_FIELDS = ("info", "modules")
 
@@ -2124,7 +2110,7 @@ def node_list() -> list[dict]:
 
 
 def node_create(client_id: str, token_hash: str) -> None:
-    """Legt die Node an (oder setzt sie mit neuem Token zurueck)."""
+    """Creates the node (or resets it with a new token)."""
     _conn.execute(
         "INSERT OR REPLACE INTO nodes (client_id, token_hash, state, error, version, info, modules, created_at, last_seen) "
         "VALUES (?, ?, 'installing', NULL, NULL, '{}', '{}', ?, 0)",
@@ -2154,7 +2140,7 @@ def node_delete(client_id: str) -> None:
 
 
 def _default_user_language() -> str:
-    """Sprache fuer neue Konten = Server-Sprache (Standard: Englisch)."""
+    """Language for new accounts = server language (default: English)."""
     try:
         from .i18n import server_lang
         return server_lang()
@@ -2173,8 +2159,8 @@ def create_user(username: str, password_hash: str, display_name: str, role: str,
          (email or "").strip() or None, _default_user_language()),
     )
     _conn.commit()
-    # Standard-Gruppen sofort zuweisen, damit ein frisches Konto nicht ohne
-    # jedes Recht dasteht (nicht einmal 'login').
+    # Assign the default groups immediately, so a fresh account is not left
+    # without any right (not even 'login').
     auto_assign_groups(user_id, role)
     return get_user_by_id(user_id)
 
@@ -2190,9 +2176,8 @@ def update_user_password(user_id: str, password_hash: str, must_change_pw: bool 
 def set_user_totp(user_id: str, secret: str | None = None,
                   enabled: bool | None = None, backup: str | None = None) -> None:
     """
-    Zwei-Faktor-Felder eines Benutzers setzen. Nur die übergebenen Werte werden
-    geändert - so lässt sich z.B. ein verbrauchter Wiederherstellungscode
-    entfernen, ohne das Geheimnis anzufassen.
+    Set a user's two-factor fields. Only the provided values are changed - so a
+    used recovery code can be removed, for example, without touching the secret.
     """
     sets, args = [], []
     if secret is not None:
@@ -2208,15 +2193,15 @@ def set_user_totp(user_id: str, secret: str | None = None,
     _conn.commit()
 
 
-# Oberflaechen-Styles: Der Core kennt nur "futuristic" (Desktop mit Fenstern).
-# Weitere Styles (Classic = "standard", Classic Hard = "classic_hard", eigene)
-# kommen aus dem Modul "styles" (src/modules/styles/frontend/styles/*/style.json).
+# UI styles: the core knows only "futuristic" (desktop with windows).
+# Further styles (Classic = "standard", Classic Hard = "classic_hard", custom)
+# come from the module "styles" (src/modules/styles/frontend/styles/*/style.json).
 CORE_DESIGN = "futuristic"
 _DESIGN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,40}$")
 
 
 def available_designs() -> list[str]:
-    """Aktuell waehlbare Styles: Core-Standard + die des Moduls "styles" (wenn aktiv)."""
+    """Currently selectable styles: core default + those of the module "styles" (if active)."""
     out = [CORE_DESIGN]
     try:
         from app import modules as _modules
@@ -2229,15 +2214,15 @@ def available_designs() -> list[str]:
 
 
 def valid_design_id(design: str | None) -> bool:
-    """Speicherbar ist jede gueltig geschriebene ID - auch wenn der Style gerade
-    nicht verfuegbar ist (Modul aus): die Wahl bleibt erhalten und greift wieder,
-    sobald er zurueck ist."""
+    """Any validly written ID can be stored - even if the style is currently
+    unavailable (module off): the choice is kept and takes effect again as soon
+    as it is back."""
     return bool(design) and bool(_DESIGN_ID_RE.match(design))
 
 
 def effective_design(user) -> str:
-    """Style, der fuer den Benutzer gilt: eigene Wahl, sonst Standard der
-    Installation - jeweils nur, wenn verfuegbar; sonst Futuristisch."""
+    """The style that applies for the user: own choice, otherwise the
+    installation default - each only if available; otherwise futuristic."""
     own = ""
     try:
         own = (user["design"] if "design" in user.keys() else "") or ""
@@ -2251,7 +2236,7 @@ def effective_design(user) -> str:
 
 
 def update_user_profile(user_id: str, display_name: str | None = None, language: str | None = None, theme: str | None = None, accent: str | None = None, email: str | None = None, design: str | None = None) -> None:
-    """Aktualisiert nur die übergebenen Felder (die anderen bleiben unverändert)."""
+    """Updates only the provided fields (the others stay unchanged)."""
     user = get_user_by_id(user_id)
     if not user:
         return
@@ -2307,13 +2292,13 @@ def create_tenant(name: str, color: str = "#2dd4bf") -> dict:
 
 def ensure_uncategorized() -> tuple[str, str]:
     """
-    Stellt sicher, dass es einen Tenant "Uncategorized" mit einer Location
-    "Default" gibt, und gibt (tenant_id, location_id) zurück.
+    Ensures there is a tenant "Uncategorized" with a location "Default", and
+    returns (tenant_id, location_id).
 
-    Wird benutzt, wenn ein Client OHNE Tenant/Location hinzugefügt wird -
-    er landet dann automatisch hier statt "heimatlos" zu sein.
+    Used when a client is added WITHOUT a tenant/location - it then lands here
+    automatically instead of being "homeless".
     """
-    # Tenant "Uncategorized" suchen oder anlegen
+    # Find or create the tenant "Uncategorized"
     row = _conn.execute("SELECT id FROM tenants WHERE name = ?", ("Uncategorized",)).fetchone()
     if row:
         tenant_id = row["id"]
@@ -2324,7 +2309,7 @@ def ensure_uncategorized() -> tuple[str, str]:
             (tenant_id, "Uncategorized", "#7f93ad"),
         )
 
-    # Location "Default" innerhalb dieses Tenants suchen oder anlegen
+    # Find or create the location "Default" inside this tenant
     row = _conn.execute(
         "SELECT id FROM locations WHERE tenant_id = ? AND name = ?", (tenant_id, "Default")
     ).fetchone()
@@ -2358,9 +2343,9 @@ def create_location(tenant_id: str, name: str) -> dict:
 
 def _move_clients_to_uncategorized(where_sql: str, params: tuple) -> int:
     """
-    Verschiebt alle Clients, auf die where_sql zutrifft, nach
-    Uncategorized/Default (folder_id wird geleert, da Ordner an der alten
-    Location hängen). Gibt die Anzahl verschobener Clients zurück.
+    Moves all clients matched by where_sql to Uncategorized/Default (folder_id
+    is cleared, since folders belong to the old location). Returns the number
+    of moved clients.
     """
     unc_tenant, unc_location = ensure_uncategorized()
     cur = _conn.execute(
@@ -2372,19 +2357,19 @@ def _move_clients_to_uncategorized(where_sql: str, params: tuple) -> int:
 
 def delete_location(location_id: str) -> dict:
     """
-    Löscht eine Location. Alle Clients darin wandern nach Uncategorized/Default.
-    Die "Default"-Location des Uncategorized-Tenants ist geschützt (Auffangbecken).
-    Ordner der Location werden mitgelöscht (Clients wurden vorher verschoben).
+    Deletes a location. All clients in it move to Uncategorized/Default.
+    The "Default" location of the Uncategorized tenant is protected (catch-all).
+    Folders of the location are deleted too (clients were moved beforehand).
     """
     unc_tenant, unc_location = ensure_uncategorized()
     if location_id == unc_location:
-        raise ValueError("Die Standard-Location 'Uncategorized/Default' kann nicht gelöscht werden")
+        raise ValueError("The default location 'Uncategorized/Default' cannot be deleted")
     if not _conn.execute("SELECT 1 FROM locations WHERE id = ?", (location_id,)).fetchone():
-        raise KeyError("Location nicht gefunden")
+        raise KeyError("location not found")
 
     moved = _move_clients_to_uncategorized("location_id = ?", (location_id,))
-    # Ordner explizit löschen (nicht auf FK-CASCADE verlassen - PRAGMA
-    # foreign_keys ist in SQLite standardmäßig aus).
+    # Delete folders explicitly (do not rely on FK CASCADE - PRAGMA
+    # foreign_keys is off by default in SQLite).
     _conn.execute("DELETE FROM folders WHERE location_id = ?", (location_id,))
     _conn.execute("DELETE FROM locations WHERE id = ?", (location_id,))
     _conn.commit()
@@ -2393,18 +2378,18 @@ def delete_location(location_id: str) -> dict:
 
 def delete_tenant(tenant_id: str) -> dict:
     """
-    Löscht einen Tenant samt aller seiner Locations und Ordner. Alle Clients
-    des Tenants (auch solche ohne Location) wandern nach Uncategorized/Default.
-    Der Uncategorized-Tenant selbst ist geschützt (Auffangbecken).
+    Deletes a tenant including all its locations and folders. All clients of
+    the tenant (including those without a location) move to Uncategorized/Default.
+    The Uncategorized tenant itself is protected (catch-all).
     """
     unc_tenant, _ = ensure_uncategorized()
     if tenant_id == unc_tenant:
-        raise ValueError("Der Tenant 'Uncategorized' kann nicht gelöscht werden")
+        raise ValueError("The tenant 'Uncategorized' cannot be deleted")
     if not _conn.execute("SELECT 1 FROM tenants WHERE id = ?", (tenant_id,)).fetchone():
-        raise KeyError("Tenant nicht gefunden")
+        raise KeyError("tenant not found")
 
-    # Clients über tenant_id ODER über eine Location des Tenants erwischen
-    # (deckt auch inkonsistente Datensätze ab, bei denen nur eins gesetzt ist).
+    # Catch clients via tenant_id OR via a location of the tenant (also covers
+    # inconsistent records where only one is set).
     moved = _move_clients_to_uncategorized(
         "tenant_id = ? OR location_id IN (SELECT id FROM locations WHERE tenant_id = ?)",
         (tenant_id, tenant_id),
@@ -2439,12 +2424,11 @@ def create_folder(location_id: str, name: str, parent_folder_id: str | None = No
 
 def delete_folder(folder_id: str) -> int:
     """
-    Löscht einen Ordner samt aller Unterordner (rekursiv). Clients, die in einem
-    dieser Ordner lagen, verlieren nur ihre Ordner-Zuordnung (folder_id = NULL) -
-    sie bleiben in ihrer Location/ihrem Tenant. Gibt die Anzahl gelöschter Ordner
-    zurück.
+    Deletes a folder including all subfolders (recursively). Clients that were
+    in one of these folders only lose their folder assignment (folder_id = NULL)
+    - they stay in their location/tenant. Returns the number of deleted folders.
     """
-    # Alle betroffenen Ordner-IDs sammeln (der Ordner + alle Nachkommen).
+    # Collect all affected folder IDs (the folder + all descendants).
     to_delete = [folder_id]
     frontier = [folder_id]
     while frontier:
@@ -2455,7 +2439,7 @@ def delete_folder(folder_id: str) -> int:
             to_delete.append(c["id"])
             frontier.append(c["id"])
     placeholders = ",".join("?" for _ in to_delete)
-    # Clients aus diesen Ordnern lösen (bleiben in Location/Tenant).
+    # Detach clients from these folders (they stay in location/tenant).
     _conn.execute(
         f"UPDATE clients SET folder_id = NULL WHERE folder_id IN ({placeholders})",
         to_delete,
@@ -2478,11 +2462,10 @@ def upsert_client(
     ip: str | None,
 ) -> None:
     """
-    Wird aufgerufen, wenn sich ein Agent registriert.
-    Legt den Client neu an (dann landet er zunächst OHNE Tenant/Location,
-    "nicht zugeordnet" - der Admin ordnet ihn im Dashboard per Edit-Dialog
-    einem Tenant/einer Location zu) oder aktualisiert die Basis-Infos,
-    falls er schon existiert.
+    Called when an agent registers.
+    Creates the client (it then lands first WITHOUT a tenant/location,
+    "unassigned" - the admin assigns it to a tenant/location in the dashboard
+    via the edit dialog) or updates the basic info if it already exists.
     """
     now = _now_ms()
     existing = _conn.execute("SELECT id FROM clients WHERE id = ?", (client_id,)).fetchone()
@@ -2507,19 +2490,19 @@ def upsert_client(
 
 
 def touch_client(client_id: str) -> None:
-    """Aktualisiert nur den 'zuletzt gesehen'-Zeitstempel (bei jedem Heartbeat)."""
+    """Updates only the 'last seen' timestamp (on every heartbeat)."""
     _conn.execute("UPDATE clients SET last_seen = ? WHERE id = ?", (_now_ms(), client_id))
     _conn.commit()
 
 
 def apply_detected_device_type(client_id: str, detected: str | None) -> bool:
     """
-    Merkt sich den vom Agenten automatisch erkannten Gerätetyp ("vm"/"lxc")
-    in detected_device_type. Der eigentliche device_type wird NICHT mehr
-    automatisch geändert - stattdessen fragt das Client-Panel den Nutzer
-    einmalig, ob der Client als VM/LXC (mit Host-Auswahl) oder als physisch
-    geführt werden soll (Bestätigung -> device_type_ack = 1).
-    Gibt True zurück, wenn eine (neue) Erkennung gespeichert wurde.
+    Remembers the device type auto-detected by the agent ("vm"/"lxc") in
+    detected_device_type. The actual device_type is NO longer changed
+    automatically - instead the client panel asks the user once whether the
+    client should be treated as VM/LXC (with host selection) or as physical
+    (confirmation -> device_type_ack = 1).
+    Returns True if a (new) detection was stored.
     """
     if detected not in ("vm", "lxc"):
         return False
@@ -2559,7 +2542,7 @@ def get_client(client_id: str) -> dict | None:
 
 
 def set_agent_version(client_id: str, version: str | None) -> None:
-    """Speichert die vom Agenten gemeldete Version (für den 'veraltet'-Hinweis)."""
+    """Stores the version reported by the agent (for the 'outdated' hint)."""
     if not version:
         return
     _conn.execute("UPDATE clients SET agent_version = ? WHERE id = ?", (version, client_id))
@@ -2568,9 +2551,8 @@ def set_agent_version(client_id: str, version: str | None) -> None:
 
 def set_pending_agent_update(client_id: str, on: bool) -> None:
     """
-    Merkt vor (bzw. löscht), dass der Client ein Agent-Update bekommen soll,
-    sobald er sich das nächste Mal verbindet (Offline-Option von
-    "Alle Agenten jetzt aktualisieren").
+    Pre-marks (or clears) that the client should receive an agent update as
+    soon as it connects next time (offline option of "Update all agents now").
     """
     _conn.execute("UPDATE clients SET pending_agent_update = ? WHERE id = ?",
                   (1 if on else 0, client_id))
@@ -2578,29 +2560,29 @@ def set_pending_agent_update(client_id: str, on: bool) -> None:
 
 
 def set_user_silent_screen(user_id: int, on: bool) -> None:
-    """Einmaliger Silent-Modus: Die NÄCHSTE Remote-Bildschirm-Sitzung dieses
-    Benutzers startet ohne Zustimmungs-Dialog am Gerät; danach wird das Flag
-    automatisch wieder gelöscht (siehe sockets.dashboard_screen_start)."""
+    """One-off silent mode: this user's NEXT remote-screen session starts
+    without a consent dialog on the device; afterwards the flag is cleared
+    automatically (see sockets.dashboard_screen_start)."""
     _conn.execute("UPDATE users SET silent_screen = ? WHERE id = ?",
                   (1 if on else 0, user_id))
     _conn.commit()
 
 
-_UI_PREFS_MAX_BYTES = 512 * 1024   # Altbestand: EIN Blob in users.ui_prefs
+_UI_PREFS_MAX_BYTES = 512 * 1024   # legacy: ONE blob in users.ui_prefs
 
-# Neue Ablage: eine Zeile JE SCHLUESSEL statt eines einzigen grossen Blobs.
+# New storage: one row PER KEY instead of a single large blob.
 #
-# Warum der Umbau: Vorher lagen alle UI-Einstellungen zusammen in
-# users.ui_prefs und wurden gegen ein Limit von 512 KB geprueft. Sobald ein
-# einzelner Brocken (Flotten-Verlauf, Benachrichtigungen, grosse Layouts) das
-# Limit sprengte, schlug das GESAMTE Speichern fehl - und mit ihm auch das
-# Startmenue-Layout mit seinen Ordnern. Nach aussen sah das so aus, als wuerde
-# der Browser-Cache "vergessen": In einem anderen Browser/unter einer anderen
-# URL war schlicht nichts da, weil nie etwas ankam.
+# Why the rework: previously all UI settings lay together in users.ui_prefs and
+# were checked against a 512 KB limit. As soon as a single chunk (fleet
+# history, notifications, large layouts) exceeded the limit, the ENTIRE save
+# failed - and with it the start-menu layout with its folders. From the
+# outside this looked as if the browser cache was "forgotten": in another
+# browser/under another URL there was simply nothing, because nothing ever
+# arrived.
 #
-# Jetzt scheitert im schlimmsten Fall EIN Schluessel, nie mehr alle.
-_UI_PREF_KEY_MAX_BYTES = 2 * 1024 * 1024      # 2 MB je Schluessel
-_UI_PREF_TOTAL_MAX_BYTES = 32 * 1024 * 1024   # 32 MB je Benutzer insgesamt
+# Now in the worst case ONE key fails, never all of them again.
+_UI_PREF_KEY_MAX_BYTES = 2 * 1024 * 1024      # 2 MB per key
+_UI_PREF_TOTAL_MAX_BYTES = 32 * 1024 * 1024   # 32 MB per user in total
 
 
 def _ensure_user_prefs_table() -> None:
@@ -2617,7 +2599,7 @@ def _ensure_user_prefs_table() -> None:
 
 
 def get_user_prefs(user_id) -> dict:
-    """Alle UI-Schluessel eines Benutzers als {key: value}."""
+    """All UI keys of a user as {key: value}."""
     _ensure_user_prefs_table()
     out: dict[str, str] = {}
     try:
@@ -2628,8 +2610,8 @@ def get_user_prefs(user_id) -> dict:
             out[r["key"]] = r["value"]
     except Exception:
         pass
-    # Einmalige Uebernahme aus der alten Blob-Spalte, damit bestehende
-    # Installationen ihre Einstellungen behalten.
+    # One-off import from the old blob column, so existing installations keep
+    # their settings.
     if not out:
         raw = get_user_ui_prefs(user_id)
         if raw:
@@ -2647,9 +2629,9 @@ def get_user_prefs(user_id) -> dict:
 
 def merge_user_prefs(user_id, keys: dict) -> None:
     """
-    Einzelne Schluessel schreiben/loeschen (Wert None loescht).
-    Zu grosse Einzelwerte werden uebersprungen - der Rest wird trotzdem
-    gespeichert, damit ein Ausreisser nicht alles blockiert.
+    Write/delete individual keys (value None deletes).
+    Oversized single values are skipped - the rest is stored anyway, so one
+    outlier does not block everything.
     """
     _ensure_user_prefs_table()
     uid = str(user_id)
@@ -2670,7 +2652,7 @@ def merge_user_prefs(user_id, keys: dict) -> None:
             (uid, key, val, _now_ms()))
     _conn.commit()
     if skipped:
-        print(f"[db] UI-Einstellungen zu gross, uebersprungen: {', '.join(skipped)}")
+        print(f"[db] UI settings too large, skipped: {', '.join(skipped)}")
 
 
 def user_prefs_size(user_id) -> int:
@@ -2685,32 +2667,32 @@ def user_prefs_size(user_id) -> int:
 
 
 def get_user_ui_prefs(user_id: int) -> str | None:
-    """Serverseitig gespeicherte UI-Einstellungen (JSON-String) des Benutzers."""
+    """Server-side stored UI settings (JSON string) of the user."""
     row = _conn.execute("SELECT ui_prefs FROM users WHERE id = ?", (user_id,)).fetchone()
     return row["ui_prefs"] if row and row["ui_prefs"] else None
 
 
 def set_user_ui_prefs(user_id: int, prefs_json: str) -> None:
-    """Speichert die UI-Einstellungen (JSON-String, größenbegrenzt)."""
+    """Stores the UI settings (JSON string, size-limited)."""
     if prefs_json and len(prefs_json.encode("utf-8")) > _UI_PREFS_MAX_BYTES:
-        raise ValueError("UI-Einstellungen zu groß (max. 512 KB)")
+        raise ValueError("UI settings too large (max. 512 KB)")
     _conn.execute("UPDATE users SET ui_prefs = ? WHERE id = ?", (prefs_json, user_id))
     _conn.commit()
 
 
 def merge_user_ui_prefs(user_id: int, keys: dict) -> dict:
     """
-    Führt einzelne UI-Schlüssel in den gespeicherten Stand ein, OHNE die
-    übrigen Schlüssel zu verlieren.
+    Merges individual UI keys into the stored state WITHOUT losing the other
+    keys.
 
-    Warum das wichtig ist: Früher hat das Frontend immer den KOMPLETTEN Satz
-    per PUT geschrieben. Öffnete man das RMM über eine andere URL/einen anderen
-    Browser (leerer localStorage) und lief ein Speichervorgang, bevor der
-    Server-Stand geladen war, wurden serverseitig gespeicherte Dinge (offene
-    Ordner im Startmenü, Favoriten, Layouts) überschrieben bzw. gelöscht.
-    Mit dem Merge kann ein Client immer nur das ändern, was er wirklich kennt.
+    Why this matters: previously the frontend always wrote the COMPLETE set via
+    PUT. If one opened the RMM via a different URL/browser (empty localStorage)
+    and a save ran before the server state was loaded, server-side stored
+    things (open folders in the start menu, favorites, layouts) were
+    overwritten or deleted. With the merge a client can only ever change what
+    it actually knows.
 
-    Wert None löscht den Schlüssel gezielt.
+    Value None deletes the key specifically.
     """
     import json as _json
     raw = get_user_ui_prefs(user_id)
@@ -2733,9 +2715,9 @@ def merge_user_ui_prefs(user_id: int, keys: dict) -> dict:
 
 def update_client(client_id: str, fields: dict) -> dict | None:
     """
-    Generisches Update für den Edit-Dialog im Frontend.
-    'fields' ist ein Dict mit den Spalten, die geändert werden sollen,
-    z.B. {"hostname": "Neuer Name", "tenant_id": "...", "color": "#ff0000"}.
+    Generic update for the edit dialog in the frontend.
+    'fields' is a dict with the columns to be changed,
+    e.g. {"hostname": "New name", "tenant_id": "...", "color": "#ff0000"}.
     """
     allowed = {
         "hostname", "tenant_id", "location_id", "folder_id", "parent_client_id",
@@ -2756,27 +2738,27 @@ def update_client(client_id: str, fields: dict) -> dict | None:
 
 def delete_client(client_id: str) -> None:
     _conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
-    # Client-scoped Rechte-Grants mit aufräumen (verwaiste Einträge vermeiden).
+    # Also clean up client-scoped permission grants (avoid orphaned entries).
     _conn.execute("DELETE FROM permission_grants WHERE scope = ?", (client_id,))
     _conn.commit()
 
 
 # ------------------------------------------------------------------
-# WARTUNGSMODUS (Core) - Alarme aus, Schutzmechanismen ausgesetzt
+# MAINTENANCE MODE (Core) - alarms off, protection mechanisms suspended
 # ------------------------------------------------------------------
 
 def client_maintenance(client: dict | None) -> dict:
-    """{"active": bool, "until": ms (0 = bis manuell beendet)} fuer einen Client-Datensatz."""
+    """{"active": bool, "until": ms (0 = until ended manually)} for a client record."""
     if not client or client.get("status_override") != "maintenance":
         return {"active": False, "until": 0}
     until = int(client.get("maintenance_until") or 0)
     if until and until <= _now_ms():
-        return {"active": False, "until": until}       # abgelaufen
+        return {"active": False, "until": until}       # expired
     return {"active": True, "until": until}
 
 
 def in_maintenance(client_id: str | None) -> bool:
-    """Bequemer Test fuer Core und Module (z.B. Notifier, Patching, USB)."""
+    """Convenient test for core and modules (e.g. notifier, patching, USB)."""
     if not client_id:
         return False
     try:
@@ -2786,7 +2768,7 @@ def in_maintenance(client_id: str | None) -> bool:
 
 
 def set_maintenance(client_id: str, minutes: int | None) -> dict:
-    """minutes > 0: fuer X Minuten; 0: bis manuell beendet; None: beenden."""
+    """minutes > 0: for X minutes; 0: until ended manually; None: end."""
     if minutes is None:
         _conn.execute("UPDATE clients SET status_override = NULL, maintenance_until = 0 "
                       "WHERE id = ? AND status_override = 'maintenance'", (client_id,))
@@ -2806,7 +2788,7 @@ def expired_maintenance_ids() -> list[str]:
 
 
 # ------------------------------------------------------------------
-# OFFLINE-WARTESCHLANGE (Aktionen "sobald der Agent online ist")
+# OFFLINE QUEUE (actions "as soon as the agent is online")
 # ------------------------------------------------------------------
 
 def queue_add(client_id: str, kind: str, label: str, payload: dict,
@@ -2852,11 +2834,11 @@ def queue_delete(qid: str) -> None:
 
 
 # ------------------------------------------------------------------
-# AKTIVIERUNG + MODUL-STORE (Settings -> Aktivierung / Modul-Store)
+# ACTIVATION + MODULE STORE (Settings -> Activation / Module Store)
 # ------------------------------------------------------------------
 
 def redeem_activation_key(key: str, username: str | None = None) -> dict:
-    """Speichert einen Aktivierungscode mit Einlösedatum (neueste Zeile = aktiv)."""
+    """Stores an activation code with its redemption date (newest row = active)."""
     row = {"id": _new_id(), "key": key, "redeemed_at": _now_ms(), "redeemed_by": username}
     _conn.execute(
         "INSERT INTO activation_keys (id, key, redeemed_at, redeemed_by) VALUES (?, ?, ?, ?)",
@@ -2867,7 +2849,7 @@ def redeem_activation_key(key: str, username: str | None = None) -> dict:
 
 
 def get_activation() -> dict | None:
-    """Der zuletzt eingelöste Aktivierungscode (oder None)."""
+    """The most recently redeemed activation code (or None)."""
     row = _conn.execute(
         "SELECT * FROM activation_keys ORDER BY redeemed_at DESC LIMIT 1"
     ).fetchone()
@@ -2912,7 +2894,7 @@ def add_audit_entry(username: str | None, action: str, target: str | None = None
 
 
 def list_audit_for_target(target: str, action_prefix: str, limit: int = 500) -> list[dict]:
-    """Audit-Eintraege eines Ziels (z.B. Client) mit Aktions-Praefix, neueste zuerst."""
+    """Audit entries of a target (e.g. client) with an action prefix, newest first."""
     rows = _conn.execute(
         "SELECT * FROM audit_log WHERE target = ? AND action LIKE ? ORDER BY ts DESC LIMIT ?",
         (target, action_prefix + "%", limit),
@@ -2928,19 +2910,19 @@ def list_audit_log(limit: int = 200) -> list[dict]:
 
 
 def cleanup_old_audit_entries(max_age_days: int = 30) -> None:
-    """Löscht Audit-Einträge, die älter als max_age_days sind (Aufbewahrungsfrist)."""
+    """Deletes audit entries older than max_age_days (retention period)."""
     cutoff = _now_ms() - max_age_days * 86400 * 1000
     _conn.execute("DELETE FROM audit_log WHERE ts < ?", (cutoff,))
     _conn.commit()
 
 
 # ------------------------------------------------------------------
-# ENROLLMENT TOKENS (Client-Onboarding)
+# ENROLLMENT TOKENS (client onboarding)
 # ------------------------------------------------------------------
 
 def create_enrollment_token(tenant_id: str | None, location_id: str | None, client_name: str | None = None) -> str:
-    """Erzeugt einen neuen, zufälligen Onboarding-Token."""
-    token = uuid.uuid4().hex  # z.B. "3f9a2b1c..." - lang genug, um nicht erratbar zu sein
+    """Creates a new, random onboarding token."""
+    token = uuid.uuid4().hex  # e.g. "3f9a2b1c..." - long enough to be unguessable
     _conn.execute(
         "INSERT INTO enrollment_tokens (token, tenant_id, location_id, client_name, created_at) VALUES (?, ?, ?, ?, ?)",
         (token, tenant_id, location_id, client_name, _now_ms()),
@@ -2960,14 +2942,14 @@ def mark_enrollment_token_used(token: str) -> None:
 
 
 # ------------------------------------------------------------------
-# SCREEN RECORDINGS (Aufzeichnung von Remote-Sessions)
+# SCREEN RECORDINGS (recording of remote sessions)
 # ------------------------------------------------------------------
 
 def create_recording(client_id: str, client_hostname: str, username: str, file_path: str,
                      fmt: str = "frames") -> str:
-    """Legt einen neuen Recording-Eintrag an und gibt dessen ID zurück.
-    fmt: 'frames' (JPEG-Frames, Standard) oder 'term' (Terminal-Sitzung als
-    Text-Replay - siehe recording.start_term_recording)."""
+    """Creates a new recording entry and returns its ID.
+    fmt: 'frames' (JPEG frames, default) or 'term' (terminal session as a
+    text replay - see recording.start_term_recording)."""
     rec_id = _new_id()
     _conn.execute(
         """INSERT INTO screen_recordings
@@ -2981,7 +2963,7 @@ def create_recording(client_id: str, client_hostname: str, username: str, file_p
 
 def create_video_recording(client_id: str, client_hostname: str, username: str,
                            file_path: str, started_at: int, ended_at: int) -> str:
-    """Legt einen Eintrag für eine im Browser aufgenommene 1:1-Video-Aufzeichnung an."""
+    """Creates an entry for a 1:1 video recording captured in the browser."""
     rec_id = _new_id()
     _conn.execute(
         """INSERT INTO screen_recordings
@@ -2994,7 +2976,7 @@ def create_video_recording(client_id: str, client_hostname: str, username: str,
 
 
 def finish_recording(rec_id: str, frame_count: int) -> None:
-    """Markiert eine Aufzeichnung als beendet und speichert die Frame-Anzahl."""
+    """Marks a recording as finished and stores the frame count."""
     _conn.execute(
         "UPDATE screen_recordings SET ended_at = ?, frame_count = ? WHERE id = ?",
         (_now_ms(), frame_count, rec_id),
@@ -3015,7 +2997,7 @@ def get_recording(rec_id: str) -> dict | None:
 
 
 def delete_recording(rec_id: str) -> dict | None:
-    """Entfernt einen Recording-DB-Eintrag und gibt ihn zurück (zum Datei-Löschen)."""
+    """Removes a recording DB entry and returns it (for file deletion)."""
     rec = get_recording(rec_id)
     if rec:
         _conn.execute("DELETE FROM screen_recordings WHERE id = ?", (rec_id,))
@@ -3025,10 +3007,10 @@ def delete_recording(rec_id: str) -> dict | None:
 
 def prune_missing_recordings() -> int:
     """
-    Entfernt Replay-Einträge, deren Datei auf der Platte nicht mehr existiert
-    (z.B. manuell gelöscht oder Volume gewechselt). WICHTIG: Es wird NUR der
-    screen_recordings-Eintrag entfernt - das Audit-Log bleibt vollständig
-    erhalten. Gibt die Anzahl der entfernten Einträge zurück.
+    Removes replay entries whose file no longer exists on disk (e.g. deleted
+    manually or volume switched). IMPORTANT: only the screen_recordings entry
+    is removed - the audit log is kept completely. Returns the number of
+    removed entries.
     """
     from pathlib import Path as _P
     removed = 0
@@ -3042,7 +3024,7 @@ def prune_missing_recordings() -> int:
                 _conn.execute("DELETE FROM screen_recordings WHERE id = ?", (r["id"],))
                 removed += 1
         except OSError:
-            # Pfad nicht prüfbar (z.B. Netzlaufwerk offline) -> Eintrag behalten.
+            # Path not checkable (e.g. network drive offline) -> keep entry.
             continue
     if removed:
         _conn.commit()
@@ -3050,7 +3032,7 @@ def prune_missing_recordings() -> int:
 
 
 def list_old_recordings(max_age_days: int) -> list[dict]:
-    """Liefert Aufzeichnungen, die älter als max_age_days sind (für Auto-Löschung)."""
+    """Returns recordings older than max_age_days (for auto-deletion)."""
     cutoff = _now_ms() - max_age_days * 86400 * 1000
     rows = _conn.execute(
         "SELECT * FROM screen_recordings WHERE started_at < ?", (cutoff,)
@@ -3059,7 +3041,7 @@ def list_old_recordings(max_age_days: int) -> list[dict]:
 
 
 # ------------------------------------------------------------------
-# SCRIPTS (gespeicherte Befehle)
+# SCRIPTS (saved commands)
 # ------------------------------------------------------------------
 
 def list_scripts() -> list[dict]:
@@ -3096,22 +3078,22 @@ def delete_script(script_id: str) -> None:
 
 
 # ------------------------------------------------------------------
-# GRUPPEN / ROLLEN & RECHTE
+# GROUPS / ROLES & RIGHTS
 # ------------------------------------------------------------------
-# Verfügbare Rechte-Schlüssel (Legacy-Gruppen-Checkboxen, global allow):
+# Available permission keys (legacy group checkboxes, global allow):
 ALL_PERMISSIONS = [
     "login", "screen", "terminal", "explorer", "quick_actions",
     "audit", "manage_users", "manage_clients", "automation",
 ]
 
-# --- Neues, feingranulares Rechte-Vokabular (tri-state Grants) -------------
-# 'admin' ist ein Wildcard (deckt alle anderen Rechte im selben Scope ab).
-# 'access_clients' steuert Sichtbarkeit + Basiszugriff auf Clients.
-# Neben den NEUEN Keys behalten wir die ALTEN Keys gültig, damit bereits
-# gespeicherte Grants weiter auflösen (keine DB-Migration!). Die Zuordnung
-# alt->neu passiert zur Laufzeit über _PERM_IMPLIES (siehe unten).
+# --- New, fine-grained permission vocabulary (tri-state grants) ------------
+# 'admin' is a wildcard (covers all other rights in the same scope).
+# 'access_clients' controls visibility + basic access to clients.
+# Besides the NEW keys we keep the OLD keys valid, so already stored grants
+# still resolve (no DB migration!). The old->new mapping happens at runtime
+# via _PERM_IMPLIES (see below).
 
-# Globale (universelle) Rechte:
+# Global (universal) rights:
 GLOBAL_PERM_KEYS = [
     "admin",
     "login",
@@ -3125,39 +3107,39 @@ GLOBAL_PERM_KEYS = [
     "see_source", "edit_source", "delete_source",
     "manage_branding",
     "manage_sso",
-    # Einstellungen: sehen / Standard-Einstellungen ändern / Admin-Einstellungen
-    # (IP/Port, Server-Update von GitHub, Datenbank, Neustart/Stop, guacd).
+    # Settings: view / change default settings / admin settings
+    # (IP/port, server update from GitHub, database, restart/stop, guacd).
     "see_settings", "manage_settings", "admin_settings",
     "see_permissions", "manage_permissions",
-    # Module verwalten: Modul-App (aktivieren/deaktivieren, Einstellungen,
-    # Teilfunktionen, Crashberichte). Frueher nur fuer Administratoren.
+    # Manage modules: module app (enable/disable, settings, sub-features,
+    # crash reports). Previously only for administrators.
     "manage_modules",
-    # Modul "spaces": eigener Space, Public Spaces, alle Spaces sehen/bearbeiten
+    # module "spaces": own space, public spaces, see/edit all spaces
     "get_user_space", "use_public_space", "see_all_spaces", "edit_all_spaces",
-    # Modul "deployment": Deployment-Server (Seite + Dateien, Relay-Bereich "Deployment")
+    # module "deployment": deployment server (page + files, relay area "Deployment")
     "manage_deployment",
-    # Modul "api": die REST-API (/api/v1) benutzen - zusaetzlich gilt pro Aufruf
-    # dasselbe Recht wie im Dashboard (z.B. Client loeschen -> c_delete).
+    # module "api": use the REST API (/api/v1) - additionally the same right
+    # applies per call as in the dashboard (e.g. delete a client -> c_delete).
     "use_api",
-    # Modul "webserver": Websites anlegen/loeschen und ALLE Websites bearbeiten
+    # module "webserver": create/delete websites and edit ALL websites
     "manage_websites",
-    # Modul "docker": Stacks anlegen, ALLE Container/Images/Volumes/Netzwerke steuern
+    # module "docker": create stacks, control ALL containers/images/volumes/networks
     "manage_docker",
     "manage_cloudflare",
     "manage_headless_screen",
     "manage_canary",
     "manage_ad",
-    "use_bmc",         # Modul "bmc": iLO/iDRAC ansehen und steuern
-    "manage_bmc",      # Modul "bmc": BMC-Verbindungen anlegen/aendern
-    "use_passwords",   # Modul "passwords": Passwort-Manager nutzen
-    "use_geotrack",    # Modul "geotrack": Standorte ansehen
-    "manage_geotrack", # Modul "geotrack": Tracking an/aus, Verlauf loeschen
+    "use_bmc",         # module "bmc": view and control iLO/iDRAC
+    "manage_bmc",      # module "bmc": create/change BMC connections
+    "use_passwords",   # module "passwords": use the password manager
+    "use_geotrack",    # module "geotrack": view locations
+    "manage_geotrack", # module "geotrack": tracking on/off, clear history
     "manage_tenants",
     "use_tenants",
     "manage_dist",
     "manage_temp_usb",
     "use_browser",
-    # Modul "console": RMM-Konsole benutzen (SSH, Dashboard, Client-App) - je Befehl zusaetzlich das passende Recht
+    # module "console": use the RMM console (SSH, dashboard, client app) - per command additionally the matching right
     "use_console",
     "create_users",
     "network_scan", "port_scan",
@@ -3166,135 +3148,133 @@ GLOBAL_PERM_KEYS = [
     "automation",
     "manage_hierarchy",
     "play_games",
-    # Audio-Player / Media-Hub (eigene Bibliothek, Uploads)
+    # audio player / media hub (own library, uploads)
     "use_media",
-    # Medien fuer ALLE bereitstellen: Uploads, Links und Wiedergabelisten, die
-    # jeder Benutzer sieht. Bewusst ein eigenes Recht - wer den Player benutzen
-    # darf ("use_media"), soll nicht automatisch die gemeinsame Bibliothek
-    # veraendern koennen.
+    # Provide media for EVERYONE: uploads, links and playlists that every user
+    # sees. Deliberately a separate right - whoever may use the player
+    # ("use_media") should not automatically be able to change the shared
+    # library.
     "share_media",
     "manage_favorites",
     "use_relay", "relay_unlimited",
-    # Chat-App (Direktnachrichten & Gruppen)
+    # chat app (direct messages & groups)
     "use_chat",
-    # Persönliche Todo-Liste (streng privat, keine Freigaben)
+    # personal todo list (strictly private, no shares)
     "use_todos",
-    # Software-Patching: Bestand sehen und Updates anstoßen bzw. Regeln setzen.
+    # software patching: view inventory and trigger updates or set rules.
     "patching", "manage_patching",
-    # Datenschutz: Fristen setzen, Auskunft über Dritte, Löschung ausführen.
-    # Bewusst NICHT in 'admin_settings' enthalten - wer Server-Einstellungen
-    # ändern darf, muss nicht automatisch fremde Personendaten einsehen.
+    # Privacy: set deadlines, information about third parties, execute erasure.
+    # Deliberately NOT included in 'admin_settings' - whoever may change server
+    # settings need not automatically see other people's personal data.
     "manage_privacy",
-    # (Frueher stand hier zusaetzlich "super_admin" - "Voll-Administrator".
-    #  Das war dasselbe wie das 'admin'-Wildcard und nur verwirrend: zwei
-    #  Haekchen mit identischer Wirkung. Beide sind jetzt zu 'admin'
-    #  zusammengefasst; 'super_admin' bleibt als Alt-Schluessel gueltig, damit
-    #  bereits vergebene Rechte weiter greifen.)
-    # Neue Clients aufnehmen (Enrollment-Token erzeugen, Agent-Installer holen)
+    # (Previously there was also "super_admin" - "full administrator" - here.
+    #  That was the same as the 'admin' wildcard and merely confusing: two
+    #  checkboxes with identical effect. Both are now merged into 'admin';
+    #  'super_admin' stays valid as a legacy key so already granted rights
+    #  keep working.)
+    # Enroll new clients (create enrollment token, fetch agent installer)
     "add_client",
-    # Organigramm (Über-/Unterstellung von Benutzern und Gruppen)
+    # org chart (super-/subordination of users and groups)
     "see_org", "manage_org",
-    # Kalender
-    "use_calendar",      # eigenen Kalender + eigene Termine sehen
-    "manage_calendar",   # Termine für andere anlegen/ändern (über die eigene
-                         # Vorgesetzten-Rolle hinaus)
-    # Remote-Bildschirm ohne Anfrage: erlaubt den einmaligen "Silent-Modus"
-    # im Profil (nächste Remote-Sitzung ohne Zustimmungs-Dialog am Gerät).
+    # Calendar
+    "use_calendar",      # see own calendar + own appointments
+    "manage_calendar",   # create/change appointments for others (beyond one's
+                         # own superior role)
+    # Remote screen without a request: allows the one-off "silent mode" in the
+    # profile (next remote session without a consent dialog on the device).
     "screen_silent",
-    # Ticket-System (Sichtbarkeit einzelner Tickets zusätzlich auf
-    # Admins/Ersteller/Zugewiesene begrenzt, siehe tickets_routes.py).
-    # VPN: App benutzen bzw. Tunnel ohne Ablaufzeit ausstellen.
+    # Ticket system (visibility of individual tickets additionally limited to
+    # admins/creator/assignees, see tickets_routes.py).
+    # VPN: use the app or issue tunnels without an expiry.
     "use_vpn", "vpn_unlimited",
     "ticket_read", "ticket_create", "ticket_edit", "ticket_comment",
     "ticket_assign", "ticket_resolve", "ticket_delete",
-    # Modul "inventory": Inventar ansehen bzw. Geraete/Lager verwalten
+    # module "inventory": view inventory or manage devices/stock
     "see_inventory", "manage_inventory",
 ]
 
-# Pro-Client-Rechte:
+# Per-client rights:
 CLIENT_ONLY_PERM_KEYS = [
     "access_clients",
-    "manage_clients",       # bearbeiten
-    "manage_agent",         # aktualisieren (Agent-Update)
-    "c_delete",             # löschen
+    "manage_clients",       # edit
+    "manage_agent",         # update (agent update)
+    "c_delete",             # delete
     "c_screen", "c_screen_view",
     "c_terminal", "c_terminal_console",
     "c_guacamole",
-    "c_power",              # runterfahren/neustarten
+    "c_power",              # shut down/restart
     "c_explorer_view", "c_explorer_edit",
     "c_taskmanager_view", "c_taskmanager_kill",
     "c_relay", "c_relay_unlimited",
-    "c_vpn", "c_vpn_unlimited",     # VPN-Tunnel auf diesen Client ausstellen
-    # Node dieses Clients verwalten: installieren/entfernen/aktualisieren,
-    # Docker installieren, Node-Module bereitstellen/entfernen/steuern.
-    # Wer es auf mindestens einem Client hat, sieht die Node-Uebersicht
-    # (nur mit diesen Clients) und den Katalog der Node-Module.
+    "c_vpn", "c_vpn_unlimited",     # issue VPN tunnels to this client
+    # Manage this client's node: install/remove/update, install Docker,
+    # provide/remove/control node modules. Whoever has it on at least one
+    # client sees the node overview (only with those clients) and the catalog
+    # of node modules.
     "manage_nodes",
-    # Modul "proxmox" (pro Agent mit verbundener Proxmox-Instanz). Zusaetzlicher
-    # Bereich "Standard-Proxmox" (pve:*) = gilt fuer ALLE Agenten mit Proxmox.
-    "pve_access",      # Proxmox-Dashboard sehen
-    "pve_vms_all",     # alle VMs sehen
-    "pve_lxc_all",     # alle LXC-Container sehen
-    "pve_power",       # Gaeste starten/stoppen/neu starten
-    "pve_console",     # Konsole (noVNC / Weboberflaeche)
-    "pve_snapshot",    # Snapshots anlegen/zuruecksetzen/loeschen
-    "pve_backup",      # Backups (vzdump) anlegen/ansehen
-    "pve_config",      # Konfiguration von Gaesten aendern
-    "pve_storage",     # Storage sehen/Inhalte
-    "pve_users",       # Proxmox-Benutzer/Gruppen/ACL
-    "pve_nodes",       # Nodes, Aufgaben, Dienste
-    "pve_api",         # beliebige Proxmox-API-Aufrufe (API-Explorer) - maechtig!
-    "pve_manage",      # Proxmox-Verbindung einrichten + Gast-Freigaben verwalten
-    "c_portforward",                # Port-Weiterleitung auf diesen Client
+    # module "proxmox" (per agent with a connected Proxmox instance). Additional
+    # area "Default Proxmox" (pve:*) = applies to ALL agents with Proxmox.
+    "pve_access",      # see the Proxmox dashboard
+    "pve_vms_all",     # see all VMs
+    "pve_lxc_all",     # see all LXC containers
+    "pve_power",       # start/stop/restart guests
+    "pve_console",     # console (noVNC / web interface)
+    "pve_snapshot",    # create/revert/delete snapshots
+    "pve_backup",      # create/view backups (vzdump)
+    "pve_config",      # change guest configuration
+    "pve_storage",     # see storage/contents
+    "pve_users",       # Proxmox users/groups/ACL
+    "pve_nodes",       # nodes, tasks, services
+    "pve_api",         # arbitrary Proxmox API calls (API explorer) - powerful!
+    "pve_manage",      # set up the Proxmox connection + manage guest shares
+    "c_portforward",                # port forward to this client
     "c_notes_view", "c_notes_edit",
-    "c_patch_view", "c_patch_apply",   # Patches dieses Clients sehen / einspielen
-    "c_registry",                      # Registry lesen/schreiben (nur Windows)
-    "c_win_update",                    # Windows-Automatik-Updates aus/ein (nur Windows)
+    "c_patch_view", "c_patch_apply",   # see / install this client\047s patches
+    "c_registry",                      # read/write registry (Windows only)
+    "c_win_update",                    # Windows automatic updates off/on (Windows only)
     "c_websites_view", "c_websites_edit",
-    "c_screen_silent",      # Remote-Bildschirm ohne Anfrage (pro Client)
-    "set_warranty",         # Garantie-Datum dieses Clients setzen/ändern
+    "c_screen_silent",      # remote screen without a request (per client)
+    "set_warranty",         # set/change this client\047s warranty date
 ]
 
-# Alt-Keys (nur noch für Rückwärts-Auflösung gespeicherter Grants).
+# Legacy keys (only for backward resolution of stored grants).
 LEGACY_PERM_KEYS = [
     "use_guacamole", "use_terminal", "use_screen", "use_explorer",
     "use_taskmanager", "manage_users",
-    # Zusammengefuehrt mit 'admin' (siehe oben) - wird nicht mehr angeboten,
-    # loest aber weiterhin auf.
+    # Merged with 'admin' (see above) - no longer offered, but still resolves.
     "super_admin",
-    # Altes Node-Proxy-Recht (Node-System neu gebaut) - nur noch Aufloesung.
+    # Old node-proxy right (node system rebuilt) - resolution only.
     "c_nodeproxy",
 ]
 
-# Master-Liste gültiger Keys (für set_grants-Validierung + Resolver).
+# Master list of valid keys (for set_grants validation + resolver).
 PERM_KEYS = GLOBAL_PERM_KEYS + [
     p for p in CLIENT_ONLY_PERM_KEYS if p not in GLOBAL_PERM_KEYS
 ] + LEGACY_PERM_KEYS
 
 # ------------------------------------------------------------------
-# STANDARD-CLIENT ("Default-Client")
-# Ein Pseudo-Client-Scope, dessen Client-Rechte für JEDEN Client gelten.
-# Damit lassen sich Rechte einmal zentral vergeben, statt sie pro Client
-# einzeln zu setzen. Auflösung (siehe auth._resolve): 'deny' schlägt immer
-# 'allow' - ein Verbot auf einem KONKRETEN Client sticht also die Erlaubnis
-# aus dem Standard-Client.
+# DEFAULT CLIENT ("default client")
+# A pseudo client scope whose client rights apply to EVERY client. This lets
+# rights be granted once centrally, instead of setting them per client. 
+# Resolution (see auth._resolve): 'deny' always beats 'allow' - so a denial on
+# a CONCRETE client overrides the allow from the default client.
 # ------------------------------------------------------------------
 DEFAULT_CLIENT_SCOPE = "*"
-# "Standard-Proxmox": Proxmox-Rechte (pve_*) fuer ALLE Agenten mit verbundenem Proxmox
+# "Default Proxmox": Proxmox rights (pve_*) for ALL agents with a connected Proxmox
 DEFAULT_PVE_SCOPE = "pve:*"
 
-# Welche Rechte im General-Tab (global) bzw. im Client-Tab angeboten werden.
+# Which rights are offered in the general tab (global) or the client tab.
 GENERAL_PERM_KEYS = list(GLOBAL_PERM_KEYS)
 CLIENT_PERM_KEYS = list(CLIENT_ONLY_PERM_KEYS)
 
 # ------------------------------------------------------------------
-# Rechte-Implikationen (zur Laufzeit, ohne die DB zu ändern):
-# Ein 'allow' auf dem Quell-Key gilt automatisch auch für alle Ziel-Keys.
-# Deckt (a) alte Keys -> neue Keys und (b) "stärkeres Recht deckt schwächeres"
-# ab (z.B. Vollzugriff impliziert Nur-Ansehen).
+# Permission implications (at runtime, without changing the DB):
+# An 'allow' on the source key automatically applies to all target keys too.
+# Covers (a) old keys -> new keys and (b) "stronger right covers weaker"
+# (e.g. full access implies view-only).
 # ------------------------------------------------------------------
 _PERM_IMPLIES = {
-    # --- Alt -> Neu (gespeicherte Grants bleiben unangetastet) ---
+    # --- Old -> New (stored grants stay untouched) ---
     "use_screen": ["c_screen", "c_screen_view"],
     "use_terminal": ["c_terminal", "c_terminal_console"],
     "use_explorer": ["c_explorer_view", "c_explorer_edit"],
@@ -3303,10 +3283,10 @@ _PERM_IMPLIES = {
     "manage_users": ["create_users", "see_permissions", "manage_permissions"],
     "manage_bmc": ["use_bmc"],
     "manage_geotrack": ["use_geotrack"],
-    # altes manage_clients deckte auch Notizen/Websites/Löschen/Power ab
+    # old manage_clients also covered notes/websites/delete/power
     "manage_clients": ["c_delete", "c_power", "c_notes_view", "c_notes_edit",
                        "c_websites_view", "c_websites_edit", "set_warranty"],
-    # --- Stärkeres Recht deckt schwächeres ab ---
+    # --- Stronger right covers weaker ---
     "c_screen": ["c_screen_view"],
     "c_terminal": ["c_terminal_console"],
     "c_explorer_edit": ["c_explorer_view"],
@@ -3319,7 +3299,7 @@ _PERM_IMPLIES = {
     "manage_org": ["see_org"],
     "manage_calendar": ["use_calendar"],
     "manage_patching": ["patching"],
-    # Wer Medien fuer alle bereitstellen darf, darf den Player selbst nutzen.
+    # Whoever may provide media for everyone may use the player themselves.
     "share_media": ["use_media"],
     "c_patch_apply": ["c_patch_view"],
     "edit_source": ["see_source"],
@@ -3327,39 +3307,39 @@ _PERM_IMPLIES = {
     "relay_unlimited": ["use_relay"],
     "vpn_unlimited": ["use_vpn"],
     "create_scripts": ["use_scripts"],
-    # Einstellungen: Bearbeiten setzt Ansehen voraus, Admin-Einstellungen
-    # decken auch die Standard-Einstellungen ab.
+    # Settings: editing requires viewing, admin settings also cover the
+    # default settings.
     "manage_settings": ["see_settings"],
     "admin_settings": ["manage_settings", "see_settings"],
-    # Dashboard anpassen setzt Dashboard sehen voraus.
+    # Customizing the dashboard requires seeing the dashboard.
     "customize_dashboard": ["see_dashboard"],
-    # Aufzeichnungen löschen setzt Sehen voraus.
+    # Deleting recordings requires viewing.
     "delete_replay": ["see_replay"],
-    # Bildschirm ohne Anfrage setzt das Bildschirm-Recht voraus.
+    # Screen without a request requires the screen right.
     "c_screen_silent": ["c_screen"],
-    # Ticket-Rechte setzen das Lese-Recht voraus.
+    # Ticket rights require the read right.
     "ticket_create": ["ticket_read"],
     "ticket_edit": ["ticket_read"],
     "ticket_comment": ["ticket_read"],
     "ticket_assign": ["ticket_read"],
     "ticket_resolve": ["ticket_read"],
     "ticket_delete": ["ticket_read"],
-    # Inventar verwalten setzt Ansehen voraus.
+    # Managing inventory requires viewing.
     "manage_inventory": ["see_inventory"],
 }
 
 
 def perm_implies_map() -> dict:
-    """Implikations-Map (Quelle -> abgedeckte Rechte) fürs Frontend."""
+    """Implication map (source -> covered rights) for the frontend."""
     return {k: list(v) for k, v in _PERM_IMPLIES.items()}
 
 
 def perms_implied_by(perm: str) -> list[str]:
-    """Quell-Keys, deren 'allow' das gefragte Recht 'perm' automatisch erfüllt."""
+    """Source keys whose 'allow' automatically satisfies the requested right 'perm'."""
     return [src for src, dsts in _PERM_IMPLIES.items() if perm in dsts]
 
 
-# Legacy-Gruppen-Recht -> neuer Perm-Key (für Rückwärtskompatibilität).
+# Legacy group right -> new perm key (for backward compatibility).
 _LEGACY_PERM_MAP = {
     "login": "login", "screen": "use_screen", "terminal": "use_terminal",
     "explorer": "use_explorer", "audit": "see_audit",
@@ -3373,7 +3353,7 @@ _LEGACY_PERM_MAP = {
 # ------------------------------------------------------------------
 
 def get_grants(subject_type: str, subject_id: str) -> list[dict]:
-    """Alle Grants EINES Subjekts (Benutzer oder Gruppe)."""
+    """All grants of ONE subject (user or group)."""
     rows = _conn.execute(
         "SELECT scope, perm, effect FROM permission_grants "
         "WHERE subject_type = ? AND subject_id = ?",
@@ -3384,10 +3364,9 @@ def get_grants(subject_type: str, subject_id: str) -> list[dict]:
 
 def set_grants(subject_type: str, subject_id: str, grants: list[dict]) -> None:
     """
-    Ersetzt ALLE Grants eines Subjekts. 'grants' ist eine Liste von
-    {scope, perm, effect}. effect muss 'allow' oder 'deny' sein; alles andere
-    (bzw. weggelassene Kombinationen) bedeutet 'keine Angabe' und wird nicht
-    gespeichert.
+    Replaces ALL grants of a subject. 'grants' is a list of
+    {scope, perm, effect}. effect must be 'allow' or 'deny'; anything else (or
+    omitted combinations) means 'unset' and is not stored.
     """
     _conn.execute(
         "DELETE FROM permission_grants WHERE subject_type = ? AND subject_id = ?",
@@ -3409,8 +3388,8 @@ def set_grants(subject_type: str, subject_id: str, grants: list[dict]) -> None:
 
 
 def delete_grants_for_client(client_id: str) -> None:
-    """Räumt Client-scoped Grants auf, wenn ein Client gelöscht wird.
-    Der Standard-Client-Scope ('*') bleibt dabei immer erhalten."""
+    """Cleans up client-scoped grants when a client is deleted.
+    The default client scope ('*') is always kept."""
     if not client_id or client_id == DEFAULT_CLIENT_SCOPE:
         return
     _conn.execute("DELETE FROM permission_grants WHERE scope = ?", (client_id,))
@@ -3419,10 +3398,10 @@ def delete_grants_for_client(client_id: str) -> None:
 
 def get_effective_grants(user_id: str) -> list[dict]:
     """
-    Sammelt ALLE relevanten Grants eines Benutzers: seine eigenen (subject
-    'user') plus die aller Gruppen, in denen er Mitglied ist ('group'), plus
-    die Legacy-Gruppenrechte (groups.permissions) als globale allow-Grants.
-    Rückgabe: Liste {scope, perm, effect}.
+    Collects ALL relevant grants of a user: their own (subject 'user') plus
+    those of all groups they are a member of ('group'), plus the legacy group
+    rights (groups.permissions) as global allow grants.
+    Returns: list of {scope, perm, effect}.
     """
     grants: list[dict] = []
     grants.extend(get_grants("user", user_id))
@@ -3430,7 +3409,7 @@ def get_effective_grants(user_id: str) -> list[dict]:
     group_ids = get_user_group_ids(user_id)
     for gid in group_ids:
         grants.extend(get_grants("group", gid))
-        # Legacy: alte Checkbox-Rechte der Gruppe als globale allow-Grants.
+        # Legacy: the group\047s old checkbox rights as global allow grants.
         g = get_group(gid)
         if g:
             for p in (g["permissions"] or "").split(","):
@@ -3457,10 +3436,10 @@ def get_group_by_name(name: str) -> dict | None:
 
 def upsert_ad_group(name: str) -> dict:
     """
-    Legt eine AD-Gruppe (is_ad_group=1) an, falls sie noch nicht existiert, und
-    gibt sie zurück. Existiert bereits eine gleichnamige Gruppe (egal ob lokal
-    oder AD), wird diese unverändert zurückgegeben (Namen sind der Matching-Key
-    zwischen AD-Gruppen und RMM-Gruppen).
+    Creates an AD group (is_ad_group=1) if it does not yet exist and returns it.
+    If a group with the same name already exists (whether local or AD), it is
+    returned unchanged (names are the matching key between AD groups and RMM
+    groups).
     """
     existing = get_group_by_name(name)
     if existing:
@@ -3479,9 +3458,9 @@ def create_group(name: str, permissions: list[str], is_ad_group: bool = False) -
 
 
 def set_group_unmanaged(group_id: str, unmanaged: bool) -> dict | None:
-    """Markiert eine (AD-)Gruppe als unverwaltet (1) bzw. verwaltet (0). Unverwaltete
-    Gruppen erscheinen in einem eingeklappten Ordner und werden bei der
-    AD-Anmeldung NICHT automatisch zugewiesen."""
+    """Marks an (AD) group as unmanaged (1) or managed (0). Unmanaged groups
+    appear in a collapsed folder and are NOT assigned automatically on AD
+    login."""
     _conn.execute("UPDATE groups SET unmanaged = ? WHERE id = ?",
                   (1 if unmanaged else 0, group_id))
     _conn.commit()
@@ -3517,8 +3496,8 @@ def get_user_group_ids(user_id: str) -> list[str]:
 
 def get_user_permissions(user_id: str, role: str) -> set[str]:
     """
-    Ermittelt die effektiven Rechte eines Benutzers: Admins haben ALLE Rechte,
-    ansonsten die Vereinigung der Rechte aller Gruppen des Benutzers.
+    Determines a user's effective rights: admins have ALL rights, otherwise the
+    union of the rights of all the user's groups.
     """
     if role == "admin":
         return set(ALL_PERMISSIONS)
@@ -3535,7 +3514,7 @@ def get_user_permissions(user_id: str, role: str) -> set[str]:
 
 
 # ------------------------------------------------------------------
-# REALMS (Verzeichnis-Anbindung, z.B. Active Directory)
+# REALMS (directory connection, e.g. Active Directory)
 # ------------------------------------------------------------------
 
 def list_realms() -> list[dict]:
@@ -3543,22 +3522,21 @@ def list_realms() -> list[dict]:
 
 
 def list_realms_full() -> list[dict]:
-    """Wie list_realms(), aber INKLUSIVE bind_password - nur für interne Auth-Nutzung!"""
+    """Like list_realms(), but INCLUDING bind_password - for internal auth use only!"""
     return [dict(r) for r in _conn.execute("SELECT * FROM realms ORDER BY name").fetchall()]
 
 
 def get_public_realms() -> list[dict]:
-    """Nur die für das Login-Dropdown nötigen Felder (id + name), ohne Geheimnisse."""
+    """Only the fields needed for the login dropdown (id + name), without secrets."""
     rows = _conn.execute("SELECT id, name FROM realms WHERE enabled = 1 ORDER BY name").fetchall()
     return [dict(r) for r in rows]
 
 
 def upsert_ad_user(username: str, display_name: str, realm_id: str) -> dict:
     """
-    Legt einen AD-Benutzer lokal an (falls neu) oder aktualisiert seinen
-    Anzeigenamen. AD-Benutzer haben keinen nutzbaren Passwort-Hash (sie melden
-    sich immer über das Verzeichnis an) und die Rolle 'viewer' - ihre echten
-    Rechte kommen über die zugeordneten Gruppen.
+    Creates an AD user locally (if new) or updates their display name. AD users
+    have no usable password hash (they always sign in via the directory) and
+    the role 'viewer' - their actual rights come via the assigned groups.
     """
     existing = get_user_by_username(username)
     if existing:
@@ -3581,13 +3559,13 @@ def upsert_ad_user(username: str, display_name: str, realm_id: str) -> dict:
 
 def sync_ad_user_groups(user_id: str, ad_group_names: list[str]) -> None:
     """
-    Weist einem AD-Benutzer automatisch seine AD-Gruppen zu:
-      - Für jede AD-Gruppe wird bei Bedarf eine RMM-Gruppe angelegt (is_ad_group=1).
-      - Als "unmanaged" markierte Gruppen werden übersprungen (sie sollen nichts
-        mit dem RMM zu tun haben).
-      - Manuell zugewiesene NICHT-AD-Gruppen (lokale Gruppen) bleiben erhalten.
+    Automatically assigns an AD user their AD groups:
+      - For each AD group an RMM group is created if needed (is_ad_group=1).
+      - Groups marked as "unmanaged" are skipped (they should have nothing to
+        do with the RMM).
+      - Manually assigned NON-AD groups (local groups) are kept.
     """
-    # Bestehende lokale (Nicht-AD-)Mitgliedschaften behalten.
+    # Keep existing local (non-AD) memberships.
     keep = []
     for gid in get_user_group_ids(user_id):
         g = get_group(gid)
@@ -3596,12 +3574,12 @@ def sync_ad_user_groups(user_id: str, ad_group_names: list[str]) -> None:
 
     ad_ids = []
     for name in ad_group_names:
-        g = upsert_ad_group(name)          # legt AD-Gruppe an, falls neu
+        g = upsert_ad_group(name)          # creates the AD group if new
         if g.get("unmanaged"):
-            continue                        # unverwaltete AD-Gruppen nicht zuweisen
+            continue                        # do not assign unmanaged AD groups
         ad_ids.append(g["id"])
 
-    # Reihenfolge/Duplikate bereinigen und speichern.
+    # Clean up order/duplicates and save.
     set_user_groups(user_id, list(dict.fromkeys(keep + ad_ids)))
 
 
@@ -3626,9 +3604,9 @@ def create_realm(name, server, base_dn, bind_user, bind_password,
 
 def update_realm(realm_id: str, fields: dict) -> dict | None:
     """
-    Aktualisiert ein Realm. Nur bekannte Felder werden übernommen. Ein leeres
-    bind_password wird ignoriert (damit man beim Bearbeiten das gespeicherte
-    Passwort nicht versehentlich löscht, wenn man das Feld leer lässt).
+    Updates a realm. Only known fields are applied. An empty bind_password is
+    ignored (so editing does not accidentally delete the stored password when
+    the field is left empty).
     """
     allowed = {
         "name", "server", "base_dn", "bind_user", "bind_password",
@@ -3639,7 +3617,7 @@ def update_realm(realm_id: str, fields: dict) -> dict | None:
         if k not in allowed:
             continue
         if k == "bind_password" and (v is None or v == ""):
-            continue  # leeres Passwort = unverändert lassen
+            continue  # empty password = leave unchanged
         if k in ("use_ssl", "enabled"):
             v = 1 if v else 0
         updates[k] = v
@@ -3658,115 +3636,115 @@ def delete_realm(realm_id: str) -> None:
 
 
 # ------------------------------------------------------------------
-# SETTINGS (globaler Schlüssel/Wert-Speicher)
+# SETTINGS (global key/value store)
 # ------------------------------------------------------------------
 
-# Standardwerte für alle bekannten Einstellungen. get_setting() greift hierauf
-# zurück, wenn in der DB noch nichts gespeichert wurde.
+# Default values for all known settings. get_setting() falls back to this when
+# nothing is stored in the DB yet.
 DEFAULT_SETTINGS = {
-    # Leer = automatisch aus der aufgerufenen URL ableiten (request.base_url).
-    # Setzt man hier z.B. "https://rmm.firma.de", tauchen die Install-Befehle
-    # mit dieser Adresse statt "localhost" auf. Vollständige URL überschreibt
-    # Host/Domain/Port unten.
+    # Empty = derive automatically from the requested URL (request.base_url).
+    # If one sets e.g. "https://rmm.company.com" here, the install commands show
+    # this address instead of "localhost". A full URL overrides host/domain/port
+    # below.
     "server_url": "",
-    # Server-IP/Host bzw. optionale Domain und Ports (für die Install-Befehle).
-    "server_host": "",              # IP oder Hostname
-    "server_domain": "",            # optionale Domain (wird bevorzugt vor der IP)
-    "server_backend_port": "4000",  # Port des Backends/der API
-    "server_frontend_port": "4000", # Port des Dashboards (Frontend)
-    # --- Wartungsmodus / Diagnose ---
-    # Schreibt ALLES mit (Backend + Agenten) - fuer die Suche nach
-    # Abstuerzen. Kostet Platz, deshalb standardmaessig aus.
+    # Server IP/host or optional domain and ports (for the install commands).
+    "server_host": "",              # IP or hostname
+    "server_domain": "",            # optional domain (preferred over the IP)
+    "server_backend_port": "4000",  # port of the backend/API
+    "server_frontend_port": "4000", # port of the dashboard (frontend)
+    # --- Maintenance mode / diagnostics ---
+    # Logs EVERYTHING (backend + agents) - for tracking down crashes. Costs
+    # space, therefore off by default.
     "maintenance_mode": "0",
     "maintenance_until": "0",
     "maintenance_agents": "0",
-    # --- VPN (WireGuard-kompatibel) ---
+    # --- VPN (WireGuard-compatible) ---
     "vpn_enabled": "1",
-    # UDP-Port des Tunnel-Endpunkts. Leer = Umgebungsvariable VPN_PORT bzw.
-    # der WireGuard-Standard 51820.
+    # UDP port of the tunnel endpoint. Empty = environment variable VPN_PORT or
+    # the WireGuard default 51820.
     "vpn_port": "",
-    # Adressbereich, aus dem die Tunnel-Endpunkte ihre Adresse bekommen.
+    # Address range from which the tunnel endpoints get their address.
     "vpn_subnet": "10.77.0.0/16",
-    # NUR setzen, wenn der VPN-Endpunkt unter einer ANDEREN Adresse erreichbar
-    # ist als das Dashboard. Das ist der Regelfall hinter einem Reverse-Proxy:
-    # der Proxy reicht kein UDP durch, der Port 51820 muss also direkt auf den
-    # Server zeigen. Bleibt das Feld leer, wird der Host aus server_url bzw.
-    # server_domain/server_host abgeleitet.
+    # Set ONLY if the VPN endpoint is reachable at a DIFFERENT address than the
+    # dashboard. That is the normal case behind a reverse proxy: the proxy does
+    # not pass UDP through, so port 51820 must point directly at the server. If
+    # the field stays empty, the host is derived from server_url or
+    # server_domain/server_host.
     "vpn_endpoint_host": "",
-    # Optionaler DNS-Server, der im Tunnel benutzt werden soll.
+    # Optional DNS server to be used in the tunnel.
     "vpn_dns": "",
-    # MTU des Tunnels. 1380 ist auch hinter DSL/PPPoE noch sicher.
+    # MTU of the tunnel. 1380 is still safe even behind DSL/PPPoE.
     "vpn_mtu": "1380",
-    # Namenszone des virtuellen Netzes: <hostname>.rmm
+    # Name zone of the virtual network: <hostname>.rmm
     "vpn_zone": "rmm",
-    # UDP-Port des Relays (Erreichbarkeit hinter NAT).
+    # UDP port of the relay (reachability behind NAT).
     "vpn_relay_port": "51821",
-    # Port, auf dem Nodes ihr eigenes WireGuard aufmachen.
-    # DNS im Tunnel auf das Backend zeigen lassen (Namensaufloesung im
-    # virtuellen Netz). 0 = der Client behaelt seinen eigenen DNS.
+    # Port on which nodes open their own WireGuard.
+    # Point DNS in the tunnel at the backend (name resolution in the virtual
+    # network). 0 = the client keeps its own DNS.
     "vpn_use_internal_dns": "1",
-    # In welchem Abstand ein Metrik-Punkt gespeichert wird (Sekunden).
+    # The interval at which a metric point is stored (seconds).
     "metrics_interval_seconds": "10",
-    # Wie lange die Metrik-Historie aufbewahrt wird (Stunden).
-    # 0 = UNBEGRENZT: es wird nie automatisch gelöscht - die Graphen zeigen
-    # nach einem Browser-Reload immer die komplette bisherige Historie.
+    # How long the metric history is kept (hours).
+    # 0 = UNLIMITED: nothing is ever deleted automatically - after a browser
+    # reload the graphs always show the complete history so far.
     "metrics_retention_hours": "0",
-    # --- Host-Sperre: Zugriff nur über die hinterlegten Adressen ---
-    # "0" = aus (Standard). Bewusst aus, weil eine falsch gesetzte Sperre
-    # den Zugang kostet; siehe hostlock.py.
+    # --- Host lock: access only via the stored addresses ---
+    # "0" = off (default). Deliberately off, because a wrongly set lock costs
+    # access; see hostlock.py.
     "host_lock_enabled": "0",
-    # 'ui'  = nur Oberfläche/API sperren, Agenten kommen weiter durch
-    # 'all' = auch Agenten-Verbindungen (Socket.IO) prüfen
+    # 'ui'  = lock only the UI/API, agents still get through
+    # 'all' = also check agent connections (Socket.IO)
     "host_lock_scope": "ui",
-    # Zusätzlich erlaubte Adressen, kommagetrennt (z.B. interner DNS-Name).
+    # Additionally allowed addresses, comma-separated (e.g. internal DNS name).
     "host_lock_extra": "",
-    # X-Forwarded-Host vertrauen? Nur einschalten, wenn wirklich ein
-    # Reverse Proxy davorsteht - sonst hebelt jeder die Sperre selbst aus.
+    # Trust X-Forwarded-Host? Only enable if a reverse proxy really sits in
+    # front - otherwise anyone can bypass the lock themselves.
     "host_lock_trust_proxy": "0",
-    # --- Aufbewahrungsfristen (DSGVO Art. 5 Abs. 1 lit. e) ---
-    # Überall gilt: 0 = unbegrenzt. Das ist eine bewusste Entscheidung und
-    # sollte begründet sein - "aus Versehen für immer" ist kein Rechtsgrund.
-    # Durchgesetzt werden die Fristen von privacy.purge() (täglicher Job).
-    # Wie lange Screen-Replays aufbewahrt werden (Tage). Der heikelste
-    # Bestand des Systems, daher knapper Standard.
+    # --- Retention periods (GDPR Art. 5 (1) (e)) ---
+    # Everywhere: 0 = unlimited. That is a deliberate decision and should be
+    # justified - "forever by accident" is no legal basis. The periods are
+    # enforced by privacy.purge() (daily job).
+    # How long screen replays are kept (days). The most sensitive data of the
+    # system, hence a conservative default.
     "replay_retention_days": "30",
-    "retention_audit_days": "90",        # danach anonymisiert, nicht gelöscht
+    "retention_audit_days": "90",        # anonymized afterwards, not deleted
     "retention_activity_days": "180",
     "retention_chat_days": "365",
     "retention_todo_archive_days": "365",
     "retention_enrollment_days": "30",
-    # Zeitpunkt des letzten Durchlaufs (nur Anzeige).
+    # Time of the last run (display only).
     "privacy_last_purge": "0",
-    # --- Aufnahme-Einstellungen (Screen-Agent UND Guacamole-Sessions) ---
-    # Master-Schalter: "1" = Sessions werden als Replay aufgezeichnet, "0" = aus.
+    # --- Recording settings (screen agent AND Guacamole sessions) ---
+    # Master switch: "1" = sessions are recorded as a replay, "0" = off.
     "recording_enabled": "1",
-    # Screen-Agent-Replay: JPEG-Qualität (1-100) und max. Bilder/Sekunde.
+    # Screen-agent replay: JPEG quality (1-100) and max. frames/second.
     "screen_record_quality": "40",
     "screen_record_fps": "5",
-    # Guacamole-Replay (RDP/VNC/SSH/Telnet): Qualität, FPS, Auflösungs-Skalierung.
-    # scale 1.0 = volle Auflösung; 0.5 = halbe (kleinere Dateien).
+    # Guacamole replay (RDP/VNC/SSH/Telnet): quality, FPS, resolution scaling.
+    # scale 1.0 = full resolution; 0.5 = half (smaller files).
     "guac_record_quality": "50",
     "guac_record_fps": "8",
     "guac_record_scale": "0.75",
-    # Extern gehostetes Apache guacd (für Remote-Desktop im Browser).
+    # Externally hosted Apache guacd (for remote desktop in the browser).
     "guacd_host": "127.0.0.1",
     "guacd_port": "4822",
-    # Server-Selbst-Update aus GitHub: "1" = automatisch, Kanal siehe unten.
+    # Server self-update from GitHub: "1" = automatic, channel see below.
     "server_auto_update": "0",
-    # "commit" = neuester Commit, "full" = neuestes Full-Release,
-    # "any" = neuestes Release (Alpha und Full)
+    # "commit" = latest commit, "full" = latest full release,
+    # "any" = latest release (alpha and full)
     "server_auto_update_channel": "full",
-    # Automatisches Agent-Update: "1" = veraltete Agenten aktualisieren sich
-    # beim Verbinden selbst (Clients mit auto_update='global' folgen dieser
-    # Einstellung; 'on'/'off' pro Client hat Vorrang). Default aus.
+    # Automatic agent update: "1" = outdated agents update themselves on
+    # connecting (clients with auto_update='global' follow this setting;
+    # 'on'/'off' per client takes precedence). Default off.
     "agent_auto_update": "0",
-    # --- Software-Patching ---
-    # Wie oft die Agenten nach Aktualisierungen suchen (Stunden).
+    # --- Software patching ---
+    # How often the agents scan for updates (hours).
     "patch_scan_interval_hours": "24",
-    # Master-Schalter fürs automatische Einspielen. Clients mit
-    # patch_policy='global' folgen ihm; 'on'/'off' pro Client sticht.
+    # Master switch for automatic installation. Clients with
+    # patch_policy='global' follow it; 'on'/'off' per client overrides.
     "patch_auto_enabled": "0",
-    # --- SMTP (E-Mail-Benachrichtigungen) ---
+    # --- SMTP (email notifications) ---
     "smtp_host": "",
     "smtp_port": "587",
     "smtp_user": "",
@@ -3786,7 +3764,7 @@ def get_setting(key: str, default: str | None = None) -> str | None:
 
 
 def get_int_setting(key: str) -> int:
-    """Einstellung als Ganzzahl lesen; fällt bei Unsinn auf den Default zurück."""
+    """Read a setting as an integer; falls back to the default on nonsense."""
     try:
         return int(float(get_setting(key)))
     except (TypeError, ValueError):
@@ -3797,7 +3775,7 @@ def get_int_setting(key: str) -> int:
 
 
 def get_float_setting(key: str) -> float:
-    """Einstellung als Kommazahl lesen; fällt bei Unsinn auf den Default zurück."""
+    """Read a setting as a float; falls back to the default on nonsense."""
     try:
         return float(get_setting(key))
     except (TypeError, ValueError):
@@ -3808,7 +3786,7 @@ def get_float_setting(key: str) -> float:
 
 
 def get_all_settings() -> dict:
-    """Alle Einstellungen (Defaults + gespeicherte Overrides) als Dict."""
+    """All settings (defaults + stored overrides) as a dict."""
     result = dict(DEFAULT_SETTINGS)
     for r in _conn.execute("SELECT key, value FROM settings").fetchall():
         result[r["key"]] = r["value"]
@@ -3825,17 +3803,17 @@ def set_setting(key: str, value) -> None:
 
 
 # ------------------------------------------------------------------
-# METRICS HISTORY (persistierte Graphen-Daten)
+# METRICS HISTORY (persisted graph data)
 # ------------------------------------------------------------------
 
 def record_metric_point(
     client_id: str, cpu: float, ram: float, net_in: float, net_out: float,
     ts: int | None = None, extra: str | None = None,
 ) -> None:
-    """Speichert einen einzelnen Metrik-Messpunkt für einen Client.
-    extra = JSON-String der kompletten Metrik-Momentaufnahme (optional), damit
-    auch Metriken ohne eigene Spalte (Ping, Temperatur, Leistung, ...) eine
-    Historie bekommen."""
+    """Stores a single metric data point for a client.
+    extra = JSON string of the complete metric snapshot (optional), so that
+    metrics without their own column (ping, temperature, power, ...) also get a
+    history."""
     ts = ts if ts is not None else _now_ms()
     _conn.execute(
         """INSERT INTO metrics_history (client_id, ts, cpu, ram, net_in, net_out, extra)
@@ -3845,25 +3823,24 @@ def record_metric_point(
     _conn.commit()
 
 
-# Obergrenzen fuer den Metrikverlauf.
+# Upper bounds for the metric history.
 #
-# HIER LAG DER ABSTURZ vom 23.08.: Diese Abfrage lief OHNE jede Grenze.
-# Die Einstellung 'metrics_retention_hours' steht im Auslieferungszustand
-# auf 0, was "unbegrenzt aufbewahren" bedeutet - und das Dashboard las beim
-# Laden die KOMPLETTE Historie eines Clients. Jeder Heartbeat schreibt alle
-# fuenf Sekunden eine Zeile mit einem JSON-Feld; bei sieben Geraeten sind
-# das rund 120.000 Zeilen am Tag. Nach einigen Wochen brauchte die Abfrage
-# 125 Sekunden. Weil alle Abfragen durch dieselbe Sperre gehen, stand
-# solange das gesamte Backend - bis der Waechter es beendete.
+# THIS IS WHERE THE CRASH of 23.08. HAPPENED: this query ran WITHOUT any limit.
+# The setting 'metrics_retention_hours' is 0 in the delivery state, which means
+# "keep unlimited" - and on loading the dashboard read a client's COMPLETE
+# history. Every heartbeat writes a row with a JSON field every five seconds;
+# with seven devices that is around 120,000 rows a day. After a few weeks the
+# query took 125 seconds. Because all queries go through the same lock, the
+# entire backend was stalled that long - until the watchdog ended it.
 #
-# Zwei Grenzen, beide noetig:
-#   * ein Zeitfenster, wenn der Aufrufer keines nennt
-#   * eine Obergrenze an Punkten, mit Ausduennung statt Abschneiden
+# Two limits, both needed:
+#   * a time window when the caller names none
+#   * an upper bound on points, with thinning instead of truncation
 #
-# Ausduennen statt Abschneiden ist wichtig: Ein abgeschnittener Verlauf
-# zeigt nur den Anfang und sieht aus, als waere danach nichts passiert. Ein
-# ausgeduennter zeigt den ganzen Zeitraum, nur gröber - und genau das
-# braucht ein Diagramm, das ohnehin nur ein paar hundert Pixel breit ist.
+# Thinning instead of truncation matters: a truncated history shows only the
+# beginning and looks as if nothing happened afterwards. A thinned one shows
+# the whole period, just coarser - and that is exactly what a chart only a few
+# hundred pixels wide needs.
 METRICS_DEFAULT_WINDOW_H = 24
 METRICS_MAX_POINTS = 3000
 
@@ -3871,25 +3848,25 @@ METRICS_MAX_POINTS = 3000
 def get_metrics_history(client_id: str, since_ts: int | None = None,
                         max_points: int = METRICS_MAX_POINTS) -> list[dict]:
     """
-    Messpunkte eines Clients, aufsteigend nach Zeit - immer begrenzt.
+    Data points of a client, ascending by time - always bounded.
 
-    'since_ts' = None bedeutet NICHT mehr "alles", sondern das
-    Standardfenster (24 Stunden). Wer wirklich mehr will, gibt einen
-    Zeitpunkt an - und bekommt trotzdem hoechstens 'max_points' Punkte.
+    'since_ts' = None no longer means "everything", but the default window
+    (24 hours). Whoever really wants more passes a timestamp - and still gets
+    at most 'max_points' points.
     """
     if since_ts is None:
         since_ts = int(time.time() * 1000) - METRICS_DEFAULT_WINDOW_H * 3600_000
 
-    # Erst zaehlen: billig dank des Index auf (client_id, ts), und die Zahl
-    # entscheidet, ob ausgeduennt werden muss.
+    # Count first: cheap thanks to the index on (client_id, ts), and the count
+    # decides whether thinning is needed.
     row = _conn.execute(
         "SELECT COUNT(*) AS n FROM metrics_history WHERE client_id = ? AND ts >= ?",
         (client_id, since_ts)).fetchone()
     total = int(row["n"] if row else 0)
 
     if total > max_points:
-        # Jede n-te Zeile nehmen. ROW_NUMBER() gibt es seit SQLite 3.25,
-        # das ist in jedem unterstuetzten Python enthalten.
+        # Take every n-th row. ROW_NUMBER() exists since SQLite 3.25, which is
+        # included in every supported Python.
         step = (total // max_points) + 1
         rows = _conn.execute(
             """SELECT ts, cpu, ram, net_in, net_out, extra FROM (
@@ -3907,8 +3884,8 @@ def get_metrics_history(client_id: str, since_ts: int | None = None,
     out = []
     for r in rows:
         d = dict(r)
-        # extra (JSON-Snapshot) direkt in den Punkt mergen, damit das Frontend
-        # jede Metrik (Ping/Temp/Power/...) als Verlauf abgreifen kann.
+        # Merge extra (JSON snapshot) directly into the point, so the frontend
+        # can read every metric (Ping/Temp/Power/...) as a history.
         raw = d.pop("extra", None)
         if raw:
             try:
@@ -3922,21 +3899,21 @@ def get_metrics_history(client_id: str, since_ts: int | None = None,
 
 
 def prune_metrics_history(older_than_ts: int) -> None:
-    """Löscht Messpunkte, die älter als der Zeitstempel sind."""
+    """Deletes data points older than the timestamp."""
     _conn.execute("DELETE FROM metrics_history WHERE ts < ?", (older_than_ts,))
     _conn.commit()
 
 
 # ------------------------------------------------------------------
-# WEBHOOKS (Benachrichtigungen)
+# WEBHOOKS (notifications)
 # ------------------------------------------------------------------
 
 # ------------------------------------------------------------------
-# Client-Websites (Quick Access + Uptime-Monitoring)
+# Client websites (quick access + uptime monitoring)
 # ------------------------------------------------------------------
 
 def list_client_websites(client_id: str) -> list[dict]:
-    """Alle an einen Client gebundenen Websites (für den Quick Access)."""
+    """All websites bound to a client (for the quick access)."""
     rows = _conn.execute(
         "SELECT * FROM client_websites WHERE client_id = ? ORDER BY favorite DESC, name",
         (client_id,),
@@ -3945,8 +3922,8 @@ def list_client_websites(client_id: str) -> list[dict]:
 
 
 def list_favorite_websites() -> list[dict]:
-    """Alle als Favorit angehefteten Websites (über alle Clients hinweg),
-    angereichert um den Hostnamen des zugehörigen Clients."""
+    """All websites pinned as favorites (across all clients), enriched with the
+    hostname of the associated client."""
     rows = _conn.execute(
         """SELECT w.*, c.hostname AS client_hostname
            FROM client_websites w
@@ -3958,7 +3935,7 @@ def list_favorite_websites() -> list[dict]:
 
 
 def list_monitored_websites() -> list[dict]:
-    """Alle Websites mit aktivem Uptime-Monitoring (für die Monitor-Engine)."""
+    """All websites with active uptime monitoring (for the monitor engine)."""
     rows = _conn.execute(
         """SELECT w.*, c.hostname AS client_hostname, c.tenant_id, c.location_id
            FROM client_websites w
@@ -3991,7 +3968,7 @@ def create_client_website(client_id: str, name: str, url: str, favorite: bool = 
 
 
 def update_client_website(website_id: str, fields: dict) -> dict | None:
-    """Aktualisiert nur die übergebenen Felder (analog update_client)."""
+    """Updates only the provided fields (analogous to update_client)."""
     allowed = {"name", "url", "favorite", "monitor_enabled", "monitor_notify",
                "monitor_interval_seconds", "open_mode"}
     fields = {k: v for k, v in fields.items() if k in allowed}
@@ -4009,8 +3986,8 @@ def delete_client_website(website_id: str) -> None:
 
 
 def set_website_check_result(website_id: str, status: str, error: str | None = None) -> None:
-    """Ergebnis eines Uptime-Scans speichern ('up'/'down'). Aktualisiert
-    last_checked immer, last_status_change nur bei tatsächlichem Wechsel."""
+    """Store the result of an uptime scan ('up'/'down'). Always updates
+    last_checked, last_status_change only on an actual change."""
     now = _now_ms()
     prev = _conn.execute("SELECT last_status FROM client_websites WHERE id = ?",
                          (website_id,)).fetchone()
@@ -4037,7 +4014,7 @@ def get_webhook(webhook_id: str) -> dict | None:
 
 
 def update_webhook(webhook_id: str, fields: dict) -> dict | None:
-    """Aktualisiert nur die übergebenen Felder eines Webhooks."""
+    """Updates only the provided fields of a webhook."""
     allowed = {"name", "url", "type", "enabled", "headers", "body_template"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if updates:
@@ -4066,7 +4043,7 @@ def delete_webhook(webhook_id: str) -> None:
 
 
 # ------------------------------------------------------------------
-# AUTOMATIONEN (geplante Befehle/Skripte)
+# AUTOMATIONS (scheduled commands/scripts)
 # ------------------------------------------------------------------
 
 def list_automations() -> list[dict]:
@@ -4102,7 +4079,7 @@ def mark_automation_run(auto_id: str) -> None:
 def record_automation_result(run_id: str, automation_id: str, client_id: str,
                              client_hostname: str | None, stdout: str, stderr: str,
                              exit_code: int | None, ok: bool) -> None:
-    """Speichert das Ergebnis EINES Clients innerhalb eines Automation-Durchlaufs."""
+    """Stores the result of ONE client within an automation run."""
     _conn.execute(
         """INSERT INTO automation_runs
            (id, run_id, automation_id, client_id, client_hostname, started_at,
@@ -4116,8 +4093,8 @@ def record_automation_result(run_id: str, automation_id: str, client_id: str,
 
 def list_automation_runs(automation_id: str, limit_runs: int = 20) -> list[dict]:
     """
-    Liefert die letzten Durchläufe einer Automation, gruppiert nach run_id.
-    Jeder Durchlauf enthält die Ergebnisliste aller Clients.
+    Returns the latest runs of an automation, grouped by run_id. Each run
+    contains the result list of all clients.
     """
     rows = [dict(r) for r in _conn.execute(
         """SELECT * FROM automation_runs WHERE automation_id = ?
@@ -4153,7 +4130,7 @@ def delete_automation(auto_id: str) -> None:
 
 
 def get_due_automations() -> list[dict]:
-    """Liefert aktivierte Automationen, deren Intervall seit last_run abgelaufen ist."""
+    """Returns enabled automations whose interval has elapsed since last_run."""
     now = _now_ms()
     due = []
     for a in list_automations():

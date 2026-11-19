@@ -1,34 +1,30 @@
 """
 sockets.py
 ----------
-Verwaltet alle Echtzeit-Verbindungen (WebSockets über die Socket.IO-Bibliothek).
+Manages all real-time connections (WebSockets via the Socket.IO library).
 
-Es gibt ZWEI getrennte "Namespaces" (=unabhängige Kommunikationskanäle):
+There are TWO separate "namespaces" (= independent communication channels):
 
-  /agent      -> hier verbinden sich die Agenten (die Programme, die auf den
-                 verwalteten PCs/Servern laufen). Nur wer das richtige
-                 AGENT_TOKEN mitschickt, darf sich hier verbinden.
+  /agent      -> the agents connect here (the programs running on the managed
+                 PCs/servers). Only who sends the correct AGENT_TOKEN may
+                 connect here.
 
-  /dashboard  -> hier verbindet sich das Browser-Frontend, um Live-Updates
-                 zu bekommen (z.B. "Client X ist jetzt online", "neue
-                 CPU-Auslastung für Client Y").
+  /dashboard  -> the browser frontend connects here to get live updates (e.g.
+                 "client X is now online", "new CPU load for client Y").
 
-Der Ablauf für einen Befehl wie "führe im Terminal 'dir' aus" ist:
-  1. Frontend ruft die REST-Route POST /api/clients/{id}/exec auf
-  2. Diese Route ruft request_exec() aus DIESER Datei auf
-  3. request_exec() schickt über den Agent-Namespace ein "exec"-Event an
-     genau den richtigen Agenten und WARTET (mit einem asyncio.Future) auf
-     dessen Antwort
-  4. Der Agent führt den Befehl aus und schickt ein "exec-result"-Event zurück
-  5. Der exec-result Handler hier findet das wartende Future wieder und
-     "erfüllt" es mit dem Ergebnis - dadurch kann request_exec() in Schritt 2
-     seine Antwort zurückgeben, und die REST-Route kann sie ans Frontend
-     zurückschicken.
+The flow for a command like "run 'dir' in the terminal" is:
+  1. Frontend calls the REST route POST /api/clients/{id}/exec
+  2. This route calls request_exec() from THIS file
+  3. request_exec() sends an "exec" event via the agent namespace to exactly
+     the right agent and WAITS (with an asyncio.Future) for its answer
+  4. The agent runs the command and sends back an "exec-result" event
+  5. The exec-result handler here finds the waiting future again and
+     "fulfills" it with the result - this lets request_exec() in step 2 return
+     its answer, and the REST route can send it back to the frontend.
 
-Dieses "schicke Anfrage raus, warte auf Antwort mit derselben Anfrage-ID"
-Muster nennt man "Request/Response über Events" und ist der Standard-Weg,
-um über WebSockets etwas zu erreichen, das sich wie ein normaler
-Funktionsaufruf anfühlt.
+This "send a request out, wait for the answer with the same request ID"
+pattern is called "request/response over events" and is the standard way to
+achieve something over WebSockets that feels like a normal function call.
 """
 
 import asyncio
@@ -38,8 +34,8 @@ import json as _json
 
 
 def _json_dumps_safe(obj) -> "str | None":
-    """Metrik-Snapshot als kompaktes JSON (für die Historie). Bei Problemen None,
-    damit das Speichern des Messpunkts nie an einem exotischen Wert scheitert."""
+    """Metric snapshot as compact JSON (for the history). None on problems, so
+    storing the data point never fails on an exotic value."""
     try:
         return _json.dumps(obj, separators=(",", ":"), default=str)
     except (TypeError, ValueError):
@@ -52,10 +48,10 @@ from app import db
 
 
 def _int_env_early(name: str, default: int) -> int:
-    """Ganzzahl aus einer Umgebungsvariablen - schon vor dem Anlegen des
-    Servers nutzbar (das spätere _env_int steht erst weiter unten und wird
-    hier noch nicht gebraucht). Unsinnige Werte fallen auf den Standard
-    zurück, statt den Start zu verhindern."""
+    """Integer from an environment variable - usable even before the server is
+    created (the later _env_int is further below and is not needed here yet).
+    Nonsensical values fall back to the default instead of preventing the
+    start."""
     import os
     try:
         v = int(os.getenv(name, "") or default)
@@ -64,40 +60,38 @@ def _int_env_early(name: str, default: int) -> int:
         return default
 
 
-# Der eigentliche Socket.IO-Server. async_mode="asgi" bedeutet: er läuft
-# zusammen mit FastAPI im selben modernen Python-Webserver-Standard (ASGI).
+# The actual Socket.IO server. async_mode="asgi" means: it runs together with
+# FastAPI in the same modern Python web-server standard (ASGI).
 # ----------------------------------------------------------------------
-# Server-Grenzwerte: MÜSSEN gesetzt sein, sonst gelten die Defaults von
-# python-socketio - und die passen nicht zu dem, was dieses Projekt sendet.
+# Server limits: MUST be set, otherwise the defaults of python-socketio apply -
+# and those do not fit what this project sends.
 #
-# max_http_buffer_size (Default: 1 MB)
-#   Ein Screen-Frame ist ein JPEG, das der Agent auf bis zu 1920 px
-#   skaliert, base64-kodiert (+37 %) und in EINEM Paket schickt. Bei
-#   Qualität 70-90 liegt so ein Frame regelmässig zwischen 400 KB und
-#   1,1 MB. Überschreitet EIN Paket das Limit, verwirft Engine.IO nicht
-#   etwa nur das Paket - es trennt die Verbindung. Genau deshalb läuft
-#   der Screen "halbwegs" (einfache Bilder gehen durch, detailreiche
-#   sprengen das Limit) und genau deshalb fällt der Agent dabei offline.
-#   50 MB lassen jedem Frame Luft, ohne dass ein einzelner Client
-#   nennenswert Speicher binden kann.
+# max_http_buffer_size (default: 1 MB)
+#   A screen frame is a JPEG that the agent scales to up to 1920 px,
+#   base64-encodes (+37 %) and sends in ONE packet. At quality 70-90 such a
+#   frame regularly lies between 400 KB and 1.1 MB. If ONE packet exceeds the
+#   limit, Engine.IO does not just drop the packet - it disconnects. That is
+#   exactly why the screen works "halfway" (simple images get through,
+#   detailed ones blow the limit) and exactly why the agent goes offline
+#   doing it. 50 MB leave every frame room without a single client binding
+#   noteworthy memory.
 #
-# ping_interval / ping_timeout (Default: 25 s / 20 s)
-#   Hinter Cloudflare werden ungenutzte WebSockets nach etwa 100 s
-#   Stille geschlossen. Mit 20 s Takt liegen immer mehrere Pings
-#   innerhalb dieses Fensters; die 40 s Timeout verhindern, dass ein
-#   kurzer Aussetzer (Proxy-Umschaltung, Mobilfunk) sofort als
-#   Verbindungsabbruch gewertet wird.
+# ping_interval / ping_timeout (default: 25 s / 20 s)
+#   Behind Cloudflare, unused WebSockets are closed after about 100 s of
+#   silence. With a 20 s cadence several pings always fall within this window;
+#   the 40 s timeout prevents a brief dropout (proxy switch, mobile network)
+#   from being counted immediately as a disconnect.
 _SOCKET_MAX_PACKET = _int_env_early("RMM_SOCKET_MAX_PACKET", 50_000_000)
 
 
 from app import modules as _modules
 
-# Optionale Modul-Funktionen (alle None-sicher, siehe _Optional)
-recording = _modules.optional("recordings", "recording")      # Modul 'recordings'
-patching = _modules.optional("patching", "patching")          # Modul 'patching'
-portforward = _modules.optional("network", "portforward")     # Modul 'network' (Port-Weiterleitung)
-from app import agent_streams                                 # TCP durch Agenten (Core-Baustein)
-rdp_gateway = _modules.optional("guacamole", "rdp_gateway")   # Modul 'guacamole'
+# Optional module functions (all None-safe, see _Optional)
+recording = _modules.optional("recordings", "recording")      # module 'recordings'
+patching = _modules.optional("patching", "patching")          # module 'patching'
+portforward = _modules.optional("network", "portforward")     # module 'network' (port forward)
+from app import agent_streams                                 # TCP through agents (core building block)
+rdp_gateway = _modules.optional("guacamole", "rdp_gateway")   # module 'guacamole'
 
 sio = socketio.AsyncServer(
     async_mode="asgi",
@@ -218,37 +212,35 @@ def _conn_tls(environ: dict) -> bool:
 
 
 # ======================================================================
-# ALLE Socket-Handler zentral absichern
+# Secure ALL socket handlers centrally
 # ======================================================================
-# In dieser Datei haengen rund 50 Ereignis-Behandlungen. Wirft eine davon
-# eine Ausnahme, faengt python-socketio sie zwar ab - aber die Meldung
-# landet in dessen eigenem Logger, der standardmaessig stumm ist. Der
-# Agent wartet dann auf eine Antwort, die nie kommt, und im Protokoll steht
-# nichts. Das ist die unangenehmste Sorte Fehler: Es sieht aus, als haette
-# jemand nichts gemacht.
+# This file has around 50 event handlers. If one of them throws an exception,
+# python-socketio does catch it - but the message lands in its own logger,
+# which is silent by default. The agent then waits for an answer that never
+# comes, and nothing is in the log. That is the most unpleasant kind of error:
+# it looks as if someone did nothing.
 #
-# 50 Handler einzeln mit try/except zu versehen waere fehleranfaellig und
-# beim naechsten neuen Handler schon wieder unvollstaendig. Stattdessen
-# wird HIER, an einer einzigen Stelle, der Registrierungsmechanismus
-# umhuellt: Jeder Handler, der ueber @sio.on oder @sio.event angemeldet
-# wird, bekommt die Absicherung automatisch - auch jeder kuenftige.
+# Equipping 50 handlers individually with try/except would be error-prone and
+# incomplete again with the next new handler. Instead the registration
+# mechanism is wrapped HERE, in a single place: every handler registered via
+# @sio.on or @sio.event gets the safeguard automatically - including every
+# future one.
 #
-# Was die Huelle tut:
-#   * faengt jede Ausnahme ab und meldet sie MIT Kenncode und Ereignisnamen
-#   * schickt, wenn die Anfrage eine requestId trug, eine Fehlerantwort
-#     zurueck - sonst wartet der Aufrufer bis zu seinem Zeitlimit
-#   * misst die Dauer und meldet auffaellig langsame Behandlungen
+# What the wrapper does:
+#   * catches every exception and reports it WITH a code and the event name
+#   * sends an error response back if the request carried a requestId -
+#     otherwise the caller waits up to its time limit
+#   * measures the duration and reports notably slow handlers
 
 def _wrap_handler(handler, event_name: str):
     """
-    Legt die Absicherung um einen einzelnen Ereignis-Handler.
+    Places the safeguard around a single event handler.
 
-    GRUNDREGEL: Diese Huelle darf einen Handler niemals unbrauchbar machen.
-    Sie ist eine Verbesserung, kein Kernbestandteil - schlaegt hier
-    irgendetwas fehl, wird der ORIGINAL-Handler registriert. Ein
-    ungesicherter Handler ist immer noch besser als ein kaputter.
-    Genau das ist schon einmal schiefgegangen: Die Huelle verlor die
-    Signatur, und dadurch konnte sich kein Dashboard mehr anmelden.
+    GROUND RULE: this wrapper must never make a handler unusable. It is an
+    improvement, not a core component - if anything fails here, the ORIGINAL
+    handler is registered. An unguarded handler is still better than a broken
+    one. That is exactly what once went wrong: the wrapper lost the signature,
+    and as a result no dashboard could sign in anymore.
     """
     import functools
     import inspect
@@ -261,10 +253,10 @@ def _wrap_handler(handler, event_name: str):
     async def _fail(sid, args, exc):
         from app.errors import report, Codes
         client_id = state.sid_to_client_id.get(sid) if isinstance(sid, str) else None
-        code = report(Codes.SOCK_HANDLER, exc, f"Ereignis '{event_name}'",
+        code = report(Codes.SOCK_HANDLER, exc, f"event '{event_name}'",
                       sid=sid, client=client_id)
-        # Trug die Anfrage eine Kennung, MUSS eine Antwort zurueck - sonst
-        # haengt die Gegenseite bis zu ihrem Zeitlimit.
+        # If the request carried an ID, an answer MUST go back - otherwise the
+        # other side hangs up to its time limit.
         try:
             payload = next((a for a in args if isinstance(a, dict)), None)
             request_id = (payload or {}).get("requestId")
@@ -277,35 +269,34 @@ def _wrap_handler(handler, event_name: str):
             pass
 
     # ---------------------------------------------------------------
-    # WICHTIG: Die SIGNATUR muss erhalten bleiben.
+    # IMPORTANT: the SIGNATURE must be preserved.
     #
-    # python-socketio sieht sich die Parameterliste eines Handlers an, um
-    # zu entscheiden, wie es ihn aufruft. Der 'connect'-Handler bekommt
-    # (sid, environ, auth), wenn er drei Parameter hat, und nur
-    # (sid, environ), wenn er zwei hat.
+    # python-socketio looks at a handler's parameter list to decide how to call
+    # it. The 'connect' handler gets (sid, environ, auth) if it has three
+    # parameters, and only (sid, environ) if it has two.
     #
-    # Eine Huelle mit (*args, **kwargs) hat aus dieser Sicht KEINE
-    # benannten Parameter - socketio ruft dann mit zwei Argumenten auf, und
-    # der echte Handler bekommt sein 'auth' nicht. Genau das ist passiert:
+    # A wrapper with (*args, **kwargs) has NO named parameters from this point
+    # of view - socketio then calls with two arguments, and the real handler
+    # does not get its 'auth'. That is exactly what happened:
     #   TypeError: dashboard_connect() missing 1 required positional
     #   argument: 'auth'
-    # Damit konnte sich kein Dashboard mehr anmelden.
+    # As a result no dashboard could sign in anymore.
     #
-    # functools.wraps kopiert __name__ und __doc__, aber NICHT die
-    # Signatur. Deshalb wird sie hier ausdruecklich uebernommen: __wrapped__
-    # setzt wraps() bereits, und inspect.signature() folgt dem - solange
-    # man __signature__ nicht ueberschreibt. Sicherheitshalber wird sie
-    # explizit gesetzt, damit es nicht von Implementierungsdetails abhaengt.
+    # functools.wraps copies __name__ and __doc__, but NOT the signature. That
+    # is why it is taken over explicitly here: wraps() already sets __wrapped__,
+    # and inspect.signature() follows it - as long as one does not overwrite
+    # __signature__. To be safe it is set explicitly, so it does not depend on
+    # implementation details.
     try:
         _sig = inspect.signature(handler)
     except (TypeError, ValueError):
         _sig = None
 
-    # Wie viele Positionsargumente nimmt der Handler wirklich? python-socketio ruft
-    # z.B. 'disconnect' mit (sid, reason) auf und verlaesst sich darauf, bei einem
-    # TypeError ohne 'reason' erneut zu probieren. Diese Huelle nimmt aber alles an
-    # und verschluckt den TypeError - deshalb kuerzt sie die Argumente selbst auf
-    # die Anzahl, die der Handler erwartet (sonst liefen disconnect-Handler nie).
+    # How many positional arguments does the handler really take? python-socketio
+    # calls e.g. 'disconnect' with (sid, reason) and relies on retrying without
+    # 'reason' on a TypeError. But this wrapper accepts everything and swallows
+    # the TypeError - so it trims the arguments itself to the number the handler
+    # expects (otherwise disconnect handlers would never run).
     _max_pos = None
     if _sig is not None:
         _params = list(_sig.parameters.values())
@@ -323,9 +314,9 @@ def _wrap_handler(handler, event_name: str):
             except asyncio.CancelledError:
                 raise
             except socketio.exceptions.ConnectionRefusedError:
-                # Gewollte Ablehnung eines Verbindungsversuchs (falsches Token): MUSS bei
-                # python-socketio ankommen. Frueher wurde sie hier verschluckt - dann galt
-                # die Verbindung als erlaubt, auch mit falschem Agent-Token.
+                # Intentional rejection of a connection attempt (wrong token): MUST reach
+                # python-socketio. Previously it was swallowed here - then the connection
+                # counted as allowed, even with a wrong agent token.
                 raise
             except Exception as exc:
                 await _fail(args[0] if args else None, args, exc)
@@ -336,8 +327,8 @@ def _wrap_handler(handler, event_name: str):
                     try:
                         from app.errors import report, Codes
                         report(Codes.SOCK_HANDLER, None,
-                               f"Ereignis '{event_name}' war langsam",
-                               dauer=f"{took:.1f}s")
+                               f"event '{event_name}' was slow",
+                               duration=f"{took:.1f}s")
                     except Exception:
                         pass
     else:
@@ -348,10 +339,10 @@ def _wrap_handler(handler, event_name: str):
             try:
                 return handler(*args, **kwargs)
             except socketio.exceptions.ConnectionRefusedError:
-                raise                                   # siehe oben: Ablehnung nicht verschlucken
+                raise                                   # see above: do not swallow the rejection
             except Exception as exc:
                 from app.errors import report, Codes
-                report(Codes.SOCK_HANDLER, exc, f"Ereignis '{event_name}'")
+                report(Codes.SOCK_HANDLER, exc, f"event '{event_name}'")
                 return None
 
     guarded._rmm_guarded = True
@@ -365,25 +356,25 @@ _orig_event = sio.event
 
 
 def _safe_wrap(fn, event):
-    """Umhuellt - und faellt bei Problemen auf das Original zurueck."""
+    """Wraps - and falls back to the original on problems."""
     try:
         wrapped = _wrap_handler(fn, event)
-        # Gegenprobe: Die Signatur MUSS erhalten bleiben, sonst ruft
-        # python-socketio den Handler mit der falschen Zahl Argumente auf.
+        # Cross-check: the signature MUST be preserved, otherwise
+        # python-socketio calls the handler with the wrong number of arguments.
         import inspect
         if inspect.signature(wrapped) != inspect.signature(fn):
-            print(f"[sockets] Absicherung fuer '{event}' uebersprungen - "
-                  f"Signatur haette sich geaendert.")
+            print(f"[sockets] safeguard for '{event}' skipped - "
+                  f"signature would have changed.")
             return fn
         return wrapped
     except Exception as e:
-        print(f"[sockets] Absicherung fuer '{event}' nicht moeglich ({e}) - "
-              f"Handler laeuft ungesichert weiter.")
+        print(f"[sockets] safeguard for '{event}' not possible ({e}) - "
+              f"handler continues unguarded.")
         return fn
 
 
 def _guarded_on(event, handler=None, namespace=None):
-    """Ersatz fuer sio.on - haengt die Absicherung dazwischen."""
+    """Replacement for sio.on - inserts the safeguard in between."""
     if handler is not None:
         return _orig_on(event, _safe_wrap(handler, event), namespace)
 
@@ -394,17 +385,17 @@ def _guarded_on(event, handler=None, namespace=None):
 
 
 def _guarded_event(*args, **kwargs):
-    """Ersatz fuer sio.event (mit und ohne Klammern verwendbar)."""
+    """Replacement for sio.event (usable with and without parentheses)."""
     if len(args) == 1 and callable(args[0]) and not kwargs:
         fn = args[0]
         return _orig_event(_safe_wrap(fn, fn.__name__))
 
-    # FEHLER BEHOBEN: Frueher stand hier _orig_event(handler, namespace=...). Mit
-    # Argumenten liefert python-socketio dort aber nur einen DEKORATOR zurueck und
-    # registriert NICHTS. Betroffen waren 'connect' und 'disconnect' im Namespace
-    # /agent: Die Agent-Token-Pruefung und die Annahme-Schleuse liefen nie (jede
-    # Verbindung wurde angenommen, auch mit falschem Token), und getrennte Agenten
-    # wurden nicht als offline gemeldet. Jetzt wird direkt ueber sio.on registriert.
+    # BUG FIXED: previously this was _orig_event(handler, namespace=...). But
+    # with arguments python-socketio returns only a DECORATOR there and registers
+    # NOTHING. Affected were 'connect' and 'disconnect' in the /agent namespace:
+    # the agent-token check and the acceptance gate never ran (every connection
+    # was accepted, even with a wrong token), and disconnected agents were not
+    # reported as offline. Now it is registered directly via sio.on.
     def decorator(fn):
         _orig_on(fn.__name__, _safe_wrap(fn, fn.__name__), kwargs.get("namespace"))
         return fn
@@ -417,15 +408,14 @@ sio.event = _guarded_event
 
 def verify_handlers() -> dict:
     """
-    Prueft beim Start, dass jeder Ereignis-Handler noch die Signatur hat,
-    die python-socketio erwartet.
+    Checks at start that every event handler still has the signature that
+    python-socketio expects.
 
-    Warum: Ein Handler mit falscher Signatur faellt NICHT beim Start auf.
-    Er scheitert erst, wenn jemand das Ereignis ausloest - also wenn ein
-    Dashboard sich anmeldet, eine Shell geoeffnet wird oder ein Agent sich
-    meldet. Und dann steht im Protokoll nur ein TypeError irgendwo in einer
-    Bibliothek. Diese Pruefung zieht den Fehler an den Start vor, wo er
-    hingehoert.
+    Why: a handler with a wrong signature does NOT show up at start. It only
+    fails when someone triggers the event - that is, when a dashboard signs in,
+    a shell is opened or an agent reports. And then the log only shows a
+    TypeError somewhere in a library. This check pulls the error forward to the
+    start, where it belongs.
     """
     import inspect
     problems = []
@@ -441,26 +431,26 @@ def verify_handlers() -> dict:
             try:
                 params = list(inspect.signature(fn).parameters)
             except (TypeError, ValueError):
-                problems.append(f"{namespace}:{event} (Signatur nicht lesbar)")
+                problems.append(f"{namespace}:{event} (signature not readable)")
                 continue
-            # 'connect' bekommt (sid, environ) oder (sid, environ, auth),
-            # 'disconnect' (sid) oder (sid, reason), alles andere (sid, data).
+            # 'connect' gets (sid, environ) or (sid, environ, auth),
+            # 'disconnect' (sid) or (sid, reason), everything else (sid, data).
             expected = {"connect": (2, 3), "disconnect": (1, 2)}.get(event)
             if expected and len(params) not in expected:
                 problems.append(
-                    f"{namespace or '/'}:{event} hat {len(params)} Parameter "
-                    f"({', '.join(params)}), erwartet {' oder '.join(map(str, expected))}")
+                    f"{namespace or '/'}:{event} has {len(params)} parameters "
+                    f"({', '.join(params)}), expected {' or '.join(map(str, expected))}")
     if problems:
         for p in problems:
-            print(f"[sockets] SIGNATUR-PROBLEM: {p}")
+            print(f"[sockets] SIGNATURE PROBLEM: {p}")
         try:
             from app.errors import report, Codes
-            report(Codes.BOOT, None, "Socket-Handler mit falscher Signatur",
-                   anzahl=len(problems), betroffen="; ".join(problems[:5]))
+            report(Codes.BOOT, None, "socket handlers with wrong signature",
+                   count=len(problems), affected="; ".join(problems[:5]))
         except Exception:
             pass
     else:
-        print(f"[sockets] {checked} Ereignis-Handler geprueft - Signaturen in Ordnung.")
+        print(f"[sockets] {checked} event handlers checked - signatures OK.")
     return {"checked": checked, "problems": problems}
 
 
@@ -494,54 +484,71 @@ async def _e2e_in_node(sid, data):
 
 
 class ConnectionState:
-    """Hält den aktuellen Live-Zustand aller verbundenen Agenten im Speicher."""
+    """Holds the current live state of all connected agents in memory."""
 
     def __init__(self) -> None:
-        self.client_id_to_sid: dict[str, str] = {}   # Client-ID -> Socket.IO Session-ID
-        self.sid_to_client_id: dict[str, str] = {}   # umgekehrte Zuordnung (für Disconnect)
-        self.live_metrics: dict[str, dict] = {}      # Client-ID -> letzte gemeldete Metriken
-        self.last_metric_save: dict[str, int] = {}   # Client-ID -> Zeitstempel des letzten gespeicherten Punkts
-        self.pending_requests: dict[str, asyncio.Future] = {}  # request_id -> wartendes Future
-        # Client-ID -> Zeitpunkt (monotonic), zu dem der Agent nach einem Update
-        # frisch registriert hat ("updated: true"). Wird vom Update-Endpunkt
-        # abgefragt, um ein Update als erfolgreich zu bestätigen.
+        self.client_id_to_sid: dict[str, str] = {}   # client ID -> Socket.IO session ID
+        self.sid_to_client_id: dict[str, str] = {}   # reverse mapping (for disconnect)
+        self.live_metrics: dict[str, dict] = {}      # client ID -> last reported metrics
+        self.last_metric_save: dict[str, int] = {}   # client ID -> timestamp of the last stored point
+        self.pending_requests: dict[str, asyncio.Future] = {}  # request_id -> waiting future
+        # client ID -> time (monotonic) at which the agent freshly registered
+        # after an update ("updated: true"). Queried by the update endpoint to
+        # confirm an update as successful.
         self.update_confirmed: dict[str, float] = {}
-        # Laufende Agent-Updates (vom Dashboard angestossen): Stufe/Detail aus
-        # agent-action-log, updated=True nach erfolgreicher Neuanmeldung.
+        # Running agent updates (triggered from the dashboard): stage/detail
+        # from agent-action-log, updated=True after a successful re-register.
         self.update_jobs: dict[str, dict] = {}
+        # Debounced offline display: on a connection drop a client is NOT
+        # reported offline immediately, but only after a grace period
+        # (AGENT_OFFLINE_GRACE_S, ~2 heartbeats). last_disconnect remembers the
+        # time of the drop, _offline_tasks the planned offline report (cancelled
+        # on a reconnect).
+        self.last_disconnect: dict[str, float] = {}
+        self._offline_tasks: dict = {}
 
     def is_online(self, client_id: str) -> bool:
+        # Live socket NOW - decisive for actions (exec, screen, relay, ...)
+        # that really need an open connection.
         return client_id in self.client_id_to_sid
 
+    def ui_online(self, client_id: str) -> bool:
+        """Online status for display/notifications - DEBOUNCED: a client stays
+        'online' across a brief reconnect dropout and only counts as offline
+        when it has missed the grace period (see disconnect() or
+        _deferred_offline())."""
+        if client_id in self.client_id_to_sid:
+            return True
+        ts = self.last_disconnect.get(client_id)
+        return ts is not None and (time.monotonic() - ts) < AGENT_OFFLINE_GRACE_S
 
-# Ein einziges, globales State-Objekt für die ganze App
+
+# A single, global state object for the whole app
 state = ConnectionState()
 
 
 # ======================================================================
-# AUFNAHME-SCHLEUSE FÜR AGENTEN  ("einer nach dem anderen")
+# ADMISSION GATE FOR AGENTS  ("one after another")
 # ----------------------------------------------------------------------
-# Problem, das hier gelöst wird: Nach einem Neustart des Containers (oder
-# einem kurzen Netzausfall) wollen ALLE Agenten gleichzeitig verbinden.
-# Jede Anmeldung zieht mehrere Datenbank-Schreibvorgänge, Notifier-Regeln
-# und zwei Broadcasts an alle Dashboards nach sich. Bei 50+ Agenten
-# gleichzeitig entstehen daraus tausende parallele Coroutinen und
-# DB-Zugriffe in derselben Sekunde - der Container wird vom OOM-Killer
-# bzw. vom blockierten Event-Loop erledigt.
+# Problem solved here: after a container restart (or a brief network outage)
+# ALL agents want to connect at once. Every registration triggers several
+# database writes, notifier rules and two broadcasts to all dashboards. With
+# 50+ agents at once this produces thousands of parallel coroutines and DB
+# accesses in the same second - the container is finished off by the OOM
+# killer or the blocked event loop.
 #
-# Lösung in drei Stufen:
-#   1. TÜRSTEHER (Semaphore): Nur eine begrenzte Zahl Agenten darf sich
-#      gleichzeitig im Anmelde-Vorgang befinden. Standard: 1 - also
-#      wirklich streng einer nach dem anderen.
-#   2. WARTESCHLANGE: Wer keinen Platz bekommt, wartet. Wird die Wartezeit
-#      zu lang oder ist die Schlange voll, wird die Verbindung höflich
-#      abgelehnt; der Agent versucht es mit Backoff später erneut.
-#   3. SERIALISIERUNG: Die eigentliche 'register'-Verarbeitung läuft unter
-#      einem Lock, damit sie nie überlappt - egal wie viele Sockets offen
-#      sind.
+# Solution in three stages:
+#   1. DOORMAN (semaphore): only a limited number of agents may be in the
+#      registration process at the same time. Default: 1 - so really strictly
+#      one after another.
+#   2. QUEUE: whoever gets no slot waits. If the wait gets too long or the
+#      queue is full, the connection is refused politely; the agent retries
+#      later with backoff.
+#   3. SERIALIZATION: the actual 'register' processing runs under a lock, so it
+#      never overlaps - no matter how many sockets are open.
 #
-# Alle Werte sind über Umgebungsvariablen einstellbar, damit man auf
-# grösserer Hardware wieder aufdrehen kann, ohne Code zu ändern.
+# All values are configurable via environment variables, so one can turn it
+# back up on bigger hardware without changing code.
 # ======================================================================
 
 import os as _os
@@ -554,44 +561,51 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-# Wie viele Agenten dürfen sich GLEICHZEITIG anmelden?
+# How many agents may register AT THE SAME TIME?
 #
-# War 1 - das war zu streng und hat mehr kaputt gemacht als geholfen. Eine
-# Anmeldung dauert Millisekunden; das Problem waren nie zwei gleichzeitige
-# Anmeldungen, sondern hundert. Bei 4 Plätzen bleibt die Last gedeckelt,
-# aber eine Handvoll Agenten kommt nach einem Netzausfall sofort wieder
-# rein, statt sich gegenseitig in immer längere Wartezeiten zu drängen.
+# Was 1 - that was too strict and broke more than it helped. A registration
+# takes milliseconds; the problem was never two simultaneous registrations,
+# but a hundred. With 4 slots the load stays capped, but a handful of agents
+# gets back in immediately after a network outage, instead of pushing each
+# other into ever longer waits.
 AGENT_ADMISSION_SLOTS = _env_int("AGENT_ADMISSION_SLOTS", 4)
-# Wie lange darf ein Agent auf seinen Platz warten, bevor er abgewiesen wird?
+# How long may an agent wait for its slot before being refused?
 AGENT_ADMISSION_WAIT_S = _env_int("AGENT_ADMISSION_WAIT_S", 45)
-# Wie viele Agenten dürfen höchstens in der Schlange stehen? Darüber hinaus
-# wird sofort abgelehnt, statt immer mehr Speicher mit Wartenden zu füllen.
+# How many agents may stand in the queue at most? Beyond that it is refused
+# immediately, instead of filling ever more memory with waiters.
 AGENT_ADMISSION_QUEUE = _env_int("AGENT_ADMISSION_QUEUE", 100)
-# Notbremse: Meldet sich ein Agent nach dem Verbinden nicht binnen dieser
-# Zeit an, wird sein Platz wieder freigegeben.
+# Emergency stop: if an agent does not register within this time after
+# connecting, its slot is released again.
 #
-# War 30 s. Das war viel zu lang: Eine Anmeldung folgt dem Verbinden
-# innerhalb von Millisekunden. Bricht die Verbindung genau dazwischen ab,
-# blockierte der tote Platz eine halbe Minute lang die Schleuse - bei
-# wenigen Plätzen legt das den Wiedereinstieg aller Agenten lahm.
+# Was 30 s. That was far too long: a registration follows the connect within
+# milliseconds. If the connection drops exactly in between, the dead slot
+# blocked the gate for half a minute - with few slots this cripples the
+# re-entry of all agents.
 AGENT_ADMISSION_HOLD_S = _env_int("AGENT_ADMISSION_HOLD_S", 10)
-# Wie viele Heartbeats werden gleichzeitig verarbeitet? Heartbeats schreiben
-# in die DB - unbegrenzt parallel ist genau die Last, die den Container killt.
+# How many heartbeats are processed at the same time? Heartbeats write to the
+# DB - unlimited parallelism is exactly the load that kills the container.
 AGENT_HEARTBEAT_SLOTS = _env_int("AGENT_HEARTBEAT_SLOTS", 4)
+
+# Grace period before a disconnected agent is shown/reported as OFFLINE. The
+# agent sends a heartbeat every ~5-6 s; ~16 s tolerates two missed heartbeats
+# (plus reconnect time) without a brief dropout making the whole fleet jump to
+# offline in the dashboard. A reconnect within the grace period cancels the
+# offline report.
+AGENT_OFFLINE_GRACE_S = _env_int("AGENT_OFFLINE_GRACE_S", 16)
 
 _admission_sem: "asyncio.Semaphore | None" = None
 _register_lock: "asyncio.Lock | None" = None
 _heartbeat_sem: "asyncio.Semaphore | None" = None
-_admission_waiting = 0                 # aktuell in der Schlange
-_admission_held: dict[str, object] = {}  # sid -> Watchdog-Task (hält einen Platz)
+_admission_waiting = 0                 # currently in the queue
+_admission_held: dict[str, object] = {}  # sid -> watchdog task (holds a slot)
 _admission_stats = {"granted": 0, "refused": 0, "healed": 0}
 
 
 def _ensure_gate() -> None:
-    """Legt die Schleusen-Objekte beim ersten Gebrauch an.
+    """Creates the gate objects on first use.
 
-    Bewusst spät: asyncio-Primitive dürfen erst existieren, wenn der
-    Event-Loop läuft - beim Import des Moduls tut er das noch nicht.
+    Deliberately late: asyncio primitives may only exist once the event loop
+    is running - on module import it is not yet.
     """
     global _admission_sem, _register_lock, _heartbeat_sem
     if _admission_sem is None:
@@ -603,7 +617,7 @@ def _ensure_gate() -> None:
 
 
 async def _admission_acquire(sid: str) -> bool:
-    """Wartet auf einen freien Platz in der Schleuse. False = abgelehnt."""
+    """Waits for a free slot in the gate. False = refused."""
     global _admission_waiting
     _ensure_gate()
     if _admission_waiting >= AGENT_ADMISSION_QUEUE:
@@ -614,20 +628,20 @@ async def _admission_acquire(sid: str) -> bool:
                                timeout=AGENT_ADMISSION_WAIT_S)
     except asyncio.TimeoutError:
         _admission_stats["refused"] += 1
-        print(f"[gate] Agent {sid} abgewiesen - alle {AGENT_ADMISSION_SLOTS} "
-              f"Plätze belegt, {_admission_waiting - 1} weitere warten")
+        print(f"[gate] agent {sid} refused - all {AGENT_ADMISSION_SLOTS} "
+              f"slots busy, {_admission_waiting - 1} more waiting")
         return False
     finally:
         _admission_waiting -= 1
 
-    # Notbremse scharf machen: Platz automatisch freigeben, falls kein
-    # 'register' kommt.
+    # Arm the emergency stop: release the slot automatically if no 'register'
+    # arrives.
     async def _watchdog():
         try:
             await asyncio.sleep(AGENT_ADMISSION_HOLD_S)
         except asyncio.CancelledError:
             return
-        print(f"[gate] Agent {sid} hat sich nicht angemeldet - Platz freigegeben")
+        print(f"[gate] agent {sid} did not register - slot released")
         _admission_release(sid)
 
     _admission_held[sid] = asyncio.ensure_future(_watchdog())
@@ -636,7 +650,7 @@ async def _admission_acquire(sid: str) -> bool:
 
 
 def _admission_release(sid: str) -> None:
-    """Gibt den Platz eines Agenten wieder frei (mehrfacher Aufruf ist harmlos)."""
+    """Releases an agent\047s slot again (multiple calls are harmless)."""
     task = _admission_held.pop(sid, None)
     if task is None:
         return
@@ -652,21 +666,21 @@ def _admission_release(sid: str) -> None:
 
 
 # ----------------------------------------------------------------------
-# Gebündelte Dashboard-Broadcasts
+# Bundled dashboard broadcasts
 # ----------------------------------------------------------------------
-# 'clients:changed' hat keinen Inhalt - es sagt dem Frontend nur "lade die
-# Liste neu". 80 Agenten, die binnen zwei Sekunden verbinden, lösten bisher
-# 160 solcher Broadcasts aus (und damit 160 Neuladungen pro Dashboard).
-# Jetzt wird höchstens einer pro Sekunde verschickt.
+# 'clients:changed' has no content - it only tells the frontend to "reload the
+# list". 80 agents connecting within two seconds previously triggered 160 such
+# broadcasts (and thus 160 reloads per dashboard). Now at most one per second
+# is sent.
 _clients_changed_task: "object | None" = None
 
 
 def _emit_clients_changed_soon(delay: float = 1.0) -> None:
-    """Meldet den Dashboards gesammelt, dass sich die Client-Liste geändert hat."""
+    """Tells the dashboards in a bundled way that the client list has changed."""
     global _clients_changed_task
     task = _clients_changed_task
     if task is not None and not task.done():
-        return   # es ist bereits eine Meldung unterwegs
+        return   # a report is already on the way
 
     async def _fire():
         await asyncio.sleep(delay)
@@ -687,14 +701,14 @@ def _new_request_id() -> str:
 
 
 # ------------------------------------------------------------------
-# Offline-Warteschlange abarbeiten (beim Agent-Anmelden und auf Anstoss
-# aus clients_routes, wenn der Agent schon online ist).
+# Process the offline queue (on agent register and on a trigger from
+# clients_routes when the agent is already online).
 # ------------------------------------------------------------------
 _queue_busy: set = set()
 
 
 async def push_maintenance(client_id: str) -> dict:
-    """Wartungsstatus an Agent + Dashboards verteilen (nach Setzen/Ablauf)."""
+    """Distribute the maintenance status to agent + dashboards (after set/expiry)."""
     m = db.client_maintenance(await db.call(db.get_client, client_id))
     try:
         await send_to_agent(client_id, "maintenance-mode", m)
@@ -705,7 +719,7 @@ async def push_maintenance(client_id: str) -> dict:
 
 
 async def maintenance_expiry_loop() -> None:
-    """Beendet abgelaufene Wartungsmodi (Core-Hintergrundschleife)."""
+    """Ends expired maintenance modes (core background loop)."""
     while True:
         await asyncio.sleep(30)
         for cid in await db.call(db.expired_maintenance_ids):
@@ -741,20 +755,20 @@ async def kick_offline_queue(client_id: str) -> None:
                         roll = _mods.use("software", "rollout") if _mods.is_enabled("software") else None
                         if roll is None:
                             await db.call(db.queue_set_status, it["id"], "failed",
-                                          "Modul 'software' ist nicht aktiv")
+                                          "module 'software' is not active")
                         else:
                             res = await roll.install(client_id, payload.get("package_id"))
                             await db.call(db.queue_set_status, it["id"],
                                           "done" if res.get("ok") else "failed",
                                           str(res.get("output") or res.get("error") or "")[:3000])
                     elif str(it["kind"]).startswith("mod:"):
-                        # Generisch fuer Module: "mod:<modul>:<datei>" -> <datei>.queue_run(client, payload)
+                        # Generic for modules: "mod:<module>:<file>" -> <file>.queue_run(client, payload)
                         from app import modules as _mods
                         _p = str(it["kind"]).split(":")
                         hdl = _mods.use(_p[1], _p[2]) if len(_p) == 3 and _mods.is_enabled(_p[1]) else None
                         if hdl is None or not hasattr(hdl, "queue_run"):
                             await db.call(db.queue_set_status, it["id"], "failed",
-                                          f"Modul '{_p[1] if len(_p) > 1 else '?'}' ist nicht aktiv")
+                                          f"module '{_p[1] if len(_p) > 1 else '?'}' is not active")
                         else:
                             await db.call(db.queue_set_status, it["id"], "running")
                             res = await hdl.queue_run(client_id, payload)
@@ -763,7 +777,7 @@ async def kick_offline_queue(client_id: str) -> None:
                                           str(res.get("output") or "")[:3000])
                     else:
                         await db.call(db.queue_set_status, it["id"], "failed",
-                                      f"Unbekannte Aktionsart {it['kind']}")
+                                      f"unknown action kind {it['kind']}")
                 except Exception as exc:
                     await db.call(db.queue_set_status, it["id"], "failed", str(exc)[:1000])
             await sio.emit("queue:changed", {"client_id": client_id}, namespace="/dashboard")
@@ -777,17 +791,17 @@ async def request_exec(client_id: str, command: str, timeout_seconds: float = 20
                        session: str | None = None, shell: str = "auto",
                        elevated: bool = False) -> dict:
     """
-    Schickt einen Shell-Befehl an einen Agenten und wartet auf das Ergebnis.
-    Gibt zurück: {"stdout": ..., "stderr": ..., "code": ...}
-    Wirft eine Exception, wenn der Client offline ist oder nicht rechtzeitig antwortet.
+    Sends a shell command to an agent and waits for the result.
+    Returns: {"stdout": ..., "stderr": ..., "code": ...}
+    Throws an exception if the client is offline or does not answer in time.
 
-    'session' identifiziert ein Terminal-Fenster: der Agent hält pro Session ein
-    eigenes Arbeitsverzeichnis, damit 'cd' über mehrere Befehle hinweg wirkt.
-    'shell' = 'cmd'|'powershell'|'auto', 'elevated' = als Administrator (Windows).
+    'session' identifies a terminal window: the agent keeps a separate working
+    directory per session, so 'cd' takes effect across several commands.
+    'shell' = 'cmd'|'powershell'|'auto', 'elevated' = as administrator (Windows).
     """
     sid = state.client_id_to_sid.get(client_id)
     if not sid:
-        raise RuntimeError("Client ist offline")
+        raise RuntimeError("Client is offline")
 
     request_id = _new_request_id()
     future: asyncio.Future = asyncio.get_event_loop().create_future()
@@ -809,12 +823,12 @@ async def request_exec(client_id: str, command: str, timeout_seconds: float = 20
 
 async def request_fs_list(client_id: str, path: str, timeout_seconds: float = 15.0) -> list[dict]:
     """
-    Fragt bei einem Agenten den Inhalt eines Ordners ab.
-    Gibt eine Liste von Datei-/Ordner-Einträgen zurück.
+    Requests the contents of a folder from an agent.
+    Returns a list of file/folder entries.
     """
     sid = state.client_id_to_sid.get(client_id)
     if not sid:
-        raise RuntimeError("Client ist offline")
+        raise RuntimeError("Client is offline")
 
     request_id = _new_request_id()
     future: asyncio.Future = asyncio.get_event_loop().create_future()
@@ -833,10 +847,10 @@ async def request_fs_list(client_id: str, path: str, timeout_seconds: float = 15
 
 
 async def request_proc_list(client_id: str, timeout_seconds: float = 15.0) -> list[dict]:
-    """Fragt die laufende Prozessliste eines Clients ab (für den Task-Manager)."""
+    """Requests the running process list of a client (for the task manager)."""
     sid = state.client_id_to_sid.get(client_id)
     if not sid:
-        raise RuntimeError("Client ist offline")
+        raise RuntimeError("Client is offline")
 
     request_id = _new_request_id()
     future: asyncio.Future = asyncio.get_event_loop().create_future()
@@ -855,10 +869,10 @@ async def request_proc_list(client_id: str, timeout_seconds: float = 15.0) -> li
 
 
 async def request_proc_kill(client_id: str, pid: int, timeout_seconds: float = 10.0) -> dict:
-    """Fordert einen Agenten auf, einen Prozess zu beenden."""
+    """Asks an agent to terminate a process."""
     sid = state.client_id_to_sid.get(client_id)
     if not sid:
-        raise RuntimeError("Client ist offline")
+        raise RuntimeError("Client is offline")
 
     request_id = _new_request_id()
     future: asyncio.Future = asyncio.get_event_loop().create_future()
@@ -874,10 +888,10 @@ async def request_proc_kill(client_id: str, pid: int, timeout_seconds: float = 1
 
 
 async def request_fs_read(client_id: str, path: str, timeout_seconds: float = 30.0) -> dict:
-    """Fordert eine Datei von einem Agenten an (für den Download im Dashboard)."""
+    """Requests a file from an agent (for the download in the dashboard)."""
     sid = state.client_id_to_sid.get(client_id)
     if not sid:
-        raise RuntimeError("Client ist offline")
+        raise RuntimeError("Client is offline")
 
     request_id = _new_request_id()
     future: asyncio.Future = asyncio.get_event_loop().create_future()
@@ -897,13 +911,13 @@ async def request_fs_read(client_id: str, path: str, timeout_seconds: float = 30
 
 async def request_patch_ping(client_id: str, timeout_seconds: float = 8.0) -> dict:
     """
-    Fragt den Agenten, ob er Patching überhaupt beherrscht. Antwortet er
-    nicht innerhalb weniger Sekunden, läuft dort ein Agent ohne die
-    Patch-Handler - dann hat es keinen Zweck, einen Scan zu schicken.
+    Asks the agent whether it supports patching at all. If it does not answer
+    within a few seconds, an agent without the patch handlers runs there - then
+    there is no point sending a scan.
     """
     sid = state.client_id_to_sid.get(client_id)
     if not sid:
-        raise RuntimeError("Client ist offline")
+        raise RuntimeError("Client is offline")
 
     request_id = _new_request_id()
     future: asyncio.Future = asyncio.get_event_loop().create_future()
@@ -917,13 +931,13 @@ async def request_patch_ping(client_id: str, timeout_seconds: float = 8.0) -> di
 
 async def request_patch_selftest(client_id: str, timeout_seconds: float = 90.0) -> dict:
     """
-    Kurzer Funktionstest auf dem Client: sind die Update-Quellen ansprechbar,
-    läuft der Agent erhöht? Dauert Sekunden statt Minuten und beantwortet
-    die Frage "liegt es am Agenten oder am System?".
+    Short function test on the client: are the update sources reachable, does
+    the agent run elevated? Takes seconds instead of minutes and answers the
+    question "is it the agent or the system?".
     """
     sid = state.client_id_to_sid.get(client_id)
     if not sid:
-        raise RuntimeError("Client ist offline")
+        raise RuntimeError("Client is offline")
 
     request_id = _new_request_id()
     future: asyncio.Future = asyncio.get_event_loop().create_future()
@@ -941,20 +955,20 @@ async def request_patch_selftest(client_id: str, timeout_seconds: float = 90.0) 
 
 async def request_patch_scan(client_id: str, timeout_seconds: float = 900.0) -> dict:
     """
-    Lässt einen Agenten nach verfügbaren Aktualisierungen suchen.
+    Lets an agent scan for available updates.
 
-    Grosszügiger Timeout: die Windows-Update-Abfrage braucht auf trägen
-    Systemen regelmässig mehrere Minuten. Ein Agent ab Patch-Protokoll 2
-    antwortet in jedem Fall - notfalls mit einer Fehlermeldung; bleibt er
-    trotzdem stumm, steht auf dem Client etwas.
+    Generous timeout: the Windows Update query regularly takes several minutes
+    on sluggish systems. An agent from patch protocol 2 on always answers - if
+    need be with an error message; if it stays silent anyway, something is
+    wrong on the client.
 
-    Anders als früher wird eine Fehlerantwort hier NICHT in eine Ausnahme
-    verwandelt: der Aufrufer will auch bei einem Fehler die mitgelieferten
-    Zusatzangaben (Quellen, Fähigkeiten) auswerten.
+    Unlike before, an error response is NOT turned into an exception here: the
+    caller wants to evaluate the extra data provided (sources, capabilities)
+    even on an error.
     """
     sid = state.client_id_to_sid.get(client_id)
     if not sid:
-        raise RuntimeError("Client ist offline")
+        raise RuntimeError("Client is offline")
 
     request_id = _new_request_id()
     future: asyncio.Future = asyncio.get_event_loop().create_future()
@@ -971,12 +985,12 @@ async def request_patch_scan(client_id: str, timeout_seconds: float = 900.0) -> 
 async def request_patch_apply(client_id: str, items: list[dict],
                               timeout_seconds: float = 7200.0) -> dict:
     """
-    Lässt einen Agenten die benannten Aktualisierungen installieren.
-    Sehr langer Timeout - Feature-Updates laufen durchaus zwei Stunden.
+    Lets an agent install the named updates.
+    Very long timeout - feature updates can run for two hours.
     """
     sid = state.client_id_to_sid.get(client_id)
     if not sid:
-        raise RuntimeError("Client ist offline")
+        raise RuntimeError("Client is offline")
 
     request_id = _new_request_id()
     future: asyncio.Future = asyncio.get_event_loop().create_future()
@@ -994,13 +1008,13 @@ async def request_patch_apply(client_id: str, items: list[dict],
 async def request_fs_op(client_id: str, event: str, data: dict,
                         timeout_seconds: float = 60.0) -> dict:
     """
-    Generischer Helfer für schreibende FS-Operationen auf einem Client:
-    fs-write (Upload/Editieren), fs-mkdir, fs-delete, fs-rename.
-    Alle antworten mit dem Event 'fs-op-result'.
+    Generic helper for writing FS operations on a client:
+    fs-write (upload/edit), fs-mkdir, fs-delete, fs-rename.
+    All answer with the event 'fs-op-result'.
     """
     sid = state.client_id_to_sid.get(client_id)
     if not sid:
-        raise RuntimeError("Client ist offline")
+        raise RuntimeError("Client is offline")
 
     request_id = _new_request_id()
     future: asyncio.Future = asyncio.get_event_loop().create_future()
@@ -1019,71 +1033,71 @@ async def request_fs_op(client_id: str, event: str, data: dict,
 
 
 # ====================================================================
-# Handler für den /agent Namespace (Verbindungen von den Agent-Programmen)
+# Handlers for the /agent namespace (connections from the agent programs)
 # ====================================================================
 
 # ------------------------------------------------------------------
-# Automatisches Agent-Update
+# Automatic agent update
 # ------------------------------------------------------------------
-# Veraltete Agenten werden beim Verbinden automatisch aktualisiert, wenn das
-# Feature greift. Effektiver Modus pro Client:
-#   auto_update = 'on'     -> immer aktualisieren
-#   auto_update = 'off'    -> nie automatisch aktualisieren
-#   auto_update = 'global' -> Settings-Schalter 'agent_auto_update' entscheidet
-# Ein Cooldown pro Client verhindert Update-Schleifen, falls ein Update
-# fehlschlägt und der Agent sich immer wieder mit alter Version meldet.
+# Outdated agents are updated automatically on connecting when the feature
+# applies. Effective mode per client:
+#   auto_update = 'on'     -> always update
+#   auto_update = 'off'    -> never update automatically
+#   auto_update = 'global' -> the settings switch 'agent_auto_update' decides
+# A cooldown per client prevents update loops if an update fails and the agent
+# keeps reporting with the old version.
 
-_AUTO_UPDATE_COOLDOWN_S = 1800   # 30 min zwischen zwei Auto-Update-Versuchen
+_AUTO_UPDATE_COOLDOWN_S = 1800   # 30 min between two auto-update attempts
 _auto_update_last: dict[str, float] = {}
-# Nach einem Backend-Neustart verbinden sich ALLE Agenten gleichzeitig neu.
-# Ohne Bremse bekaemen dann alle veralteten Agenten im selben Moment das
-# Update (Last-Spitze auf Hosts mit vielen Gaesten, alle Clients kurz weg).
-# Deshalb: in den ersten Minuten nach dem Start zufaellig verzoegert, und
-# hoechstens _AUTO_UPDATE_PARALLEL Updates werden gleichzeitig angestossen.
-# Der Cooldown steht zusaetzlich in der DB, damit er einen Neustart ueberlebt.
+# After a backend restart ALL agents reconnect at the same time. Without a
+# brake all outdated agents would get the update at the same moment (load spike
+# on hosts with many guests, all clients briefly gone). Therefore: randomly
+# delayed in the first minutes after the start, and at most _AUTO_UPDATE_PARALLEL
+# updates are triggered at the same time. The cooldown is additionally in the DB
+# so it survives a restart.
 _PROC_START = time.time()
 _AUTO_UPDATE_PARALLEL = 2
 _auto_update_sem: "asyncio.Semaphore | None" = None
-# Letzter Heartbeat-basierter Versions-Check pro Client (max. 1x/60s).
+# Last heartbeat-based version check per client (max. 1x/60s).
 _auto_update_hb_check: dict[str, float] = {}
-# Drossel für die Metrik-Schwellwert-Prüfung (Benachrichtigungs-Regeln).
+# Throttle for the metric threshold check (notification rules).
 _threshold_check: dict[str, float] = {}
 
-# Pfad zur ausgelieferten Agent-Version (…/backend/app/sockets.py -> …/agent/version.txt)
+# Path to the shipped agent version (…/backend/app/sockets.py -> …/agent/version.txt)
 from pathlib import Path as _Path
 from app.paths import AGENT_VERSION_FILE as _AGENT_VERSION_FILE, AGENT_MAIN_FILE as _AGENT_PY_FILE
 
-# Was jeder Client beim Anmelden über sich gesagt hat: Code-Prüfsumme und
-# Patch-Fähigkeit. Nur im Arbeitsspeicher - die Werte kommen bei jedem
-# 'register' frisch herein, und ohne Verbindung sind sie bedeutungslos.
+# What each client said about itself on registering: code checksum and patch
+# capability. In memory only - the values come in fresh on every 'register',
+# and without a connection they are meaningless.
 _agent_code_hashes: dict[str, str] = {}
 _agent_caps: dict[str, dict] = {}
 
 
 def agent_capabilities(client_id: str) -> dict:
     """
-    Selbstauskunft eines verbundenen Agenten.
+    Self-report of a connected agent.
 
-    Ersetzt das frühere Raten per Ping: Wer patchen kann, sagt es beim
-    Anmelden. Ein leeres Ergebnis heisst "hat nichts gemeldet" - also
-    Agent-Code ohne Patch-Modul.
+    Replaces the earlier guessing via ping: whoever can patch says so on
+    registering. An empty result means "reported nothing" - so agent code
+    without the patch module.
     """
     return dict(_agent_caps.get(client_id) or {})
 
-# Prüfsumme der ausgelieferten agent.py, zwischengespeichert nach mtime.
+# Checksum of the shipped agent.py, cached by mtime.
 _latest_hash_cache: tuple[float, str] = (0.0, "")
 
 
 def _latest_agent_hash() -> str:
     """
-    Prüfsumme der agent.py, die dieses Backend ausliefert.
+    Checksum of the agent.py that this backend ships.
 
-    Grund für dieses ganze Verfahren: version.txt ist die einzige Quelle, aus
-    der bisher hervorging, ob ein Agent veraltet ist. Wird sie beim Ändern von
-    agent.py nicht mit hochgezählt - und das passiert regelmäßig -, hält das
-    Backend jeden Client für aktuell und stößt NIE ein Update an. Auf den
-    Clients lief dadurch monatealter Code; neue Fähigkeiten wie 'patch-ping'
-    fehlten dort schlicht, obwohl sie im Projekt vorhanden waren.
+    Reason for this whole procedure: version.txt is the only source that so far
+    indicated whether an agent is outdated. If it is not incremented when
+    agent.py changes - and that happens regularly - the backend considers every
+    client current and NEVER triggers an update. As a result months-old code
+    ran on the clients; new capabilities like 'patch-ping' were simply missing
+    there, although they existed in the project.
     """
     global _latest_hash_cache
     try:
@@ -1102,7 +1116,7 @@ def _latest_agent_hash() -> str:
 
 
 def _latest_agent_version() -> str:
-    """Aktuell ausgelieferte Agent-Version (Single Source: agent/version.txt)."""
+    """Currently shipped agent version (single source: agent/version.txt)."""
     try:
         return _AGENT_VERSION_FILE.read_text(encoding="utf-8").strip() or ""
     except OSError:
@@ -1110,7 +1124,7 @@ def _latest_agent_version() -> str:
 
 
 def _version_tuple(v: str):
-    """'1.2.10' -> (1, 2, 10). Nicht-numerische Teile werden als 0 gewertet."""
+    """'1.2.10' -> (1, 2, 10). Non-numeric parts are counted as 0."""
     parts = []
     for p in str(v).strip().split("."):
         try:
@@ -1122,17 +1136,16 @@ def _version_tuple(v: str):
 
 def _agent_outdated(agent_v: str, latest_v: str, client_id: str | None = None) -> bool:
     """
-    Ist der Agent auf dem Client älter als der ausgelieferte?
+    Is the agent on the client older than the shipped one?
 
-    Zwei Kriterien, in dieser Reihenfolge:
-      1. Kleinere Versionsnummer -> veraltet (wie bisher).
-      2. Gleiche Versionsnummer, aber ANDERER Code -> ebenfalls veraltet.
-         Erkannt an der Prüfsumme, die der Agent beim Anmelden meldet.
-         Meldet er gar keine, läuft dort eine Fassung von vor dieser
-         Änderung - also ebenfalls alter Code.
+    Two criteria, in this order:
+      1. Lower version number -> outdated (as before).
+      2. Same version number, but DIFFERENT code -> also outdated. Detected via
+         the checksum the agent reports on registering. If it reports none, a
+         version from before this change runs there - so also old code.
 
-    Kriterium 2 greift nur, wenn dieses Backend eine eigene Prüfsumme bilden
-    kann; ohne agent.py auf der Platte bleibt es beim reinen Versionsvergleich.
+    Criterion 2 only applies if this backend can compute its own checksum;
+    without agent.py on disk it stays with the pure version comparison.
     """
     if agent_v and latest_v:
         try:
@@ -1154,8 +1167,9 @@ _migration_last: dict[str, float] = {}
 
 
 async def _migration_redirect(client_id: str, hostname: str = "") -> bool:
-    """Umzug aktiv? -> Agent per Update zum neuen Server schicken (hoechstens alle 15 min je Agent,
-    damit ein fehlschlagendes Update keine Schleife erzeugt). True = ausgeloest."""
+    """Migration active? -> send the agent via an update to the new server (at
+    most every 15 min per agent, so a failing update does not create a loop).
+    True = triggered."""
     target = (await db.call(db.get_setting, "migration_target_url", "") or "").strip()
     if not target:
         return False
@@ -1163,7 +1177,7 @@ async def _migration_redirect(client_id: str, hostname: str = "") -> bool:
     if now - _migration_last.get(client_id, 0.0) < 900:
         return False
     _migration_last[client_id] = now
-    await asyncio.sleep(3)                       # Anmeldung erst sauber abschliessen lassen
+    await asyncio.sleep(3)                       # let the registration finish cleanly first
     if await send_to_agent(client_id, "update-agent", {}):
         await db.call(db.add_audit_entry, None, "migration.agent_redirected", target=client_id,
                       details=f"{hostname or client_id} -> {target}")
@@ -1172,10 +1186,10 @@ async def _migration_redirect(client_id: str, hostname: str = "") -> bool:
 
 
 async def _maybe_auto_update(client_id: str, agent_version: str | None) -> None:
-    """Stößt bei veralteter Version das Selbst-Update an, falls Auto-Update greift."""
+    """Triggers the self-update on an outdated version if auto-update applies."""
     latest = _latest_agent_version()
     if not _agent_outdated(agent_version or "", latest, client_id):
-        _auto_update_last.pop(client_id, None)   # aktuell -> Cooldown zurücksetzen
+        _auto_update_last.pop(client_id, None)   # current -> reset the cooldown
         return
 
     client = await db.call(db.get_client, client_id)
@@ -1190,8 +1204,8 @@ async def _maybe_auto_update(client_id: str, agent_version: str | None) -> None:
     now = time.monotonic()
     last = _auto_update_last.get(client_id)
     if last is not None and now - last < _AUTO_UPDATE_COOLDOWN_S:
-        return   # kürzlich schon versucht -> keine Update-Schleife bauen
-    try:   # Cooldown auch ueber einen Backend-Neustart hinweg
+        return   # tried recently -> do not build an update loop
+    try:   # cooldown also across a backend restart
         last_wall = float(await db.call(db.get_setting, f"agent_auto_update_last:{client_id}", "0") or 0)
     except Exception:
         last_wall = 0.0
@@ -1210,14 +1224,14 @@ async def _staggered_auto_update(client_id: str, client: dict, agent_version, la
     global _auto_update_sem
     import random
     if time.time() - _PROC_START < 300:
-        await asyncio.sleep(random.uniform(60, 240))       # kurz nach dem Start: verteilen
+        await asyncio.sleep(random.uniform(60, 240))       # shortly after the start: spread out
     if _auto_update_sem is None:
         _auto_update_sem = asyncio.Semaphore(_AUTO_UPDATE_PARALLEL)
     async with _auto_update_sem:
         if not state.is_online(client_id):
             return
         await _send_auto_update(client_id, client, agent_version, latest)
-        await asyncio.sleep(45)                             # Platz erst nach einer Weile freigeben
+        await asyncio.sleep(45)                             # release the slot only after a while
 
 
 async def _send_auto_update(client_id: str, client: dict, agent_version, latest) -> None:
@@ -1227,8 +1241,8 @@ async def _send_auto_update(client_id: str, client: dict, agent_version, latest)
                       target=client_id,
                       details=f"{client.get('hostname')}: {agent_version} -> {latest}")
         print(f"[auto-update] {client.get('hostname')} ({client_id}): "
-              f"Agent {agent_version} -> {latest} wird aktualisiert")
-        # Dashboard informieren (gleiches Event wie beim manuellen Update-Start).
+              f"agent {agent_version} -> {latest} being updated")
+        # Inform the dashboard (same event as on the manual update start).
         await sio.emit("client:update-started", {"id": client_id, "auto": True},
                        namespace="/dashboard")
 
@@ -1236,18 +1250,18 @@ async def _send_auto_update(client_id: str, client: dict, agent_version, latest)
 @sio.event(namespace="/agent")
 async def connect(sid, environ, auth):
     """
-    Wird aufgerufen, sobald sich JEMAND mit /agent verbinden will.
+    Called as soon as SOMEONE wants to connect to /agent.
 
-    Zwei Prüfungen, in dieser Reihenfolge:
-      1. AGENT_TOKEN - ohne das richtige Token wird sofort abgelehnt.
-      2. Aufnahme-Schleuse - der Agent wartet hier, bis er an der Reihe ist.
-         Das Warten passiert BEVOR die Verbindung als hergestellt gilt, also
-         bevor irgendwelche Daten fliessen. Dadurch baut immer nur eine
-         Handvoll Agenten gleichzeitig wirklich auf.
+    Two checks, in this order:
+      1. AGENT_TOKEN - without the correct token it is refused immediately.
+      2. Admission gate - the agent waits here until it is its turn. The wait
+         happens BEFORE the connection counts as established, i.e. before any
+         data flows. This way only a handful of agents ever really connect at
+         the same time.
 
-    Wer nicht rechtzeitig drankommt, wird mit einem klaren Grund abgewiesen
-    ("busy") - der Agent wartet dann selbst und probiert es erneut. Das ist
-    deutlich billiger, als hunderte halboffene Verbindungen zu halten.
+    Whoever does not get through in time is refused with a clear reason
+    ("busy") - the agent then waits itself and tries again. That is much
+    cheaper than holding hundreds of half-open connections.
     """
     inner = e2e_accept(sid, environ, auth)
     token = inner.get("token")
@@ -1257,52 +1271,50 @@ async def connect(sid, environ, auth):
             "encryption required: update the agent (unencrypted agents are blocked on this server)")
     if token != AGENT_TOKEN:
         e2e_forget(sid)
-        raise socketio.exceptions.ConnectionRefusedError("Ungültiges Agent-Token")
+        raise socketio.exceptions.ConnectionRefusedError("Invalid agent token")
 
     if not await _admission_acquire(sid):
         raise socketio.exceptions.ConnectionRefusedError(
-            "busy: Server nimmt gerade andere Agenten auf - bitte später erneut")
+            "busy: the server is currently admitting other agents - please retry later")
 
 
 @sio.on("register", namespace="/agent")
 async def on_register(sid, payload):
     """
-    Aussenhuelle der Anmeldung.
+    Outer shell of the registration.
 
-    UMGEBAUT (2026-09-20). Die alte Fassung hatte zwei Fehler, die zusammen
-    genau das Bild erzeugten, das in der Praxis auftrat: "Der Agent
-    installiert sich sauber, meldet sich verbunden - und taucht im Dashboard
-    nie auf."
+    REBUILT (2026-09-20). The old version had two bugs that together produced
+    exactly the picture seen in practice: "the agent installs cleanly, reports
+    connected - and never appears in the dashboard."
 
-      1. Sie fing JEDE Ausnahme aus _do_register() ab, schrieb sie nur auf
-         die Konsole und schickte trotzdem 'register-ack' mit ok=True. Der
-         Agent hielt sich fuer angemeldet und begann mit Heartbeats, obwohl
-         in der Datenbank nie ein Client-Datensatz entstanden war. Der
-         Fehlschlag war damit vollstaendig unsichtbar.
+      1. It caught EVERY exception from _do_register(), only wrote it to the
+         console and still sent 'register-ack' with ok=True. The agent
+         considered itself registered and started heartbeats, although no
+         client record was ever created in the database. The failure was thus
+         completely invisible.
 
-      2. Sie hielt waehrend der GESAMTEN Verarbeitung ein globales Lock -
-         und die Verarbeitung machte rund fuenfzehn SYNCHRONE
-         Datenbankaufrufe direkt im Event-Loop. Bei einer grossen Datenbank
-         reichte das, um die Anmeldungen so zu stauen, dass die Schleuse
-         nach 45 s mit "busy" abwies. Auch dann sah der Agent nur eine
-         Verbindung, die immer wieder neu aufgebaut wurde.
+      2. It held a global lock during the ENTIRE processing - and the
+         processing made around fifteen SYNCHRONOUS database calls directly in
+         the event loop. With a large database that was enough to jam the
+         registrations so much that the gate refused with "busy" after 45 s.
+         Even then the agent only saw a connection that was rebuilt over and
+         over.
 
-    Jetzt gilt: Das Lock ist PRO CLIENT (zwei verschiedene Geraete stoeren
-    sich nicht mehr gegenseitig), saemtliche Datenbankarbeit laeuft in
-    Arbeits-Threads, und das 'register-ack' sagt die Wahrheit - inklusive
-    Grund, wenn es schiefging.
+    Now: the lock is PER CLIENT (two different devices no longer interfere with
+    each other), all database work runs in worker threads, and the
+    'register-ack' tells the truth - including the reason if it went wrong.
     """
     _ensure_gate()
     client_id = (payload or {}).get("id") or ""
-    ok, reason = False, "unbekannt"
+    ok, reason = False, "unknown"
     try:
         async with _register_lock_for(client_id):
             ok, reason = await _do_register(sid, payload)
     except Exception as e:
         from app.errors import report as _report, Codes as _Codes
-        code = _report(_Codes.API_UNHANDLED, e, "Agenten-Anmeldung",
+        code = _report(_Codes.API_UNHANDLED, e, "agent registration",
                        client=client_id or sid)
-        ok, reason = False, f"Serverfehler ({code})"
+        ok, reason = False, f"server error ({code})"
     finally:
         try:
             ack = {"ok": ok}
@@ -1319,15 +1331,15 @@ async def on_register(sid, payload):
         _admission_release(sid)
 
     if not ok:
-        # Bewusst laut: Eine fehlgeschlagene Anmeldung ist der Unterschied
-        # zwischen "Geraet ist im Dashboard" und "Geraet existiert nicht".
-        print(f"[register] FEHLGESCHLAGEN fuer {client_id or sid}: {reason}")
+        # Deliberately loud: a failed registration is the difference between
+        # "device is in the dashboard" and "device does not exist".
+        print(f"[register] FAILED for {client_id or sid}: {reason}")
 
 
-# Ein Lock je Client statt eines globalen. Die Schleuse (_admission_sem)
-# begrenzt weiterhin, WIE VIELE Anmeldungen gleichzeitig laufen duerfen; das
-# Lock verhindert nur noch, dass DERSELBE Agent sich zweimal parallel
-# anmeldet (das passiert, wenn er kurz hintereinander neu verbindet).
+# One lock per client instead of a global one. The gate (_admission_sem) still
+# limits HOW MANY registrations may run at the same time; the lock only
+# prevents the SAME agent from registering twice in parallel (which happens
+# when it reconnects in quick succession).
 _register_locks: dict = {}
 
 
@@ -1336,7 +1348,7 @@ def _register_lock_for(client_id: str):
     if lock is None:
         lock = asyncio.Lock()
         _register_locks[client_id] = lock
-        # Aufraeumen, damit das Verzeichnis nicht unbegrenzt waechst.
+        # Clean up so the dictionary does not grow unbounded.
         if len(_register_locks) > 5000:
             for key in [k for k, v in list(_register_locks.items())
                         if not v.locked()][:2500]:
@@ -1346,39 +1358,47 @@ def _register_lock_for(client_id: str):
 
 async def _do_register(sid, payload) -> tuple[bool, str]:
     """
-    Ein Agent meldet sich an. Rueckgabe: (erfolgreich, Grund).
+    An agent registers. Returns: (success, reason).
 
-    Der Ablauf ist bewusst in zwei Haelften geteilt:
+    The flow is deliberately split into two halves:
 
-      PFLICHT   Alles, ohne das das Geraet nicht im Dashboard erscheint:
-                Datensatz anlegen, einem Mandanten zuordnen, Dashboards
-                benachrichtigen. Scheitert hier etwas, meldet die Funktion
-                einen Fehlschlag - der Agent erfaehrt das und versucht es
-                erneut, statt in einen stillen Leerlauf zu gehen.
+      MANDATORY   Everything without which the device does not appear in the
+                  dashboard: create the record, assign it to a tenant, notify
+                  dashboards. If something fails here, the function reports a
+                  failure - the agent learns of it and retries, instead of
+                  going into a silent idle.
 
-      KUER      Alles Weitere: Auto-Update, Benachrichtigungsregeln,
-                Patch-Angaben, Node-Konfiguration, Absturzmeldung. Jeder
-                dieser Punkte steht in seinem eigenen try - ein Fehler dort
-                darf die Anmeldung nicht mehr kippen. Frueher konnte genau
-                das passieren: eine kaputte Benachrichtigungsregel verhinderte
-                die Aufnahme eines Geraets.
+      OPTIONAL    Everything else: auto-update, notification rules, patch info,
+                  node configuration, crash report. Each of these points is in
+                  its own try - an error there must no longer topple the
+                  registration. Previously exactly that could happen: a broken
+                  notification rule prevented a device from being admitted.
 
-    Saemtliche Datenbankaufrufe laufen ueber db.call() in einem
-    Arbeits-Thread. Im Event-Loop darf nichts mehr auf eine Dateisperre
-    warten - dort haengen alle Agenten, die Shell und der Remote-Screen dran.
+    All database calls run via db.call() in a worker thread. In the event loop
+    nothing may wait on a file lock anymore - all agents, the shell and the
+    remote screen hang on it.
     """
     payload = payload or {}
     client_id = payload.get("id")
     hostname = payload.get("hostname")
     if not client_id or not hostname:
-        return False, "Anmeldung ohne id/hostname"
+        return False, "registration without id/hostname"
 
-    # ---------------- PFLICHT ----------------------------------------
+    # ---------------- MANDATORY --------------------------------------
     state.client_id_to_sid[client_id] = sid
     state.sid_to_client_id[sid] = client_id
 
-    # Gemeldete Code-Pruefsumme merken - MUSS vor jeder Veraltet-Pruefung
-    # passieren, sonst hielte die erste Pruefung jeden Agenten fuer veraltet.
+    # Reconnect within the offline grace period: cancel a possibly already
+    # planned offline report and discard the drop time, so a brief dropout does
+    # NOT come through as "offline".
+    state.last_disconnect.pop(client_id, None)
+    _pending_off = state._offline_tasks.pop(client_id, None)
+    if _pending_off is not None and not _pending_off.done():
+        _pending_off.cancel()
+
+    # Remember the reported code checksum - MUST happen before any
+    # outdated-check, otherwise the first check would consider every agent
+    # outdated.
     _agent_code_hashes[client_id] = str(payload.get("agent_code_hash") or "")
     _agent_caps[client_id] = {
         "protocol": int(payload.get("patch_protocol") or 0),
@@ -1401,13 +1421,13 @@ async def _do_register(sid, payload) -> tuple[bool, str]:
     except Exception as e:
         from app.errors import report as _report, Codes as _Codes
         code = _report(_Codes.API_UNHANDLED, e,
-                       "Client-Datensatz beim Anmelden schreiben",
+                       "write client record on register",
                        client=client_id)
-        return False, f"Datenbank schreibt nicht ({code})"
+        return False, f"database not writing ({code})"
 
-    # Zuordnung zu Mandant/Standort. Ohne tenant_id blendet das Dashboard
-    # den Client in den meisten Ansichten AUS - deshalb gehoert das hier in
-    # die Pflicht und nicht in die Kuer.
+    # Assignment to tenant/location. Without tenant_id the dashboard HIDES the
+    # client in most views - so this belongs in the mandatory part and not in
+    # the optional one.
     try:
         client = await db.call(db.get_client, client_id)
         if client and not client["tenant_id"]:
@@ -1431,25 +1451,25 @@ async def _do_register(sid, payload) -> tuple[bool, str]:
     except Exception as e:
         from app.errors import report as _report, Codes as _Codes
         code = _report(_Codes.API_UNHANDLED, e,
-                       "Client einem Mandanten zuordnen", client=client_id)
-        return False, f"Zuordnung fehlgeschlagen ({code})"
+                       "assign client to a tenant", client=client_id)
+        return False, f"assignment failed ({code})"
 
-    # Ab hier gilt die Anmeldung als geglueckt: Der Datensatz steht, und die
-    # Dashboards erfahren es. Das geschieht VOR der Kuer, damit kein
-    # Nebenschauplatz das Erscheinen im Dashboard verzoegern kann.
+    # From here the registration counts as succeeded: the record exists, and
+    # the dashboards learn of it. This happens BEFORE the optional part, so no
+    # side task can delay the appearance in the dashboard.
     try:
         await sio.emit("client:online", {"id": client_id}, namespace="/dashboard")
         _emit_clients_changed_soon()
     except Exception as e:
-        print(f"[register] Dashboards nicht benachrichtigt: {e!r}")
+        print(f"[register] dashboards not notified: {e!r}")
 
-    # ---------------- KUER -------------------------------------------
+    # ---------------- OPTIONAL ---------------------------------------
     async def _side(name, coro_factory):
-        """Ein Nebenschauplatz - darf scheitern, ohne die Anmeldung zu kippen."""
+        """A side task - may fail without toppling the registration."""
         try:
             await coro_factory()
         except Exception as e:
-            print(f"[register] '{name}' fuer {client_id} fehlgeschlagen: {e!r}")
+            print(f"[register] '{name}' for {client_id} failed: {e!r}")
 
     async def _version():
         await db.call(db.set_agent_version, client_id, payload.get("agent_version"))
@@ -1467,16 +1487,16 @@ async def _do_register(sid, payload) -> tuple[bool, str]:
         host = hostname or client_id
         await notifier.fire_event("agent_update", client_id=client_id,
             notification=build_notification(
-                f"Agent auf {host} wurde auf Version "
-                f"{payload.get('agent_version') or '?'} aktualisiert.",
-                head=f"\u2b06\ufe0f Agent aktualisiert \u2013 {host}",
-                client=host, service="Agent-Update", level="success"))
+                f"Agent on {host} was updated to version "
+                f"{payload.get('agent_version') or '?'}.",
+                head=f"Agent updated - {host}",
+                client=host, service="Agent update", level="success"))
 
     async def _auto_update():
-        # Server-Umzug aktiv (Source -> Migration -> "Agenten umziehen"): jeder Agent,
-        # der sich HIER noch meldet, bekommt das Update-Kommando. Das Update-Skript
-        # traegt die neue Server-Adresse ein -> der Agent verbindet sich danach mit dem
-        # neuen Backend. Gilt unabhaengig von der Agent-Version.
+        # Server move active (Source -> Migration -> "move agents"): every agent
+        # that still reports HERE gets the update command. The update script
+        # writes the new server address -> the agent then connects to the new
+        # backend. Applies regardless of the agent version.
         if await _migration_redirect(client_id, hostname):
             return
         pending = await db.call(db.get_client, client_id)
@@ -1510,8 +1530,8 @@ async def _do_register(sid, payload) -> tuple[bool, str]:
         host = (row or {}).get("hostname") or hostname or client_id
         await db.call(db.add_audit_entry, None, "agent.crashed",
                       target=client_id, details=str(crash)[:1000])
-        print(f"[agent-crash] {host}: Agent ist abgestuerzt und wurde neu "
-              f"gestartet:\n{crash}")
+        print(f"[agent-crash] {host}: agent crashed and was restarted:"
+              f"\n{crash}")
         await sio.emit("client:agent-crashed", {
             "id": client_id, "hostname": host, "error": str(crash)[-2000:],
         }, namespace="/dashboard")
@@ -1532,33 +1552,33 @@ async def _do_register(sid, payload) -> tuple[bool, str]:
         host = hostname or client_id
         await notifier.fire_event("client_online", client_id=client_id,
             notification=build_notification(
-                f"{host} ist jetzt online.",
-                head=f"\U0001f7e2 Client online \u2013 {host}",
+                f"{host} is now online.",
+                head=f"Client online - {host}",
                 client=host, service="Status", level="success"))
         if not was_known:
             await notifier.fire_event("client_new", client_id=client_id,
                 notification=build_notification(
-                    f"Neuer Client {host} wurde registriert.",
-                    head=f"\u2728 Neuer Client \u2013 {host}",
+                    f"New client {host} was registered.",
+                    head=f"New client - {host}",
                     client=host, service="Onboarding", level="info"))
 
     async def _node_check():
         from app import node_manager
         await node_manager.on_agent_online(client_id)
 
-    await _side("node-pruefung", _node_check)
+    await _side("node-check", _node_check)
     await _side("agent-version", _version)
-    await _side("update-bestaetigung", _updated_flag)
+    await _side("update-confirmation", _updated_flag)
     await _side("auto-update", _auto_update)
-    await _side("geraetetyp", _device_type)
-    await _side("absturzmeldung", _crash_report)
+    await _side("device-type", _device_type)
+    await _side("crash-report", _crash_report)
     async def _maintenance_push():
-        # Wartungsmodus (Core) an den Agenten: Schutzmechanismen aussetzen.
+        # Maintenance mode (Core) to the agent: suspend protection mechanisms.
         m = db.client_maintenance(await db.call(db.get_client, client_id))
         await sio.emit("maintenance-mode", m, to=sid, namespace="/agent")
 
     async def _blackbox_cfg():
-        # Blackbox-Konfiguration (Settings -> Allgemein) an den Agenten geben.
+        # Give the blackbox configuration (Settings -> General) to the agent.
         enabled = (await db.call(db.get_setting, "blackbox_enabled", "0")) == "1"
         try:
             interval = int(await db.call(db.get_setting, "blackbox_interval_min", "5") or 5)
@@ -1569,24 +1589,24 @@ async def _do_register(sid, payload) -> tuple[bool, str]:
                        to=sid, namespace="/agent")
 
     async def _offline_queue():
-        # Offline-Warteschlange: vorgemerkte Aktionen jetzt ausfuehren
-        # ("wenn Agent online, dann installiere Software XY").
+        # Offline queue: run the pre-marked actions now
+        # ("if agent online, then install software XY").
         await kick_offline_queue(client_id)
 
     async def _pending_handoff():
-        # Backend-Migration mit NEUER Adresse: Agents, die erst jetzt online
-        # kommen, bekommen die neue Server-Adresse nachgereicht (gesetzt von
-        # POST /api/migration/handoff auf dem ALTEN Backend).
+        # Backend migration with a NEW address: agents that only come online
+        # now get the new server address delivered afterwards (set by
+        # POST /api/migration/handoff on the OLD backend).
         url = await db.call(db.get_setting, "migration_handoff_url", "")
         if url:
             await sio.emit("migrate-server", {"url": url}, to=sid, namespace="/agent")
 
-    await _side("netze", _subnets)
-    await _side("wartungsmodus", _diag_mode)
-    await _side("benachrichtigungen", _notify_online)
+    await _side("subnets", _subnets)
+    await _side("diag-mode", _diag_mode)
+    await _side("notifications", _notify_online)
     await _side("migrations-handoff", _pending_handoff)
     await _side("blackbox-config", _blackbox_cfg)
-    await _side("wartungsmodus-core", _maintenance_push)
+    await _side("maintenance-core", _maintenance_push)
     await _side("offline-queue", _offline_queue)
 
     return True, "ok"
@@ -1594,55 +1614,53 @@ async def _do_register(sid, payload) -> tuple[bool, str]:
 
 @sio.on("heartbeat", namespace="/agent")
 async def on_heartbeat(sid, payload):
-    """Ein Agent meldet alle paar Sekunden seine aktuellen Metriken (CPU/RAM/Disk/...)."""
+    """An agent reports its current metrics every few seconds (CPU/RAM/disk/...)."""
     client_id = payload.get("id")
     if not client_id:
         return
 
-    # Heartbeats sind der zweite Lastfaktor: Sie schreiben in die Datenbank
-    # und senden an alle Dashboards. Ohne Begrenzung laufen bei vielen
-    # Clients beliebig viele davon gleichzeitig. Wir lassen nur eine feste
-    # Zahl gleichzeitig durch - und wenn gerade Anmeldungen laufen, haben
-    # DIESE Vorrang: ein ausgelassener Heartbeat ist folgenlos, eine
-    # abgebrochene Anmeldung nicht.
+    # Heartbeats are the second load factor: they write to the database and
+    # send to all dashboards. Without a limit, arbitrarily many of them run at
+    # once with many clients. We let only a fixed number through at a time -
+    # and when registrations are running, THOSE take precedence: a skipped
+    # heartbeat has no consequences, an aborted registration does.
     _ensure_gate()
-    # Anmeldungen haben Vorrang: ein ausgelassener Messpunkt ist folgenlos,
-    # eine verzoegerte Anmeldung nicht. Geprueft wird jetzt die Schleuse
-    # selbst (wartende + belegte Plaetze) - das alte globale Register-Lock
-    # gibt es nicht mehr, es war der Flaschenhals bei den Anmeldungen.
+    # Registrations take precedence: a skipped data point has no consequences,
+    # a delayed registration does. The gate itself is now checked (waiting +
+    # occupied slots) - the old global register lock no longer exists, it was
+    # the bottleneck for registrations.
     if _admission_waiting or _admission_held:
         return
     if _heartbeat_sem.locked():
-        return   # Rückstau -> diesen Messpunkt überspringen statt aufstauen
+        return   # backlog -> skip this data point instead of piling up
     async with _heartbeat_sem:
         await _handle_heartbeat(client_id, payload)
 
 
-# Zeitpunkt des letzten Aufraeumens der Messwert-Historie (siehe unten).
+# Time of the last cleanup of the metric history (see below).
 _last_prune = [0]
 
 
 async def _handle_heartbeat(client_id, payload):
     """
-    Eigentliche Heartbeat-Verarbeitung (siehe on_heartbeat).
+    Actual heartbeat processing (see on_heartbeat).
 
-    Die Datenbankzugriffe laufen in einem Thread, NICHT im Event-Loop.
-    Grund: Die Datenbank liegt im Bind-Mount, auf einem NAS also auf einem
-    langsamen Dateisystem. Ein einzelnes hängendes Schreiben blockierte
-    bisher das gesamte Backend - keine HTTP-Antwort, keine Socket.IO-Pings,
-    alle Agenten fliegen gleichzeitig raus. Genau dieses Muster steht im
-    Log vom 22.08. um 23:38:29.
+    The database accesses run in a thread, NOT in the event loop. Reason: the
+    database is in the bind mount, so on a NAS on a slow file system. A single
+    hanging write previously blocked the entire backend - no HTTP response, no
+    Socket.IO pings, all agents drop at once. Exactly this pattern is in the
+    log on 22.08. at 23:38:29.
 
-    Der Heartbeat ist der mit Abstand häufigste Schreibpfad (jeder Agent
-    alle fünf Sekunden), deshalb wird er zuerst ausgelagert.
+    The heartbeat is by far the most frequent write path (every agent every
+    five seconds), so it is offloaded first.
     """
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, db.touch_client, client_id)
 
-    # Auto-Update auch für BEREITS verbundene Clients: Wird eine neue
-    # Agent-Version ausgerollt, während der Client online ist, greift der
-    # Register-Check nicht mehr. Deshalb hier ein sparsamer (max. 1x/60s pro
-    # Client) Versions-Check, der ggf. das Auto-Update anstößt.
+    # Auto-update also for ALREADY connected clients: if a new agent version
+    # is rolled out while the client is online, the register check no longer
+    # applies. So here a sparing (max. 1x/60s per client) version check that
+    # triggers the auto-update if needed.
     now_check = time.monotonic()
     if now_check - _auto_update_hb_check.get(client_id, 0.0) >= 60.0:
         _auto_update_hb_check[client_id] = now_check
@@ -1658,13 +1676,13 @@ async def _handle_heartbeat(client_id, payload):
     metrics["ts"] = now_ms
     state.live_metrics[client_id] = metrics
 
-    # --- Persistenz: höchstens alle metrics_interval_seconds einen Punkt speichern ---
-    # (Heartbeats kommen alle paar Sekunden, gespeichert wird aber nur im
-    #  eingestellten Takt, damit die DB nicht vollläuft.)
-    # Der Messpunkt wird geschrieben UND aufgeraeumt - beides sind Schreib-
-    # zugriffe auf eine Tabelle, die schnell sehr gross wird. Sie liefen
-    # bisher synchron im Event-Loop; ein einziges langsames fsync legte damit
-    # das ganze Backend still. Jetzt: Arbeits-Thread.
+    # --- Persistence: store at most one point every metrics_interval_seconds ---
+    # (Heartbeats come every few seconds, but are stored only at the configured
+    #  cadence, so the DB does not fill up.)
+    # The data point is written AND cleaned up - both are write accesses to a
+    # table that quickly grows very large. They previously ran synchronously in
+    # the event loop; a single slow fsync thereby froze the whole backend.
+    # Now: worker thread.
     try:
         interval_ms = (await db.call(db.get_int_setting,
                                      "metrics_interval_seconds")) * 1000
@@ -1681,12 +1699,12 @@ async def _handle_heartbeat(client_id, payload):
                 now_ms,
                 extra=_json_dumps_safe(metrics),
             )
-            # Alles ausserhalb der Aufbewahrungsdauer wegraeumen.
-            # 0 (oder negativ) = unbegrenzt aufbewahren -> NIE prunen.
-            # Das Aufraeumen laeuft hoechstens alle fuenf Minuten, nicht bei
-            # jedem Messpunkt: Es war bei vielen Agenten der teuerste
-            # Einzelvorgang im Heartbeat-Pfad und trotzdem hundertfach
-            # redundant - geloescht ist geloescht.
+            # Clean up everything outside the retention period.
+            # 0 (or negative) = keep unlimited -> NEVER prune.
+            # The cleanup runs at most every five minutes, not on every data
+            # point: with many agents it was the most expensive single
+            # operation in the heartbeat path and yet hundredfold redundant -
+            # deleted is deleted.
             retention_hours = await db.call(db.get_int_setting,
                                             "metrics_retention_hours")
             if retention_hours > 0 and now_ms - _last_prune[0] >= 300_000:
@@ -1694,13 +1712,13 @@ async def _handle_heartbeat(client_id, payload):
                 retention_ms = retention_hours * 3600 * 1000
                 await db.call(db.prune_metrics_history, now_ms - retention_ms)
     except Exception as e:
-        print(f"[metrics] Konnte Messpunkt nicht speichern: {e}")
+        print(f"[metrics] could not store data point: {e}")
 
     await sio.emit("client:metrics", {"id": client_id, "metrics": metrics}, namespace="/dashboard")
 
-    # Benachrichtigungs-Regeln: Metrik-Schwellwerte (CPU/RAM/Disk/Temp).
-    # Höchstens alle 30 s pro Client prüfen - den eigentlichen Alarm-Cooldown
-    # (kein Spam) übernimmt die Regel selbst (notifier._cooled_down).
+    # Notification rules: metric thresholds (CPU/RAM/disk/temp). Check at most
+    # every 30 s per client - the actual alarm cooldown (no spam) is handled by
+    # the rule itself (notifier._cooled_down).
     now_check2 = time.monotonic()
     if now_check2 - _threshold_check.get(client_id, 0.0) >= 30.0:
         _threshold_check[client_id] = now_check2
@@ -1710,38 +1728,37 @@ async def _handle_heartbeat(client_id, payload):
             if _c:
                 await notifier.check_metric_thresholds(_c, metrics)
         except Exception as e:
-            print(f"[notify] Schwellwert-Prüfung fehlgeschlagen: {e}")
+            print(f"[notify] threshold check failed: {e}")
 
 
 # ------------------------------------------------------------------
-# VPN: Meldungen der Nodes
+# VPN: reports from the nodes
 # ------------------------------------------------------------------
-# Seit die Tunnel auf den Nodes enden (echtes WireGuard) trägt das Backend
-# keine Nutzdaten mehr. Was hier ankommt, sind nur noch Zustandsmeldungen
-# und - falls die Node hinter symmetrischem NAT sitzt - die Pakete des
-# Relays. Die Handler sind bewusst dünn; die Logik liegt in der Port-Weiterleitung.
+# Since the tunnels end on the nodes (real WireGuard), the backend no longer
+# carries payload data. What arrives here is only state reports and - if the
+# node sits behind symmetric NAT - the relay's packets. The handlers are
+# deliberately thin; the logic lies in the port forwarding.
 
-# VPN AUSGEBAUT (2026-09-20)
+# VPN REMOVED (2026-09-20)
 # ---------------------------
-# Hier standen 'node-wg-state', 'wg-relay' und 'node-net-packet'. Der letzte
-# war der gefaehrliche: JEDES einzelne IP-Paket eines Tunnels lief als
-# Socket.IO-Ereignis durch diesen Event-Loop und wurde von dort per
-# ensure_future weiterverteilt. Ein aktiver Tunnel hat damit dieselbe
-# Schleife geflutet, die auch Anmeldungen, Shell und Screen bedient.
+# 'node-wg-state', 'wg-relay' and 'node-net-packet' were here. The last was the
+# dangerous one: EVERY single IP packet of a tunnel ran as a Socket.IO event
+# through this event loop and was distributed from there via ensure_future. An
+# active tunnel thus flooded the same loop that also serves registrations, the
+# shell and the screen.
 #
-# Die Ereignisse werden jetzt bewusst NICHT mehr entgegengenommen. Ein alter
-# Agent, der sie noch sendet, bekommt von python-socketio schlicht keine
-# Reaktion - das ist folgenlos und kostet nichts.
+# The events are now deliberately NO longer accepted. An old agent that still
+# sends them simply gets no reaction from python-socketio - that is harmless
+# and costs nothing.
 
 
-# --- Port-Weiterleitung -------------------------------------------
-# Sie benutzt dieselben Ereignisse wie frueher das VPN (vpn-open/-data/
-# -close). Der Agent kennt sie bereits; nur die Gegenstelle im Backend ist
-# jetzt eine andere - nicht mehr der (entfernte) Userspace-Stack, sondern
-# unmittelbar die Weiterleitung.
+# --- Port forwarding ----------------------------------------------
+# It uses the same events as the VPN used to (vpn-open/-data/-close). The agent
+# already knows them; only the counterpart in the backend is now a different
+# one - no longer the (removed) userspace stack, but directly the forwarding.
 
-# Zusaetzlich: app/agent_streams.py (TCP durch einen Agenten fuer Module, z.B.
-# den Server-Browser). Beide Seiten kennen nur ihre eigenen Stream-IDs.
+# Additionally: app/agent_streams.py (TCP through an agent for modules, e.g.
+# the server browser). Both sides only know their own stream IDs.
 
 @sio.on("vpn-open-result", namespace="/agent")
 async def on_forward_open_result(sid, payload):
@@ -1761,16 +1778,16 @@ async def on_forward_close(sid, payload):
     agent_streams.on_close(payload or {})
 
 
-# 'node-wg-result' und request_node_wg() sind mit dem VPN entfallen: Sie
-# dienten ausschliesslich dazu, WireGuard auf einer Node einzurichten.
+# 'node-wg-result' and request_node_wg() were dropped with the VPN: they
+# served only to set up WireGuard on a node.
 
 
 async def request_tempuser(client_id: str, expiry: str, timeout_seconds: float = 60.0) -> dict:
-    """Legt auf dem Agenten einen temporären Benutzer mit Einmal-Passwort an.
+    """Creates a temporary user with a one-time password on the agent.
     expiry: '1h' | '2h' | '4h' | '24h' | 'logoff' | 'never'."""
     sid = state.client_id_to_sid.get(client_id)
     if not sid:
-        raise RuntimeError("Client ist offline")
+        raise RuntimeError("Client is offline")
     request_id = _new_request_id()
     future: asyncio.Future = asyncio.get_event_loop().create_future()
     state.pending_requests[request_id] = future
@@ -1784,7 +1801,7 @@ async def request_tempuser(client_id: str, expiry: str, timeout_seconds: float =
 
 @sio.on("tempuser-result", namespace="/agent")
 async def on_tempuser_result(sid, payload):
-    """Antwort eines Agenten auf 'tempuser-create'."""
+    """An agent's answer to 'tempuser-create'."""
     future = state.pending_requests.get((payload or {}).get("requestId"))
     if future and not future.done():
         future.set_result(payload)
@@ -1792,7 +1809,7 @@ async def on_tempuser_result(sid, payload):
 
 @sio.on("exec-result", namespace="/agent")
 async def on_exec_result(sid, payload):
-    """Antwort eines Agenten auf einen zuvor gesendeten 'exec'-Befehl."""
+    """An agent's answer to a previously sent 'exec' command."""
     future = state.pending_requests.get(payload.get("requestId"))
     if future and not future.done():
         future.set_result(payload)
@@ -1801,9 +1818,9 @@ async def on_exec_result(sid, payload):
 @sio.on("agent-action-log", namespace="/agent")
 async def on_agent_action_log(sid, payload):
     """
-    Fortschritts-/Fehlermeldung des Agenten zu Update/Uninstall. Wird direkt an
-    die Dashboards weitergereicht, damit man in Echtzeit sieht, was auf dem
-    Client passiert (statt nur eines generischen 60s-Timeouts).
+    Progress/error report of the agent regarding update/uninstall. Passed
+    directly to the dashboards, so one sees in real time what happens on the
+    client (instead of only a generic 60s timeout).
     """
     try:
         job = state.update_jobs.get(payload.get("id") or "")
@@ -1823,7 +1840,7 @@ async def on_agent_action_log(sid, payload):
 
 @sio.on("fs-result", namespace="/agent")
 async def on_fs_result(sid, payload):
-    """Antwort eines Agenten auf eine zuvor gesendete 'fs-list'-Anfrage."""
+    """An agent's answer to a previously sent 'fs-list' request."""
     future = state.pending_requests.get(payload.get("requestId"))
     if future and not future.done():
         future.set_result(payload)
@@ -1832,10 +1849,9 @@ async def on_fs_result(sid, payload):
 @sio.on("patch-ping-result", namespace="/agent")
 async def on_patch_ping_result(sid, payload):
     """
-    Antwort auf die Fähigkeitsabfrage. Die gemeldeten Fähigkeiten werden
-    gleich mit übernommen - so ist der Stand auch dann aktuell, wenn sich
-    auf dem Client nach dem Anmelden etwas geändert hat (winget nachträglich
-    installiert, Rechte geändert).
+    Answer to the capability query. The reported capabilities are taken over
+    right away - this way the state is current even if something changed on the
+    client after registering (winget installed afterwards, rights changed).
     """
     client_id = state.sid_to_client_id.get(sid)
     if client_id and payload.get("protocol"):
@@ -1854,7 +1870,7 @@ async def on_patch_ping_result(sid, payload):
 
 @sio.on("patch-selftest-result", namespace="/agent")
 async def on_patch_selftest_result(sid, payload):
-    """Antwort auf den Funktionstest."""
+    """Answer to the function test."""
     future = state.pending_requests.get(payload.get("requestId"))
     if future and not future.done():
         future.set_result(payload)
@@ -1863,11 +1879,10 @@ async def on_patch_selftest_result(sid, payload):
 @sio.on("patch-progress", namespace="/agent")
 async def on_patch_progress(sid, payload):
     """
-    Zwischenstand eines laufenden Scans oder einer Installation.
+    Intermediate status of a running scan or installation.
 
-    Ohne diese Meldungen war ein Patch-Auftrag eine Blackbox: minutenlang
-    Stille, danach entweder ein Ergebnis oder eine Zeitüberschreitung - ohne
-    jeden Hinweis, wo es geklemmt hat.
+    Without these reports a patch job was a black box: minutes of silence, then
+    either a result or a timeout - without any hint where it got stuck.
     """
     client_id = state.sid_to_client_id.get(sid) or payload.get("id")
     if not client_id:
@@ -1882,7 +1897,7 @@ async def on_patch_progress(sid, payload):
 
 @sio.on("patch-scan-result", namespace="/agent")
 async def on_patch_scan_result(sid, payload):
-    """Antwort eines Agenten mit der Liste verfügbarer Aktualisierungen."""
+    """An agent\047s answer with the list of available updates."""
     future = state.pending_requests.get(payload.get("requestId"))
     if future and not future.done():
         future.set_result(payload)
@@ -1890,7 +1905,7 @@ async def on_patch_scan_result(sid, payload):
 
 @sio.on("patch-apply-result", namespace="/agent")
 async def on_patch_apply_result(sid, payload):
-    """Antwort eines Agenten nach dem Einspielen von Aktualisierungen."""
+    """An agent\047s answer after installing updates."""
     future = state.pending_requests.get(payload.get("requestId"))
     if future and not future.done():
         future.set_result(payload)
@@ -1898,7 +1913,7 @@ async def on_patch_apply_result(sid, payload):
 
 @sio.on("proc-result", namespace="/agent")
 async def on_proc_result(sid, payload):
-    """Antwort eines Agenten mit der Prozessliste."""
+    """An agent\047s answer with the process list."""
     future = state.pending_requests.get(payload.get("requestId"))
     if future and not future.done():
         future.set_result(payload)
@@ -1906,7 +1921,7 @@ async def on_proc_result(sid, payload):
 
 @sio.on("proc-kill-result", namespace="/agent")
 async def on_proc_kill_result(sid, payload):
-    """Antwort eines Agenten auf eine Prozess-Beenden-Anfrage."""
+    """An agent\047s answer to a process-kill request."""
     future = state.pending_requests.get(payload.get("requestId"))
     if future and not future.done():
         future.set_result(payload)
@@ -1914,7 +1929,7 @@ async def on_proc_kill_result(sid, payload):
 
 @sio.on("fs-read-result", namespace="/agent")
 async def on_fs_read_result(sid, payload):
-    """Antwort eines Agenten mit dem Inhalt einer Datei (Download)."""
+    """An agent\047s answer with the content of a file (download)."""
     future = state.pending_requests.get(payload.get("requestId"))
     if future and not future.done():
         future.set_result(payload)
@@ -1922,8 +1937,8 @@ async def on_fs_read_result(sid, payload):
 
 @sio.on("fs-op-result", namespace="/agent")
 async def on_fs_op_result(sid, payload):
-    """Antwort eines Agenten auf eine schreibende FS-Operation
-    (Upload/Ordner anlegen/Löschen/Umbenennen)."""
+    """An agent\047s answer to a writing FS operation
+    (upload/create folder/delete/rename)."""
     future = state.pending_requests.get(payload.get("requestId"))
     if future and not future.done():
         future.set_result(payload)
@@ -1931,11 +1946,11 @@ async def on_fs_op_result(sid, payload):
 
 
 # ------------------------------------------------------------------
-# BLACKBOX "letzter Stand": Agents melden periodisch Screenshot + Metrik-
-# Deltas + Log-Schwanz. Geht ein Client offline, sieht man hier seinen
-# letzten Zustand. Ablage: storage/blackbox/<client_id>/ - der Screenshot
-# wird bei jedem neuen VERWORFEN (ueberschrieben), Metriken als Deltas an
-# metrics.jsonl angehaengt (gekappt), Logs ueberschrieben.
+# BLACKBOX "last state": agents periodically report a screenshot + metric
+# deltas + log tail. If a client goes offline, one sees its last state here.
+# Storage: storage/blackbox/<client_id>/ - the screenshot is DISCARDED
+# (overwritten) on every new one, metrics appended as deltas to metrics.jsonl
+# (capped), logs overwritten.
 # ------------------------------------------------------------------
 
 def _blackbox_dir(client_id: str):
@@ -1962,7 +1977,7 @@ async def on_blackbox_snap(sid, data):
         except (OSError, ValueError):
             prev = {}
         metrics = data.get("metrics") or {}
-        # DELTA: nur Felder speichern, die sich seit dem letzten Mal geaendert haben.
+        # DELTA: only store fields that changed since the last time.
         last = prev.get("metrics") or {}
         delta = {k: v for k, v in metrics.items() if last.get(k) != v}
         if delta:
@@ -1988,15 +2003,14 @@ async def on_blackbox_snap(sid, data):
     try:
         await asyncio.get_running_loop().run_in_executor(None, _store)
     except Exception:
-        pass   # Blackbox ist best effort - nie die Agent-Verbindung stoeren
+        pass   # blackbox is best effort - never disturb the agent connection
 
 
 @sio.on("screen-frame", namespace="/agent")
 async def on_screen_frame(sid, payload):
     """
-    Ein Agent schickt ein Bildschirm-Frame. Wir leiten es an alle
-    Dashboard-Clients weiter UND schneiden es mit, falls für diesen Client
-    gerade eine Aufzeichnung läuft.
+    An agent sends a screen frame. We forward it to all dashboard clients AND
+    record it if a recording is currently running for this client.
     """
     recording.record_frame(
         payload.get("id"),
@@ -2009,10 +2023,10 @@ async def on_screen_frame(sid, payload):
 
 @sio.on("screen-error", namespace="/agent")
 async def on_screen_error(sid, payload):
-    """Ein Agent meldet, dass Screen-Streaming nicht möglich ist."""
-    # Beim Start wurde bereits eine Aufzeichnung angelegt - die wäre jetzt ein
-    # leeres 0-Frame-Replay. Sofort wieder löschen (Datei + DB). Der Audit-
-    # Eintrag bleibt bewusst bestehen (Zugriffsversuch bleibt nachvollziehbar).
+    """An agent reports that screen streaming is not possible."""
+    # A recording was already created on start - it would now be an empty
+    # 0-frame replay. Delete it immediately (file + DB). The audit entry is
+    # deliberately kept (the access attempt stays traceable).
     recording.abort_recording(payload.get("id"))
     await sio.emit("screen-error", payload, namespace="/dashboard")
 
@@ -2020,31 +2034,31 @@ async def on_screen_error(sid, payload):
 @sio.on("screen-mode", namespace="/agent")
 async def on_screen_mode(sid, payload):
     """
-    Ein Agent meldet, WIE Remote-Zugriff möglich ist (z.B. mode='shell', wenn
-    kein grafischer Bildschirm vorhanden ist). Das Dashboard öffnet dann direkt
-    eine Shell statt einen Fehler anzuzeigen.
+    An agent reports HOW remote access is possible (e.g. mode='shell' when
+    there is no graphical screen). The dashboard then opens a shell directly
+    instead of showing an error.
     """
     await sio.emit("screen-mode", payload, namespace="/dashboard")
 
 
-# --- Interaktives Terminal: Agent -> Dashboard weiterleiten ---
-# Laufende Terminal-Sitzungen: session_id -> Verlaufspuffer (für EIN Audit-Log
-# pro Sitzung mit der gesamten History, statt pro Befehl).
+# --- Interactive terminal: forward agent -> dashboard ---
+# Running terminal sessions: session_id -> history buffer (for ONE audit log
+# per session with the full history, instead of per command).
 _term_sessions: dict = {}
 
 
-# Terminal-Sitzungen, deren Ausgabe NICHT an die Dashboards geht, sondern gezielt an
-# einen Empfaenger (z.B. die RMM-Konsole per SSH/Web): session -> {"output": async fn(str), "exit": async fn()}
+# Terminal sessions whose output does NOT go to the dashboards, but to a
+# specific recipient (e.g. the RMM console via SSH/web): session -> {"output": async fn(str), "exit": async fn()}
 term_listeners: dict[str, dict] = {}
 
 
 @sio.on("term-output", namespace="/agent")
 async def on_term_output(sid, payload):
-    """Shell-Ausgabe an alle Dashboards weiterreichen + in die laufende
-    Terminal-Aufzeichnung schreiben (Replay statt Einzel-Befehls-Log)."""
+    """Forward shell output to all dashboards + write into the running terminal
+    recording (replay instead of a per-command log)."""
     session = payload.get("session")
     listener = term_listeners.get(session)
-    if listener:                                  # gezielte Sitzung (Konsole) - nicht an alle Dashboards
+    if listener:                                  # targeted session (console) - not to all dashboards
         try:
             await listener["output"](payload.get("data", ""))
         except Exception:
@@ -2068,9 +2082,9 @@ async def on_term_exit(sid, payload):
     await _finalize_term_session(payload.get("session"))
 
 
-# --- Agent-Konsole: Dashboard liest den Log des Agenten mit ---
-# Dashboard -> Agent: Stream öffnen/schließen; Agent -> Dashboard: Historie
-# und Live-Zeilen weiterreichen (gefiltert wird im Frontend über payload.id).
+# --- Agent console: the dashboard reads along the agent's log ---
+# Dashboard -> agent: open/close stream; agent -> dashboard: forward history
+# and live lines (filtered in the frontend via payload.id).
 
 @sio.on("agent-console-open", namespace="/dashboard")
 async def dashboard_agent_console_open(sid, data):
@@ -2078,7 +2092,7 @@ async def dashboard_agent_console_open(sid, data):
     if not await _ws_user_may(data.get("username"), "use_terminal", client_id):
         await sio.emit("agent-console", {
             "id": client_id,
-            "data": "\r\n\x1b[31mKeine Berechtigung für die Agent-Konsole dieses Clients.\x1b[0m\r\n",
+            "data": "\r\n\x1b[31mNo permission for the agent console of this client.\x1b[0m\r\n",
         }, namespace="/dashboard")
         return
     ok = await send_to_agent(client_id, "agent-console-open", {})
@@ -2103,39 +2117,76 @@ async def on_agent_console_history(sid, payload):
 
 @sio.event(namespace="/agent")
 async def disconnect(sid):
-    """Ein Agent hat die Verbindung verloren/beendet -> als offline markieren."""
-    # Zuerst den Schleusen-Platz freigeben: Bricht die Verbindung ab, BEVOR
-    # sich der Agent angemeldet hat, dürfen die Wartenden nicht bis zum
-    # Watchdog-Timeout blockiert bleiben.
+    """An agent lost/ended the connection -> mark as offline."""
+    # Release the gate slot first: if the connection drops BEFORE the agent has
+    # registered, the waiters must not stay blocked until the watchdog timeout.
     _admission_release(sid)
     e2e_forget(sid)
     client_id = state.sid_to_client_id.pop(sid, None)
     if client_id:
-        state.client_id_to_sid.pop(client_id, None)
-        state.live_metrics.pop(client_id, None)
-        agent_streams.close_all_for(client_id)          # TCP-Streams durch diesen Agenten beenden
+        # Detach only the REAL socket mapping - and only if this socket is
+        # still the current one. If the agent reported in the meantime with a
+        # NEW socket (reconnect before this disconnect event), the old, dead
+        # socket must not topple the new connection.
+        if state.client_id_to_sid.get(client_id) == sid:
+            state.client_id_to_sid.pop(client_id, None)
+        agent_streams.close_all_for(client_id)          # end TCP streams through this agent
+        # Already reconnected? Then there is nothing more to do.
+        if client_id in state.client_id_to_sid:
+            return
+        # Debounce the offline DISPLAY: do not report immediately, but only
+        # after the grace period check whether the agent is really gone. This
+        # way a brief dropout (or a brief loop/network hang that disconnects
+        # several agents at once) does not put the whole fleet on offline
+        # immediately. live_metrics are kept as the "last state" until the
+        # client really counts as offline.
+        state.last_disconnect[client_id] = time.monotonic()
+        _old = state._offline_tasks.get(client_id)
+        if _old is not None and not _old.done():
+            _old.cancel()
+        state._offline_tasks[client_id] = asyncio.create_task(_deferred_offline(client_id))
+
+
+async def _deferred_offline(client_id: str) -> None:
+    """Reports a client as offline only after AGENT_OFFLINE_GRACE_S - and only
+    if it has NOT reconnected by then. A reconnect within the grace period
+    cancels this task (see the register handler), so a brief dropout does not
+    come through as offline."""
+    try:
+        await asyncio.sleep(AGENT_OFFLINE_GRACE_S)
+    except asyncio.CancelledError:
+        return
+    # Back in the meantime? Then it was only a brief dropout.
+    if client_id in state.client_id_to_sid:
+        return
+    state.last_disconnect.pop(client_id, None)
+    state._offline_tasks.pop(client_id, None)
+    state.live_metrics.pop(client_id, None)
+    try:
         await sio.emit("client:offline", {"id": client_id}, namespace="/dashboard")
         _emit_clients_changed_soon()
-        # Benachrichtigungs-Regeln: "Client geht offline".
-        try:
-            from app import notifier
-            from router.admin_routes import build_notification
-            _c = await db.call(db.get_client, client_id)
-            _host = (_c or {}).get("hostname") or client_id
-            await notifier.fire_event("client_offline", client_id=client_id,
-                notification=build_notification(
-                    f"{_host} ist offline gegangen.",
-                    head=f"🔴 Client offline – {_host}",
-                    client=_host, service="Status", level="warn"))
-        except Exception as _e:
-            print(f"[notify] offline-Event fehlgeschlagen: {_e}")
+    except Exception as _e:
+        print(f"[offline] dashboards not notified: {_e!r}")
+    # Notification rules: "client goes offline".
+    try:
+        from app import notifier
+        from router.admin_routes import build_notification
+        _c = await db.call(db.get_client, client_id)
+        _host = (_c or {}).get("hostname") or client_id
+        await notifier.fire_event("client_offline", client_id=client_id,
+            notification=build_notification(
+                f"{_host} went offline.",
+                head=f"Client offline - {_host}",
+                client=_host, service="Status", level="warn"))
+    except Exception as _e:
+        print(f"[notify] offline event failed: {_e}")
 
 
 async def send_to_agent(client_id: str, event: str, data: dict) -> bool:
     """
-    Schickt ein beliebiges Event an den Agenten eines Clients (ohne auf eine
-    Antwort zu warten). Wird für Screen-Start/Stop/Input benutzt.
-    Gibt True zurück, wenn der Client online war.
+    Sends an arbitrary event to a client's agent (without waiting for an
+    answer). Used for screen start/stop/input.
+    Returns True if the client was online.
     """
     sid = state.client_id_to_sid.get(client_id)
     if not sid:
@@ -2145,18 +2196,18 @@ async def send_to_agent(client_id: str, event: str, data: dict) -> bool:
 
 
 # ====================================================================
-# Handler für den /dashboard Namespace (Verbindungen vom Browser-Frontend)
+# Handlers for the /dashboard namespace (connections from the browser frontend)
 # ====================================================================
-# Hinweis: Hier bewusst (noch) keine Prüfung des Login-Tokens beim reinen
-# Verbindungsaufbau - die REST-Routen sind bereits per JWT abgesichert.
-# Für eine noch strengere Absicherung könnte man hier zusätzlich das JWT
-# im "auth"-Objekt prüfen, analog zum Agent-Token oben.
+# Note: deliberately (still) no check of the login token on the pure connection
+# setup here - the REST routes are already secured via JWT. For even stricter
+# protection one could additionally check the JWT in the "auth" object here,
+# analogous to the agent token above.
 
 @sio.on("connect", namespace="/dashboard")
 async def dashboard_connect(sid, environ, auth):
-    # Beim Verbinden die BOOT_ID des laufenden Backend-Prozesses schicken. Das
-    # Frontend erkennt daran einen Neustart (BOOT_ID ändert sich) und lädt neu -
-    # so entfällt das sekündliche Polling von /api/boot-id.
+    # On connect, send the BOOT_ID of the running backend process. The frontend
+    # detects a restart from it (BOOT_ID changes) and reloads - this avoids the
+    # per-second polling of /api/boot-id.
     try:
         from app.main import BOOT_ID
         await sio.emit("boot:id", {"boot_id": BOOT_ID}, to=sid, namespace="/dashboard")
@@ -2166,7 +2217,7 @@ async def dashboard_connect(sid, environ, auth):
 
 @sio.on("disconnect", namespace="/dashboard")
 async def dashboard_disconnect(sid):
-    # Falls dieser Client die Backend-Ausgabe abonniert hatte, austragen.
+    # If this client had subscribed to the backend output, unsubscribe.
     try:
         from app.loghub import hub as _h
         _h.subscribers.discard(sid)
@@ -2174,16 +2225,16 @@ async def dashboard_disconnect(sid):
         pass
 
 
-# --- Rechteprüfung im (unauthentifizierten) Dashboard-Namespace ------------
-# Der Dashboard-Namespace hat keinen JWT-Handshake; wir vertrauen dem vom
-# Frontend mitgeschickten Benutzernamen (best effort, analog zum Audit-Log).
-# Die REST-Routen bleiben die harte Sicherheitsgrenze; hier verhindern wir
-# zusätzlich versehentliche/naive Zugriffe ohne Recht.
+# --- Permission check in the (unauthenticated) dashboard namespace ---------
+# The dashboard namespace has no JWT handshake; we trust the username sent by
+# the frontend (best effort, analogous to the audit log). The REST routes
+# remain the hard security boundary; here we additionally prevent
+# accidental/naive accesses without a right.
 async def _ws_user_may(username: str | None, perm: str,
                        client_id: str | None) -> bool:
-    # Jetzt async: Die Rechtepruefung liest den Benutzer aus der Datenbank.
-    # Vorher lief dieser Lesezugriff synchron im Event-Loop - bei jedem
-    # Start eines Remote-Bildschirms und jeder Terminal-Sitzung.
+    # Now async: the permission check reads the user from the database.
+    # Previously this read ran synchronously in the event loop - on every start
+    # of a remote screen and every terminal session.
     from app import db as _db
     from app.auth import user_has_permission
     if not username:
@@ -2196,85 +2247,84 @@ async def _ws_user_may(username: str | None, perm: str,
 
 @sio.on("screen-start", namespace="/dashboard")
 async def dashboard_screen_start(sid, data):
-    """Dashboard möchte den Bildschirm eines Clients sehen -> Agent anweisen + Aufnahme starten."""
+    """Dashboard wants to see a client\047s screen -> instruct agent + start recording."""
     from app import db as _db
     client_id = data.get("clientId")
     if not await _ws_user_may(data.get("username"), "use_screen", client_id):
         await sio.emit("screen-error",
-                       {"id": client_id, "error": "Keine Berechtigung für den Remote-Bildschirm dieses Clients."},
+                       {"id": client_id, "error": "No permission for the remote screen of this client."},
                        namespace="/dashboard")
         return
 
-    # Aufnahme-Qualität/FPS aus den Einstellungen an den Agent mitgeben, damit
-    # er die Frames passend erzeugt (bessere/schlechtere Qualität, mehr/weniger
-    # Bilder). Der Agent nutzt diese Werte fürs JPEG-Encoding & die Sende-Rate.
+    # Pass the recording quality/FPS from the settings to the agent, so it
+    # produces the frames accordingly (better/worse quality, more/fewer
+    # images). The agent uses these values for the JPEG encoding & the send rate.
     quality = await _db.call(_db.get_int_setting, "screen_record_quality") or 40
     fps = await _db.call(_db.get_int_setting, "screen_record_fps") or 5
 
-    # Zustimmung am Gerät: Physische Geräte UND VMs bekommen eine Abfrage
-    # angezeigt (z.B. wenn jemand per RDP in der VM arbeitet) - der Bildschirm
-    # startet erst nach Bestätigung. Ist niemand angemeldet, verbindet der
-    # Agent direkt. Nur LXC-Container sind ausgenommen (keine grafische
-    # Anmeldung möglich).
+    # Consent on the device: physical devices AND VMs get a prompt shown (e.g.
+    # when someone works in the VM via RDP) - the screen starts only after
+    # confirmation. If nobody is logged in, the agent connects directly. Only
+    # LXC containers are exempt (no graphical login possible).
     client = await _db.call(_db.get_client, client_id)
     needs_consent = bool(client) and (client.get("device_type") or "physical") != "lxc"
 
-    # Silent-Modus (einmalig): Hat der Benutzer den Modus im Profil aktiviert
-    # UND das Recht 'screen_silent' (global) bzw. 'c_screen_silent' auf diesem
-    # Client, wird die Zustimmungs-Abfrage am Gerät übersprungen. Direkt beim
-    # Verbindungsaufbau schaltet sich der Modus automatisch wieder AUS, damit
-    # er wirklich nur für DIESE eine Sitzung gilt.
+    # Silent mode (one-off): if the user enabled the mode in the profile AND
+    # has the right 'screen_silent' (global) or 'c_screen_silent' on this
+    # client, the consent prompt on the device is skipped. Right on the
+    # connection setup the mode turns itself OFF again, so it really applies
+    # only to THIS one session.
     _u = await _db.call(_db.get_user_by_username, data.get("username") or "")
     if needs_consent and _u and _u.get("silent_screen"):
         from app.auth import is_super_admin as _is_sa
         if (_is_sa(_u) or user_has_permission(_u, "screen_silent")
                 or user_has_permission(_u, "c_screen_silent", client_id)):
             needs_consent = False
-            await _db.call(_db.set_user_silent_screen, _u["id"], False)  # einmalig
+            await _db.call(_db.set_user_silent_screen, _u["id"], False)  # one-off
             await _db.call(_db.add_audit_entry, _u["username"],
                            "screen.silent_used", target=client_id,
                            details=client.get("hostname") if client else client_id)
-            print(f"[screen] Silent-Modus von {_u['username']} genutzt -> keine "
-                  f"Abfrage, Modus wieder deaktiviert")
-            # Alle Dashboards informieren: Das Profil (falls offen) schaltet den
-            # Toggle dann sofort sichtbar wieder AUS.
+            print(f"[screen] silent mode used by {_u['username']} -> no "
+                  f"prompt, mode deactivated again")
+            # Inform all dashboards: the profile (if open) then visibly turns
+            # the toggle OFF again immediately.
             await sio.emit("silent-screen:consumed",
                            {"username": _u["username"],
                             "client": client.get("hostname") if client else client_id},
                            namespace="/dashboard")
-    print(f"[screen] Start für {client.get('hostname') if client else client_id}: "
+    print(f"[screen] start for {client.get('hostname') if client else client_id}: "
           f"device_type={client.get('device_type') if client else '?'} -> require_consent={needs_consent}")
 
     await send_to_agent(client_id, "screen-start", {
         "quality": quality, "fps": fps,
         "require_consent": needs_consent,
         "requested_by": data.get("username", ""),
-        # Mehrbenutzer (Windows): vom Dashboard gewaehlte Sitzung des Benutzers,
-        # dessen Bildschirm gesehen/gesteuert werden soll.
+        # Multi-user (Windows): the user session chosen by the dashboard whose
+        # screen is to be seen/controlled.
         "session": data.get("session"),
     })
 
-    # Aufzeichnung nur starten, wenn global aktiviert.
+    # Start the recording only if globally enabled.
     recording_on = await _db.call(_db.get_setting, "recording_enabled", "1") == "1"
 
-    # Aufzeichnung starten (falls Client bekannt und aktiviert) + Audit-Log.
+    # Start the recording (if client known and enabled) + audit log.
     if client:
         rec_id = recording.start_recording(
-            client_id, client["hostname"], data.get("username", "unbekannt"),
+            client_id, client["hostname"], data.get("username", "unknown"),
         ) if recording_on else None
-        # Audit-Eintrag IMMER (Zugriff protokollieren) - mit Replay-Verknüpfung,
-        # falls aufgezeichnet wurde.
+        # Audit entry ALWAYS (log the access) - with a replay link if a
+        # recording was made.
         await _db.call(
             _db.add_audit_entry,
-            data.get("username", "unbekannt"),
+            data.get("username", "unknown"),
             "screen.session_started",
             target=client_id,
             details=f"rec:{rec_id}" if rec_id else client["hostname"],
         )
-        _screen_open[client_id] = {"user": data.get("username", "unbekannt"), "ts": time.time()}
+        _screen_open[client_id] = {"user": data.get("username", "unknown"), "ts": time.time()}
 
 
-# Laufende Sitzungen (fuer den Sitzungsverlauf: Ende + Dauer ins Audit-Log)
+# Running sessions (for the session history: end + duration into the audit log)
 _screen_open: dict[str, dict] = {}
 
 
@@ -2290,9 +2340,9 @@ async def _log_session_end(client_id: str | None, by: str) -> None:
 
 @sio.on("screen-stop", namespace="/dashboard")
 async def dashboard_screen_stop(sid, data):
-    """Dashboard hat das VNC-Fenster geschlossen -> Streaming + Aufnahme stoppen."""
+    """Dashboard closed the VNC window -> stop streaming + recording."""
     client_id = data.get("clientId")
-    # Stoppen darf jeder mit Sichtrecht (kein Schaden; verhindert nur das Zusehen).
+    # Anyone with view rights may stop (no harm; only prevents watching).
     if not await _ws_user_may(data.get("username"), "c_screen_view", client_id):
         return
     await send_to_agent(client_id, "screen-stop", {})
@@ -2302,7 +2352,7 @@ async def dashboard_screen_stop(sid, data):
 
 @sio.on("screen-audio", namespace="/dashboard")
 async def dashboard_screen_audio(sid, data):
-    """Ton des Remote-PCs ein-/ausschalten (wie AnyDesk "Ton uebertragen")."""
+    """Turn the remote PC\047s sound on/off (like AnyDesk "transmit sound")."""
     from app import db as _db
     client_id = data.get("clientId")
     if not await _ws_user_may(data.get("username"), "use_screen", client_id):
@@ -2315,16 +2365,16 @@ async def dashboard_screen_audio(sid, data):
 
 @sio.on("screen-audio", namespace="/agent")
 async def on_screen_audio(sid, payload):
-    """Ton-Stueck (mu-law, mono) oder Status/Fehler vom Agenten -> Dashboard (ohne Aufzeichnung)."""
+    """Audio chunk (mu-law, mono) or status/error from the agent -> dashboard (without recording)."""
     await sio.emit("screen-audio", payload, namespace="/dashboard")
 
 
 @sio.on("screen-input", namespace="/dashboard")
 async def dashboard_screen_input(sid, data):
-    """Maus-/Tastatureingabe vom Dashboard an den Agenten weiterreichen.
-    Fruehere Luecke: dieses Event pruefte KEIN Recht - wer die Client-ID kannte,
-    konnte einem Geraet ohne use_screen Eingaben schicken. Jetzt wie alle anderen
-    Fernwartungs-Events mit Rechtepruefung."""
+    """Forward mouse/keyboard input from the dashboard to the agent.
+    Former gap: this event checked NO right - whoever knew the client ID could
+    send input to a device without use_screen. Now, like all other remote-support
+    events, with a permission check."""
     client_id = data.pop("clientId", None)
     username = data.pop("username", None)
     if not client_id:
@@ -2336,7 +2386,7 @@ async def dashboard_screen_input(sid, data):
 
 @sio.on("screen-clipboard-get", namespace="/dashboard")
 async def dashboard_screen_clipboard_get(sid, data):
-    """Dashboard möchte die Zwischenablage des Remote-PCs holen (Clipboard-Sync)."""
+    """Dashboard wants to fetch the remote PC\047s clipboard (clipboard sync)."""
     client_id = data.get("clientId")
     if client_id:
         if not await _ws_user_may(data.get("username"), "use_screen", client_id):
@@ -2344,25 +2394,25 @@ async def dashboard_screen_clipboard_get(sid, data):
         ok = await send_to_agent(client_id, "screen-clipboard-get", {})
         if not ok:
             await sio.emit("screen-clipboard",
-                           {"id": client_id, "error": "Client ist offline."},
+                           {"id": client_id, "error": "Client is offline."},
                            namespace="/dashboard")
 
 
-# --- Chat-/Steuerfenster der laufenden Fernwartung ---
-# --- Registry (nur Windows, Recht c_registry je Client) ---
+# --- Chat/control window of the running remote-support session ---
+# --- Registry (Windows only, right c_registry per client) ---
 @sio.on("registry", namespace="/dashboard")
 async def dashboard_registry(sid, data):
     client_id = data.get("clientId")
     op = data.get("op") or "list"
-    # Schreiben/Loeschen braucht c_registry; Lesen (list/get) ebenso (Registry kann sensibel sein).
+    # Write/delete needs c_registry; reading (list/get) too (the registry can be sensitive).
     if not await _ws_user_may(data.get("username"), "c_registry", client_id):
         await sio.emit("registry-result", {"id": client_id, "rid": data.get("rid"), "op": op,
-                       "ok": False, "error": "Keine Berechtigung (Registry)."}, namespace="/dashboard")
+                       "ok": False, "error": "No permission (registry)."}, namespace="/dashboard")
         return
     ok = await send_to_agent(client_id, "registry", {k: data.get(k) for k in ("op", "path", "name", "type", "data", "rid")})
     if not ok:
         await sio.emit("registry-result", {"id": client_id, "rid": data.get("rid"), "op": op,
-                       "ok": False, "error": "Client ist offline."}, namespace="/dashboard")
+                       "ok": False, "error": "Client is offline."}, namespace="/dashboard")
 
 
 @sio.on("registry-result", namespace="/agent")
@@ -2370,7 +2420,7 @@ async def on_registry_result(sid, payload):
     await sio.emit("registry-result", payload, namespace="/dashboard")
 
 
-# --- Windows-Automatik-Updates aus/ein (Recht c_win_update) ---
+# --- Windows automatic updates off/on (right c_win_update) ---
 @sio.on("wu-auto", namespace="/dashboard")
 async def dashboard_wu_auto(sid, data):
     from app import db as _db
@@ -2379,7 +2429,7 @@ async def dashboard_wu_auto(sid, data):
     perm = "c_win_update" if setting else "c_patch_view"
     if not await _ws_user_may(data.get("username"), perm, client_id):
         await sio.emit("wu-auto", {"id": client_id, "supported": True,
-                       "error": "Keine Berechtigung."}, namespace="/dashboard")
+                       "error": "No permission."}, namespace="/dashboard")
         return
     payload = {"disabled": bool(data.get("disabled"))} if setting else {}
     ok = await send_to_agent(client_id, "wu-auto", payload)
@@ -2387,7 +2437,7 @@ async def dashboard_wu_auto(sid, data):
         await _db.call(_db.add_audit_entry, data.get("username", "?"),
                        "winupdate.auto_" + ("disabled" if data.get("disabled") else "enabled"), target=client_id)
     if not ok:
-        await sio.emit("wu-auto", {"id": client_id, "supported": True, "error": "Client ist offline."},
+        await sio.emit("wu-auto", {"id": client_id, "supported": True, "error": "Client is offline."},
                        namespace="/dashboard")
 
 
@@ -2398,7 +2448,7 @@ async def on_wu_auto(sid, payload):
 
 @sio.on("screen-session-chat", namespace="/dashboard")
 async def dashboard_session_chat(sid, data):
-    """Admin tippt im VNC-Fenster -> an den Agenten (zeigt es der Person vor dem PC)."""
+    """Admin types in the VNC window -> to the agent (shows it to the person at the PC)."""
     client_id = data.get("clientId")
     if not await _ws_user_may(data.get("username"), "use_screen", client_id):
         return
@@ -2412,7 +2462,7 @@ async def on_session_chat(sid, payload):
 
 @sio.on("screen-session-request-grant", namespace="/dashboard")
 async def dashboard_session_request_grant(sid, data):
-    """Admin bittet die Person vor dem PC um Administrator-Rechte (wie AnyDesk)."""
+    """Admin asks the person at the PC for administrator rights (like AnyDesk)."""
     from app import db as _db
     client_id = data.get("clientId")
     if not await _ws_user_may(data.get("username"), "use_screen", client_id):
@@ -2422,23 +2472,23 @@ async def dashboard_session_request_grant(sid, data):
     await send_to_agent(client_id, "screen-session-request-grant", {})
 
 
-# --- Datei-Uebertragung in der Fernwartungs-Sitzung (wie AnyDesk) ---
-# --- Digitaler USB-Stick: Dateien, die der Agent zuruecksendet ----------------
+# --- File transfer in the remote-support session (like AnyDesk) ---
+# --- Digital USB stick: files that the agent sends back ----------------
 _tempusb_in: dict = {}
 
 
 @sio.on("temp-usb-status", namespace="/agent")
 async def on_tempusb_status(sid, payload):
-    """Status des Agenten (angehaengt/geloest/Fehler) -> Dashboard."""
+    """Agent status (attached/detached/error) -> dashboard."""
     await sio.emit("temp-usb-status", payload, namespace="/dashboard")
 
 
 @sio.on("temp-usb-upload", namespace="/agent")
 async def on_tempusb_upload(sid, payload):
-    """Agent -> Bereich: eine im Geraeteordner neue/geaenderte Datei (stueckweise)."""
+    """Agent -> area: a new/changed file in the device folder (in chunks)."""
     import base64 as _b64
     from app import modules as _modules
-    _store = _modules.use("temp-usb", "store")   # nur wenn das Modul aktiv ist
+    _store = _modules.use("temp-usb", "store")   # only if the module is active
     d = payload or {}
     area_id = str(d.get("id") or "")
     name = str(d.get("name") or "")
@@ -2451,7 +2501,7 @@ async def on_tempusb_upload(sid, payload):
     except Exception:
         _tempusb_in.pop(key, None)
         return
-    if len(buf) > 1024 * 1024 * 1024:     # 1 GB je Datei - Schutz gegen Dauerstrom
+    if len(buf) > 1024 * 1024 * 1024:     # 1 GB per file - protection against a constant stream
         _tempusb_in.pop(key, None)
         return
     if d.get("last"):
@@ -2472,7 +2522,7 @@ async def _db_run(fn, *a):
 
 @sio.on("screen-file-chunk", namespace="/dashboard")
 async def dashboard_screen_file_chunk(sid, data):
-    """Admin -> Benutzer: ein Stueck einer Datei (base64, ~256 KB) an den Agenten."""
+    """Admin -> user: one chunk of a file (base64, ~256 KB) to the agent."""
     from app import db as _db
     client_id = data.get("clientId")
     if not await _ws_user_may(data.get("username"), "use_screen", client_id):
@@ -2495,7 +2545,7 @@ async def on_screen_file_ack(sid, payload):
 
 @sio.on("screen-file-out", namespace="/agent")
 async def on_screen_file_out(sid, payload):
-    """Benutzer -> Admin: Datei aus dem Sitzungsfenster (stueckweise) ans Dashboard."""
+    """User -> admin: file from the session window (in chunks) to the dashboard."""
     from app import db as _db
     if int((payload or {}).get("seq") or 0) == 0:
         await _db.call(_db.add_audit_entry, "system", "screen.file_received",
@@ -2505,17 +2555,17 @@ async def on_screen_file_out(sid, payload):
 
 @sio.on("screen-session-perms", namespace="/agent")
 async def on_session_perms(sid, payload):
-    """Berechtigungen, die der Benutzer im Sitzungsfenster geschaltet hat -> Dashboard."""
+    """Permissions the user toggled in the session window -> dashboard."""
     await sio.emit("screen-session-perms", payload, namespace="/dashboard")
 
 
 @sio.on("screen-session-grant", namespace="/agent")
 async def on_session_grant(sid, payload):
-    # Benutzer hat Admin-Rechte erlaubt/entzogen -> ans Dashboard + Audit.
+    # User allowed/revoked admin rights -> to the dashboard + audit.
     from app import db as _db
     cid = (payload or {}).get("id")
     action = "granted" if payload.get("granted") else ("denied" if payload.get("denied") else "revoked")
-    detail = "silent (ohne Benutzerfreigabe)" if payload.get("silent") else "durch Benutzer"
+    detail = "silent (without user approval)" if payload.get("silent") else "by user"
     await _db.call(_db.add_audit_entry, "system",
                    "screen.admin_" + action, target=cid, details=detail)
     await sio.emit("screen-session-grant", payload, namespace="/dashboard")
@@ -2523,7 +2573,7 @@ async def on_session_grant(sid, payload):
 
 @sio.on("screen-session-disconnect", namespace="/agent")
 async def on_session_disconnect(sid, payload):
-    # Benutzer hat die Fernwartung getrennt -> Aufnahme stoppen + Dashboard informieren.
+    # User disconnected the remote support -> stop recording + inform the dashboard.
     cid = (payload or {}).get("id")
     recording.stop_recording(cid)
     await _log_session_end(cid, "user")
@@ -2532,13 +2582,13 @@ async def on_session_disconnect(sid, payload):
 
 @sio.on("screen-clipboard", namespace="/agent")
 async def on_screen_clipboard(sid, payload):
-    """Agent liefert den Inhalt der Remote-Zwischenablage -> ans Dashboard."""
+    """Agent delivers the content of the remote clipboard -> to the dashboard."""
     await sio.emit("screen-clipboard", payload, namespace="/dashboard")
 
 
 @sio.on("screen-config", namespace="/dashboard")
 async def dashboard_screen_config(sid, data):
-    """Qualitaet/FPS der laufenden Fernwartung aendern (z.B. aus bytera://.../remotescreen/fps=10)."""
+    """Change quality/FPS of the running remote support (e.g. from bytera://.../remotescreen/fps=10)."""
     client_id = data.get("clientId")
     if not client_id:
         return
@@ -2552,7 +2602,7 @@ async def dashboard_screen_config(sid, data):
         try: out["quality"] = max(10, min(95, int(data["quality"])))
         except Exception: pass
     if data.get("width") is not None:
-        try: out["width"] = max(0, min(3840, int(data["width"])))   # 0 = automatisch
+        try: out["width"] = max(0, min(3840, int(data["width"])))   # 0 = automatic
         except Exception: pass
     if out:
         await send_to_agent(client_id, "screen-config", out)
@@ -2560,7 +2610,7 @@ async def dashboard_screen_config(sid, data):
 
 @sio.on("screen-set-monitor", namespace="/dashboard")
 async def dashboard_screen_set_monitor(sid, data):
-    """Bildschirm-Wechsel (Multi-Monitor) an den Agenten weiterreichen."""
+    """Forward a screen switch (multi-monitor) to the agent."""
     client_id = data.get("clientId")
     monitor = data.get("monitor")
     if client_id and monitor is not None:
@@ -2569,10 +2619,10 @@ async def dashboard_screen_set_monitor(sid, data):
         await send_to_agent(client_id, "screen-set-monitor", {"monitor": int(monitor)})
 
 
-# --- Mehrbenutzer-Auswahl: "erst einen Benutzer waehlen" ---
+# --- Multi-user selection: "pick a user first" ---
 @sio.on("screen-users", namespace="/dashboard")
 async def dashboard_screen_users(sid, data):
-    """Dashboard will wissen, welche Benutzer am Geraet angemeldet sind."""
+    """Dashboard wants to know which users are logged in on the device."""
     from app import db as _db
     client_id = data.get("clientId")
     if not await _ws_user_may(data.get("username"), "use_screen", client_id):
@@ -2580,7 +2630,7 @@ async def dashboard_screen_users(sid, data):
     ok = await send_to_agent(client_id, "screen-users", {})
     if not ok:
         await sio.emit("screen-users", {"id": client_id, "users": [], "multi": False,
-                                        "error": "Client ist offline."}, namespace="/dashboard")
+                                        "error": "Client is offline."}, namespace="/dashboard")
 
 
 @sio.on("screen-users", namespace="/agent")
@@ -2588,15 +2638,15 @@ async def on_screen_users(sid, payload):
     await sio.emit("screen-users", payload, namespace="/dashboard")
 
 
-# --- Virtueller Bildschirmtreiber (headless, Modul "headless-screen") ---
+# --- Virtual display driver (headless, module "headless-screen") ---
 def _vdisplay_pkg():
-    """URL + SHA256 des Treiberpakets, wenn das Modul es bereitgestellt hat."""
+    """URL + SHA256 of the driver package, if the module provided it."""
     try:
         from app import modules as _m
         if _m.is_enabled("headless-screen"):
             return _m.use("headless-screen", "vdriver").package_info()
     except Exception as e:
-        print(f"[vdisplay] Paketinfo nicht verfuegbar: {e}")
+        print(f"[vdisplay] package info not available: {e}")
     return {"url": "", "sha256": ""}
 
 
@@ -2614,12 +2664,12 @@ async def dashboard_vdisplay_install(sid, data):
     client_id = data.get("clientId")
     if not await _ws_user_may(data.get("username"), "manage_headless_screen", client_id):
         await sio.emit("vdisplay-result", {"id": client_id, "action": "install", "ok": False,
-                       "error": "Keine Berechtigung (manage_headless_screen)."}, namespace="/dashboard")
+                       "error": "No permission (manage_headless_screen)."}, namespace="/dashboard")
         return
     pkg = _vdisplay_pkg()
     if not pkg.get("url"):
         await sio.emit("vdisplay-result", {"id": client_id, "action": "install", "ok": False,
-                       "error": "Kein Treiberpaket auf dem Server. Modul „Headless-Bildschirm“ aktivieren."},
+                       "error": "No driver package on the server. Enable the module \"Headless screen\"."},
                        namespace="/dashboard")
         return
     await _db.call(_db.add_audit_entry, data.get("username", "?"), "headless.vdisplay_install",
@@ -2633,16 +2683,16 @@ async def dashboard_vdisplay_remove(sid, data):
     client_id = data.get("clientId")
     if not await _ws_user_may(data.get("username"), "manage_headless_screen", client_id):
         await sio.emit("vdisplay-result", {"id": client_id, "action": "remove", "ok": False,
-                       "error": "Keine Berechtigung (manage_headless_screen)."}, namespace="/dashboard")
+                       "error": "No permission (manage_headless_screen)."}, namespace="/dashboard")
         return
     await _db.call(_db.add_audit_entry, data.get("username", "?"), "headless.vdisplay_remove",
                    target=client_id)
     await _vdisplay_job("remove", client_id, data.get("username"), {})
 
 
-# Treiber-Installation/-Entfernung als BACKEND-JOB (app/bgjobs.py): Das Backend
-# wartet auf die Rueckmeldung des Agenten - Neuladen oder andere Benutzer sehen
-# denselben Stand in der Aufgaben-Anzeige.
+# Driver install/remove as a BACKEND JOB (app/bgjobs.py): the backend waits for
+# the agent's response - a reload or other users see the same state in the task
+# display.
 _vdisplay_waiters: dict[str, "asyncio.Future"] = {}
 
 
@@ -2656,22 +2706,22 @@ async def _vdisplay_job(action: str, client_id: str, username: str | None, pkg: 
         fut = loop.create_future()
         _vdisplay_waiters[client_id] = fut
         try:
-            job.update(phase=action, detail="Auftrag an den Agenten gesendet")
+            job.update(phase=action, detail="order sent to the agent")
             if not await send_to_agent(client_id, f"vdisplay-{action}", pkg):
-                raise RuntimeError("Client ist offline")
-            job.update(detail="Agent arbeitet (Treiber laden/installieren)")
+                raise RuntimeError("Client is offline")
+            job.update(detail="agent working (loading/installing driver)")
             res = await asyncio.wait_for(fut, timeout=600)
         except asyncio.TimeoutError:
-            raise RuntimeError("Keine Rückmeldung des Agenten innerhalb von 10 Minuten")
+            raise RuntimeError("no response from the agent within 10 minutes")
         finally:
             if _vdisplay_waiters.get(client_id) is fut:
                 _vdisplay_waiters.pop(client_id, None)
         if not res.get("ok", True):
-            raise RuntimeError(res.get("error") or "Agent meldet einen Fehler")
+            raise RuntimeError(res.get("error") or "agent reports an error")
         return res
 
     bgjobs.start("vdisplay." + action, client_id,
-                 title=f"Virtueller Bildschirm {'installieren' if action == 'install' else 'entfernen'}: "
+                 title=f"{'Install' if action == 'install' else 'Remove'} virtual display: "
                        f"{client.get('hostname') or client_id}",
                  user=user, runner=work, perm="manage_headless_screen", client_id=client_id,
                  meta={"client": client_id})
@@ -2691,9 +2741,9 @@ async def on_vdisplay_result(sid, payload):
 
 
 # ------------------------------------------------------------------
-# EXPERIMENTELLES RDP-GATEWAY (für headless VMs)
-# Das Dashboard bittet das Backend, sich selbst per RDP zur VM zu verbinden
-# und die Frames über denselben "screen-frame"-Kanal zu streamen.
+# EXPERIMENTAL RDP GATEWAY (for headless VMs)
+# The dashboard asks the backend to connect to the VM itself via RDP and stream
+# the frames over the same "screen-frame" channel.
 # ------------------------------------------------------------------
 
 async def _rdp_emit_frame(client_id, jpeg_b64, width, height):
@@ -2709,29 +2759,29 @@ async def _rdp_emit_error(client_id, message):
 @sio.on("rdp-start", namespace="/dashboard")
 async def dashboard_rdp_start(sid, data):
     """
-    Startet einen RDP-Verbindungsversuch des Backends zur VM. Nur wenn pyrdp
-    verfügbar ist - sonst bekommt das Dashboard einen klaren Hinweis auf den
-    nativen .rdp-Weg.
+    Starts an RDP connection attempt from the backend to the VM. Only if pyrdp
+    is available - otherwise the dashboard gets a clear hint about the native
+    .rdp way.
     """
     from app import db as _db
     client_id = data.get("clientId")
     client = (await _db.call(_db.get_client, client_id)) if client_id else None
     if not client:
-        await _rdp_emit_error(client_id, "Client nicht gefunden.")
+        await _rdp_emit_error(client_id, "Client not found.")
         return
 
     if not rdp_gateway.is_available():
         await _rdp_emit_error(
             client_id,
-            "Eingebettetes RDP (pyrdp) ist auf dem Server nicht installiert. "
-            "Bitte den Button 'Per RDP verbinden (nativ)' nutzen - das öffnet den "
-            "Windows-RDP-Client und funktioniert zuverlässig auch bei headless VMs."
+            "Embedded RDP (pyrdp) is not installed on the server. "
+            "Please use the 'Connect via RDP (native)' button - it opens the "
+            "Windows RDP client and works reliably even with headless VMs."
         )
         return
 
     host = client.get("ip")
     if not host:
-        await _rdp_emit_error(client_id, "Keine IP-Adresse für diesen Client bekannt.")
+        await _rdp_emit_error(client_id, "No IP address known for this client.")
         return
 
     loop = asyncio.get_event_loop()
@@ -2741,7 +2791,7 @@ async def dashboard_rdp_start(sid, data):
         loop, _rdp_emit_frame, _rdp_emit_error,
     )
     if not started:
-        await _rdp_emit_error(client_id, "RDP-Session konnte nicht gestartet werden.")
+        await _rdp_emit_error(client_id, "RDP session could not be started.")
 
 
 @sio.on("rdp-stop", namespace="/dashboard")
@@ -2751,23 +2801,23 @@ async def dashboard_rdp_stop(sid, data):
         rdp_gateway.stop_session(client_id)
 
 
-_term_sessions_UNUSED = None  # (Puffer oben in der Agent-Sektion definiert)
+_term_sessions_UNUSED = None  # (buffer defined above in the agent section)
 
 
-# --- Interaktives Terminal: Dashboard -> Agent weiterleiten ---
+# --- Interactive terminal: forward dashboard -> agent ---
 @sio.on("term-open", namespace="/dashboard")
 async def dashboard_term_open(sid, data):
-    """Startet eine interaktive Shell-Session auf dem Ziel-Client."""
+    """Starts an interactive shell session on the target client."""
     client_id = data.get("clientId")
     shell = data.get("shell", "auto")
-    # Anmelde-Modus: "admin" = direkte Root-/System-Shell (wie bisher),
-    # "user" = der Agent startet /bin/login im PTY (Username/Passwort wie SSH).
+    # Login mode: "admin" = direct root/system shell (as before),
+    # "user" = the agent starts /bin/login in the PTY (username/password like SSH).
     mode = data.get("mode") if data.get("mode") in ("admin", "user") else "admin"
     session = data.get("session")
     if not await _ws_user_may(data.get("username"), "use_terminal", client_id):
         await sio.emit("term-output", {
             "id": client_id, "session": session,
-            "data": "\r\n\x1b[31mKeine Berechtigung für das Terminal dieses Clients.\x1b[0m\r\n",
+            "data": "\r\n\x1b[31mNo permission for the terminal of this client.\x1b[0m\r\n",
         }, namespace="/dashboard")
         await sio.emit("term-exit", {"id": client_id, "session": session}, namespace="/dashboard")
         return
@@ -2778,18 +2828,18 @@ async def dashboard_term_open(sid, data):
         "cols": data.get("cols", 80),
         "rows": data.get("rows", 24),
     })
-    # Bestätigung ans Dashboard: beweist, dass DIESES (aktuelle) Backend das
-    # Event verarbeitet hat, und meldet, ob der Ziel-Agent online ist. Damit
-    # kann das Frontend genau unterscheiden: kein ack = Backend veraltet/nicht
-    # neu gestartet; ack mit agent_online=false = Client offline; ack aber keine
-    # Ausgabe = Agent veraltet (kein PTY).
+    # Confirmation to the dashboard: proves that THIS (current) backend
+    # processed the event, and reports whether the target agent is online. This
+    # lets the frontend distinguish exactly: no ack = backend outdated/not
+    # restarted; ack with agent_online=false = client offline; ack but no output
+    # = agent outdated (no PTY).
     await sio.emit("term-ack", {"session": session, "agent_online": bool(ok)},
                    namespace="/dashboard")
     if ok:
-        # Sitzung anlegen + Aufzeichnung starten: Die gesamte Sitzung wird als
-        # Terminal-Replay mitgeschnitten (wie der Screen-Recorder), statt
-        # Befehle und Ausgaben einzeln zu loggen. Audit-Eintrag mit Replay-Link
-        # folgt beim Schließen (term-close/exit).
+        # Create the session + start recording: the entire session is recorded
+        # as a terminal replay (like the screen recorder), instead of logging
+        # commands and output individually. An audit entry with a replay link
+        # follows on closing (term-close/exit).
         import time as _t
         from app import db as _db
         rec_id = None
@@ -2798,12 +2848,12 @@ async def dashboard_term_open(sid, data):
             rec_id = recording.start_term_recording(
                 session, client_id,
                 (client or {}).get("hostname") or client_id,
-                data.get("username", "unbekannt"),
+                data.get("username", "unknown"),
             )
         _term_sessions[session] = {
             "client_id": client_id,
-            "username": data.get("username", "unbekannt"),
-            "shell": shell if mode == "admin" else f"{shell} (Benutzer-Login)",
+            "username": data.get("username", "unknown"),
+            "shell": shell if mode == "admin" else f"{shell} (user login)",
             "mode": mode,
             "started": _t.time(),
             "rec_id": rec_id,
@@ -2811,7 +2861,7 @@ async def dashboard_term_open(sid, data):
     else:
         await sio.emit("term-output", {
             "id": client_id, "session": session,
-            "data": "\r\n\x1b[31mClient ist offline.\x1b[0m\r\n",
+            "data": "\r\n\x1b[31mClient is offline.\x1b[0m\r\n",
         }, namespace="/dashboard")
         await sio.emit("term-exit", {"id": client_id, "session": session},
                        namespace="/dashboard")
@@ -2841,9 +2891,9 @@ async def dashboard_term_close(sid, data):
 
 
 async def _finalize_term_session(session: str) -> None:
-    """Beendet die Terminal-Aufzeichnung (Replay) und schreibt EINEN kompakten
-    Audit-Eintrag mit Verweis auf das Replay - statt Befehle/Ausgaben einzeln
-    ins Log zu schreiben."""
+    """Ends the terminal recording (replay) and writes ONE compact audit entry
+    referencing the replay - instead of writing commands/output individually
+    into the log."""
     from app import db as _db
     meta = _term_sessions.pop(session, None)
     if not meta:
@@ -2851,28 +2901,28 @@ async def _finalize_term_session(session: str) -> None:
     import time as _t
     rec_id = recording.stop_term_recording(session)
     dur = int(_t.time() - meta["started"])
-    details = f"shell:{meta['shell']} dauer:{dur}s"
+    details = f"shell:{meta['shell']} duration:{dur}s"
     if rec_id:
-        # Gleiche Verknüpfung wie beim Screen-Recording: das Audit-Log kann
-        # daraus einen "Aufzeichnung ansehen"-Link machen.
+        # Same link as for the screen recording: the audit log can make a
+        # "view recording" link from it.
         details = f"rec:{rec_id} " + details
     await _db.call(_db.add_audit_entry, meta["username"], "terminal.session",
                    target=meta["client_id"], details=details)
 
 
 # ==========================================================================
-# BACKEND-AUSGABE (Live-Log) - "Source"-Tab
+# BACKEND OUTPUT (live log) - "Source" tab
 # --------------------------------------------------------------------------
-# Read-only: streamt die Konsolenausgabe (stdout/stderr) des laufenden
-# Backend-Prozesses (run.py) an eingeschriebene Admin-Dashboards. Es gibt KEINE
-# Eingabe/Shell mehr - nur Anzeige. Auth über das JWT des Admins.
+# Read-only: streams the console output (stdout/stderr) of the running backend
+# process (run.py) to subscribed admin dashboards. There is NO input/shell
+# anymore - display only. Auth via the admin's JWT.
 # ==========================================================================
 
 from app.loghub import hub as _loghub_hub
 
 
 def _admin_from_token(token: str):
-    """Gibt den Admin-User zurück, wenn das Token gültig und role=='admin' ist."""
+    """Returns the admin user if the token is valid and role=='admin'."""
     try:
         from app.auth import decode_access_token
         payload = decode_access_token(token)
@@ -2887,13 +2937,13 @@ def _admin_from_token(token: str):
 
 @sio.on("backend-log-open", namespace="/dashboard")
 async def backend_log_open(sid, data):
-    """Admin abonniert die Backend-Ausgabe; bekommt zuerst den Verlauf."""
+    """Admin subscribes to the backend output; gets the history first."""
     if not _admin_from_token(data.get("token")):
         await sio.emit("backend-log-history",
-                       {"data": "[Nicht autorisiert - nur Super-Admins]\n"},
+                       {"data": "[Not authorized - super admins only]\n"},
                        to=sid, namespace="/dashboard")
         return
-    # Event-Loop merken (für Broadcasts aus Fremd-Threads) + Zuhörer registrieren.
+    # Remember the event loop (for broadcasts from foreign threads) + register the listener.
     _loghub_hub.set_loop(asyncio.get_event_loop())
     _loghub_hub.subscribers.add(sid)
     await sio.emit("backend-log-history", {"data": _loghub_hub.history()},
