@@ -2,7 +2,7 @@
 store.py (module "geotrack") - location tracker: configuration + location history.
 
 Tables (SQLite, db._conn):
-  geo_clients    per client: whether it is tracked (default: laptops on), last state.
+  geo_clients    per client: whether it is tracked (default OFF, opt-in via widget), last state.
   geo_locations  location history (time, lat/lon, accuracy, source os|wifi|ip,
                  city/country from resolution).
 """
@@ -47,7 +47,9 @@ def is_enabled(client_id: str, detected_kind: str = "") -> bool:
     row = get_client(client_id)
     if row:
         return bool(row["enabled"])
-    return detected_kind == "laptop"          # default: laptops on, everything else off
+    # Default OFF for every device (laptops included): location tracking is
+    # opt-in via the per-client widget, never permanently on by itself.
+    return False
 
 
 def set_enabled(client_id: str, enabled: bool):

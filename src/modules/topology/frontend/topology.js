@@ -59,6 +59,8 @@ export function renderTopology(body, win) {
   let currentFlow = "";                 // flow for new lines
   let view = { x: 40, y: 40, z: 1 };
   let saveTimer = null;
+  let drawnAgentIds = new Set();        // agent/client IDs currently shown as nodes
+  const lastOnline = {};                // last drawn online state per agent ID (live status)
   let bmcLinks = {};                    // Modul "bmc": agent-client-id -> {id,name,vendor}
   let staleBackend = false;             // backend still runs the old module code
 
@@ -372,11 +374,30 @@ export function renderTopology(body, win) {
   };
   dashboardSocket.on("topology:changed", onTopoChanged);
 
+  // Live client status: when an action (e.g. shutdown) takes a device offline,
+  // or it comes back online, redraw so the node's status dot updates at once
+  // instead of staying stale until the next reload/discovery.
+  const onClientStatus = (p) => {
+    const id = p?.id;
+    if (!id || !drawnAgentIds.has(id)) return;
+    const now = !!(findClient(id)?.online);
+    if (lastOnline[id] === now) return;        // only on a real online<->offline change
+    lastOnline[id] = now;
+    if (!dragging && dlg.style.display !== "block") draw();
+  };
+  dashboardSocket.on("client:metrics", onClientStatus);
+  dashboardSocket.on("client:offline", onClientStatus);
+
   // ---------------------------------------------------------------- graph (discovery + edits)
   function nodeView(n, custom) {
     const meta = custom ? {} : ((ovr.meta || {})[n.id] || {});
     const agentId = custom ? n.agent_id : meta.agent_id;
-    const agent = (agentId && agentsById[agentId]) || (agentId ? null : n.agent) || null;
+    const agent0 = (agentId && agentsById[agentId]) || (agentId ? null : n.agent) || null;
+    // Live status: reflect the client's current online state (kept up to date by
+    // the dashboard socket) so a node turns red/green immediately when an action
+    // like shutdown takes the device offline - not only after a reload.
+    const liveCl = agent0 ? findClient(agent0.id) : null;
+    const agent = agent0 ? { ...agent0, online: liveCl ? !!liveCl.online : agent0.online } : null;
     // a node with an agent shows the agent's icon (sidebar/panel) unless the map sets its own
     const agentType = agent ? clientIconType(findClient(agent.id) || agent) : "";
     const ownType = custom ? n.type : meta.type;
@@ -554,6 +575,13 @@ export function renderTopology(body, win) {
 
   function draw() {
     const { nodes, edges } = graph();
+    // Remember which agents are on the map (and their current online state) so
+    // the live-status listener below only redraws on a real online<->offline change.
+    drawnAgentIds = new Set();
+    for (const n of nodes) {
+      const aid = n.agent?.id || n.agentId;
+      if (aid) { drawnAgentIds.add(aid); lastOnline[aid] = !!n.agent?.online; }
+    }
     positions = layout(nodes);
     flowById = Object.fromEntries((ovr.flows || []).map((f) => [f.id, f]));
     svg.innerHTML = "";
@@ -1376,6 +1404,8 @@ export function renderTopology(body, win) {
   if (win?.key) registerCleanup(win.key, () => {
     stopWatch?.();
     dashboardSocket.off("topology:changed", onTopoChanged);
+    dashboardSocket.off("client:metrics", onClientStatus);
+    dashboardSocket.off("client:offline", onClientStatus);
     clearTimeout(saveTimer);
   });
 }

@@ -277,6 +277,23 @@
 }
 :where(input, select, textarea):disabled { opacity: .55; cursor: not-allowed; }
 
+/* --------------------------------------------------------------------------
+   Label/value forms (e.g. Provisioning, iLO/iDRAC connection, boot, media).
+   These use an inline two-column grid "150px 1fr" (label left, input right).
+   Some contexts were collapsing them so the value cell stayed empty and the
+   input dropped onto its own full-width row below the label. Pin the two
+   columns and clear any stray column span so label and input always sit side
+   by side. minmax(0,1fr) also stops a wide value (long <select> option) from
+   pushing the grid out of its container.
+   -------------------------------------------------------------------------- */
+[style*="grid-template-columns:150px 1fr"] {
+  grid-template-columns: 150px minmax(0, 1fr) !important;
+}
+[style*="grid-template-columns:150px 1fr"] > * {
+  grid-column: auto !important;
+  min-width: 0;
+}
+
 /* --- Dropdown ------------------------------------------------------------- */
 :where(select) {
   appearance: none;
