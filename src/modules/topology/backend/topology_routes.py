@@ -25,7 +25,7 @@ zu den Live-Messwerten bzw. der bekannten IP des Clients passt.
 import asyncio
 import re
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app import bgjobs, db
 from app.auth import can_access_client, get_current_user, require_perm
@@ -76,8 +76,12 @@ def _agent_index(user: dict) -> tuple[dict, dict]:
 
 
 def _check_source(user: dict, source: str) -> None:
-    """Karten einer Node sieht nur, wer auf die Node zugreifen darf."""
-    if source != "backend" and not can_access_client(user, source):
+    """A node's map is only visible to whoever may access the node.
+    "backend" and user-created maps ("map:<id>") are open to anyone with
+    the scan permission."""
+    if source == "backend" or store.is_custom_map(source):
+        return
+    if not can_access_client(user, source):
         raise HTTPException(404, "Quelle nicht gefunden")
 
 
@@ -194,13 +198,22 @@ def _make_runner(source: str, target: str | None, via: str):
 
 @router.post("/discover/start")
 async def discover_start(target: str | None = None, via: str = "",
+                         map_id: str = Query("", alias="map"),
                          user: dict = Depends(get_current_user)):
     require_perm(user, "network_scan")
     try:
         parse_target(target)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    source = via or "backend"
+    # "map" chooses WHERE the result is stored (a user-created canvas);
+    # "via" chooses WHERE the scan runs (backend or a node). Without a map
+    # the two are the same, as before.
+    if map_id:
+        if not store.is_custom_map(map_id):
+            raise HTTPException(400, "Ungültige Karte")
+        source = map_id
+    else:
+        source = via or "backend"
     if via:
         from app import node_manager
         if not can_access_client(user, via):
@@ -297,5 +310,61 @@ async def put_map(source: str = "backend", origin: str = "", overrides: dict = B
 @router.get("/sources")
 def get_sources(user: dict = Depends(get_current_user)):
     require_perm(user, "network_scan")
-    return {"sources": [x for x in store.list_sources()
-                        if x == "backend" or can_access_client(user, x)]}
+    sources = [x for x in store.list_sources()
+               if x == "backend"
+               or (not store.is_custom_map(x) and can_access_client(user, x))]
+    return {"sources": sources, "maps": store.list_custom_maps()}
+
+
+# ------------------------------------------------------------------
+# User-created maps (independent canvases, e.g. one per subnet)
+# ------------------------------------------------------------------
+@router.post("/maps")
+async def create_map(body: dict = Body(default={}), user: dict = Depends(get_current_user)):
+    require_perm(user, "network_scan")
+    label = (body or {}).get("label") if isinstance(body, dict) else ""
+    r = await db.call(store.create_map, label or "")
+    db.add_audit_entry(user["username"], "topology.map.create", target=r["source"])
+    await notify_changed(r["source"], what="maps")
+    return r
+
+
+@router.patch("/maps")
+async def rename_map(body: dict = Body(...), user: dict = Depends(get_current_user)):
+    require_perm(user, "network_scan")
+    source = (body or {}).get("source") or ""
+    if not store.is_custom_map(source):
+        raise HTTPException(400, "Nur eigene Karten lassen sich umbenennen")
+    r = await db.call(store.rename_map, source, (body or {}).get("label") or "")
+    if not r.get("ok"):
+        raise HTTPException(400, "Umbenennen fehlgeschlagen")
+    db.add_audit_entry(user["username"], "topology.map.rename", target=source)
+    await notify_changed(source, what="maps")
+    return r
+
+
+@router.delete("/maps")
+async def delete_map(source: str = "", user: dict = Depends(get_current_user)):
+    require_perm(user, "network_scan")
+    if not store.is_custom_map(source):
+        raise HTTPException(400, "Nur eigene Karten lassen sich löschen")
+    r = await db.call(store.delete_source, source)
+    db.add_audit_entry(user["username"], "topology.map.delete", target=source)
+    await notify_changed(source, what="maps")
+    return r
+
+
+@router.post("/map/delete-node")
+async def delete_node(source: str = "backend", origin: str = "",
+                      body: dict = Body(...), user: dict = Depends(get_current_user)):
+    """Really delete discovered devices from the saved map (no soft-hide).
+    A later scan or a manual add brings them back."""
+    require_perm(user, "network_scan")
+    _check_source(user, source)
+    ids = (body or {}).get("ids") if isinstance(body, dict) else None
+    if not isinstance(ids, list):
+        raise HTTPException(400, "ids fehlen")
+    r = await db.call(store.delete_nodes, source, ids)
+    db.add_audit_entry(user["username"], "topology.delete-node", target=source)
+    await notify_changed(source, origin=origin[:40], what="map")
+    return {"ok": True, **r}

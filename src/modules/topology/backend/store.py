@@ -21,6 +21,7 @@
 
 import json
 import re
+import secrets
 import threading
 
 from app.paths import MODULES_DATA_DIR
@@ -47,6 +48,7 @@ def _load() -> dict:
         data = {}
     data.setdefault("maps", {})
     data.setdefault("overrides", {})
+    data.setdefault("labels", {})        # display names of user-created maps ("map:<id>" -> label)
     return data
 
 
@@ -168,7 +170,109 @@ def set_overrides(source: str, overrides: dict) -> dict:
 def list_sources() -> list[str]:
     with _lock:
         data = _load()
-    return sorted(set(data["maps"]) | set(data["overrides"]))
+    return sorted(set(data["maps"]) | set(data["overrides"]) | set(data["labels"]))
+
+
+# ------------------------------------------------------------------ real delete (no soft-hide)
+def delete_nodes(source: str, ids) -> dict:
+    """Really remove discovered devices from the saved map and strip every
+    override that points at them. Nothing is kept hidden: a later scan
+    re-discovers the device and a manual add puts it back."""
+    ids = {str(x) for x in (ids or []) if x}
+    removed = 0
+    if not ids:
+        return {"removed": 0}
+    with _lock:
+        data = _load()
+        m = data["maps"].get(source)
+        if m:
+            nodes = [n for n in (m.get("nodes") or []) if str(n.get("id")) not in ids]
+            removed = len(m.get("nodes") or []) - len(nodes)
+            m["nodes"] = nodes
+            m["edges"] = [e for e in (m.get("edges") or [])
+                          if isinstance(e, (list, tuple)) and len(e) == 2
+                          and str(e[0]) not in ids and str(e[1]) not in ids]
+            data["maps"][source] = m
+        ovr = data["overrides"].get(source)
+        if isinstance(ovr, dict):
+            if isinstance(ovr.get("pos"), dict):
+                ovr["pos"] = {k: v for k, v in ovr["pos"].items() if k not in ids}
+            if isinstance(ovr.get("meta"), dict):
+                ovr["meta"] = {k: v for k, v in ovr["meta"].items() if k not in ids}
+            if isinstance(ovr.get("hidden"), list):
+                ovr["hidden"] = [x for x in ovr["hidden"] if x not in ids]
+            if isinstance(ovr.get("lines"), list):
+                ovr["lines"] = [l for l in ovr["lines"] if l.get("a") not in ids and l.get("b") not in ids]
+            if isinstance(ovr.get("removed_edges"), list):
+                ovr["removed_edges"] = [e for e in ovr["removed_edges"]
+                                        if not (isinstance(e, (list, tuple)) and len(e) == 2
+                                                and (str(e[0]) in ids or str(e[1]) in ids))]
+            if isinstance(ovr.get("edge_props"), dict):
+                ovr["edge_props"] = {k: v for k, v in ovr["edge_props"].items()
+                                     if not any(p in ids for p in str(k).split("|"))}
+            data["overrides"][source] = ovr
+        _save(data)
+    return {"removed": removed}
+
+
+# ------------------------------------------------------------------ user-created maps (independent canvases)
+MAP_PREFIX = "map:"
+
+
+def is_custom_map(source: str) -> bool:
+    """A user-created map (an own canvas, e.g. for a second subnet),
+    as opposed to "backend" or a node's client ID."""
+    return str(source).startswith(MAP_PREFIX)
+
+
+def create_map(label: str) -> dict:
+    """Create a new, empty, user-named map and return {source, label}."""
+    label = _s(label, 80).strip() or "New map"
+    with _lock:
+        data = _load()
+        while True:
+            source = MAP_PREFIX + secrets.token_hex(4)
+            if source not in data["labels"] and source not in data["maps"] and source not in data["overrides"]:
+                break
+        data["labels"][source] = label
+        data["overrides"].setdefault(source, {})     # so the map shows up as a source right away
+        _save(data)
+    return {"source": source, "label": label}
+
+
+def rename_map(source: str, label: str) -> dict:
+    label = _s(label, 80).strip()
+    if not is_custom_map(source) or not label:
+        return {"ok": False}
+    with _lock:
+        data = _load()
+        data["labels"][source] = label
+        _save(data)
+    return {"ok": True, "source": source, "label": label}
+
+
+def delete_source(source: str) -> dict:
+    """Remove a user-created map completely: map data, overrides and label."""
+    if not is_custom_map(source):
+        return {"ok": False}
+    with _lock:
+        data = _load()
+        data["maps"].pop(source, None)
+        data["overrides"].pop(source, None)
+        data["labels"].pop(source, None)
+        _save(data)
+    return {"ok": True}
+
+
+def list_custom_maps() -> list[dict]:
+    """All user-created maps as [{source, label}], sorted by label."""
+    with _lock:
+        data = _load()
+        labels = dict(data.get("labels") or {})
+        keys = set(data["maps"]) | set(data["overrides"]) | set(labels)
+    out = [{"source": k, "label": labels.get(k) or "Map"} for k in keys if is_custom_map(k)]
+    out.sort(key=lambda m: m["label"].lower())
+    return out
 
 
 # ------------------------------------------------------------------ per-user view settings

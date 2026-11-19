@@ -16,7 +16,7 @@
 
 import { moduleRequest } from "/js/app/modules.js";
 import { api } from "/js/app/api.js";
-import { esc, uiConfirm } from "/js/app/utils.js";
+import { esc, uiConfirm, uiPrompt } from "/js/app/utils.js";
 import { openWindow, registerCleanup } from "/js/app/windowmanager.js";
 import { nodeHint } from "/js/app/nodechoice.js";
 import { findClient } from "/js/app/state.js";
@@ -45,6 +45,7 @@ const edgeKey = (a, b) => (a < b ? `${a}|${b}` : `${b}|${a}`);
 export function renderTopology(body, win) {
   const ORIGIN = rid("o");
   let source = "backend";
+  let maps = [];                        // user-created maps: [{source, label}]
   let mapData = null;
   let ovr = emptyOvr();
   let agentsById = {};                  // agents assigned by hand
@@ -87,6 +88,11 @@ export function renderTopology(body, win) {
         .tp-root .tp-pal button.on{border-color:#fff}
       </style>
       <div class="tp-bar explorer-toolbar">
+        <select id="tp-map" title="Map / canvas – independent networks, e.g. one per subnet" style="max-width:180px"></select>
+        <button class="btn btn-sm" id="tp-map-new" title="New map">➕</button>
+        <button class="btn btn-sm" id="tp-map-ren" title="Rename this map" style="display:none">✏️</button>
+        <button class="btn btn-sm" id="tp-map-del" title="Delete this map" style="display:none">🗑️</button>
+        <span class="tp-sep"></span>
         <select id="tp-via" title="Discover from where?" style="max-width:200px"><option value="">🖥 From the backend</option></select>
         <input type="text" id="tp-target" placeholder="Target: empty = own network · 192.168.1. · 10.10.0.0/16" style="flex:1;min-width:160px">
         <button class="btn-primary" id="tp-scan">📡 Discover</button>
@@ -142,7 +148,30 @@ export function renderTopology(body, win) {
   $("#tp-bg").innerHTML = BGS.map(([k, l]) => `<option value="${k}">▒ ${l}</option>`).join("");
 
   // ---------------------------------------------------------------- source / load / save
-  const viaSel = $("#tp-via");
+  // Two independent selectors:
+  //   #tp-map  = which map is shown/saved: "" = automatic (by scanner), or a user-created "map:<id>"
+  //   #tp-via  = where a discovery runs:   "" = backend, or a node's client ID
+  // Without a chosen map the two are the same, exactly as before.
+  const viaSel = $("#tp-via"), mapSel = $("#tp-map");
+  const customMap = () => mapSel.value.startsWith("map:");
+  function computeSource() { return mapSel.value || viaSel.value || "backend"; }
+  function applySource() {
+    source = computeSource();
+    $("#tp-map-ren").style.display = customMap() ? "" : "none";
+    $("#tp-map-del").style.display = customMap() ? "" : "none";
+  }
+
+  async function loadMaps(select) {
+    let r = { maps: [] };
+    try { r = await moduleRequest("/api/topology/sources"); } catch { /* keep going */ }
+    maps = r.maps || [];
+    const cur = select !== undefined ? select : mapSel.value;
+    mapSel.innerHTML = `<option value="">🗺️ Auto (by scanner)</option>`
+      + maps.map((m) => `<option value="${esc(m.source)}">🗺️ ${esc(m.label)}</option>`).join("");
+    mapSel.value = maps.some((m) => m.source === cur) ? cur : "";
+    applySource();
+  }
+
   api.nodeChoices("topology").then((r) => {
     for (const n of r.nodes || []) {
       const o = document.createElement("option");
@@ -151,10 +180,43 @@ export function renderTopology(body, win) {
       viaSel.appendChild(o);
     }
   }).catch(() => {});
-  viaSel.addEventListener("change", () => {
-    source = viaSel.value || "backend";
-    lineFrom = null; sel.clear();
-    loadMap(true); watchSource();
+
+  const reselect = () => { applySource(); lineFrom = null; sel.clear(); loadMap(true); watchSource(); };
+  viaSel.addEventListener("change", reselect);
+  mapSel.addEventListener("change", reselect);
+
+  $("#tp-map-new").addEventListener("click", async () => {
+    const label = await uiPrompt("New map", {
+      description: "An independent canvas – e.g. for another subnet. Pick a scanner and a target, then Discover into it.",
+      placeholder: "e.g. Office · 192.168.10.0/24", okText: "Create" });
+    if (label == null || !label.trim()) return;
+    try {
+      const r = await moduleRequest("/api/topology/maps", { method: "POST", body: JSON.stringify({ label: label.trim() }) });
+      await loadMaps(r.source);
+      reselect();
+    } catch (e) { window.notify?.(esc(e.message), "error"); }
+  });
+  $("#tp-map-ren").addEventListener("click", async () => {
+    if (!customMap()) return;
+    const cur = maps.find((m) => m.source === mapSel.value);
+    const label = await uiPrompt("Rename map", { value: cur?.label || "", okText: "Rename" });
+    if (label == null || !label.trim()) return;
+    try {
+      await moduleRequest("/api/topology/maps", { method: "PATCH", body: JSON.stringify({ source: mapSel.value, label: label.trim() }) });
+      await loadMaps(mapSel.value);
+    } catch (e) { window.notify?.(esc(e.message), "error"); }
+  });
+  $("#tp-map-del").addEventListener("click", async () => {
+    if (!customMap()) return;
+    const cur = maps.find((m) => m.source === mapSel.value);
+    if (!(await uiConfirm(`Delete map “${esc(cur?.label || "")}”?`, {
+      description: "The canvas and everything on it is removed. Devices on other maps stay untouched.",
+      okText: "Delete", danger: true }))) return;
+    try {
+      await moduleRequest(`/api/topology/maps?source=${encodeURIComponent(mapSel.value)}`, { method: "DELETE" });
+      await loadMaps("");
+      reselect();
+    } catch (e) { window.notify?.(esc(e.message), "error"); }
   });
 
   async function loadMap(refit = true) {
@@ -210,6 +272,34 @@ export function renderTopology(body, win) {
     }, 350);
   }
 
+  // Delete selected items for real: own nodes and boxes drop out of the
+  // overrides, discovered devices are removed from the saved map on the
+  // server (no soft-hide). A later scan or a manual add brings a device back.
+  async function deleteItems(keys) {
+    if (staleBackend) { $("#tp-stale").style.display = ""; setText("Not deleted – the backend must be restarted first (see the red note).", true); return; }
+    clearTimeout(saveTimer); saveTimer = null;
+    const discovered = [];
+    for (const k of keys) {
+      if (k.startsWith("box:")) { ovr.boxes = ovr.boxes.filter((b) => "box:" + b.id !== k); continue; }
+      if (ovr.custom_nodes.some((c) => c.id === k)) {
+        ovr.custom_nodes = ovr.custom_nodes.filter((c) => c.id !== k);
+        ovr.lines = ovr.lines.filter((l) => l.a !== k && l.b !== k);
+        delete ovr.pos[k]; delete ovr.meta[k];
+      } else discovered.push(k);
+    }
+    try {
+      await moduleRequest(`/api/topology/map?source=${encodeURIComponent(source)}&origin=${ORIGIN}`,
+        { method: "PUT", body: JSON.stringify(ovr) });
+    } catch (e) { setText(`Saving failed: ${esc(e.message)}`, true); }
+    if (discovered.length) {
+      try {
+        await moduleRequest(`/api/topology/map/delete-node?source=${encodeURIComponent(source)}&origin=${ORIGIN}`,
+          { method: "POST", body: JSON.stringify({ ids: discovered }) });
+      } catch (e) { setText(`Delete failed: ${esc(e.message)}`, true); }
+    }
+    await loadMap(false);
+  }
+
   // ---------------------------------------------------------------- discovery = backend job
   let job = null, stopWatch = null;
   function watchSource() {
@@ -259,6 +349,7 @@ export function renderTopology(body, win) {
       const target = $("#tp-target").value.trim();
       if (target) q.set("target", target);
       if (viaSel.value) q.set("via", viaSel.value);
+      if (mapSel.value) q.set("map", mapSel.value);   // scan into the chosen map
       const r = await moduleRequest(`/api/topology/discover/start?${q}`, { method: "POST" });
       if (r.attached) window.notify?.(`A discovery is already running for this source (by ${r.by}) – showing it.`, "info");
       job = r; showJob();
@@ -274,7 +365,9 @@ export function renderTopology(body, win) {
   const busy = () => dragging || dlg.style.display === "block" || !!saveTimer;
   function maybeReload() { if (pendingReload && !busy()) { pendingReload = false; loadMap(false); } }
   const onTopoChanged = (p) => {
-    if (!p || p.source !== source || (p.origin && p.origin === ORIGIN)) return;
+    if (!p || (p.origin && p.origin === ORIGIN)) return;
+    if (p.what === "maps") { loadMaps(); return; }   // a map was created/renamed/deleted elsewhere
+    if (p.source !== source) return;
     if (busy()) pendingReload = true; else loadMap(p.what === "map");
   };
   dashboardSocket.on("topology:changed", onTopoChanged);
@@ -297,9 +390,10 @@ export function renderTopology(body, win) {
     };
   }
   function graph() {
-    const hidden = new Set(ovr.hidden || []);
     const nodes = [];
-    for (const n of mapData?.nodes || []) if (!hidden.has(n.id)) nodes.push(nodeView(n, false));
+    // No soft-hide any more: discovered devices are either on the map or
+    // really deleted. Old "hidden" entries are ignored so nothing stays stuck.
+    for (const n of mapData?.nodes || []) nodes.push(nodeView(n, false));
     for (const c of ovr.custom_nodes || []) nodes.push(nodeView(c, true));
     const have = new Set(nodes.map((n) => n.id));
     const removed = new Set((ovr.removed_edges || []).map(([a, b]) => edgeKey(a, b)));
@@ -983,16 +1077,9 @@ export function renderTopology(body, win) {
     if (ev.key === "l" || ev.key === "L") setLineMode(!lineMode);
     if ((ev.key === "Delete" || ev.key === "Backspace") && sel.size) {
       ev.preventDefault();
-      if (!(await uiConfirm(`Remove ${sel.size} selected item(s)?`, { description: "Own nodes and boxes are deleted, discovered devices are hidden.", okText: "Remove", danger: true }))) return;
-      for (const k of sel) {
-        if (k.startsWith("box:")) { ovr.boxes = ovr.boxes.filter((b) => "box:" + b.id !== k); continue; }
-        if (ovr.custom_nodes.some((c) => c.id === k)) {
-          ovr.custom_nodes = ovr.custom_nodes.filter((c) => c.id !== k);
-          ovr.lines = ovr.lines.filter((l) => l.a !== k && l.b !== k);
-          delete ovr.pos[k];
-        } else if (!ovr.hidden.includes(k)) ovr.hidden.push(k);
-      }
-      sel.clear(); saveOvr(); draw();
+      if (!(await uiConfirm(`Delete ${sel.size} selected item(s)?`, { description: "Own nodes and boxes are removed; discovered devices are really deleted from the map – a scan or a manual add brings them back.", okText: "Delete", danger: true }))) return;
+      const keys = [...sel]; sel.clear();
+      await deleteItems(keys);
     }
   });
 
@@ -1043,8 +1130,7 @@ export function renderTopology(body, win) {
           <option value="always" ${mode === "always" ? "selected" : ""}>always on the map</option></select></label>
         ${n.mac ? `<div style="font-size:11px;color:var(--subtext)">MAC ${esc(n.mac)}</div>` : ""}
         <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:4px;flex-wrap:wrap">
-          ${noteOnly ? "" : n.custom ? `<button class="btn btn-danger" id="d-del" style="margin-right:auto">Delete</button>`
-            : `<button class="btn btn-danger" id="d-hide" style="margin-right:auto">Hide</button>`}
+          ${noteOnly ? "" : `<button class="btn btn-danger" id="d-del" style="margin-right:auto">Delete</button>`}
           <button class="btn" id="d-cancel">Cancel</button><button class="btn-primary" id="d-ok">Apply</button>
         </div></div>`);
     dlg.querySelector("#d-cancel").onclick = closeDialog;
@@ -1085,14 +1171,17 @@ export function renderTopology(body, win) {
       saveOvr(); closeDialog(); draw();
     };
     const del = dlg.querySelector("#d-del");
-    if (del) del.onclick = () => {
-      ovr.custom_nodes = ovr.custom_nodes.filter((x) => x.id !== n.id);
-      ovr.lines = ovr.lines.filter((l) => l.a !== n.id && l.b !== n.id);
-      delete ovr.pos[n.id]; delete ovr.meta[n.id];
-      saveOvr(); closeDialog(); draw();
+    if (del) del.onclick = async () => {
+      if (n.custom) {        // own node: just drop it from the overrides
+        ovr.custom_nodes = ovr.custom_nodes.filter((x) => x.id !== n.id);
+        ovr.lines = ovr.lines.filter((l) => l.a !== n.id && l.b !== n.id);
+        delete ovr.pos[n.id]; delete ovr.meta[n.id];
+        saveOvr(); closeDialog(); draw();
+      } else {               // discovered device: really remove it from the map
+        closeDialog();
+        await deleteItems([n.id]);
+      }
     };
-    const hide = dlg.querySelector("#d-hide");
-    if (hide) hide.onclick = () => { if (!ovr.hidden.includes(n.id)) ovr.hidden.push(n.id); saveOvr(); closeDialog(); draw(); };
   }
 
   function openLineDialog(e) {
@@ -1280,6 +1369,7 @@ export function renderTopology(body, win) {
 
   // ---------------------------------------------------------------- start
   loadPrefs();
+  loadMaps();
   loadMap();
   loadBmcLinks().then(() => { try { draw(); } catch { /* vor erstem Laden */ } });
   watchSource();
