@@ -1,43 +1,43 @@
-// bytera-url.js - internes Adress-Schema  bytera://<bereich>/<ziel...>
+// bytera-url.js - internal address scheme  bytera://<area>/<target...>
 // ---------------------------------------------------------------------------
-// Wie steam://... ein Spiel startet, oeffnet bytera://... einen Bereich des
-// Dashboards. Die Links funktionieren an drei Stellen:
-//   * im Dashboard angeklickt (<a href="bytera://...">)         -> Fenster oeffnet sich
-//   * beim Laden als  ?go=bytera://...  oder  #bytera://...      -> wird einmal ausgefuehrt
-//   * vom Betriebssystem (Desktop-Client registriert das Schema) -> siehe Client
+// Like steam://... starts a game, bytera://... opens an area of the dashboard.
+// The links work in three places:
+//   * clicked in the dashboard (<a href="bytera://...">)         -> a window opens
+//   * on load as  ?go=bytera://...  or  #bytera://...             -> runs once
+//   * from the operating system (desktop client registers the scheme) -> see client
 //
 // Format:  bytera://<kind>/<p1>/<p2>?a=b
-//   bytera://agent/<id>                 Geraet auswaehlen (Uebersicht)
-//   bytera://agent/<id>/terminal        Terminal des Geraets
-//   bytera://agent/<id>/explorer        Dateien
-//   bytera://agent/<id>/screen          Fernwartung (Alias: vnc, remote)
+//   bytera://agent/<id>                 select device (overview)
+//   bytera://agent/<id>/terminal        terminal of the device
+//   bytera://agent/<id>/explorer        files
+//   bytera://agent/<id>/screen          remote maintenance (alias: vnc, remote)
 //   bytera://agent/<id>/files           = explorer
-//   bytera://agent/<id>/tasks           Task-Manager
-//   bytera://agent/<id>/edit            Geraet bearbeiten
-//   bytera://node/<id>                  Node eines Geraets
-//   bytera://space/<name>               Space oeffnen (Modul "spaces")
-//   bytera://dist[/<ordner>]            Verteilung (Core)
-//   bytera://app/<appId>                beliebige Core-/Modul-App (terminal etc. brauchen ein Geraet)
-//   bytera://clients                    Geraete-Uebersicht
-// Unbekanntes Ziel -> Hinweis, kein Absturz.
+//   bytera://agent/<id>/tasks           task manager
+//   bytera://agent/<id>/edit            edit device
+//   bytera://node/<id>                  node of a device
+//   bytera://space/<name>               open space (module "spaces")
+//   bytera://dist[/<folder>]            distribution (Core)
+//   bytera://app/<appId>                any core/module app (terminal etc. need a device)
+//   bytera://clients                    device overview
+// Unknown target -> hint, no crash.
 //
-// Diese Datei kennt die Oeffnen-Funktionen NICHT direkt, sondern bekommt sie
-// per setByteraHandlers() aus app.js gereicht (keine Import-Zyklen, testbar).
+// This file does NOT know the open functions directly but gets them via
+// setByteraHandlers() from app.js (no import cycles, testable).
 
 let H = {
-  openApp: () => false,          // (appId)            Core-/Menue-App
-  openModuleApp: () => false,    // (appId)            App eines aktiven Moduls
-  clientAction: () => false,     // (action, clientId) Terminal/Explorer/VNC/... fuer ein Geraet
-  selectClient: () => false,     // (clientId)         Geraet in der Seitenleiste auswaehlen
-  openNode: () => false,         // (clientId)         Node-Fenster
-  openSpace: () => false,        // (name)             Space oeffnen
-  openDist: () => false,         // (folder?)          Verteilung
-  notify: (m) => { try { window.notify?.(m, "error", 7000); } catch { /* egal */ } },
+  openApp: () => false,          // (appId)            core/menu app
+  openModuleApp: () => false,    // (appId)            app of an active module
+  clientAction: () => false,     // (action, clientId) terminal/explorer/VNC/... for a device
+  selectClient: () => false,     // (clientId)         select device in the sidebar
+  openNode: () => false,         // (clientId)         node window
+  openSpace: () => false,        // (name)             open space
+  openDist: () => false,         // (folder?)          distribution
+  notify: (m) => { try { window.notify?.(m, "error", 7000); } catch { /* ignore */ } },
 };
 
 export function setByteraHandlers(h) { H = { ...H, ...h }; }
 
-// Aktionen je Geraet; linke Seite = im Link erlaubte Schreibweise.
+// Actions per device; left side = spelling allowed in the link.
 const AGENT_ACTIONS = {
   terminal: "terminal", shell: "terminal", cmd: "terminal",
   explorer: "explorer", files: "explorer", dateien: "explorer",
@@ -80,15 +80,15 @@ export function resolveByteraUrl(raw) {
       case "agent":
       case "device":
       case "client": {
-        // "clients" (Uebersicht) wird unten als eigener kind behandelt; hier mit ID:
+        // "clients" (overview) is handled below as its own kind; here with an ID:
         const id = parts[0];
         if (!id) { H.openApp("clients"); return true; }
         const action = (parts[1] || "").toLowerCase();
         if (!action) { H.selectClient(id); return true; }
         if (action === "node") { H.openNode(id); return true; }
         const mapped = AGENT_ACTIONS[action];
-        if (!mapped) { H.notify(`Unbekannte Geräte-Aktion: ${action}`); return true; }
-        if (!H.clientAction(mapped, id)) H.notify("Gerät nicht gefunden oder kein Zugriff.");
+        if (!mapped) { H.notify(`Unknown device action: ${action}`); return true; }
+        if (!H.clientAction(mapped, id)) H.notify("Device not found or no access.");
         return true;
       }
       case "clients":
@@ -100,7 +100,7 @@ export function resolveByteraUrl(raw) {
         return true;
       case "space":
       case "spaces":
-        if (!H.openSpace(parts[0] || "")) H.notify("Spaces-Modul ist nicht aktiv.");
+        if (!H.openSpace(parts[0] || "")) H.notify("The Spaces module is not active.");
         return true;
       case "dist":
       case "verteilung":
@@ -111,20 +111,20 @@ export function resolveByteraUrl(raw) {
         if (!appId) return true;
         if (H.openApp(appId)) return true;
         if (H.openModuleApp(appId)) return true;
-        H.notify(`Unbekannte App: ${appId}`);
+        H.notify(`Unknown app: ${appId}`);
         return true;
       }
       default:
-        H.notify(`Unbekanntes bytera://-Ziel: ${kind}`);
+        H.notify(`Unknown bytera:// target: ${kind}`);
         return true;
     }
   } catch (e) {
-    H.notify("Konnte den Link nicht öffnen: " + (e?.message || e));
+    H.notify("Could not open the link: " + (e?.message || e));
     return true;
   }
 }
 
-/** Baut einen Link, z.B. makeByteraUrl("agent", id, "terminal"). */
+/** Builds a link, e.g. makeByteraUrl("agent", id, "terminal"). */
 export function makeByteraUrl(kind, ...segments) {
   const path = segments
     .filter((s) => s !== undefined && s !== null && s !== "")
@@ -133,17 +133,17 @@ export function makeByteraUrl(kind, ...segments) {
   return `bytera://${kind}` + (path ? "/" + path : "");
 }
 
-/** Link in die Zwischenablage legen (mit kurzer Rueckmeldung). */
+/** Copy a link to the clipboard (with a short confirmation). */
 export function copyByteraUrl(url) {
   try {
     navigator.clipboard?.writeText(url).then(
-      () => window.notify?.("Link kopiert: " + url, "success", 2500),
+      () => window.notify?.("Link copied: " + url, "success", 2500),
       () => window.notify?.(url, "info", 4000),
     );
   } catch { window.notify?.(url, "info", 4000); }
 }
 
-// Klicks auf <a href="bytera://..."> im ganzen Dashboard abfangen.
+// Intercept clicks on <a href="bytera://..."> across the whole dashboard.
 let _clickHooked = false;
 export function installByteraLinkHandler() {
   if (_clickHooked) return;
@@ -156,8 +156,8 @@ export function installByteraLinkHandler() {
   });
 }
 
-// Beim Laden: ?go=bytera://...  oder  #bytera://...  einmal ausfuehren und
-// danach aus der Adresse entfernen (kein erneutes Ausloesen bei Reload).
+// On load: run ?go=bytera://...  or  #bytera://...  once and then remove it
+// from the address (no re-triggering on reload).
 export function consumeDeepLinkFromLocation() {
   let target = null;
   try {
@@ -174,7 +174,7 @@ export function consumeDeepLinkFromLocation() {
     if (isByteraUrl(decodeURIComponent(url.hash.replace(/^#/, "")))) url.hash = "";
     history.replaceState(null, "", url.toString());
   } catch { /* egal */ }
-  // Etwas spaeter: erst muessen Geraete/Module geladen sein.
+  // A little later: devices/modules must be loaded first.
   setTimeout(() => resolveByteraUrl(target), 400);
   return true;
 }

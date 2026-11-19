@@ -1,10 +1,10 @@
-// nodechoice.js - gemeinsamer Text fuer die Auswahl "Backend oder Node"
+// nodechoice.js - shared text for the "backend or node" choice
 // --------------------------------------------------------------------
-// Eintraege aus api.nodeChoices(modul): {id, name, installed, active, outdated}.
-// Waehlbar ist eine Node nur, wenn das Node-Modul dort installiert UND einzeln
-// aktiviert ist (seit Node 0.3.0 ist jedes Modul nach dem Installieren aus).
+// Entries from api.nodeChoices(module): {id, name, installed, active, outdated}.
+// A node is selectable only if the node module is installed there AND enabled
+// individually (since node 0.3.0 every module is off after installing).
 export function nodeHint(n) {
   if (n.active) return "";
-  if (n.outdated) return " (Node veraltet – erst aktualisieren)";
-  return n.installed ? " (Modul nicht aktiviert)" : " (Modul nicht installiert)";
+  if (n.outdated) return " (node outdated - update first)";
+  return n.installed ? " (module not enabled)" : " (module not installed)";
 }

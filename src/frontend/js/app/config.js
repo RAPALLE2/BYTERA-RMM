@@ -1,26 +1,26 @@
 // config.js
 // ---------
-// Da das Frontend vom selben Python-Backend ausgeliefert wird, auf dem auch
-// die API läuft, können wir hier einfach "" (leerer String = gleiche Adresse
-// wie die Webseite selbst) verwenden. Läuft das Frontend doch mal von woanders,
-// reicht es, hier eine volle URL einzutragen.
+// Since the frontend is served by the same Python backend that also runs the
+// API, we can simply use "" here (empty string = same address as the web page
+// itself). If the frontend ever runs from elsewhere, just enter a full URL
+// here.
 export const BACKEND_URL = "";
 
 // ---------------------------------------------------------------------------
-// Kanonische Adresse dieser Installation
+// Canonical address of this installation
 // ---------------------------------------------------------------------------
-// `location.host` ist nur die Adresse, ueber die der Benutzer GERADE zugreift.
-// Fuer alles, was auf einem ANDEREN Rechner eingegeben wird - WebDAV-Pfade,
-// Netzlaufwerk-Befehle, Installationszeilen - ist das die falsche Quelle: wer
-// das Dashboard intern per IP oeffnet, bekaeme eine Adresse, die von aussen
-// niemand erreicht.
+// `location.host` is only the address through which the user HAPPENS to access
+// it right now. For anything entered on ANOTHER machine - WebDAV paths, network
+// drive commands, install lines - that is the wrong source: whoever opens the
+// dashboard internally via IP would get an address that nobody reaches from
+// outside.
 //
-// Das Backend kennt die richtige (Einstellung "Vollstaendige URL" bzw.
-// Domain/Host + Port, sonst die Anfrage selbst inkl. Reverse-Proxy-Header).
-// Hier wird sie einmal geholt und gemerkt; bis sie da ist, gilt location als
-// Rueckfallebene, damit nichts leer bleibt.
+// The backend knows the correct one (setting "Full URL" resp. domain/host +
+// port, otherwise the request itself incl. reverse-proxy headers). It is
+// fetched once here and remembered; until it arrives, location is the fallback
+// so nothing stays empty.
 
-let _publicBase = null;      // aufgeloester Wert
+let _publicBase = null;      // resolved value
 let _publicBasePromise = null;
 
 function _fromLocation() {
@@ -36,15 +36,15 @@ function _fromLocation() {
   };
 }
 
-/** Sofort verfuegbarer Wert - solange nichts geladen ist, aus location. */
+/** Immediately available value - from location as long as nothing is loaded. */
 export function publicBaseNow() {
   return _publicBase || _fromLocation();
 }
 
 /**
- * Kanonische Adresse laden (einmal pro Sitzung). Schlaegt der Abruf fehl -
- * altes Backend, kein Netz - wird die Adresse aus location benutzt, statt
- * einen Fehler zu werfen: eine ungenaue Adresse ist besser als eine leere.
+ * Load the canonical address (once per session). If the fetch fails - old
+ * backend, no network - the address from location is used instead of throwing
+ * an error: an inaccurate address is better than an empty one.
  */
 export function loadPublicBase() {
   if (_publicBase) return Promise.resolve(_publicBase);
