@@ -1,13 +1,13 @@
-# dist_store.py (Core) - frueher Modul "dist" - einheitliche Verteil-Ordner unter storage/dist
+# dist_store.py (Core) - formerly module "dist" - unified distribution folders under storage/dist
 # -----------------------------------------------------------------------
-# Auf der Platte: src/backend/storage/dist/<ordner>/...
-#   enroll/      frei hochgeladene Installer/Dateien fuer Clients (exe, msi, scripts ...)
-#                (frueher "enrollment" - wird beim Start umbenannt, alte Links leiten um)
-#   agent/       Agent-Pakete
-#   client/      Client-App-Pakete
-#   ... weitere Ordner frei anlegbar
-# Je Ordner eine .dist.json: {"public": bool, "label": str}. Standard: public = True.
-# Oeffentlich erreichbar unter  rmm.url.de/dist/<ordner>/<datei>  (wenn public).
+# On disk: src/backend/storage/dist/<folder>/...
+#   enroll/      freely uploaded installers/files for clients (exe, msi, scripts ...)
+#                (formerly "enrollment" - renamed at startup, old links redirect)
+#   agent/       agent packages
+#   client/      client app packages
+#   ... more folders can be created freely
+# One .dist.json per folder: {"public": bool, "label": str}. Default: public = True.
+# Publicly reachable at  rmm.url.de/dist/<folder>/<file>  (when public).
 from __future__ import annotations
 
 import json
@@ -17,11 +17,11 @@ from pathlib import Path
 
 from app.paths import DIST_DIR  # storage/dist
 META = ".dist.json"
-# Diese Ordner gibt es immer (werden bei Bedarf angelegt).
+# These folders always exist (created on demand).
 CORE_FOLDERS = {
-    "enroll": "Enrollment (Installer & Dateien für Clients)",
-    "agent": "Agent-Pakete",
-    "client": "Client-App-Pakete",
+    "enroll": "Enrollment (installers & files for clients)",
+    "agent": "Agent packages",
+    "client": "Client app packages",
 }
 _NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,48}$")
 

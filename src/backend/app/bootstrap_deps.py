@@ -1,20 +1,20 @@
 """
 bootstrap_deps.py
 -----------------
-Stellt sicher, dass ALLE benötigten Python-Bibliotheken vorhanden sind - und
-installiert fehlende automatisch nach (pip). So muss niemand von Hand
-"pip install -r requirements.txt" ausführen; ein fehlendes ldap3 (oder eine
-andere Lib) blockiert den Start nicht mehr.
+Makes sure that ALL required Python libraries are present - and installs
+missing ones automatically (pip). So nobody has to run
+"pip install -r requirements.txt" by hand; a missing ldap3 (or another lib) no
+longer blocks startup.
 
-Ablauf:
-  1. requirements.txt einlesen (Paketnamen extrahieren).
-  2. Für jedes Paket prüfen, ob es importierbar ist.
-  3. Fehlt etwas: erst ein Sammel-"pip install -r requirements.txt" versuchen,
-     danach gezielt die noch fehlenden Einzelpakete.
+Flow:
+  1. Read requirements.txt (extract package names).
+  2. For each package, check whether it is importable.
+  3. If something is missing: first try a bulk "pip install -r requirements.txt",
+     then the still-missing individual packages specifically.
 
-Bewusst schlank gehalten und ohne harte Fehler: Kann pip nicht installieren
-(z.B. kein Internet, kein Schreibrecht), läuft das Backend trotzdem weiter -
-die betroffene Funktion meldet sich dann später selbst (z.B. LDAP-Login).
+Deliberately kept lean and without hard errors: if pip cannot install
+(e.g. no internet, no write permission), the backend keeps running anyway -
+the affected feature then reports it itself later (e.g. LDAP login).
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Paket auf PyPI  ->  importierbarer Modulname (nur wo sie abweichen).
+# Package on PyPI  ->  importable module name (only where they differ).
 _IMPORT_NAME = {
     "python-socketio": "socketio",
     "python-dotenv": "dotenv",
@@ -38,13 +38,13 @@ _IMPORT_NAME = {
 }
 
 
-# Sicherheitsnetz: Ohne diese Pakete startet das Backend GAR NICHT. Sie werden
-# auch dann installiert, wenn sie versehentlich in requirements.txt fehlen -
-# genau das ist mit "python-multipart" passiert und fuehrte zu einer endlosen
-# Absturz-Neustart-Schleife (FastAPI verlangt es, sobald ein Router Uploads
-# oder Formulare anbietet).
+# Safety net: without these packages the backend does NOT start AT ALL. They are
+# installed even if they are accidentally missing from requirements.txt - that is
+# exactly what happened with "python-multipart" and caused an endless
+# crash-restart loop (FastAPI requires it as soon as a router offers uploads or
+# forms).
 _ESSENTIAL = {
-    # Importname : Paketname auf PyPI
+    # import name : package name on PyPI
     "fastapi": "fastapi",
     "uvicorn": "uvicorn[standard]",
     "socketio": "python-socketio",
@@ -53,14 +53,14 @@ _ESSENTIAL = {
     "bcrypt": "bcrypt",
     "pydantic": "pydantic",
     "multipart": "python-multipart",
-    # Datenbank-Treiber fuer den Wechsel auf MySQL/MariaDB bzw. PostgreSQL.
-    # Sie stehen zwar in requirements.txt, aber bestehende Installationen
-    # wurden vor dieser Aenderung gebaut - dann scheiterte der Wechsel mit
-    # "Treiber fehlt". Hier gehoert er ins Sicherheitsnetz, damit er beim
-    # naechsten Start ohne Zutun nachkommt.
+    # Database drivers for switching to MySQL/MariaDB resp. PostgreSQL.
+    # They are in requirements.txt, but existing installations were built
+    # before this change - then the switch failed with "driver missing". Here it
+    # belongs in the safety net so it is pulled in on the next start without
+    # any action.
     "pymysql": "PyMySQL",
     "psycopg2": "psycopg2-binary",
-    # SSH-Teil des SFTP-Zugangs am Relay.
+    # SSH part of the SFTP access at the relay.
     "paramiko": "paramiko",
 }
 
@@ -77,7 +77,7 @@ def _parse_requirements(req_file: Path) -> list[str]:
             line = raw.split("#", 1)[0].strip()
             if not line:
                 continue
-            # Nur den Paketnamen (ohne Versionsbedingung) behalten.
+            # Keep only the package name (without version constraint).
             name = line
             for sep in ("==", ">=", "<=", "~=", ">", "<", "!="):
                 if sep in name:
@@ -101,7 +101,7 @@ def _missing(pkgs: list[str]) -> list[str]:
 
 
 def _user_site() -> str | None:
-    """Der persoenliche Paket-Ordner (~/.local/lib/...) - falls nutzbar."""
+    """The personal package folder (~/.local/lib/...) - if usable."""
     try:
         import site
         return site.getusersitepackages()
@@ -111,18 +111,18 @@ def _user_site() -> str | None:
 
 def _refresh_sys_path() -> None:
     """
-    Nach einer Installation mit "--user" liegt das Paket in einem Ordner, den
-    dieser Prozess womoeglich noch gar nicht kennt: Python bestimmt sys.path
-    EINMAL beim Start, und wenn ~/.local/lib/... damals nicht existierte, fehlt
-    der Eintrag. Ohne diese Auffrischung wuerde der Import direkt nach einer
-    erfolgreichen Installation trotzdem scheitern.
+    After an installation with "--user" the package sits in a folder this
+    process may not know about yet: Python determines sys.path ONCE at startup,
+    and if ~/.local/lib/... did not exist back then, the entry is missing.
+    Without this refresh the import would still fail right after a successful
+    installation.
     """
     us = _user_site()
     if us and us not in sys.path:
         sys.path.append(us)
     try:
         import site
-        site.main()          # baut die Pfadliste neu auf
+        site.main()          # rebuilds the path list
     except Exception:
         pass
     importlib.invalidate_caches()
@@ -130,23 +130,23 @@ def _refresh_sys_path() -> None:
 
 def _pip(args: list[str]) -> bool:
     """
-    pip aufrufen - mit Rueckfallebenen fuer Umgebungen ohne Schreibrechte.
+    Call pip - with fallback levels for environments without write permissions.
 
-    Typische Faelle:
-      * unprivilegierter Container / Prozess laeuft nicht als root
-        -> systemweites site-packages ist schreibgeschuetzt
-      * neuere Distributionen (PEP 668, "externally-managed-environment")
-        -> pip verweigert die systemweite Installation grundsaetzlich
+    Typical cases:
+      * unprivileged container / process does not run as root
+        -> system-wide site-packages is read-only
+      * newer distributions (PEP 668, "externally-managed-environment")
+        -> pip refuses the system-wide installation outright
 
-    Deshalb der Reihe nach: normal -> --user -> --user --break-system-packages.
-    Sobald ein Versuch klappt, wird sys.path aufgefrischt.
+    Therefore in order: normal -> --user -> --user --break-system-packages.
+    As soon as an attempt works, sys.path is refreshed.
     """
     import os
     attempts = [[], ["--user"], ["--user", "--break-system-packages"],
                 ["--break-system-packages"]]
     env = dict(os.environ)
-    # pip braucht ein beschreibbares HOME (Cache, ~/.local). Ist HOME nicht
-    # nutzbar - im Container haeufig -, weichen wir auf /tmp aus.
+    # pip needs a writable HOME (cache, ~/.local). If HOME is not usable -
+    # often the case in a container - we fall back to /tmp.
     home = env.get("HOME") or ""
     if not home or not os.access(home, os.W_OK):
         env["HOME"] = "/tmp"
@@ -159,13 +159,13 @@ def _pip(args: list[str]) -> bool:
                            check=True, capture_output=True, text=True,
                            timeout=600, env=env)
             if extra:
-                print(f"[bootstrap] pip-Installation gelang mit {' '.join(extra)}")
+                print(f"[bootstrap] pip installation succeeded with {' '.join(extra)}")
             _refresh_sys_path()
             return True
         except subprocess.CalledProcessError as e:
             last = ((e.stderr or "") + (e.stdout or "")).strip()
             low = last.lower()
-            # Nur bei Rechte-/PEP-668-Problemen lohnt der naechste Versuch.
+            # The next attempt is only worthwhile for permission / PEP-668 issues.
             if not any(k in low for k in ("permission denied", "externally-managed",
                                           "read-only file system", "errno 13",
                                           "consider using the `--user` option",
@@ -175,23 +175,23 @@ def _pip(args: list[str]) -> bool:
             last = str(e)
             break
 
-    print(f"[bootstrap] pip {' '.join(args)} fehlgeschlagen: {last[:600]}")
+    print(f"[bootstrap] pip {' '.join(args)} failed: {last[:600]}")
     return False
 
 
 def ensure_dependencies(req_file: Path | None = None) -> None:
-    """Installiert fehlende Abhängigkeiten aus requirements.txt nach."""
+    """Installs missing dependencies from requirements.txt."""
     if req_file is None:
         # backend/app/bootstrap_deps.py -> src/backend/data/requirements.txt
         req_file = Path(__file__).resolve().parent.parent / "data" / "requirements.txt"
 
     pkgs = _parse_requirements(req_file)
 
-    # Unverzichtbare Pakete ergaenzen, falls sie in requirements.txt fehlen.
+    # Add essential packages in case they are missing from requirements.txt.
     for mod, pypi in _ESSENTIAL.items():
         if not any(_pkg_to_module(p) == mod for p in pkgs):
-            print(f"[bootstrap] Hinweis: {pypi} steht nicht in requirements.txt, "
-                  f"wird aber zwingend gebraucht - nehme es mit auf.")
+            print(f"[bootstrap] Note: {pypi} is not in requirements.txt, "
+                  f"but is strictly required - adding it.")
             pkgs.append(pypi)
 
     if not pkgs:
@@ -200,35 +200,34 @@ def ensure_dependencies(req_file: Path | None = None) -> None:
     if not missing:
         return
 
-    print(f"[bootstrap] Fehlende Pakete: {', '.join(missing)} - installiere automatisch…")
-    # Erst der gebündelte Versuch (löst Versionskonflikte am besten auf).
+    print(f"[bootstrap] Missing packages: {', '.join(missing)} - installing automatically...")
+    # First the bundled attempt (resolves version conflicts best).
     if req_file.is_file():
         _pip(["install", "-r", str(req_file)])
 
-    # Was danach noch fehlt, gezielt einzeln nachziehen.
+    # Whatever is still missing afterwards, pull in individually.
     still = _missing(missing)
     for pkg in still:
-        print(f"[bootstrap] installiere {pkg}…")
+        print(f"[bootstrap] installing {pkg}...")
         _pip(["install", pkg])
 
     final = _missing(pkgs)
     if final:
-        print(f"[bootstrap] WARNUNG: konnte nicht installieren: {', '.join(final)} "
-              f"- betroffene Funktionen sind evtl. eingeschränkt.")
+        print(f"[bootstrap] WARNING: could not install: {', '.join(final)} "
+              f"- affected features may be limited.")
         _explain_environment(final)
     else:
-        print("[bootstrap] Alle Abhängigkeiten vorhanden.")
+        print("[bootstrap] All dependencies present.")
 
 
 def _explain_environment(missing: list[str]) -> None:
     """
-    Sagt beim Fehlschlag konkret, WORAN es liegt - sonst sieht man nur
-    "ModuleNotFoundError" und sucht an der falschen Stelle.
+    On failure, says specifically WHAT the cause is - otherwise one only sees
+    "ModuleNotFoundError" and looks in the wrong place.
 
-    Haeufigste Ursache in unprivilegierten Containern: der Prozess laeuft unter
-    einer UID, die weder in site-packages schreiben noch die vorhandenen
-    Paketdateien lesen darf (Rechte 0700 bzw. verschobene UIDs bei
-    LXC-Bind-Mounts).
+    Most common cause in unprivileged containers: the process runs under a UID
+    that can neither write to site-packages nor read the existing package files
+    (permissions 0700 resp. shifted UIDs with LXC bind mounts).
     """
     import getpass
     import os
@@ -237,10 +236,10 @@ def _explain_environment(missing: list[str]) -> None:
     try:
         who = f"{getpass.getuser()} (uid={os.getuid()}, gid={os.getgid()})"
     except Exception:
-        who = "unbekannt"
+        who = "unknown"
 
     print("[bootstrap] ---------------------------------------------------")
-    print(f"[bootstrap] Prozess laeuft als: {who}")
+    print(f"[bootstrap] Process runs as: {who}")
     print(f"[bootstrap] Python:             {sys.executable}")
     try:
         targets = site.getsitepackages()
@@ -248,20 +247,20 @@ def _explain_environment(missing: list[str]) -> None:
         targets = []
     for d in targets[:3]:
         if not os.path.isdir(d):
-            print(f"[bootstrap]   {d}  ->  existiert nicht")
+            print(f"[bootstrap]   {d}  ->  does not exist")
             continue
-        state = "beschreibbar" if os.access(d, os.W_OK) else "NUR LESEN"
-        readable = "lesbar" if os.access(d, os.R_OK | os.X_OK) else "NICHT LESBAR"
+        state = "writable" if os.access(d, os.W_OK) else "READ ONLY"
+        readable = "readable" if os.access(d, os.R_OK | os.X_OK) else "NOT READABLE"
         print(f"[bootstrap]   {d}  ->  {state}, {readable}")
     us = _user_site()
     if us:
-        print(f"[bootstrap]   persoenlich: {us} "
-              f"({'vorhanden' if os.path.isdir(us) else 'fehlt'})")
-    print("[bootstrap] Moegliche Abhilfe:")
-    print("[bootstrap]   * Container als root starten ODER dem Benutzer Lese-")
-    print("[bootstrap]     rechte geben:  chmod -R a+rX <site-packages> /app")
-    print("[bootstrap]   * unprivilegiertes LXC: Bind-Mounts werden UID-verschoben -")
-    print("[bootstrap]     Dateien muessen fuer 'andere' les-/betretbar sein (a+rX)")
-    print("[bootstrap]   * Pakete vorab installieren:")
+        print(f"[bootstrap]   personal: {us} "
+              f"({'present' if os.path.isdir(us) else 'missing'})")
+    print("[bootstrap] Possible remedy:")
+    print("[bootstrap]   * start the container as root OR give the user read")
+    print("[bootstrap]     permissions:  chmod -R a+rX <site-packages> /app")
+    print("[bootstrap]   * unprivileged LXC: bind mounts are UID-shifted -")
+    print("[bootstrap]     files must be readable/traversable for 'others' (a+rX)")
+    print("[bootstrap]   * install packages in advance:")
     print(f"[bootstrap]     {sys.executable} -m pip install --user -r src/backend/data/requirements.txt")
     print("[bootstrap] ---------------------------------------------------")

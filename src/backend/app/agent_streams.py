@@ -1,25 +1,24 @@
 """
 agent_streams.py (Core)
 =======================
-TCP-Verbindungen "durch" einen Agenten - als Baustein fuer Module.
+TCP connections "through" an agent - as a building block for modules.
 
-Der Agent kann auf Zuruf eine TCP-Verbindung in SEIN Netz aufbauen und die
-Bytes ueber die ohnehin bestehende Agenten-Verbindung durchreichen
-(Ereignisse vpn-open / vpn-data / vpn-close, siehe agent/main.py
-"VPN-GEGENSTELLE"). Auf dem Agenten wird dafuer nichts installiert: kein
-WireGuard, kein Treiber, keine Adminrechte. Hostnamen loest der AGENT auf -
-interne Namen (nas.local, intranet) funktionieren also.
+On request the agent can open a TCP connection into ITS network and pass the
+bytes through over the existing agent connection (events vpn-open / vpn-data /
+vpn-close, see agent/main.py "VPN PEER"). Nothing is installed on the agent for
+this: no WireGuard, no driver, no admin rights. Host names are resolved by the
+AGENT - so internal names (nas.local, intranet) work.
 
-Nutzung (z.B. Server-Browser ueber das Netz eines Agenten):
+Usage (e.g. server browser over an agent's network):
 
     s = await agent_streams.open_stream(client_id, "192.168.1.10", 443)
     await s.write(b"...")
-    data = await s.read()          # b"" = Verbindung zu
+    data = await s.read()          # b"" = connection closed
     await s.close()
 
-Die Portweiterleitung (Modul "network") nutzt dieselben Ereignisse mit eigener
-Verwaltung; sockets.py reicht jedes Ereignis an beide weiter - jede Seite
-kennt nur ihre eigenen Stream-IDs.
+Port forwarding (module "network") uses the same events with its own
+management; sockets.py passes each event to both - each side knows only its own
+stream IDs.
 """
 from __future__ import annotations
 
@@ -64,7 +63,7 @@ class AgentStream:
                 raise AgentStreamError("agent is offline")
 
     async def read(self) -> bytes:
-        """Naechstes Stueck Daten; b'' = Verbindung beendet."""
+        """Next chunk of data; b'' = connection ended."""
         if self.closed and self._queue.empty():
             return b""
         return await self._queue.get()
@@ -90,7 +89,7 @@ class AgentStream:
 
 
 async def open_stream(client_id: str, host: str, port: int, tag: str = "", timeout: float = OPEN_TIMEOUT) -> AgentStream:
-    """Verbindung host:port aus dem Netz des Agenten aufbauen. Wirft AgentStreamError."""
+    """Open a connection to host:port from the agent's network. Raises AgentStreamError."""
     from app.sockets import send_to_agent
     s = AgentStream(client_id, host, port, tag or "x")
     _streams[s.id] = s
@@ -110,7 +109,7 @@ async def open_stream(client_id: str, host: str, port: int, tag: str = "", timeo
     return s
 
 
-# ------------------------------------------------------------------ Ereignisse vom Agenten
+# ------------------------------------------------------------------ events from the agent
 def on_open_result(payload: dict) -> None:
     s = _streams.get(payload.get("stream", ""))
     if s and not s._opened.done():
@@ -137,7 +136,7 @@ def on_close(payload: dict) -> None:
 
 
 def close_all_for(client_id: str) -> None:
-    """Agent getrennt: alle seine Streams beenden."""
+    """Agent disconnected: end all of its streams."""
     for s in [x for x in _streams.values() if x.client_id == client_id]:
         s._mark_closed()
 

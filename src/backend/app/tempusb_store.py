@@ -1,18 +1,19 @@
 """
-tempusb_store.py (Core) - Digitaler USB-Stick
+tempusb_store.py (Core) - digital USB stick
 ---------------------------------------------
-Ein "USB-Bereich" ist ein Ordner unter /storage/temp-usb/<id>, der genau EINEM
-Besitzer gehoert: einem Benutzer ODER einer Gruppe. Dateien darin lassen sich an
-ein Geraet "anhaengen": Der Agent spiegelt sie in einen lokalen Ordner
-(Ordner-Sync, Standard C:\\bytera bzw. /mnt/bytera) oder - wenn ein Treiber
-hinterlegt ist - als virtuellen USB-Stick. Was der Benutzer am Geraet in den
-Ordner legt, kommt zurueck in den Bereich und ist im Relay sichtbar.
+A "USB area" is a folder under /storage/temp-usb/<id> that belongs to exactly
+ONE owner: a user OR a group. Files in it can be "attached" to a device: the
+agent mirrors them into a local folder (folder sync, default C:\\bytera or
+/mnt/bytera) or - if a driver is installed - as a virtual USB stick. Whatever
+the user puts into the folder on the device comes back into the area and is
+visible in the relay.
 
-Die Verwaltung (wer sieht welchen Bereich) laeuft ueber Besitzer + Recht
-manage_temp_usb; die eigentliche Uebertragung ueber die Socket-Ereignisse
-temp-usb-* (siehe router/tempusb_routes.py und agent/main.py).
+Management (who sees which area) runs via owner + the manage_temp_usb
+permission; the actual transfer via the socket events temp-usb-* (see
+router/tempusb_routes.py and agent/main.py).
 
-Alles liegt als JSON neben den Ordnern (_areas.json). Idempotent, threadsicher.
+Everything is stored as JSON next to the folders (_areas.json). Idempotent,
+thread-safe.
 """
 from __future__ import annotations
 
@@ -28,7 +29,7 @@ from app.paths import TEMP_USB_DIR
 _INDEX = TEMP_USB_DIR / "_areas.json"
 _lock = threading.RLock()
 
-# Standard-Zielordner am Geraet (einstellbar je Anhang; das ist die Vorgabe).
+# Default target folder on the device (configurable per attachment; this is the default).
 DEFAULT_MOUNT = {"windows": r"C:\bytera", "posix": "/mnt/bytera"}
 
 
@@ -68,7 +69,7 @@ def all_areas() -> list[dict]:
 
 
 def visible(user: dict, group_ids: set[str], can_manage_all: bool) -> list[dict]:
-    """Bereiche, die der Benutzer sehen darf: eigene, die seiner Gruppen, oder alle (Admin/Recht)."""
+    """Areas the user may see: their own, those of their groups, or all (admin/permission)."""
     out = []
     for a in all_areas():
         if (can_manage_all
@@ -87,11 +88,11 @@ def may_access(area: dict, user: dict, group_ids: set[str], can_manage_all: bool
 
 def create(label: str, owner_type: str, owner_id: str, created_by: str) -> dict:
     if owner_type not in ("user", "group"):
-        raise ValueError("owner_type muss user oder group sein")
+        raise ValueError("owner_type must be user or group")
     area_id = "u" + secrets.token_hex(8)
     with _lock:
         d = _load()
-        d[area_id] = {"label": (label or "USB-Stick").strip()[:80], "owner_type": owner_type,
+        d[area_id] = {"label": (label or "USB stick").strip()[:80], "owner_type": owner_type,
                       "owner_id": owner_id, "created": int(time.time()), "created_by": created_by,
                       "attached": {}}
         _save(d)
@@ -116,7 +117,7 @@ def delete(area_id: str) -> None:
 
 
 def set_attached(area_id: str, client_id: str, info: dict | None) -> None:
-    """info=None -> geloest. Sonst {mode, path, ts}."""
+    """info=None -> detached. Otherwise {mode, path, ts}."""
     with _lock:
         d = _load()
         a = d.get(area_id)
@@ -130,19 +131,19 @@ def set_attached(area_id: str, client_id: str, info: dict | None) -> None:
         _save(d)
 
 
-# ------------------------------------------------------------------ Dateien im Bereich
+# ------------------------------------------------------------------ files in the area
 def _safe(name: str) -> str:
     name = Path(str(name or "").replace("\\", "/")).name.strip()
     bad = '<>:"/\\|?*'
     name = "".join("_" if (ch in bad or ord(ch) < 32) else ch for ch in name)
-    return name[:180] or "datei"
+    return name[:180] or "file"
 
 
 def _resolve(area_id: str, rel: str) -> Path:
     base = area_dir(area_id).resolve()
     p = (base / rel.replace("\\", "/").strip("/")).resolve() if rel else base
     if base != p and base not in p.parents:
-        raise ValueError("Pfad ausserhalb des Bereichs")
+        raise ValueError("path outside the area")
     return p
 
 

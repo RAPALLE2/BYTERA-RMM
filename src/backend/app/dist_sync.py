@@ -1,8 +1,8 @@
-# dist_sync.py (Core) - frueher Modul "dist" - vorhandene Agent-/Client-Pakete nach /dist spiegeln
+# dist_sync.py (Core) - formerly module "dist" - mirror existing agent/client packages into /dist
 # --------------------------------------------------------------------------
-# Mitgelieferte Client-Pakete (src/client/release, Teil des Codes) werden nach
-# storage/dist/client gespiegelt (nur wenn neuer/fehlend), damit /dist/client
-# sie zeigt. Eigene Builds und Uploads landen ohnehin direkt dort.
+# Bundled client packages (src/client/release, part of the code) are mirrored
+# to storage/dist/client (only when newer/missing), so that /dist/client shows
+# them. Own builds and uploads end up there directly anyway.
 from __future__ import annotations
 
 import shutil

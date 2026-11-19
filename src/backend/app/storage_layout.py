@@ -1,31 +1,32 @@
 """
 storage_layout.py (Core)
 ------------------------
-EIN Ablageort fuer alle Dateien: src/backend/storage (paths.STORAGE_DIR).
+ONE location for all files: src/backend/storage (paths.STORAGE_DIR).
 
-Beim Start (vor dem Laden der Module) wird alles, was noch an alten Orten
-liegt, nach storage/ verschoben:
+At startup (before the modules are loaded) everything still in old locations is
+moved to storage/:
 
-    alt                                   neu
+    old                                   new
     backend/media/recordings              storage/recordings
     backend/media/tickets                 storage/tickets
     backend/media/audio                   storage/audio
-    backend/temp/dist                     storage/dist/agent      (gebaute Agent-Installer)
-    backend/data/dist/<ordner>            storage/dist/<ordner>
-    backend/dist/<ordner>                 storage/dist/<ordner>
+    backend/temp/dist                     storage/dist/agent      (built agent installers)
+    backend/data/dist/<folder>            storage/dist/<folder>
+    backend/dist/<folder>                 storage/dist/<folder>
     storage/agent                         storage/dist/agent
-    storage/client                        storage/dist/client     (Uploads + eigene Builds)
+    storage/client                        storage/dist/client     (uploads + own builds)
     storage/dist/enrollment               storage/dist/enroll
     storage/deployment                    storage/web/deploy
     storage/web/deployment                storage/web/deploy
 
-Regeln:
-  * Es wird VERSCHOBEN, nicht kopiert, und nie etwas ueberschrieben: Liegt am
-    Ziel schon eine gleichnamige Datei, bekommt die alte den Zusatz " (alt N)".
-  * Leere alte Ordner werden entfernt. Was danach noch an alten Orten liegt
-    (z.B. unbekannte Dateien), wird NICHT angefasst, sondern in
-    logs/backend/storage-cleanup.txt aufgelistet.
-  * Laeuft bei jedem Start, ist aber nach dem ersten Mal ein No-op.
+Rules:
+  * Files are MOVED, not copied, and nothing is ever overwritten: if a file of
+    the same name already exists at the target, the old one gets the suffix
+    " (old N)".
+  * Empty old folders are removed. Anything still left in old locations
+    afterwards (e.g. unknown files) is NOT touched but listed in
+    logs/backend/storage-cleanup.txt.
+  * Runs on every startup, but is a no-op after the first time.
 """
 from __future__ import annotations
 
@@ -41,7 +42,7 @@ from app.paths import (
 MEDIA = BACKEND_DIR / "media"
 TEMP = BACKEND_DIR / "temp"
 
-# (alt, neu, "dir" = Inhalt des Ordners verschieben | "dist" = jeder Unterordner -> dist/<name>)
+# (old, new, "dir" = move the folder's contents | "dist" = each subfolder -> dist/<name>)
 MOVES: list[tuple[Path, Path, str]] = [
     (MEDIA / "recordings", RECORDINGS_DIR, "dir"),
     (MEDIA / "tickets", TICKET_FILES_DIR, "dir"),
@@ -56,7 +57,7 @@ MOVES: list[tuple[Path, Path, str]] = [
     (WEB_DIR / "deployment", DEPLOYMENT_DIR, "dir"),
 ]
 
-# Alte Orte, die es nach dem Umbau nicht mehr geben soll (fuer die Aufraeum-Liste).
+# Old locations that should no longer exist after the migration (for the cleanup list).
 LEGACY_DIRS: list[Path] = [
     MEDIA, TEMP, DATA_DIR / "dist", BACKEND_DIR / "dist", SRC_DIR / "files",
     STORAGE_DIR / "agent", STORAGE_DIR / "client", STORAGE_DIR / "deployment",
@@ -71,14 +72,14 @@ def _free_name(target: Path) -> Path:
         return target
     n = 1
     while True:
-        cand = target.with_name(f"{target.stem} (alt {n}){target.suffix}")
+        cand = target.with_name(f"{target.stem} (old {n}){target.suffix}")
         if not cand.exists():
             return cand
         n += 1
 
 
 def _merge(src: Path, dst: Path) -> int:
-    """Inhalt von src nach dst verschieben (rekursiv zusammenfuehren). -> Anzahl bewegter Eintraege."""
+    """Move contents of src to dst (merge recursively). -> number of entries moved."""
     moved = 0
     dst.mkdir(parents=True, exist_ok=True)
     for item in list(src.iterdir()):
@@ -91,12 +92,12 @@ def _merge(src: Path, dst: Path) -> int:
             shutil.move(str(item), str(_free_name(target)))
             moved += 1
         except OSError as e:
-            print(f"[storage] konnte {item} nicht verschieben: {e}")
+            print(f"[storage] could not move {item}: {e}")
     return moved
 
 
 def _rm_empty(path: Path) -> None:
-    """Leere Ordner (auch verschachtelt leere) entfernen."""
+    """Remove empty folders (including nested empty ones)."""
     if not path.is_dir():
         return
     for sub in list(path.iterdir()):
@@ -117,7 +118,7 @@ def _same(a: Path, b: Path) -> bool:
 
 
 def migrate() -> dict:
-    """Alte Orte nach storage/ verschieben. Gibt {alt: anzahl} zurueck."""
+    """Move old locations to storage/. Returns {old: count}."""
     done: dict[str, int] = {}
     STORAGE_DIR.mkdir(parents=True, exist_ok=True)
     for src, dst, mode in MOVES:
@@ -130,7 +131,7 @@ def migrate() -> dict:
                     name = "enroll" if sub.name == "enrollment" else sub.name
                     if sub.is_dir():
                         n += _merge(sub, dst / name)
-                    else:                                  # lose Datei -> dist/agent
+                    else:                                  # loose file -> dist/agent
                         shutil.move(str(sub), str(_free_name(DIST_AGENT_DIR / sub.name)))
                         n += 1
             else:
@@ -139,18 +140,18 @@ def migrate() -> dict:
             if n:
                 done[str(src.relative_to(SRC_DIR.parent))] = n
         except Exception as e:
-            print(f"[storage] Umzug {src} -> {dst} fehlgeschlagen: {e}")
+            print(f"[storage] move {src} -> {dst} failed: {e}")
     for d in LEGACY_DIRS:
         _rm_empty(d)
     if done:
-        print("[storage] Dateien an den neuen Ort (storage/) verschoben: "
+        print("[storage] files moved to the new location (storage/): "
               + ", ".join(f"{k} ({v})" for k, v in done.items()))
     write_report()
     return done
 
 
 def leftovers() -> list[dict]:
-    """Alte Ordner, die noch existieren (nach dem Umzug nicht leer)."""
+    """Old folders that still exist (not empty after the move)."""
     out = []
     for d in LEGACY_DIRS:
         if d.exists():
@@ -167,10 +168,10 @@ def write_report() -> None:
             if REPORT.exists():
                 REPORT.unlink()
             return
-        lines = ["Alte Ablageorte, die noch Dateien enthalten (wurden NICHT automatisch verschoben).",
-                 "Inhalt pruefen, ggf. von Hand nach src/backend/storage/ legen, dann den Ordner loeschen:", ""]
-        lines += [f"  {r['path']}   ({r['files']} Datei(en))" for r in rest]
+        lines = ["Old storage locations that still contain files (were NOT moved automatically).",
+                 "Check the contents, move them to src/backend/storage/ by hand if needed, then delete the folder:", ""]
+        lines += [f"  {r['path']}   ({r['files']} file(s))" for r in rest]
         REPORT.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        print(f"[storage] Achtung: {len(rest)} alte(r) Ordner mit unbekanntem Inhalt - siehe {REPORT}")
+        print(f"[storage] Warning: {len(rest)} old folder(s) with unknown content - see {REPORT}")
     except OSError:
         pass

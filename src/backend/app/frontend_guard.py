@@ -1,30 +1,30 @@
 """
-frontend_guard.py - Schutz gegen "does not provide an export named ..."
+frontend_guard.py - protection against "does not provide an export named ..."
 =======================================================================
 
-Problem: Das Dashboard besteht aus vielen ES-Modulen. Importiert EINE Datei
-eine Funktion, die es in der Zieldatei (noch/nicht mehr) gibt, verweigert der
-Browser den GESAMTEN Modulbaum - die Seite bleibt leer, nicht einmal die
-Anmeldung funktioniert, und damit auch kein Update/Hotfix ueber die Oberflaeche.
-Typische Ausloeser: Dateien aus verschiedenen Staenden gemischt (Hotfix nur
-teilweise eingespielt), Browser-/Proxy-Cache mit alten Dateien.
+Problem: the dashboard consists of many ES modules. If ONE file imports a
+function that the target file does (not yet / no longer) have, the browser
+refuses the ENTIRE module tree - the page stays blank, not even login works,
+and therefore no update/hotfix via the UI either. Typical triggers: files from
+different revisions mixed (hotfix only partly applied), browser/proxy cache
+with old files.
 
-Loesung (zusammen mit dem sicheren Lader js/boot.js im Browser):
-  * Der Server liest alle Frontend-Module (src/frontend/js/** und die
-    Frontend-Ordner der Module) und gleicht ab, welche Namen importiert, aber
-    in der Zieldatei nicht exportiert werden.
-  * Beim AUSLIEFERN einer solchen Zieldatei wird fuer jeden fehlenden Namen ein
-    Platzhalter angehaengt. Der Modulbaum laesst sich dadurch wieder laden;
-    nur wer die fehlende Funktion wirklich aufruft, bekommt eine Meldung
-    (window.__rmmMissingExport) statt einer leeren Seite.
-      - Gibt es den Namen in der Datei schon auf oberster Ebene (nur das
-        "export" fehlt), wird er einfach mit exportiert.
-      - Sonst ein Platzhalter unter eigenem, kollisionsfreiem Namen.
-  * Die Dateien auf der Platte werden NICHT veraendert.
-  * GET /api/frontend/health (ohne Anmeldung, nur Dateinamen) meldet, was fehlt.
+Solution (together with the safe loader js/boot.js in the browser):
+  * The server reads all frontend modules (src/frontend/js/** and the frontend
+    folders of the modules) and compares which names are imported but not
+    exported in the target file.
+  * When SERVING such a target file, a placeholder is appended for each missing
+    name. The module tree can be loaded again; only whoever actually calls the
+    missing function gets a message (window.__rmmMissingExport) instead of a
+    blank page.
+      - If the name already exists in the file at top level (only the "export"
+        is missing), it is simply exported along.
+      - Otherwise a placeholder under its own collision-free name.
+  * The files on disk are NOT modified.
+  * GET /api/frontend/health (no login, file names only) reports what is missing.
 
-Die Pruefung ist bewusst einfach (regulaere Ausdruecke auf import/export am
-Zeilenanfang) und wird bei Dateiaenderungen automatisch neu berechnet.
+The check is deliberately simple (regular expressions on import/export at the
+start of the line) and is recomputed automatically when files change.
 """
 
 import json
@@ -41,9 +41,9 @@ _cache: dict = {"sig": None, "patches": {}, "missing": [], "files": [], "at": 0,
 _RECHECK_SEC = 2.0
 _logged: set = set()
 
-# ---------------------------------------------------------------- Dateien
+# ---------------------------------------------------------------- files
 def _iter_files():
-    """(URL, Pfad) aller ausgelieferten JS-Module."""
+    """(URL, path) of all served JS modules."""
     js = FRONTEND_DIR / "js"
     if js.is_dir():
         for p in js.rglob("*.js"):
@@ -78,11 +78,11 @@ def _resolve(spec: str, from_url: str) -> str | None:
                 out.append(part)
         url = "/" + "/".join(out)
     else:
-        return None            # "bare" Bezeichner (npm) - gibt es hier nicht
+        return None            # "bare" specifier (npm) - does not exist here
     return url
 
 
-# ---------------------------------------------------------------- Parsen
+# ---------------------------------------------------------------- parsing
 _NAME = r"[A-Za-z_$][\w$]*"
 _RE_EXPORT_DECL = re.compile(
     rf"^export\s+(?:default\s+)?(?:async\s+)?(?:function\s*\*?|class|const|let|var)\s+({_NAME})", re.M)
@@ -92,8 +92,8 @@ _RE_TOP_DECL = r"^(?:async\s+)?(?:function\s*\*?|class|const|let|var)\s+{name}\b
 
 
 def _statements(src: str) -> list[str]:
-    """import-/export-Anweisungen am Zeilenanfang (auch mehrzeilig), ausserhalb
-    von Block-Kommentaren."""
+    """import/export statements at the start of a line (also multi-line),
+    outside of block comments."""
     out, buf, in_comment = [], None, False
     for line in src.splitlines():
         s = line.strip()
@@ -131,7 +131,7 @@ def _complete(stmt: str) -> bool:
 
 
 def _names_in_braces(txt: str, take_alias: bool) -> list[str]:
-    """{ a, b as c, default as d } -> importiert: [a, b, default] / exportiert: [a, c, d]"""
+    """{ a, b as c, default as d } -> imported: [a, b, default] / exported: [a, c, d]"""
     out = []
     for part in txt.split(","):
         part = re.sub(r"//[^\n]*|/\*.*?\*/", "", part, flags=re.S).strip()
@@ -148,7 +148,7 @@ def _names_in_braces(txt: str, take_alias: bool) -> list[str]:
 def _parse(src: str, url: str) -> dict:
     exports: set[str] = set()
     star_from: list[str] = []
-    imports: list[tuple[str, list[str]]] = []      # (Ziel-URL, Namen)
+    imports: list[tuple[str, list[str]]] = []      # (target URL, names)
     for m in _RE_EXPORT_DECL.finditer(src):
         exports.add(m.group(1))
     if _RE_EXPORT_DEFAULT.search(src):
@@ -179,9 +179,9 @@ def _parse(src: str, url: str) -> dict:
         bm = re.search(r"\{([^}]*)\}", head)
         if bm:
             names += _names_in_braces(bm.group(1), take_alias=False)
-        # Default-Import: "import X from" / "import X, { a } from" / "import X, * as ns from"
+        # default import: "import X from" / "import X, { a } from" / "import X, * as ns from"
         rest = re.sub(r"\{[^}]*\}", "", head)
-        rest = re.sub(r"\*\s*as\s+" + _NAME, "", rest)   # Namensraum-Import: kein Linkfehler
+        rest = re.sub(r"\*\s*as\s+" + _NAME, "", rest)   # namespace import: no link error
         rest = rest.replace(",", " ").strip()
         if re.fullmatch(_NAME, rest):
             names.append("default")
@@ -190,7 +190,7 @@ def _parse(src: str, url: str) -> dict:
     return {"exports": exports, "star_from": star_from, "imports": imports}
 
 
-# ---------------------------------------------------------------- Analyse
+# ---------------------------------------------------------------- analysis
 def _signature(files: list[tuple[str, Path]]) -> tuple:
     sig = []
     for url, p in files:
@@ -218,11 +218,11 @@ def _analyse() -> None:
         sources[url] = src
         try:
             parsed[url] = _parse(src, url)
-        except Exception as e:                       # nie am Pruefer scheitern
-            print(f"[frontend-guard] {url} nicht lesbar: {e}")
+        except Exception as e:                       # never fail at the checker
+            print(f"[frontend-guard] {url} not readable: {e}")
 
     def all_exports(url: str, seen=None) -> set[str] | None:
-        """Exporte inkl. "export * from"; None = unbekannt (nicht pruefbar)."""
+        """Exports incl. "export * from"; None = unknown (not checkable)."""
         seen = seen or set()
         if url in seen:
             return set()
@@ -238,11 +238,11 @@ def _analyse() -> None:
             out |= e - {"default"}
         return out
 
-    need: dict[str, dict[str, set[str]]] = {}        # Ziel -> Name -> {Importeure}
+    need: dict[str, dict[str, set[str]]] = {}        # target -> name -> {importers}
     for url, info in parsed.items():
         for target, names in info["imports"]:
             if target not in parsed:
-                continue                              # Datei fehlt ganz -> nicht reparierbar
+                continue                              # file missing entirely -> not repairable
             have = all_exports(target)
             if have is None:
                 continue
@@ -255,7 +255,7 @@ def _analyse() -> None:
     for target, names in sorted(need.items()):
         src = sources.get(target, "")
         lines = ["", "",
-                 "/* ---- BYTERA frontend_guard: fehlende Exporte (Platzhalter, Datei passt nicht zur Version) ---- */"]
+                 "/* ---- BYTERA frontend_guard: missing exports (placeholders, file does not match the version) ---- */"]
         for n in sorted(names):
             if n == "default":
                 lines.append(f"export default (function __rmm_missing_default(){{"
@@ -263,7 +263,7 @@ def _analyse() -> None:
                              f"return undefined;}});")
                 continue
             if re.search(_RE_TOP_DECL.format(name=re.escape(n)), src, re.M):
-                lines.append(f"export {{ {n} }};   // vorhanden, aber nicht exportiert")
+                lines.append(f"export {{ {n} }};   // present, but not exported")
                 continue
             local = f"__rmm_missing_{n}"
             lines.append(
@@ -277,9 +277,9 @@ def _analyse() -> None:
             key = (target, n)
             if key not in _logged:
                 _logged.add(key)
-                print(f"[frontend-guard] WARNUNG: {', '.join(sorted(importers))} importiert '{n}' aus "
-                      f"{target} - dort nicht exportiert. Platzhalter wird ausgeliefert "
-                      f"(Dateien aus verschiedenen Staenden? Update/Hotfix vollstaendig einspielen).")
+                print(f"[frontend-guard] WARNING: {', '.join(sorted(importers))} imports '{n}' from "
+                      f"{target} - not exported there. Placeholder is served "
+                      f"(files from different revisions? apply update/hotfix completely).")
     _cache.update(sig=sig, patches=patches, missing=missing,
                   files=sorted(u for u, _ in files), at=int(time.time()))
     _cache["paths"] = paths
@@ -294,14 +294,14 @@ def _ensure() -> None:
             return
         try:
             _analyse()
-        except Exception as e:                       # Schutz darf nie selbst stoeren
-            print(f"[frontend-guard] Pruefung fehlgeschlagen: {e}")
+        except Exception as e:                       # the guard must never cause trouble itself
+            print(f"[frontend-guard] check failed: {e}")
         _cache["checked"] = time.monotonic()
 
 
-# ---------------------------------------------------------------- Oeffentlich
+# ---------------------------------------------------------------- public
 def patch_for(url: str) -> str:
-    """Anhang (Platzhalter-Exporte) fuer diese Datei oder ''."""
+    """Appendix (placeholder exports) for this file or ''."""
     try:
         _ensure()
         return _cache["patches"].get(url, "")
@@ -320,12 +320,12 @@ def health() -> dict:
 
 
 def check_on_startup() -> None:
-    """Beim Start einmal pruefen und Warnungen ins Log schreiben."""
+    """Check once at startup and write warnings to the log."""
     try:
         _ensure()
         n = len(_cache["missing"])
         if n:
-            print(f"[frontend-guard] {n} fehlende Export(e) im Frontend - Platzhalter aktiv, "
-                  f"Details: GET /api/frontend/health")
+            print(f"[frontend-guard] {n} missing export(s) in the frontend - placeholders active, "
+                  f"details: GET /api/frontend/health")
     except Exception as e:
-        print(f"[frontend-guard] Start-Pruefung fehlgeschlagen: {e}")
+        print(f"[frontend-guard] startup check failed: {e}")

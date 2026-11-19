@@ -2,29 +2,29 @@
 """
 src/backend/app/i18n_check.py
 -------------------
-Zeigt, wo im Frontend noch deutscher Text fest im Code steht, statt über
-t() zu laufen - und ob DE und EN dieselben Schlüssel haben.
+Shows where the frontend still has German text hard-coded in the source instead
+of going through t() - and whether DE and EN have the same keys.
 
-    python3 src/backend/app/i18n_check.py            # Zusammenfassung
-    python3 src/backend/app/i18n_check.py --detail   # mit den konkreten Fundstellen
-    python3 src/backend/app/i18n_check.py datei.js   # nur eine Datei
+    python3 src/backend/app/i18n_check.py            # summary
+    python3 src/backend/app/i18n_check.py --detail   # with the concrete occurrences
+    python3 src/backend/app/i18n_check.py file.js    # only one file
 
-Die Erkennung ist eine Heuristik (Umlaute + typisch deutsche Wörter). Sie
-findet nicht jeden Fall, aber sie macht den Fortschritt messbar - ohne so
-eine Zahl weiß man bei 700 Strings nie, wie weit man ist.
+Detection is a heuristic (umlauts + typically German words). It does not find
+every case, but it makes progress measurable - without such a number you never
+know how far along you are with 700 strings.
 
-WICHTIG (2026-07): Frueher wurden mehrzeilige Template-Literale komplett
-uebersprungen. Genau dort steckt aber der meiste Oberflaechentext (die
-innerHTML-Bloecke der Apps). Die gemeldete Zahl war deshalb um ein Vielfaches
-zu niedrig - 137 statt real ueber 500. Jetzt werden Template-Literale
-mitgelesen; t()-Aufrufe und ${...}-Ausdruecke darin werden vorher entfernt,
-damit bereits uebersetzte Stellen keine Fehlalarme erzeugen.
+IMPORTANT (2026-07): multi-line template literals used to be skipped entirely.
+But that is exactly where most of the UI text sits (the innerHTML blocks of the
+apps). The reported number was therefore several times too low - 137 instead of
+really over 500. Template literals are now read too; t() calls and ${...}
+expressions within them are removed first, so already translated spots do not
+cause false alarms.
 """
 import re
 import sys
 from pathlib import Path
 
-# Datei liegt in src/backend/app/ -> src/ = zwei Ebenen hoeher.
+# This file lives in src/backend/app/ -> src/ = two levels up.
 ROOT = Path(__file__).resolve().parents[2] / "frontend" / "js"
 
 DE_HINT = re.compile(
@@ -32,25 +32,25 @@ DE_HINT = re.compile(
     r"|bitte|Bitte|Datei|Fehler|Einstellungen|Speichern|Abbrechen|Löschen"
     r"|erforderlich|verfügbar|ausgewählt|Benutzer|Aktualisierung|Verbindung)\b")
 
-# Zeilen, die ohnehin kein UI-Text sind.
+# Lines that are not UI text anyway.
 SKIP_LINE = re.compile(r"^\s*(//|\*|/\*)")
 
 
-# ${...} und t("...") innerhalb von Template-Literalen: das ist eingesetzter
-# Code bzw. bereits uebersetzter Text und darf nicht als Fundstelle zaehlen.
+# ${...} and t("...") inside template literals: that is inserted code resp.
+# already translated text and must not count as an occurrence.
 SUBST = re.compile(r"\$\{[^{}]*\}")
 T_CALL = re.compile(r"""t\(\s*["'][^"']*["'][^)]*\)""")
 
 
-# Interne Schluessel, die absichtlich deutscher Klartext sind und erst bei der
-# Anzeige durch eine Nachschlagefunktion uebersetzt werden - z.B.
-# `group: "Identität"` im metriccatalog, das groupLabel() aufloest. Solche
-# Zeilen sind KEINE Fundstellen, sonst kommt der Zaehler nie auf 0 und man
-# gewoehnt sich an einen Rest, in dem echte Funde untergehen.
-# Auch in Objektliteralen, die in einer Zeile beginnen:
+# Internal keys that are deliberately German plain text and only get translated
+# at display time by a lookup function - e.g. `group: "Identität"` in the metric
+# catalog, which groupLabel() resolves. Such lines are NOT occurrences,
+# otherwise the counter never reaches 0 and one gets used to a remainder in
+# which real findings get lost.
+# Also in object literals that start on one line:
 #   { id: "c.ipAddr", group: "Identität", ... }
-# Deshalb ein optionales "{ " am Anfang und die Erkennung von `group:`
-# irgendwo in der Zeile.
+# Hence an optional "{ " at the start and detection of `group:` anywhere in the
+# line.
 INTERNAL_KEY = re.compile(
     r'^\s*\{?\s*(?:group|id|scope)\s*:\s*["\']'
     r'|[,{]\s*(?:group|scope)\s*:\s*["\']'
@@ -59,24 +59,24 @@ INTERNAL_KEY = re.compile(
 
 def strings_in(src: str):
     """
-    Alle String-Literale: einfache Anfuehrungszeichen, doppelte UND
-    Template-Literale (auch mehrzeilige). Template-Literale werden Zeile fuer
-    Zeile geprueft, nachdem ${...} und t(...) herausgenommen wurden.
+    All string literals: single quotes, double quotes AND template literals
+    (also multi-line). Template literals are checked line by line, after ${...}
+    and t(...) have been removed.
     """
     for m in re.finditer(r'"([^"\n]{4,200})"|\'([^\'\n]{4,200})\'', src):
         yield m.start(), (m.group(1) or m.group(2) or "")
 
-    # Template-Literale einzeln, damit die Zeilennummer stimmt.
+    # Template literals one by one, so the line number is correct.
     for m in re.finditer(r"`([^`\\]*(?:\\.[^`\\]*)*)`", src, re.S):
         body = m.group(1)
         offset = m.start(1)
         pos = 0
-        in_comment = False      # Zustand ueber Zeilengrenzen hinweg
+        in_comment = False      # state across line boundaries
         for raw in body.split("\n"):
-            # Mehrzeilige HTML-Kommentare: Die Mittelzeilen enthalten weder
-            # "<!--" noch "-->", eine reine Zeilenpruefung reicht also nicht.
-            # Ohne diese Zustandsverfolgung blieben Erklaerkommentare (z.B. in
-            # audioplayer.js) dauerhaft als Fundstelle stehen.
+            # Multi-line HTML comments: the middle lines contain neither "<!--"
+            # nor "-->", so a pure per-line check is not enough. Without this
+            # state tracking, explanatory comments (e.g. in audioplayer.js) would
+            # stay as occurrences permanently.
             if in_comment:
                 if "-->" in raw:
                     in_comment = False
@@ -88,13 +88,13 @@ def strings_in(src: str):
                 in_comment = True
                 raw = raw.split("<!--", 1)[0]
             cleaned = T_CALL.sub("", SUBST.sub("", raw))
-            # HTML-Kommentare sind kein Oberflaechentext - sie standen aber
-            # als Fundstelle in der Liste und liessen den Zaehler nie auf 0
-            # gehen (z.B. der Erklaerkommentar in tickets.js).
+            # HTML comments are not UI text - but they appeared as occurrences
+            # in the list and kept the counter from ever reaching 0 (e.g. the
+            # explanatory comment in tickets.js).
             cleaned = re.sub(r"<!--.*?-->", " ", cleaned, flags=re.S)
             if "<!--" in cleaned or "-->" in cleaned:
-                continue        # mehrzeiliger Kommentar
-            # HTML-Attribute und Tags weglassen, es geht um sichtbaren Text.
+                continue        # multi-line comment
+            # Drop HTML attributes and tags, this is about visible text.
             cleaned = re.sub(r"<[^>]*>", " ", cleaned)
             cleaned = cleaned.strip()
             if len(cleaned) >= 4:
@@ -108,7 +108,7 @@ import json as _json
 def _lang_dirs():
     base = ROOT.parent  # .../src
     dirs = [ROOT.parent.parent / "backend" / "data" / "lang"] if False else []
-    # ROOT = .../frontend/js ; wir brauchen src-Wurzel
+    # ROOT = .../frontend/js ; we need the src root
     src_root = ROOT.parents[1]  # .../src
     out = [src_root / "backend" / "data" / "lang"]
     for area in ("backend", "frontend", "node"):
@@ -122,8 +122,8 @@ def _lang_dirs():
 
 
 def _keys_for(short_lang):
-    """Alle Schluessel einer Sprache (de/en) aus allen lang-Ordnern (zusammengefuehrt)."""
-    # Dateiname beginnt mit dem Kurzcode: de_* / en_*
+    """All keys of a language (de/en) from all lang folders (merged)."""
+    # File name starts with the short code: de_* / en_*
     keys = set()
     for d in _lang_dirs():
         for f in d.glob(f"{short_lang}_*.json"):
@@ -140,24 +140,23 @@ def check_keys() -> None:
     en = _keys_for("en")
     only_de = sorted(de - en)
     only_en = sorted(en - de)
-    print(f"Schlüssel: de={len(de)} en={len(en)}")
-    print(f"  nur in DE: {only_de or 'keine'}")
-    print(f"  nur in EN: {only_en or 'keine'}")
+    print(f"Keys: de={len(de)} en={len(en)}")
+    print(f"  only in DE: {only_de or 'none'}")
+    print(f"  only in EN: {only_en or 'none'}")
 
 
-# Aufrufe von t("…") bzw. tr("…"). Das (?<![\w.]) ist wichtig: ohne die
-# Absicherung matchte der Ausdruck auch classList.toggle("active") und meldete
-# haufenweise CSS-Klassen als fehlende Schluessel.
+# Calls of t("…") resp. tr("…"). The (?<![\w.]) is important: without this
+# safeguard the expression also matched classList.toggle("active") and reported
+# loads of CSS classes as missing keys.
 T_KEY = re.compile(r'(?<![\w.])(?:t|tr)\(\s*"([a-zA-Z_][\w]*)"')
 
 
 def check_used_keys() -> None:
     """
-    Findet Schluessel, die im Code benutzt werden, aber im Sprachpaket fehlen.
-    Das ist die wichtigste Absicherung ueberhaupt: t() faellt bei einem
-    unbekannten Schluessel still auf den Schluesselnamen zurueck - in der
-    Oberflaeche steht dann z.B. "set_db_hint" statt eines Satzes, und niemand
-    merkt es, bis ein Benutzer es meldet.
+    Finds keys that are used in the code but missing from the language pack.
+    This is the single most important safeguard: on an unknown key t() silently
+    falls back to the key name - the UI then shows e.g. "set_db_hint" instead of
+    a sentence, and nobody notices until a user reports it.
     """
     keys = _keys_for("de")
     used: dict = {}
@@ -167,49 +166,49 @@ def check_used_keys() -> None:
         for mm in T_KEY.finditer(f.read_text(encoding="utf-8")):
             used.setdefault(mm.group(1), set()).add(f.relative_to(ROOT))
     missing = {k: v for k, v in used.items() if k not in keys}
-    print(f"Verwendete Schlüssel: {len(used)}   ohne Eintrag: {len(missing) or 'keine'}")
+    print(f"Keys used: {len(used)}   without entry: {len(missing) or 'none'}")
     for k, files in sorted(missing.items()):
         print(f"    {k} -> {', '.join(sorted(str(x) for x in files))}")
     unused = sorted(keys - set(used))
-    print(f"  Nie verwendet: {len(unused)}")
+    print(f"  Never used: {len(unused)}")
 
 
-# code="…" in src/agent/main.py: Der Agent schickt Uebersetzungsschluessel statt
-# fertiger Saetze ans Dashboard (siehe _notify_screen_error). Fehlt so ein
-# Schluessel im Sprachpaket, faellt t() still auf den Schluesselnamen zurueck -
-# im Dashboard stuende dann woertlich "agent_wayland". Das faellt sonst erst im
-# Betrieb auf, und zwar genau in der Fehlersituation, die man gerade untersucht.
-# Sowohl als Argument   code="agent_x"
-# als auch im Dict       "code": "agent_x"
-# Die Dict-Form wird beim direkten Aufbau der Nutzlast verwendet und waere
-# sonst durch die Pruefung gefallen.
+# code="…" in src/agent/main.py: the agent sends translation keys instead of
+# finished sentences to the dashboard (see _notify_screen_error). If such a key
+# is missing from the language pack, t() silently falls back to the key name -
+# the dashboard would then literally show "agent_wayland". Otherwise this only
+# shows up in operation, and exactly in the error situation one is investigating.
+# Both as an argument    code="agent_x"
+# and in the dict        "code": "agent_x"
+# The dict form is used when building the payload directly and would otherwise
+# have slipped through the check.
 AGENT_CODE = re.compile(r'(?:code=|"code"\s*:\s*)["\']([a-z0-9_]+)["\']')
 
 
 def check_agent_codes() -> None:
-    # ROOT zeigt auf src/frontend/js -> src/ ist zwei Ebenen hoeher.
+    # ROOT points to src/frontend/js -> src/ is two levels up.
     agent = ROOT.parents[1] / "agent" / "main.py"
     if not agent.is_file():
-        print("  src/agent/main.py nicht gefunden - übersprungen.")
+        print("  src/agent/main.py not found - skipped.")
         return
     src = (ROOT / "app" / "i18n.js").read_text(encoding="utf-8")
     m = re.search(r"\n  de: \{\n(.*?)\n  \},?\n", src, re.S)
     keys = set(re.findall(r"(?:^|,)\s*([a-zA-Z_][\w]*)\s*:", m.group(1), re.M)) if m else set()
     used = set(AGENT_CODE.findall(agent.read_text(encoding="utf-8")))
     missing = sorted(used - keys)
-    print(f"Agent-Codes: {len(used)}   ohne Eintrag: {len(missing) or 'keine'}")
+    print(f"Agent codes: {len(used)}   without entry: {len(missing) or 'none'}")
     for k in missing:
         print(f"    {k}")
 
 
 def check_backend_and_agent_dicts() -> None:
     """
-    Paritaet der beiden ZUSAETZLICHEN Woerterbuecher pruefen:
-      - backend/app/i18n.py  -> TEXTS (Server-Meldungen, Logs, Installer)
-      - src/agent/main.py   -> _AGENT_TEXTS (Dialoge am Geraet + Agent-Logs)
-    Beide sind vom Frontend-Sprachpaket getrennt, weil sie andere Empfaenger
-    haben (siehe Kopf von backend/app/i18n.py). Ohne diese Pruefung faellt eine
-    fehlende Uebersetzung erst auf dem Zielrechner auf.
+    Check parity of the two ADDITIONAL dictionaries:
+      - backend/app/i18n.py  -> TEXTS (server messages, logs, installer)
+      - src/agent/main.py   -> _AGENT_TEXTS (dialogs on the device + agent logs)
+    Both are separate from the frontend language pack because they have other
+    recipients (see the header of backend/app/i18n.py). Without this check a
+    missing translation only shows up on the target machine.
     """
     root = ROOT.parents[1]
     for label, path, var in (
@@ -217,45 +216,45 @@ def check_backend_and_agent_dicts() -> None:
         ("Agent", root / "agent" / "main.py", "_AGENT_TEXTS"),
     ):
         if not path.is_file():
-            print(f"  {label}: {path.name} nicht gefunden - übersprungen.")
+            print(f"  {label}: {path.name} not found - skipped.")
             continue
         src = path.read_text(encoding="utf-8")
         m = re.search(var + r"[^=]*= \{.*?\n\}\n", src, re.S)
         if not m:
-            print(f"  {label}: {var} nicht gefunden.")
+            print(f"  {label}: {var} not found.")
             continue
         ns: dict = {}
         try:
             exec(var + " = " + m.group(0).split("=", 1)[1], ns)  # noqa: S102
             table = ns[var]
         except Exception as exc:
-            print(f"  {label}: {var} nicht auswertbar ({exc}).")
+            print(f"  {label}: {var} not evaluable ({exc}).")
             continue
         de, en = set(table.get("de", {})), set(table.get("en", {}))
         only_de, only_en = sorted(de - en), sorted(en - de)
         print(f"{label}: de={len(de)} en={len(en)}")
-        print(f"    nur in DE: {', '.join(only_de) if only_de else 'keine'}")
-        print(f"    nur in EN: {', '.join(only_en) if only_en else 'keine'}")
+        print(f"    only in DE: {', '.join(only_de) if only_de else 'none'}")
+        print(f"    only in EN: {', '.join(only_en) if only_en else 'none'}")
 
 
 def main() -> None:
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     detail = "--detail" in sys.argv
 
-    print("=== Schlüssel-Parität ===")
+    print("=== Key parity ===")
     check_keys()
 
-    print("\n=== Schlüssel im Code ===")
+    print("\n=== Keys in the code ===")
     check_used_keys()
 
-    print("\n=== Übersetzungs-Codes des Agenten ===")
+    print("\n=== Agent translation codes ===")
     check_agent_codes()
 
-    print("\n=== Wörterbücher von Backend und Agent ===")
+    print("\n=== Backend and agent dictionaries ===")
     check_backend_and_agent_dicts()
 
     files = [ROOT / a for a in args] if args else sorted(ROOT.rglob("*.js"))
-    print("\n=== Fest verdrahteter deutscher Text ===")
+    print("\n=== Hard-coded German text ===")
     total = 0
     rows = []
     for f in files:
@@ -270,13 +269,12 @@ def main() -> None:
                 continue
             if INTERNAL_KEY.match(line):
                 continue
-            # Steht der Text als OBJEKT-SCHLUESSEL da ("Identität": "mg_..."),
-            # ist er kein Oberflaechentext, sondern die linke Seite einer
-            # Zuordnung auf einen Uebersetzungsschluessel - so aufgebaut z.B.
-            # die keys-Tabelle in groupLabel().
+            # If the text appears as an OBJECT KEY ("Identität": "mg_..."), it
+            # is not UI text but the left-hand side of a mapping to a
+            # translation key - as built e.g. by the keys table in groupLabel().
             if re.search(re.escape(s) + r'["\']\s*:', line):
                 continue
-            # Kommentar am Zeilenende (// ...) ist kein Oberflächentext.
+            # A comment at the end of the line (// ...) is not UI text.
             cpos = line.find("//")
             if cpos != -1 and (pos - line_start) > cpos:
                 continue
@@ -293,7 +291,7 @@ def main() -> None:
         if detail:
             for ln, s in hits:
                 print(f"         {ln:5}: {s}")
-    print(f"\nDateien: {len(rows)}   Fundstellen: {total}")
+    print(f"\nFiles: {len(rows)}   occurrences: {total}")
 
 
 if __name__ == "__main__":

@@ -1,24 +1,25 @@
 """
 rebrand.py
 ----------
-Umbenennung RAPALLE.net RMM -> BYTERA RMM: zieht bestehende Installationen beim
-Backend-Start automatisch nach. Alles ist idempotent (mehrfaches Ausfuehren
-schadet nicht) und faengt Fehler selbst ab - der Start darf daran nie scheitern.
+Rename RAPALLE.net RMM -> BYTERA RMM: migrates existing installations
+automatically on backend startup. Everything is idempotent (running it several
+times does no harm) and catches errors itself - startup must never fail because
+of it.
 
-Zwei Phasen (aufgerufen in app/main.py):
+Two phases (called in app/main.py):
 
-  before_db()  VOR dem Laden der Datenbank
-               - Docker-Nachbarcontainer rapalle-rmm-* -> bytera-rmm-* umbenennen
-               - dbconfig.json: Host "rapalle-rmm-db" -> "bytera-rmm-db"
-  after_db()   NACH db.init_db()
-               - Einstellungen guacd_host / docker_db_host nachziehen
-               - gespeicherte Skripte (z.B. "Agent Update") auf die neuen Pfade/Namen
-               - data/repo.txt auf den neuen Repo-Namen (Rueckfall: update_routes)
-               - Logos: unveraenderte ALTE Standard-Logos durch die neuen ersetzen
-                 (frontend/image ist beim Selbst-Update geschuetzt, deshalb liegen die
-                 neuen Standards in app/assets/branding). Eigene Uploads bleiben.
+  before_db()  BEFORE loading the database
+               - rename neighbouring Docker containers rapalle-rmm-* -> bytera-rmm-*
+               - dbconfig.json: host "rapalle-rmm-db" -> "bytera-rmm-db"
+  after_db()   AFTER db.init_db()
+               - migrate settings guacd_host / docker_db_host
+               - stored scripts (e.g. "Agent Update") to the new paths/names
+               - data/repo.txt to the new repo name (fallback: update_routes)
+               - logos: replace unchanged OLD default logos with the new ones
+                 (frontend/image is protected during self-update, so the new
+                 defaults live in app/assets/branding). Own uploads are kept.
 
-Agents und Client-App migrieren sich selbst (Update-Skripte bzw. App-Start).
+Agents and the client app migrate themselves (update scripts resp. app start).
 """
 from __future__ import annotations
 
@@ -28,7 +29,7 @@ import shutil
 
 from app.paths import BRANDING_DIR, BRANDING_DEFAULTS_DIR, DBCONFIG_FILE, REPO_FILE
 
-# Ersetzungen fuer gespeicherte Skripte (Reihenfolge: lange Namen zuerst)
+# Replacements for stored scripts (order: long names first)
 _SCRIPT_MAP = (
     ("/opt/rapalle-rmm-agent", "/opt/bytera-rmm-agent"),
     ("Program Files\\RapalleRmmAgent", "Program Files\\ByteraRmmAgent"),
@@ -45,7 +46,7 @@ _SCRIPT_MAP = (
 
 _LEGACY_HOSTS = {"rapalle-rmm-db": "bytera-rmm-db", "rapalle-rmm-guacd": "bytera-rmm-guacd"}
 
-# sha256 der alten Standard-Logos (RAPALLE.net). Nur GENAU diese Dateien werden ersetzt.
+# sha256 of the old default logos (RAPALLE.net). Only EXACTLY these files are replaced.
 _LEGACY_LOGO_HASHES = {
     "favicon.ico": {"dbc1e8d2c95b15992e017f16459df5755d6e0b67e453ab7affe5c6c5ac35d2f7"},
     "logo.png": {"dbc1e8d2c95b15992e017f16459df5755d6e0b67e453ab7affe5c6c5ac35d2f7"},
@@ -62,18 +63,18 @@ def _log(msg: str) -> None:
 def _safe(fn):
     try:
         fn()
-    except Exception as e:      # noqa: BLE001 - der Start darf hieran nie scheitern
-        _log(f"{fn.__name__} uebersprungen: {e}")
+    except Exception as e:      # noqa: BLE001 - startup must never fail because of this
+        _log(f"{fn.__name__} skipped: {e}")
 
 
 # --------------------------------------------------------------------------
-# Phase 1: vor der Datenbank
+# Phase 1: before the database
 # --------------------------------------------------------------------------
 
 def _docker_containers() -> None:
     from app import docker_services
     for line in docker_services.migrate_legacy():
-        _log(f"Container umbenannt: {line}")
+        _log(f"container renamed: {line}")
 
 
 def _dbconfig() -> None:
@@ -84,7 +85,7 @@ def _dbconfig() -> None:
     if host in _LEGACY_HOSTS:
         cfg["host"] = _LEGACY_HOSTS[host]
         DBCONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        _log(f"dbconfig.json: Host {host} -> {cfg['host']}")
+        _log(f"dbconfig.json: host {host} -> {cfg['host']}")
 
 
 def before_db() -> None:
@@ -93,7 +94,7 @@ def before_db() -> None:
 
 
 # --------------------------------------------------------------------------
-# Phase 2: nach der Datenbank
+# Phase 2: after the database
 # --------------------------------------------------------------------------
 
 def _settings() -> None:
@@ -102,7 +103,7 @@ def _settings() -> None:
         v = db.get_setting(key) or ""
         if v in _LEGACY_HOSTS:
             db.set_setting(key, _LEGACY_HOSTS[v])
-            _log(f"Einstellung {key}: {v} -> {_LEGACY_HOSTS[v]}")
+            _log(f"setting {key}: {v} -> {_LEGACY_HOSTS[v]}")
 
 
 def _scripts() -> None:
@@ -120,7 +121,7 @@ def _scripts() -> None:
             n += 1
     if n:
         db._conn.commit()
-        _log(f"{n} gespeicherte(s) Skript(e) auf die neuen Namen umgestellt")
+        _log(f"{n} stored script(s) switched to the new names")
 
 
 def _repo() -> None:
@@ -129,7 +130,7 @@ def _repo() -> None:
     url = REPO_FILE.read_text(encoding="utf-8").strip()
     if "/Rapalle.net-RMM" in url:
         REPO_FILE.write_text(url.replace("/Rapalle.net-RMM", "/BYTERA-RMM") + "\n", encoding="utf-8")
-        _log("repo.txt auf BYTERA-RMM umgestellt")
+        _log("repo.txt switched to BYTERA-RMM")
 
 
 def _sha(p) -> str:
@@ -146,11 +147,11 @@ def _logos() -> None:
         if not src.is_file():
             continue
         if dst.is_file() and _sha(dst) not in old_hashes:
-            continue                       # eigenes Logo oder schon das neue -> nicht anfassen
+            continue                       # own logo or already the new one -> do not touch
         tmp = dst.with_name(dst.name + ".tmp-rebrand")
         shutil.copyfile(src, tmp)
         tmp.replace(dst)
-        _log(f"Logo ersetzt: {name}")
+        _log(f"logo replaced: {name}")
 
 
 def after_db() -> None:
