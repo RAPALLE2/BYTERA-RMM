@@ -2,43 +2,43 @@
 """
 build_installers.py
 ===================
-Baut LOKAL fertige Installationspakete fuer den RMM-Agenten - fuer alle, die
-den PowerShell-/Bash-Einzeiler aus dem Dashboard nicht nutzen koennen oder
-wollen (Softwareverteilung, GPO, Intune, apt/dnf-Repos, Offline-Rollout).
+Builds ready-made installation packages for the RMM agent LOCALLY - for anyone
+who cannot or does not want to use the PowerShell/Bash one-liner from the
+dashboard (software distribution, GPO, Intune, apt/dnf repos, offline rollout).
 
-Erzeugte Pakete (je nach Bausystem, siehe unten):
+Generated packages (depending on the build system, see below):
 
-  Windows   ByteraRmmAgent-Setup.exe   PyInstaller-Onefile, fragt/kennt die
-                                        Backend-URL, installiert Python bei
-                                        Bedarf, legt den SYSTEM-Autostart-Task
-                                        an. Unterstuetzt "/S" fuer still.
-            ByteraRmmAgent.msi         Nur wenn WiX (candle/light) da ist -
-                                        die MSI kapselt die Setup.exe (still),
-                                        damit sie per GPO/Intune verteilbar ist.
-  Linux     bytera-rmm-agent_<v>.deb   Debian/Ubuntu, postinst richtet venv +
-                                        systemd-Dienst ein.
-            bytera-rmm-agent-<v>.rpm   Fedora/RHEL/openSUSE (braucht rpmbuild).
-            bytera-rmm-agent.run       Selbstentpackendes Shell-Skript -
-                                        laeuft ueberall und laesst sich IMMER
-                                        bauen (auch auf Windows).
+  Windows   ByteraRmmAgent-Setup.exe   PyInstaller onefile, asks for/knows the
+                                        backend URL, installs Python if needed,
+                                        creates the SYSTEM autostart task.
+                                        Supports "/S" for silent.
+            ByteraRmmAgent.msi         Only if WiX (candle/light) is present -
+                                        the MSI wraps the Setup.exe (silent),
+                                        so it can be distributed via GPO/Intune.
+  Linux     bytera-rmm-agent_<v>.deb   Debian/Ubuntu, postinst sets up venv +
+                                        systemd service.
+            bytera-rmm-agent-<v>.rpm   Fedora/RHEL/openSUSE (needs rpmbuild).
+            bytera-rmm-agent.run       Self-extracting shell script - runs
+                                        everywhere and can ALWAYS be built
+                                        (also on Windows).
 
-Alle Pakete richten denselben Autostart ein wie die Web-Installer:
-  Windows -> Aufgabenplanung, Principal SYSTEM, Trigger "Beim Systemstart"
-             (laeuft also OHNE Anmeldung; Bildschirmaufnahme startet bei Bedarf
-             einen Helfer in der aktiven Benutzersitzung)
-  Linux   -> systemd-Unit bytera-agent.service, User=root, multi-user.target
+All packages set up the same autostart as the web installers:
+  Windows -> Task Scheduler, principal SYSTEM, trigger "at system startup"
+             (so it runs WITHOUT a login; screen capture starts a helper in the
+             active user session when needed)
+  Linux   -> systemd unit bytera-agent.service, User=root, multi-user.target
 
-Aufruf
-------
+Usage
+-----
     python src/backend/app/build_installers.py --backend-url https://rmm.example.com
     python src/backend/app/build_installers.py --targets sh,deb --out dist
     python src/backend/app/build_installers.py --list
 
-Ohne --backend-url fragt der Installer die Adresse beim Ausfuehren ab
-(bzw. nimmt sie aus dem Parameter -BackendUrl / RMM_BACKEND_URL).
+Without --backend-url the installer asks for the address at run time (or takes
+it from the parameter -BackendUrl / RMM_BACKEND_URL).
 
-Der AGENT_TOKEN wird - wenn vorhanden - automatisch aus src/backend/data/.env gelesen,
-damit sich die verteilten Agenten sofort anmelden koennen.
+The AGENT_TOKEN is - if present - read automatically from src/backend/data/.env,
+so the distributed agents can register immediately.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ import tarfile
 import tempfile
 from pathlib import Path
 
-# Datei liegt in src/backend/app/ -> Projekt-Wurzel = drei Ebenen hoeher.
+# This file is in src/backend/app/ -> project root = three levels up.
 ROOT = Path(__file__).resolve().parents[3]
 SRC = ROOT / "src"
 AGENT_DIR = SRC / "agent"
@@ -69,7 +69,7 @@ TASK_NAME = "ByteraRmmAgent"
 
 
 # ==========================================================================
-# Hilfsfunktionen
+# Helper functions
 # ==========================================================================
 
 def info(msg: str) -> None:
@@ -81,35 +81,35 @@ def have(tool: str) -> bool:
 
 
 # --------------------------------------------------------------------------
-# Bau-Werkzeuge bei Bedarf automatisch nachruesten
+# Install build tools automatically when needed
 # --------------------------------------------------------------------------
-# EXE und MSI brauchen Werkzeuge, die nicht ueberall vorhanden sind:
-#   PyInstaller  -> Python-Paket, per pip nachinstallierbar
-#   WiX v3       -> kein Python-Paket; wir laden die offiziellen Binaries
-#                   (candle.exe/light.exe) einmalig herunter und legen sie im
-#                   Cache-Ordner ab. Kein Setup, keine Adminrechte noetig.
-# Abschaltbar mit --no-auto-install.
+# EXE and MSI need tools that are not available everywhere:
+#   PyInstaller  -> Python package, installable via pip
+#   WiX v3       -> not a Python package; we download the official binaries
+#                   (candle.exe/light.exe) once and put them in the cache
+#                   folder. No setup, no admin rights needed.
+# Can be turned off with --no-auto-install.
 
 AUTO_INSTALL = True
-BUILD_REQUIREMENTS = SRC / "backend" / "data" / "requirements.txt"   # eine gemeinsame Datei
+BUILD_REQUIREMENTS = SRC / "backend" / "data" / "requirements.txt"   # one shared file
 CACHE_DIR = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / ".rmm-build"
-# Offizielle WiX-v3-Binaries (enthaelt candle.exe + light.exe, ~10 MB).
+# Official WiX v3 binaries (contains candle.exe + light.exe, ~10 MB).
 WIX_URL = "https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip"
 
 
 def pip_install(spec: str) -> bool:
-    """Installiert ein Python-Paket in die LAUFENDE Umgebung."""
-    info(f"Installiere Bau-Abhaengigkeit: {spec} ...")
+    """Installs a Python package into the RUNNING environment."""
+    info(f"Installing build dependency: {spec} ...")
     base = [sys.executable, "-m", "pip", "install", "--quiet", spec]
     for extra in ([], ["--break-system-packages"], ["--user"]):
         if subprocess.run(base + extra).returncode == 0:
             return True
-    info(f"pip install {spec} fehlgeschlagen.")
+    info(f"pip install {spec} failed.")
     return False
 
 
 def ensure_pyinstaller() -> bool:
-    """PyInstaller vorhanden? Sonst per pip nachziehen."""
+    """PyInstaller present? Otherwise pull it via pip."""
     if have("pyinstaller"):
         return True
     try:
@@ -118,8 +118,8 @@ def ensure_pyinstaller() -> bool:
     except ImportError:
         pass
     if not AUTO_INSTALL:
-        info("PyInstaller fehlt (Auto-Installation ist abgeschaltet). "
-             "Nachruesten mit: pip install -r src/backend/data/requirements.txt")
+        info("PyInstaller missing (auto-installation is turned off). "
+             "Install it with: pip install -r src/backend/data/requirements.txt")
         return False
     if not pip_install("pyinstaller>=6.0"):
         return False
@@ -132,8 +132,8 @@ def ensure_pyinstaller() -> bool:
 
 def pyinstaller_cmd() -> list[str]:
     """
-    Aufrufweg fuer PyInstaller. Nach "pip install --user" liegt die .exe nicht
-    zwingend im PATH - dann klappt der Modul-Aufruf trotzdem.
+    Call path for PyInstaller. After "pip install --user" the .exe is not
+    necessarily in the PATH - then the module call works anyway.
     """
     if have("pyinstaller"):
         return ["pyinstaller"]
@@ -142,8 +142,8 @@ def pyinstaller_cmd() -> list[str]:
 
 def ensure_wix() -> tuple[str, str] | None:
     """
-    Liefert (candle, light). Reihenfolge: PATH -> Cache -> Download.
-    Nur unter Windows sinnvoll (candle/light sind .exe).
+    Returns (candle, light). Order: PATH -> cache -> download.
+    Only meaningful on Windows (candle/light are .exe).
     """
     if have("candle") and have("light"):
         return "candle", "light"
@@ -154,13 +154,13 @@ def ensure_wix() -> tuple[str, str] | None:
         return str(candle), str(light)
 
     if platform.system() != "Windows":
-        info("WiX gibt es nur fuer Windows -> MSI uebersprungen.")
+        info("WiX only exists for Windows -> MSI skipped.")
         return None
     if not AUTO_INSTALL:
-        info("WiX fehlt (Auto-Installation abgeschaltet) -> MSI uebersprungen.")
+        info("WiX missing (auto-installation off) -> MSI skipped.")
         return None
 
-    info("Lade WiX v3 Binaries herunter (einmalig, ~10 MB) ...")
+    info("Downloading WiX v3 binaries (one-off, ~10 MB) ...")
     import urllib.request
     import zipfile as _zip
     try:
@@ -171,18 +171,18 @@ def ensure_wix() -> tuple[str, str] | None:
             zf.extractall(wix_dir)
         archive.unlink(missing_ok=True)
     except Exception as e:
-        info(f"WiX-Download fehlgeschlagen ({e}) -> MSI uebersprungen.")
+        info(f"WiX download failed ({e}) -> MSI skipped.")
         return None
 
     if candle.is_file() and light.is_file():
-        info(f"WiX bereit: {wix_dir}")
+        info(f"WiX ready: {wix_dir}")
         return str(candle), str(light)
-    info("WiX-Archiv enthielt candle/light nicht -> MSI uebersprungen.")
+    info("WiX archive did not contain candle/light -> MSI skipped.")
     return None
 
 
 def agent_version() -> str:
-    """Version aus agent/version.txt (wird nur GELESEN, nie geschrieben)."""
+    """Version from agent/version.txt (only READ, never written)."""
     try:
         v = (AGENT_DIR / "version.txt").read_text(encoding="utf-8").strip()
         return v.lstrip("v") or "0.0.0"
@@ -191,7 +191,7 @@ def agent_version() -> str:
 
 
 def read_agent_token() -> str:
-    """AGENT_TOKEN aus src/backend/data/.env holen (leer, wenn nicht vorhanden)."""
+    """Get the AGENT_TOKEN from src/backend/data/.env (empty if not present)."""
     try:
         for line in BACKEND_ENV.read_text(encoding="utf-8", errors="replace").splitlines():
             if line.strip().startswith("AGENT_TOKEN="):
@@ -202,7 +202,7 @@ def read_agent_token() -> str:
 
 
 def agent_files() -> list[Path]:
-    """Alle Dateien des Agenten (ohne .env, __pycache__, Logs)."""
+    """All files of the agent (without .env, __pycache__, logs)."""
     out = []
     for p in sorted(AGENT_DIR.rglob("*")):
         if not p.is_file():
@@ -215,17 +215,17 @@ def agent_files() -> list[Path]:
 
 
 def copy_agent_into(dest: Path, backend_url: str, token: str) -> None:
-    """Agent-Dateien + vorbereitete .env nach dest kopieren."""
+    """Copy agent files + a prepared .env to dest."""
     dest.mkdir(parents=True, exist_ok=True)
     for p in agent_files():
         rel_target = p.relative_to(AGENT_DIR)
-        # Quelle: src/agent/main.py - auf dem Client heisst die Datei weiter agent.py
+        # Source: src/agent/main.py - on the client the file is still named agent.py
         if str(rel_target) == "main.py":
             rel_target = Path("agent.py")
         target = dest / rel_target
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(p, target)
-    # Logo fuer den Zustimmungs-Dialog mitnehmen (wie im Web-Installer).
+    # Take the logo for the consent dialog along (as in the web installer).
     for cand in (BRANDING / "logo_r.png",):
         if cand.is_file():
             shutil.copy2(cand, dest / "logo.png")
@@ -245,19 +245,19 @@ def copy_agent_into(dest: Path, backend_url: str, token: str) -> None:
 
 INSTALLER_STUB = r'''
 """
-BYTERA RMM - Agent-Installer (Windows).
-Wird von src/backend/app/build_installers.py zu einer .exe gepackt.
+BYTERA RMM - agent installer (Windows).
+Packed into an .exe by src/backend/app/build_installers.py.
 
-Aufruf:
-    ByteraRmmAgent-Setup.exe                      -> interaktiv
-    ByteraRmmAgent-Setup.exe /S                   -> still (nutzt die
-                                                      eingebackene Backend-URL)
-    ByteraRmmAgent-Setup.exe /S /URL=https://...  -> still, eigene Adresse
-    ByteraRmmAgent-Setup.exe /TOKEN=abc123        -> Onboarding-Token (ordnet
-                                                      das Geraet direkt dem im
-                                                      Dashboard gewaehlten
-                                                      Tenant/Standort zu)
-    ByteraRmmAgent-Setup.exe /UNINSTALL           -> deinstallieren
+Usage:
+    ByteraRmmAgent-Setup.exe                      -> interactive
+    ByteraRmmAgent-Setup.exe /S                   -> silent (uses the baked-in
+                                                      backend URL)
+    ByteraRmmAgent-Setup.exe /S /URL=https://...  -> silent, own address
+    ByteraRmmAgent-Setup.exe /TOKEN=abc123        -> onboarding token (assigns
+                                                      the device directly to the
+                                                      tenant/location chosen in
+                                                      the dashboard)
+    ByteraRmmAgent-Setup.exe /UNINSTALL           -> uninstall
 """
 import os
 import shutil
@@ -269,7 +269,7 @@ from pathlib import Path
 INSTALL_DIR = Path(r"__INSTALL_DIR__")
 TASK_NAME = "__TASK_NAME__"
 BAKED_URL = "__BACKEND_URL__"
-# Installation unter altem Namen (RAPALLE.net RMM) - wird uebernommen und entfernt
+# Installation under the old name (RAPALLE.net RMM) - taken over and removed
 LEGACY_DIR = Path(r"C:\Program Files\RapalleRmmAgent")
 LEGACY_TASKS = ("RapalleRmmAgent", "RapalleNode", "RapalleRmmUpdate", "RapalleRmmUninstall")
 
@@ -290,7 +290,7 @@ def powershell(script: str):
 
 
 def payload_dir() -> Path:
-    """Der eingebettete agent/-Ordner (PyInstaller entpackt nach _MEIPASS)."""
+    """The embedded agent/ folder (PyInstaller extracts to _MEIPASS)."""
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
     return base / "payload"
 
@@ -316,7 +316,7 @@ def find_python() -> str | None:
 
 
 def install_python() -> str | None:
-    """Python still nachinstallieren - erst winget, dann offizieller Installer."""
+    """Install Python silently - first winget, then the official installer."""
     say("Python not found - installing it automatically ...")
     if shutil.which("winget"):
         run(["winget", "install", "-e", "--id", "Python.Python.3.12", "--silent",
@@ -327,7 +327,7 @@ def install_python() -> str | None:
         powershell(f'Invoke-WebRequest -Uri "{url}" -OutFile "{dst}"')
         if dst.is_file():
             run([str(dst), "/quiet", "InstallAllUsers=1", "PrependPath=1"], timeout=1800)
-    # PATH der laufenden Sitzung auffrischen
+    # Refresh the PATH of the running session
     machine = os.popen('powershell -NoProfile -Command '
                        '"[System.Environment]::GetEnvironmentVariable(\'Path\',\'Machine\')"').read().strip()
     if machine:
@@ -336,9 +336,9 @@ def install_python() -> str | None:
 
 
 def stop_running_agent():
-    say("Stoppe evtl. laufenden Agenten ...")
+    say("Stopping any running agent ...")
     run(["schtasks", "/end", "/tn", TASK_NAME])
-    for t in LEGACY_TASKS[:2]:                       # Agent/Node unter altem Namen
+    for t in LEGACY_TASKS[:2]:                       # agent/node under the old name
         run(["schtasks", "/end", "/tn", t])
         run(["schtasks", "/delete", "/tn", t, "/f"])
     powershell(
@@ -350,10 +350,10 @@ def stop_running_agent():
 
 
 def adopt_legacy():
-    """Altinstallation (RAPALLE.net RMM): Zuordnung (.env) und Geraete-ID uebernehmen."""
+    """Old installation (RAPALLE.net RMM): take over the assignment (.env) and device ID."""
     if not LEGACY_DIR.is_dir():
         return
-    say(f"Altinstallation gefunden - uebernehme Zuordnung aus {LEGACY_DIR} ...")
+    say(f"Old installation found - taking over the assignment from {LEGACY_DIR} ...")
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
     for f in (".env", ".device-id"):
         if (LEGACY_DIR / f).is_file() and not (INSTALL_DIR / f).is_file():
@@ -369,11 +369,11 @@ def remove_legacy():
 
 def register_task(pythonw: Path):
     """
-    Autostart als DIENST: Principal SYSTEM, Trigger 'Beim Systemstart'.
-    Damit laeuft der Agent auch dann, wenn sich NIEMAND anmeldet (Server).
-    Die Bildschirmaufnahme startet bei Bedarf einen Helfer in der aktiven
-    Benutzersitzung (agent.py --screen-helper, siehe session_bridge.py) -
-    das geht ausschliesslich aus einem SYSTEM-Prozess heraus.
+    Autostart as a SERVICE: principal SYSTEM, trigger 'at system startup'.
+    This way the agent runs even when NOBODY logs in (server). Screen capture
+    starts a helper in the active user session when needed (agent.py
+    --screen-helper, see session_bridge.py) - which only works from a SYSTEM
+    process.
     """
     say("Setting up autostart as a service (SYSTEM, at system start) ...")
     ps = f"""
@@ -388,21 +388,21 @@ Start-ScheduledTask -TaskName "{TASK_NAME}"
 """
     r = powershell(ps)
     if r.returncode != 0:
-        say("FEHLER beim Einrichten des Autostarts:")
+        say("ERROR while setting up the autostart:")
         say((r.stderr or r.stdout or "").strip())
         return False
     return True
 
 
 def uninstall():
-    say("Deinstalliere BYTERA RMM Agent ...")
+    say("Uninstalling the BYTERA RMM agent ...")
     stop_running_agent()
     run(["schtasks", "/delete", "/tn", TASK_NAME, "/f"])
     for t in ("ByteraRmmUpdate", "ByteraRmmUninstall"):
         run(["schtasks", "/delete", "/tn", t, "/f"])
     shutil.rmtree(INSTALL_DIR, ignore_errors=True)
     remove_legacy()
-    say("Fertig - der Agent wurde entfernt.")
+    say("Done - the agent has been removed.")
     return 0
 
 
@@ -413,9 +413,9 @@ def main() -> int:
         return uninstall()
 
     if not is_admin():
-        # PyInstaller wird zwar mit --uac-admin gebaut (Windows fragt dann von
-        # selbst), aber falls das Manifest fehlt oder umgangen wurde: hier per
-        # ShellExecute "runas" neu starten und alle Parameter weiterreichen.
+        # PyInstaller is built with --uac-admin (Windows then asks by itself),
+        # but in case the manifest is missing or was bypassed: restart here via
+        # ShellExecute "runas" and pass all parameters along.
         say("Restarting with administrator rights (UAC prompt) ...")
         try:
             import ctypes
@@ -426,10 +426,10 @@ def main() -> int:
                 return 0
         except Exception:
             pass
-        say("Rechteerhoehung abgelehnt oder fehlgeschlagen - "
-            "bitte als Administrator ausfuehren.")
+        say("Elevation denied or failed - "
+            "please run as administrator.")
         if not silent:
-            input("Weiter mit [Enter] ...")
+            input("Press [Enter] to continue ...")
         return 1
 
     url = BAKED_URL
@@ -442,9 +442,9 @@ def main() -> int:
     enroll = enroll or os.environ.get("RMM_ENROLLMENT_TOKEN", "")
     url = url or os.environ.get("RMM_BACKEND_URL", "")
     if not url and not silent:
-        url = input("Adresse des RMM-Servers (z.B. https://rmm.firma.de): ").strip()
+        url = input("Address of the RMM server (e.g. https://rmm.company.com): ").strip()
     if not url:
-        say("Keine Backend-Adresse angegeben (Parameter /URL=... oder RMM_BACKEND_URL).")
+        say("No backend address given (parameter /URL=... or RMM_BACKEND_URL).")
         return 1
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
@@ -453,7 +453,7 @@ def main() -> int:
     stop_running_agent()
     adopt_legacy()
 
-    say(f"Kopiere Agent nach {INSTALL_DIR} ...")
+    say(f"Copying the agent to {INSTALL_DIR} ...")
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
     old_env = INSTALL_DIR / ".env"
     keep_env = old_env.read_text(encoding="utf-8", errors="replace") if old_env.is_file() else ""
@@ -464,7 +464,7 @@ def main() -> int:
         else:
             shutil.copy2(item, target)
 
-    # Bestehende .env (Device-Zuordnung!) behalten, nur URL/Token aktualisieren.
+    # Keep the existing .env (device assignment!), only update URL/token.
     base = keep_env or (INSTALL_DIR / ".env").read_text(encoding="utf-8", errors="replace")
     lines = []
     for ln in base.splitlines():
@@ -477,7 +477,7 @@ def main() -> int:
 
     py = find_python() or install_python()
     if not py:
-        say("Python konnte nicht installiert werden - bitte manuell nachholen.")
+        say("Python could not be installed - please do it manually.")
         return 1
 
     say("Installing Python dependencies (may take 1-2 minutes) ...")
@@ -487,7 +487,7 @@ def main() -> int:
     r = run([str(pip), "install", "-r", str(INSTALL_DIR / "requirements.txt"), "--quiet"],
             timeout=1800)
     if r.returncode != 0:
-        say("FEHLER bei der Paket-Installation:")
+        say("ERROR during package installation:")
         say((r.stderr or r.stdout or "").strip()[:2000])
         return 1
 
@@ -497,11 +497,11 @@ def main() -> int:
 
     say("")
     say("=== DONE ===")
-    say("Der Agent laeuft als Dienst unter SYSTEM und startet beim Booten -")
-    say("auch wenn sich niemand anmeldet.")
-    say(f"Log-Datei bei Problemen: {INSTALL_DIR}\\agent.log")
+    say("The agent runs as a service under SYSTEM and starts at boot -")
+    say("even when nobody logs in.")
+    say(f"Log file in case of problems: {INSTALL_DIR}\\agent.log")
     if not silent:
-        input("Weiter mit [Enter] ...")
+        input("Press [Enter] to continue ...")
     return 0
 
 
@@ -512,7 +512,7 @@ if __name__ == "__main__":
 
 def build_windows_exe(out: Path, backend_url: str, token: str) -> Path | None:
     if platform.system() != "Windows":
-        info("Windows-EXE kann nur AUF Windows gebaut werden -> uebersprungen.")
+        info("A Windows EXE can only be built ON Windows -> skipped.")
         return None
     if not ensure_pyinstaller():
         return None
@@ -528,7 +528,7 @@ def build_windows_exe(out: Path, backend_url: str, token: str) -> Path | None:
             .replace("__BACKEND_URL__", backend_url),
             encoding="utf-8",
         )
-        info("Baue ByteraRmmAgent-Setup.exe (PyInstaller) ...")
+        info("Building ByteraRmmAgent-Setup.exe (PyInstaller) ...")
         r = subprocess.run(
             pyinstaller_cmd() + ["--onefile", "--console", "--uac-admin",
              "--name", "ByteraRmmAgent-Setup",
@@ -539,18 +539,18 @@ def build_windows_exe(out: Path, backend_url: str, token: str) -> Path | None:
             text=True,
         )
         if r.returncode != 0:
-            info("PyInstaller fehlgeschlagen.")
+            info("PyInstaller failed.")
             return None
     exe = out / "ByteraRmmAgent-Setup.exe"
     return exe if exe.is_file() else None
 
 
 # --------------------------------------------------------------------------
-# Vorlagen fuer die Windows-Skript-Pakete (.ps1 / .bat)
+# Templates for the Windows script packages (.ps1 / .bat)
 # --------------------------------------------------------------------------
-# Bewusst als .format()-Vorlagen (keine f-Strings): PowerShell und Batch
-# wimmeln von geschweiften Klammern - so muss nichts verdoppelt werden.
-# Platzhalter: {backend_url} {install_dir} {task}
+# Deliberately as .format() templates (no f-strings): PowerShell and Batch are
+# full of curly braces - this way nothing has to be doubled.
+# Placeholders: {backend_url} {install_dir} {task}
 
 PS_SETUP_TEMPLATE = '''param(
     [string]$BackendUrl = "{backend_url}",
@@ -562,7 +562,7 @@ $InstallDir = "{install_dir}"
 $TaskName   = "{task}"
 $Payload    = $PSScriptRoot
 
-$LegacyDir  = "C:\\Program Files\\RapalleRmmAgent"     # Altinstallation (RAPALLE.net RMM)
+$LegacyDir  = "C:\\Program Files\\RapalleRmmAgent"     # old installation (RAPALLE.net RMM)
 
 function Remove-Legacy {{
     foreach ($t in @("RapalleRmmAgent", "RapalleNode", "RapalleRmmUpdate", "RapalleRmmUninstall")) {{
@@ -596,10 +596,10 @@ if ($Uninstall) {{
     exit 0
 }}
 
-# --- Adminrechte: notfalls SELBST neu starten -----------------------------
-# Ohne Administratorrechte laesst sich weder nach "Program Files" schreiben
-# noch ein SYSTEM-Task anlegen. Statt abzubrechen starten wir uns per UAC
-# einfach neu und geben alle Parameter weiter.
+# --- Admin rights: restart OURSELVES if necessary -------------------------
+# Without administrator rights one can neither write to "Program Files" nor
+# create a SYSTEM task. Instead of aborting, we simply restart ourselves via
+# UAC and pass all parameters along.
 $id = [Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
         [Security.Principal.WindowsBuiltInRole]::Administrator)) {{
@@ -618,7 +618,7 @@ if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
 }}
 
 if (-not $BackendUrl) {{ $BackendUrl = $env:RMM_BACKEND_URL }}
-if (-not $BackendUrl) {{ $BackendUrl = Read-Host "Adresse des RMM-Servers (z.B. https://rmm.firma.de)" }}
+if (-not $BackendUrl) {{ $BackendUrl = Read-Host "Address of the RMM server (e.g. https://rmm.company.com)" }}
 if (-not $BackendUrl) {{ Write-Host "No backend address given." -ForegroundColor Red; exit 1 }}
 if ($BackendUrl -notmatch "^https?://") {{ $BackendUrl = "https://$BackendUrl" }}
 $BackendUrl = $BackendUrl.TrimEnd("/")
@@ -640,12 +640,12 @@ if (-not $python) {{
 }}
 if (-not $python) {{ Write-Host "Python is still missing - please install it manually." -ForegroundColor Red; exit 1 }}
 
-# --- 2. Dateien kopieren (vorhandene .env behalten!) ----------------------
+# --- 2. Copy files (keep an existing .env!) -------------------------------
 Stop-Agent
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 $keepEnv = ""
 if (Test-Path "$InstallDir\\.env") {{ $keepEnv = Get-Content "$InstallDir\\.env" -Raw }}
-elseif (Test-Path "$LegacyDir\\.env") {{ $keepEnv = Get-Content "$LegacyDir\\.env" -Raw }}    # Altinstallation uebernehmen
+elseif (Test-Path "$LegacyDir\\.env") {{ $keepEnv = Get-Content "$LegacyDir\\.env" -Raw }}    # take over the old installation
 if ((Test-Path "$LegacyDir\\.device-id") -and -not (Test-Path "$InstallDir\\.device-id")) {{
     Copy-Item "$LegacyDir\\.device-id" "$InstallDir\\.device-id" -Force
 }}
@@ -660,16 +660,16 @@ foreach ($line in (Get-Content "$InstallDir\\.env")) {{
 }}
 Set-Content "$InstallDir\\.env" ($envLines -join "`n")
 
-# --- 3. Abhaengigkeiten ---------------------------------------------------
+# --- 3. Dependencies ------------------------------------------------------
 Write-Host "Installing Python dependencies (may take 1-2 minutes) ..."
 & $python -m venv "$InstallDir\\venv"
 & "$InstallDir\\venv\\Scripts\\python.exe" -m pip install --upgrade pip --quiet
 & "$InstallDir\\venv\\Scripts\\pip.exe" install -r "$InstallDir\\requirements.txt" --quiet
 if ($LASTEXITCODE -ne 0) {{ Write-Host "ERROR during package installation." -ForegroundColor Red; exit 1 }}
 
-# --- 4. Autostart als Dienst (SYSTEM, beim Systemstart) -------------------
-# So laeuft der Agent auch ohne Anmeldung (Server). Die Bildschirmaufnahme
-# startet bei Bedarf einen Helfer in der aktiven Benutzersitzung.
+# --- 4. Autostart as a service (SYSTEM, at system startup) ----------------
+# This way the agent runs even without a login (server). Screen capture starts
+# a helper in the active user session when needed.
 Write-Host "Setting up autostart as a service (SYSTEM, at system start) ..."
 $Action    = New-ScheduledTaskAction -Execute "$InstallDir\\venv\\Scripts\\pythonw.exe" -Argument "`"$InstallDir\\agent.py`"" -WorkingDirectory $InstallDir
 $TrigBoot  = New-ScheduledTaskTrigger -AtStartup
@@ -689,16 +689,16 @@ Write-Host "Log file for troubleshooting: $InstallDir\\agent.log"
 
 
 PS_WRAPPER_TEMPLATE = '''<#
-BYTERA RMM - Agent-Installation (Windows, eigenstaendig)
-Der komplette Agent steckt als base64-ZIP am Ende dieser Datei - es wird also
-weder Internet noch Zugriff auf das Backend gebraucht.
+BYTERA RMM - agent installation (Windows, standalone)
+The complete agent is embedded as a base64 ZIP at the end of this file - so
+neither the internet nor access to the backend is needed.
 
-Aufruf (PowerShell als Administrator):
+Usage (PowerShell as administrator):
     .\\install-agent.ps1
-    .\\install-agent.ps1 -BackendUrl https://rmm.firma.de -Token <onboarding-token>
+    .\\install-agent.ps1 -BackendUrl https://rmm.company.com -Token <onboarding-token>
     .\\install-agent.ps1 -Uninstall
 
-Falls die Ausfuehrung blockiert wird:
+If execution is blocked:
     powershell -NoProfile -ExecutionPolicy Bypass -File .\\install-agent.ps1
 #>
 param(
@@ -708,9 +708,9 @@ param(
 )
 $ErrorActionPreference = "Stop"
 
-# --- Adminrechte: notfalls SELBST per UAC neu starten ---------------------
-# So genuegt ein Rechtsklick "Mit PowerShell ausfuehren" bzw. ein normaler
-# Aufruf - die Rechteabfrage kommt automatisch.
+# --- Admin rights: restart OURSELVES via UAC if necessary -----------------
+# This way a right-click "Run with PowerShell" or a normal call is enough - the
+# rights prompt comes automatically.
 $id = [Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
         [Security.Principal.WindowsBuiltInRole]::Administrator)) {{
@@ -731,7 +731,7 @@ if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
 $work = Join-Path $env:TEMP ("rmm-agent-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 try {{
-    # --- Eingebettetes ZIP herausloesen und entpacken ---------------------
+    # --- Extract the embedded ZIP and unpack it ---------------------------
     $self = Get-Content -LiteralPath $PSCommandPath -Raw
     $mark = "#__PAYLOAD__#"
     $b64  = $self.Substring($self.LastIndexOf($mark) + $mark.Length)
@@ -739,7 +739,7 @@ try {{
     [IO.File]::WriteAllBytes($zip, [Convert]::FromBase64String(($b64 -replace "\\s", "")))
     Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $work "agent") -Force
 
-    # --- Setup ausfuehren -------------------------------------------------
+    # --- Run setup --------------------------------------------------------
     $setup = Join-Path $work "agent\\_setup.ps1"
     $argv = @("-BackendUrl", $BackendUrl)
     if ($Token)     {{ $argv += @("-Token", $Token) }}
@@ -755,21 +755,21 @@ try {{
 
 BAT_TEMPLATE = '''@echo off
 REM ========================================================================
-REM BYTERA RMM - Agent-Installation (Windows, eigenstaendig)
-REM Der komplette Agent steckt als base64-ZIP am Ende dieser Datei.
+REM BYTERA RMM - agent installation (Windows, standalone)
+REM The complete agent is embedded as a base64 ZIP at the end of this file.
 REM
-REM Aufruf (Eingabeaufforderung als Administrator):
+REM Usage (command prompt as administrator):
 REM     install-agent.bat
-REM     install-agent.bat https://rmm.firma.de <onboarding-token>
+REM     install-agent.bat https://rmm.company.com <onboarding-token>
 REM     install-agent.bat /uninstall
 REM ========================================================================
 setlocal EnableDelayedExpansion
 
-REM --- Adminrechte: notfalls SELBST per UAC neu starten -------------------
-REM Damit reicht ein Doppelklick - Windows fragt dann nach den Rechten.
+REM --- Admin rights: restart OURSELVES via UAC if necessary --------------
+REM This way a double-click is enough - Windows then asks for the rights.
 net session >nul 2>&1
 if errorlevel 1 (
-    echo Starte mit Administratorrechten neu ^(UAC-Abfrage^) ...
+    echo Restarting with administrator rights ^(UAC prompt^) ...
     powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -ArgumentList '%*' -Verb RunAs"
     exit /b
 )
@@ -783,12 +783,12 @@ if "%BACKEND%"=="" set "BACKEND={backend_url}"
 set "WORK=%TEMP%\\rmm-agent-%RANDOM%%RANDOM%"
 mkdir "%WORK%" >nul 2>&1
 
-REM --- Zeilennummer der Payload-Marke suchen, alles danach herausschneiden -
+REM --- Find the line number of the payload marker, cut out everything after -
 for /f "delims=:" %%a in ('findstr /n /b /c:":PAYLOAD_BELOW" "%~f0"') do set "LN=%%a"
 more +%LN% "%~f0" > "%WORK%\\payload.b64"
 certutil -f -decode "%WORK%\\payload.b64" "%WORK%\\payload.zip" >nul
 if errorlevel 1 (
-    echo FEHLER beim Entpacken des eingebetteten Pakets.
+    echo ERROR while unpacking the embedded package.
     pause
     exit /b 1
 )
@@ -803,7 +803,7 @@ if "%UNINST%"=="1" (
 set "RC=%ERRORLEVEL%"
 
 rd /s /q "%WORK%" >nul 2>&1
-if "%RC%"=="0" (echo. & echo Installation abgeschlossen.) else (echo. & echo Installation fehlgeschlagen [Code %RC%].)
+if "%RC%"=="0" (echo. & echo Installation complete.) else (echo. & echo Installation failed [code %RC%].)
 if not "%UNINST%"=="1" pause
 exit /b %RC%
 
@@ -812,16 +812,16 @@ exit /b %RC%
 
 
 # ==========================================================================
-# 1b) Windows: Setup-Logik als PowerShell (fuer .ps1 und .bat)
+# 1b) Windows: setup logic as PowerShell (for .ps1 and .bat)
 # ==========================================================================
 
 def windows_setup_ps1(backend_url: str) -> str:
     """
-    Der eigentliche Installer als PowerShell-Skript. Er liegt IM Paket
-    (_setup.ps1) und wird von install-agent.ps1 / install-agent.bat nach dem
-    Entpacken aufgerufen. Gleiche Schritte wie Setup.exe und der Web-Installer:
-    Python pruefen/nachinstallieren, venv + Abhaengigkeiten, Autostart-Task
-    unter SYSTEM mit Trigger "Beim Systemstart".
+    The actual installer as a PowerShell script. It lives IN the package
+    (_setup.ps1) and is called by install-agent.ps1 / install-agent.bat after
+    unpacking. Same steps as Setup.exe and the web installer: check/install
+    Python, venv + dependencies, autostart task under SYSTEM with the trigger
+    "at system startup".
     """
     return PS_SETUP_TEMPLATE.format(backend_url=backend_url,
                                     install_dir=WIN_INSTALL_DIR,
@@ -829,7 +829,7 @@ def windows_setup_ps1(backend_url: str) -> str:
 
 
 def _windows_payload_b64(backend_url: str, token: str) -> str:
-    """Agent + _setup.ps1 als ZIP, base64-kodiert (fuer .ps1/.bat)."""
+    """Agent + _setup.ps1 as a ZIP, base64-encoded (for .ps1/.bat)."""
     import zipfile as _zip
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
@@ -850,29 +850,29 @@ def _wrap_b64(b64: str, width: int = 76) -> str:
 
 def build_windows_ps1(out: Path, backend_url: str, token: str) -> Path:
     """
-    Eigenstaendiges PowerShell-Installationsskript mit eingebettetem Agenten.
-    Braucht kein Internet und keinen Zugriff auf das Backend.
+    Standalone PowerShell installation script with an embedded agent.
+    Needs neither the internet nor access to the backend.
     """
     b64 = _wrap_b64(_windows_payload_b64(backend_url, token))
     script = PS_WRAPPER_TEMPLATE.format(backend_url=backend_url) + b64 + "\n"
     dest = out / "install-agent.ps1"
-    info(f"Baue {dest.name} ...")
+    info(f"Building {dest.name} ...")
     dest.write_text(script, encoding="utf-8")
     return dest
 
 
 def build_windows_bat(out: Path, backend_url: str, token: str) -> Path:
     """
-    Eigenstaendige .bat - fuer Umgebungen, in denen .ps1 blockiert ist oder in
-    denen per Doppelklick installiert werden soll. Das base64-ZIP steht hinter
-    der Marke :PAYLOAD_BELOW; "more +N" schneidet es heraus, "certutil -decode"
-    macht wieder ein ZIP daraus. Danach uebernimmt _setup.ps1.
+    Standalone .bat - for environments where .ps1 is blocked or where
+    installation should be done by double-click. The base64 ZIP is behind the
+    marker :PAYLOAD_BELOW; "more +N" cuts it out, "certutil -decode" turns it
+    back into a ZIP. Then _setup.ps1 takes over.
     """
     b64 = _wrap_b64(_windows_payload_b64(backend_url, token), 76)
     head = BAT_TEMPLATE.format(backend_url=backend_url)
     dest = out / "install-agent.bat"
-    info(f"Baue {dest.name} ...")
-    # CRLF: cmd.exe verarbeitet reine LF-Skripte unzuverlaessig.
+    info(f"Building {dest.name} ...")
+    # CRLF: cmd.exe processes pure-LF scripts unreliably.
     data = (head.replace("\n", "\r\n") + b64.replace("\n", "\r\n") + "\r\n")
     dest.write_bytes(data.encode("utf-8"))
     return dest
@@ -880,16 +880,16 @@ def build_windows_bat(out: Path, backend_url: str, token: str) -> Path:
 
 
 # ==========================================================================
-# 2) Windows: MSI (nur mit WiX v3 - candle/light)
+# 2) Windows: MSI (only with WiX v3 - candle/light)
 # ==========================================================================
 
 WXS = r'''<?xml version="1.0" encoding="utf-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="BYTERA RMM Agent" Language="1031"
+  <Product Id="*" Name="BYTERA RMM Agent" Language="1033"
            Version="__VERSION__" Manufacturer="BYTERA"
            UpgradeCode="7B2F1C64-9A3D-4F51-8E2A-0C7A1D4E9B31">
     <Package InstallerVersion="300" Compressed="yes" InstallScope="perMachine" />
-    <MajorUpgrade DowngradeErrorMessage="Eine neuere Version ist bereits installiert." />
+    <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <Directory Id="TARGETDIR" Name="SourceDir">
@@ -908,10 +908,10 @@ WXS = r'''<?xml version="1.0" encoding="utf-8"?>
       <ComponentGroupRef Id="Payload" />
     </Feature>
 
-    <!-- Nach dem Kopieren: Setup still ausfuehren (richtet venv + SYSTEM-Task ein). -->
+    <!-- After copying: run setup silently (sets up venv + SYSTEM task). -->
     <CustomAction Id="RunSetup" FileKey="SetupExeFile" ExeCommand="/S"
                   Execute="deferred" Impersonate="no" Return="check" />
-    <!-- Bei der Deinstallation den Agenten sauber entfernen. -->
+    <!-- On uninstall, remove the agent cleanly. -->
     <CustomAction Id="RunUninstall" FileKey="SetupExeFile" ExeCommand="/UNINSTALL"
                   Execute="deferred" Impersonate="no" Return="ignore" />
 
@@ -926,7 +926,7 @@ WXS = r'''<?xml version="1.0" encoding="utf-8"?>
 
 def build_windows_msi(out: Path, setup_exe: Path | None) -> Path | None:
     if setup_exe is None or not setup_exe.is_file():
-        info("MSI uebersprungen (Setup.exe fehlt).")
+        info("MSI skipped (Setup.exe missing).")
         return None
     wix = ensure_wix()
     if not wix:
@@ -940,7 +940,7 @@ def build_windows_msi(out: Path, setup_exe: Path | None) -> Path | None:
                .replace("__SETUP_EXE__", str(setup_exe)),
             encoding="utf-8",
         )
-        info("Baue ByteraRmmAgent.msi (WiX) ...")
+        info("Building ByteraRmmAgent.msi (WiX) ...")
         if subprocess.run([candle, "-nologo", "-out", str(tmp / "agent.wixobj"), str(wxs)]).returncode:
             return None
         msi = out / "ByteraRmmAgent.msi"
@@ -950,26 +950,26 @@ def build_windows_msi(out: Path, setup_exe: Path | None) -> Path | None:
 
 
 # ==========================================================================
-# 3) Linux: gemeinsame Installationslogik (postinst / .run)
+# 3) Linux: shared installation logic (postinst / .run)
 # ==========================================================================
 
 def linux_setup_script(backend_url: str) -> str:
     """
-    Wird nach dem Entpacken ausgefuehrt (deb-postinst, rpm-post, .run).
-    Richtet venv + Abhaengigkeiten + systemd-Dienst ein.
+    Run after unpacking (deb postinst, rpm post, .run).
+    Sets up venv + dependencies + systemd service.
 
-    Der Dienst laeuft als root unter multi-user.target - er startet also beim
-    Booten, ohne dass sich jemand anmelden muss.
+    The service runs as root under multi-user.target - so it starts at boot,
+    without anyone having to log in.
     """
     return f'''#!/bin/bash
 set -e
 INSTALL_DIR="{LINUX_INSTALL_DIR}"
 DEFAULT_URL="{backend_url}"
 
-# Backend-Adresse: Paket-Vorgabe, Umgebungsvariable oder Nachfrage.
+# Backend address: package default, environment variable or prompt.
 URL="${{RMM_BACKEND_URL:-$DEFAULT_URL}}"
 if [ -z "$URL" ] && [ -t 0 ]; then
-  read -r -p "Adresse des RMM-Servers (z.B. https://rmm.firma.de): " URL
+  read -r -p "Address of the RMM server (e.g. https://rmm.company.com): " URL
 fi
 if [ -z "$URL" ]; then
   echo "No backend address set. Add it later in $INSTALL_DIR/.env"
@@ -978,12 +978,12 @@ else
   sed -i "s|^BACKEND_URL=.*|BACKEND_URL=${{URL%/}}|" "$INSTALL_DIR/.env" 2>/dev/null || true
 fi
 
-# Onboarding-Token (ordnet das Geraet direkt dem gewaehlten Tenant/Standort zu).
+# Onboarding token (assigns the device directly to the chosen tenant/location).
 if [ -n "${{RMM_ENROLLMENT_TOKEN:-}}" ]; then
   sed -i "s|^ENROLLMENT_TOKEN=.*|ENROLLMENT_TOKEN=$RMM_ENROLLMENT_TOKEN|" "$INSTALL_DIR/.env" 2>/dev/null || true
 fi
 
-# --- Systemvoraussetzungen (python3, venv, pip) ---------------------------
+# --- System prerequisites (python3, venv, pip) ---------------------------
 PYV="$(python3 -c 'import sys;print(f"{{sys.version_info.major}}.{{sys.version_info.minor}}")' 2>/dev/null || echo 3)"
 if command -v apt-get >/dev/null 2>&1; then
   export DEBIAN_FRONTEND=noninteractive
@@ -999,7 +999,7 @@ elif command -v pacman >/dev/null 2>&1; then
   pacman -Sy --noconfirm python python-pip >/dev/null 2>&1 || true
 fi
 
-# --- Umbenennung: Altinstallation (RAPALLE.net RMM) uebernehmen -----------
+# --- Rename: take over the old installation (RAPALLE.net RMM) -------------
 LEGACY_DIR="/opt/rapalle-rmm-agent"
 if [ -d "$LEGACY_DIR" ] || [ -f /etc/systemd/system/rapalle-agent.service ]; then
   echo "Legacy install (RAPALLE.net RMM) found - taking over its identity and removing it ..."
@@ -1010,7 +1010,7 @@ if [ -d "$LEGACY_DIR" ] || [ -f /etc/systemd/system/rapalle-agent.service ]; the
     cp "$LEGACY_DIR/.device-id" "$INSTALL_DIR/.device-id"
   fi
   if [ -f "$LEGACY_DIR/.env" ]; then
-    # selbst vergebenen Geraetenamen behalten
+    # keep the self-assigned device name
     v="$(grep -m1 "^DEVICE_NAME=" "$LEGACY_DIR/.env" | cut -d= -f2- || true)"
     if [ -n "$v" ]; then sed -i "s|^DEVICE_NAME=.*|DEVICE_NAME=$v|" "$INSTALL_DIR/.env" 2>/dev/null || true; fi
   fi
@@ -1019,7 +1019,7 @@ if [ -d "$LEGACY_DIR" ] || [ -f /etc/systemd/system/rapalle-agent.service ]; the
   rm -rf "$LEGACY_DIR"
 fi
 
-# --- Abhaengigkeiten in einer venv (Fallback: systemweit) -----------------
+# --- Dependencies in a venv (fallback: system-wide) -----------------------
 cd "$INSTALL_DIR"
 if python3 -m venv venv >/dev/null 2>&1; then
   ./venv/bin/pip install --quiet --upgrade pip || true
@@ -1031,7 +1031,7 @@ else
   PYEXEC="$(command -v python3)"
 fi
 
-# --- systemd-Dienst -------------------------------------------------------
+# --- systemd service ------------------------------------------------------
 cat > /etc/systemd/system/bytera-agent.service <<UNIT
 [Unit]
 Description=BYTERA RMM Agent
@@ -1072,7 +1072,7 @@ exit 0
 
 def build_deb(out: Path, backend_url: str, token: str) -> Path | None:
     if not have("dpkg-deb"):
-        info("dpkg-deb fehlt -> .deb uebersprungen.")
+        info("dpkg-deb missing -> .deb skipped.")
         return None
     version = agent_version()
     with tempfile.TemporaryDirectory() as tmp:
@@ -1087,25 +1087,25 @@ def build_deb(out: Path, backend_url: str, token: str) -> Path | None:
             "Priority: optional\n"
             "Architecture: all\n"
             "Depends: python3 (>= 3.9), python3-venv | python3-virtualenv, systemd\n"
-            # Umbenennung: ersetzt das Paket unter altem Namen (RAPALLE.net RMM)
+            # Rename: replaces the package under the old name (RAPALLE.net RMM)
             "Replaces: rapalle-rmm-agent\n"
             "Conflicts: rapalle-rmm-agent\n"
             "Provides: rapalle-rmm-agent\n"
             "Maintainer: BYTERA <noreply@rapalle.net>\n"
             "Description: BYTERA RMM Agent\n"
-            " Verbindet dieses Geraet mit dem BYTERA RMM Dashboard.\n"
-            " Laeuft als systemd-Dienst (root) und startet beim Booten.\n",
+            " Connects this device to the BYTERA RMM dashboard.\n"
+            " Runs as a systemd service (root) and starts at boot.\n",
             encoding="utf-8",
         )
         (debian / "postinst").write_text(linux_setup_script(backend_url), encoding="utf-8")
         (debian / "prerm").write_text(LINUX_REMOVE, encoding="utf-8")
         for f in ("postinst", "prerm"):
             os.chmod(debian / f, 0o755)
-        # .env darf beim Update nicht ueberschrieben werden.
+        # The .env must not be overwritten on update.
         (debian / "conffiles").write_text(f"{LINUX_INSTALL_DIR}/.env\n", encoding="utf-8")
 
         deb = out / f"{PKG_NAME}_{version}_all.deb"
-        info(f"Baue {deb.name} ...")
+        info(f"Building {deb.name} ...")
         if subprocess.run(["dpkg-deb", "--build", "--root-owner-group",
                            str(root), str(deb)]).returncode:
             return None
@@ -1118,7 +1118,7 @@ def build_deb(out: Path, backend_url: str, token: str) -> Path | None:
 
 def build_rpm(out: Path, backend_url: str, token: str) -> Path | None:
     if not have("rpmbuild"):
-        info("rpmbuild fehlt -> .rpm uebersprungen (Paket: rpm / rpm-build).")
+        info("rpmbuild missing -> .rpm skipped (package: rpm / rpm-build).")
         return None
     version = agent_version()
     with tempfile.TemporaryDirectory() as tmp:
@@ -1146,8 +1146,8 @@ Obsoletes:      rapalle-rmm-agent
 Provides:       rapalle-rmm-agent
 
 %description
-Verbindet dieses Geraet mit dem BYTERA RMM Dashboard.
-Laeuft als systemd-Dienst (root) und startet beim Booten.
+Connects this device to the BYTERA RMM dashboard.
+Runs as a systemd service (root) and starts at boot.
 
 %prep
 %setup -q
@@ -1170,7 +1170,7 @@ fi
 """
         specfile = top / "SPECS" / f"{PKG_NAME}.spec"
         specfile.write_text(spec, encoding="utf-8")
-        info(f"Baue {PKG_NAME}-{version}.rpm ...")
+        info(f"Building {PKG_NAME}-{version}.rpm ...")
         r = subprocess.run(["rpmbuild", "-bb", "--define", f"_topdir {top}", str(specfile)])
         if r.returncode:
             return None
@@ -1182,14 +1182,14 @@ fi
 
 
 # ==========================================================================
-# 6) Ueberall: selbstentpackendes .run-Skript
+# 6) Everywhere: self-extracting .run script
 # ==========================================================================
 
 def build_run(out: Path, backend_url: str, token: str) -> Path:
     """
-    Selbstentpackender Installer: Shell-Kopf + base64-kodiertes tar.gz.
-    Laesst sich auf JEDEM System bauen (auch Windows) und laeuft auf jedem
-    Linux mit bash + tar - ganz ohne Paketmanager.
+    Self-extracting installer: shell header + base64-encoded tar.gz.
+    Can be built on ANY system (also Windows) and runs on any Linux with
+    bash + tar - entirely without a package manager.
     """
     version = agent_version()
     with tempfile.TemporaryDirectory() as tmp:
@@ -1203,17 +1203,17 @@ def build_run(out: Path, backend_url: str, token: str) -> Path:
 
     setup = linux_setup_script(backend_url).replace("#!/bin/bash\nset -e\n", "")
     header = f'''#!/bin/bash
-# BYTERA RMM Agent {version} - selbstentpackender Installer
-# Aufruf:   sudo ./install-agent.sh          (fragt ggf. nach der Adresse)
-#           sudo RMM_BACKEND_URL=https://rmm.firma.de ./install-agent.sh
+# BYTERA RMM Agent {version} - self-extracting installer
+# Usage:    sudo ./install-agent.sh          (asks for the address if needed)
+#           sudo RMM_BACKEND_URL=https://rmm.company.com ./install-agent.sh
 #           sudo RMM_ENROLLMENT_TOKEN=<token> ./install-agent.sh
 #           sudo ./install-agent.sh --uninstall
 set -e
 INSTALL_DIR="{LINUX_INSTALL_DIR}"
 
-# --- Rootrechte: notfalls SELBST ueber sudo neu starten -------------------
-# "-E" haelt Umgebungsvariablen wie RMM_BACKEND_URL / RMM_ENROLLMENT_TOKEN am
-# Leben, sonst waeren sie nach dem sudo-Wechsel weg.
+# --- Root rights: restart OURSELVES via sudo if necessary -----------------
+# "-E" keeps environment variables like RMM_BACKEND_URL / RMM_ENROLLMENT_TOKEN
+# alive, otherwise they would be gone after the switch to sudo.
 if [ "$(id -u)" != "0" ]; then
   if command -v sudo >/dev/null 2>&1; then
     echo "Restarting with root privileges (sudo) ..."
@@ -1231,7 +1231,7 @@ fi
 
 echo "Unpacking agent to $INSTALL_DIR ..."
 mkdir -p "$INSTALL_DIR"
-# Vorhandene .env (Geraete-Zuordnung!) sichern.
+# Save the existing .env (device assignment!).
 KEEP=""
 [ -f "$INSTALL_DIR/.env" ] && KEEP="$(cat "$INSTALL_DIR/.env")"
 ARCHIVE_LINE=$(awk '/^__PAYLOAD_BELOW__/ {{print NR + 1; exit 0}}' "$0")
@@ -1243,11 +1243,11 @@ exit 0
 __PAYLOAD_BELOW__
 '''
     dest = out / "install-agent.sh"
-    info(f"Baue {dest.name} ...")
+    info(f"Building {dest.name} ...")
     dest.write_text(header + b64 + "\n", encoding="utf-8", newline="\n")
     os.chmod(dest, 0o755)
-    # Zusaetzlich unter dem klassischen .run-Namen ablegen (identischer Inhalt) -
-    # manche Verteilwerkzeuge erwarten diese Endung.
+    # Also store it under the classic .run name (identical content) - some
+    # distribution tools expect this extension.
     run_copy = out / f"{PKG_NAME}.run"
     shutil.copy2(dest, run_copy)
     os.chmod(run_copy, 0o755)
@@ -1255,14 +1255,14 @@ __PAYLOAD_BELOW__
 
 
 # ==========================================================================
-# 6b) Linux: schlichtes Tarball-Paket (.tar.gz)
+# 6b) Linux: plain tarball package (.tar.gz)
 # ==========================================================================
 
 def build_tgz(out: Path, backend_url: str, token: str) -> Path:
     """
-    Klassisches Archiv: agent-Dateien + install.sh + uninstall.sh.
-    Fuer alle, die lieber selbst schauen, was installiert wird - oder das
-    Paket per Ansible/Salt ausrollen:
+    Classic archive: agent files + install.sh + uninstall.sh.
+    For anyone who would rather see for themselves what gets installed - or
+    roll the package out via Ansible/Salt:
 
         tar xzf bytera-rmm-agent-<v>.tar.gz
         cd bytera-rmm-agent-<v> && sudo ./install.sh
@@ -1276,13 +1276,13 @@ def build_tgz(out: Path, backend_url: str, token: str) -> Path:
         install = src / "install.sh"
         install.write_text(
             "#!/bin/bash\n"
-            "# Installiert den RMM-Agenten aus DIESEM Ordner nach "
+            "# Installs the RMM agent from THIS folder to "
             f"{LINUX_INSTALL_DIR}\n"
-            "# Aufruf:  sudo ./install.sh   bzw.\n"
-            "#          sudo RMM_BACKEND_URL=https://rmm.firma.de "
+            "# Usage:   sudo ./install.sh   or\n"
+            "#          sudo RMM_BACKEND_URL=https://rmm.company.com "
             "RMM_ENROLLMENT_TOKEN=<token> ./install.sh\n"
             "set -e\n"
-            # Rootrechte: notfalls per sudo neu starten (-E haelt RMM_*-Variablen).
+            # Root rights: restart via sudo if necessary (-E keeps RMM_* variables).
             'if [ "$(id -u)" != "0" ]; then\n'
             '  if command -v sudo >/dev/null 2>&1; then exec sudo -E "$0" "$@"; fi\n'
             '  echo "Please run as root (sudo is missing)."; exit 1\n'
@@ -1290,7 +1290,7 @@ def build_tgz(out: Path, backend_url: str, token: str) -> Path:
             'HERE="$(cd "$(dirname "$0")" && pwd)"\n'
             f'INSTALL_DIR="{LINUX_INSTALL_DIR}"\n'
             'mkdir -p "$INSTALL_DIR"\n'
-            '# Vorhandene .env (Geraete-Zuordnung!) behalten.\n'
+            '# Keep the existing .env (device assignment!).\n'
             'KEEP=""; [ -f "$INSTALL_DIR/.env" ] && KEEP="$(cat "$INSTALL_DIR/.env")"\n'
             'cp -a "$HERE/." "$INSTALL_DIR/"\n'
             'rm -f "$INSTALL_DIR/install.sh" "$INSTALL_DIR/uninstall.sh"\n'
@@ -1303,7 +1303,7 @@ def build_tgz(out: Path, backend_url: str, token: str) -> Path:
             LINUX_REMOVE.replace(
                 "#!/bin/bash\n",
                 '#!/bin/bash\n'
-                '# Rootrechte: notfalls per sudo neu starten.\n'
+                '# Root rights: restart via sudo if necessary.\n'
                 'if [ "$(id -u)" != "0" ]; then\n'
                 '  if command -v sudo >/dev/null 2>&1; then exec sudo -E "$0" "$@"; fi\n'
                 '  echo "Please run as root (sudo is missing)."; exit 1\n'
@@ -1315,7 +1315,7 @@ def build_tgz(out: Path, backend_url: str, token: str) -> Path:
         os.chmod(uninstall, 0o755)
 
         dest = out / f"{name}.tar.gz"
-        info(f"Baue {dest.name} ...")
+        info(f"Building {dest.name} ...")
         with tarfile.open(dest, "w:gz") as tf:
             tf.add(src, arcname=name)
     return dest
@@ -1327,17 +1327,17 @@ def build_tgz(out: Path, backend_url: str, token: str) -> Path:
 
 def build_pkg(out: Path, backend_url: str, token: str) -> Path:
     """
-    Arch-/Manjaro-Paket. Wird von Hand gebaut (tar.xz mit .PKGINFO + .INSTALL),
-    damit KEIN makepkg noetig ist - das Paket laesst sich also auch auf einem
-    Debian- oder Windows-Server erzeugen.
+    Arch/Manjaro package. Built by hand (tar.xz with .PKGINFO + .INSTALL), so
+    NO makepkg is needed - the package can therefore also be created on a
+    Debian or Windows server.
 
         sudo pacman -U bytera-rmm-agent-<v>-any.pkg.tar.xz
 
-    Hinweis: Ohne makepkg fehlt die (optionale) .MTREE-Datei. pacman gibt dazu
-    eine Warnung aus und installiert normal - nur die Dateipruefsummen fallen
-    weg.
+    Note: without makepkg the (optional) .MTREE file is missing. pacman prints a
+    warning about it and installs normally - only the file checksums are left
+    out.
     """
-    version = agent_version().replace("-", "_")   # pacman mag kein "-" in der Version
+    version = agent_version().replace("-", "_")   # pacman does not like "-" in the version
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         root = tmp / "pkgroot"
@@ -1354,14 +1354,14 @@ def build_pkg(out: Path, backend_url: str, token: str) -> Path:
             f"size = {size}\n"
             "arch = any\n"
             "license = MIT\n"
-            "replaces = rapalle-rmm-agent\n"          # Umbenennung (RAPALLE.net RMM)
+            "replaces = rapalle-rmm-agent\n"          # rename (RAPALLE.net RMM)
             "conflict = rapalle-rmm-agent\n"
             "depend = python\n"
             "depend = systemd\n"
             f"backup = {LINUX_INSTALL_DIR.lstrip('/')}/.env\n",
             encoding="utf-8",
         )
-        # pacman-Hooks: post_install/post_upgrade richten den Dienst ein.
+        # pacman hooks: post_install/post_upgrade set up the service.
         setup = linux_setup_script(backend_url).replace("#!/bin/bash\nset -e\n", "")
         remove = LINUX_REMOVE.replace("#!/bin/bash\n", "").replace("exit 0", "")
         (root / ".INSTALL").write_text(
@@ -1372,9 +1372,9 @@ def build_pkg(out: Path, backend_url: str, token: str) -> Path:
         )
 
         dest = out / f"{PKG_NAME}-{version}-1-any.pkg.tar.xz"
-        info(f"Baue {dest.name} ...")
+        info(f"Building {dest.name} ...")
         with tarfile.open(dest, "w:xz") as tf:
-            # .PKGINFO muss als ERSTER Eintrag im Archiv stehen.
+            # .PKGINFO must be the FIRST entry in the archive.
             tf.add(root / ".PKGINFO", arcname=".PKGINFO")
             tf.add(root / ".INSTALL", arcname=".INSTALL")
             for f in sorted(root.rglob("*")):
@@ -1393,39 +1393,38 @@ ALL_TARGETS = ["exe", "msi", "bat", "ps1", "sh", "tgz", "deb", "rpm", "pkg"]
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Baut lokale Agent-Installationspakete.")
+    ap = argparse.ArgumentParser(description="Builds local agent installation packages.")
     ap.add_argument("--backend-url", default="",
-                    help="Adresse des RMM-Servers, die ins Paket eingebacken wird "
-                         "(leer = der Installer fragt beim Ausfuehren nach)")
+                    help="Address of the RMM server baked into the package "
+                         "(empty = the installer asks at run time)")
     ap.add_argument("--token", default="",
-                    help="AGENT_TOKEN (Standard: aus src/backend/data/.env)")
+                    help="AGENT_TOKEN (default: from src/backend/data/.env)")
     ap.add_argument("--targets", default="auto",
-                    help=f"Komma-Liste aus {','.join(ALL_TARGETS)} oder 'auto' "
-                         "(alles, was das System bauen kann)")
-    ap.add_argument("--out", default=str(DIST_DIR), help="Ausgabeordner")
+                    help=f"Comma list of {','.join(ALL_TARGETS)} or 'auto' "
+                         "(everything the system can build)")
+    ap.add_argument("--out", default=str(DIST_DIR), help="Output folder")
     ap.add_argument("--no-auto-install", action="store_true",
-                    help="Fehlende Bau-Werkzeuge (PyInstaller, WiX) NICHT automatisch "
-                         "nachinstallieren")
+                    help="Do NOT auto-install missing build tools (PyInstaller, WiX)")
     ap.add_argument("--list", action="store_true",
-                    help="Nur zeigen, welche Pakete hier gebaut werden koennen")
+                    help="Only show which packages can be built here")
     args = ap.parse_args()
 
     global AUTO_INSTALL
     AUTO_INSTALL = not args.no_auto_install
 
     if not AGENT_DIR.is_dir():
-        info(f"Agent-Ordner nicht gefunden: {AGENT_DIR}")
+        info(f"Agent folder not found: {AGENT_DIR}")
         return 1
 
-    # exe/msi: Werkzeuge werden bei Bedarf automatisch nachgezogen (PyInstaller
-    # per pip, WiX als Download) - deshalb reicht hier "laeuft auf Windows".
+    # exe/msi: tools are pulled in automatically when needed (PyInstaller via
+    # pip, WiX as a download) - so "runs on Windows" is enough here.
     is_win = platform.system() == "Windows"
     can = {
         "exe": is_win,
         "msi": is_win,
-        # Skript- und Archivpakete brauchen KEIN externes Werkzeug - sie
-        # lassen sich auf jedem System bauen, auch fuer die jeweils andere
-        # Plattform (z.B. das Windows-.bat auf einem Linux-Server).
+        # Script and archive packages need NO external tool - they can be
+        # built on any system, also for the respective other platform (e.g. the
+        # Windows .bat on a Linux server).
         "bat": True,
         "ps1": True,
         "sh": True,
@@ -1435,16 +1434,16 @@ def main() -> int:
         "rpm": have("rpmbuild"),
     }
     if args.list:
-        print("Baubar auf diesem System:")
+        print("Buildable on this system:")
         for t in ALL_TARGETS:
-            print(f"  {t:4} {'ja' if can[t] else 'nein'}")
+            print(f"  {t:4} {'yes' if can[t] else 'no'}")
         return 0
 
     targets = ([t for t in ALL_TARGETS if can[t]] if args.targets == "auto"
                else [t.strip() for t in args.targets.split(",") if t.strip()])
     unknown = [t for t in targets if t not in ALL_TARGETS]
     if unknown:
-        info(f"Unbekannte Ziele: {', '.join(unknown)}")
+        info(f"Unknown targets: {', '.join(unknown)}")
         return 1
 
     out = Path(args.out).resolve()
@@ -1452,10 +1451,10 @@ def main() -> int:
     url = args.backend_url.rstrip("/")
     token = args.token or read_agent_token()
     if not token:
-        info("WARNUNG: kein AGENT_TOKEN gefunden (src/backend/data/.env) - die Agenten "
-             "koennen sich damit nicht anmelden. Mit --token nachreichen.")
+        info("WARNING: no AGENT_TOKEN found (src/backend/data/.env) - the agents "
+             "cannot register with it. Provide it with --token.")
 
-    info(f"Agent-Version {agent_version()} | Ziele: {', '.join(targets)} | Ausgabe: {out}")
+    info(f"Agent version {agent_version()} | targets: {', '.join(targets)} | output: {out}")
     built: list[Path] = []
     setup_exe = None
     if "exe" in targets:
@@ -1463,7 +1462,7 @@ def main() -> int:
         if setup_exe:
             built.append(setup_exe)
     if "msi" in targets:
-        # Die MSI kapselt die Setup.exe - fehlt sie, wird sie zuerst gebaut.
+        # The MSI wraps the Setup.exe - if it is missing, it is built first.
         if setup_exe is None:
             existing = out / "ByteraRmmAgent-Setup.exe"
             setup_exe = existing if existing.is_file() else build_windows_exe(out, url, token)
@@ -1491,9 +1490,9 @@ def main() -> int:
 
     print()
     if not built:
-        info("Es wurde nichts gebaut - siehe Hinweise oben.")
+        info("Nothing was built - see the notes above.")
         return 1
-    info("Fertige Pakete:")
+    info("Finished packages:")
     for b in built:
         info(f"  {b}  ({b.stat().st_size / 1024:.0f} KB)")
     return 0
