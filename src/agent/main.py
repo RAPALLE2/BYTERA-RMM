@@ -2232,48 +2232,49 @@ async def on_exec(data):
 
 
 # ======================================================================
-# VPN-GEGENSTELLE  (WireGuard-kompatibler Tunnel, Client-Seite)
+# VPN PEER  (WireGuard-compatible tunnel, client side)
 # ----------------------------------------------------------------------
-# Wichtig zum Verständnis: Auf DIESEM Gerät läuft kein WireGuard. Nichts
-# wird installiert, kein Treiber, kein TUN-Gerät, keine Administratorrechte.
+# Important to understand: no WireGuard runs on THIS device. Nothing is
+# installed, no driver, no TUN device, no administrator rights.
 #
-# Der eigentliche WireGuard-Tunnel endet im Backend (dort in reinem Python,
-# siehe backend/app/wireguard.py). Was hier ankommt, ist bereits ausgepackt:
-# schlichte Anweisungen der Art "öffne eine TCP-Verbindung nach 192.168.1.5:445
-# und schiebe diese Bytes hin und her". Das erledigt der Agent mit dem
-# Standard-Modul 'socket' - mehr braucht es nicht.
+# The actual WireGuard tunnel terminates in the backend (there in pure
+# Python, see backend/app/wireguard.py). What arrives here is already
+# unpacked: simple instructions like "open a TCP connection to 192.168.1.5:445
+# and shuffle these bytes back and forth". The agent does this with the
+# standard module 'socket' - nothing more is needed.
 #
-# Aus Sicht des Zielrechners im Netz kommt die Verbindung damit von diesem
-# Gerät. Genau das ist gewollt: Der Client ist der Brückenkopf ins Netz.
+# From the point of view of the target machine on the network, the connection
+# thus comes from this device. That is exactly intended: the client is the
+# bridgehead into the network.
 #
-# Ereignisse vom Backend:
-#   vpn-open   {tunnel, stream, host, port}  -> Verbindung aufbauen
-#   vpn-data   {stream, data(base64)}        -> Bytes zum Ziel schicken
-#   vpn-close  {stream}                      -> Verbindung schliessen
+# Events from the backend:
+#   vpn-open   {tunnel, stream, host, port}  -> open a connection
+#   vpn-data   {stream, data(base64)}        -> send bytes to the target
+#   vpn-close  {stream}                      -> close the connection
 #   vpn-udp    {tunnel, host, port, sport, src, data}
 #   vpn-ping   {tunnel, host, src, ident, seq}
 #
-# Antworten zurück: vpn-open-result, vpn-data, vpn-close, vpn-udp,
+# Responses back: vpn-open-result, vpn-data, vpn-close, vpn-udp,
 # vpn-ping-result.
 # ======================================================================
 
-# Wie viele Verbindungen darf ein Tunnel gleichzeitig offen halten? Die
-# Grenze schützt das Gerät davor, dass ein Portscan durch den Tunnel
-# tausende Sockets aufreisst.
+# How many connections may a tunnel keep open at once? The limit protects
+# the device against a port scan through the tunnel tearing open thousands
+# of sockets.
 VPN_MAX_STREAMS = int(os.getenv("AGENT_VPN_MAX_STREAMS", "128") or 128)
-# Zeitlimit für den Verbindungsaufbau zum Ziel.
+# Time limit for establishing the connection to the target.
 VPN_CONNECT_TIMEOUT = 8.0
-# Nach so langer Untätigkeit wird eine UDP-Zuordnung wieder abgeräumt.
+# After this much inactivity a UDP mapping is cleaned up again.
 VPN_UDP_IDLE = 60.0
 
 _vpn_streams: dict[str, dict] = {}          # stream-ID -> {sock, thread, tunnel}
 _vpn_streams_lock = threading.Lock()
-_vpn_udp: dict[tuple, dict] = {}            # (tunnel, host, port, sport) -> Zuordnung
+_vpn_udp: dict[tuple, dict] = {}            # (tunnel, host, port, sport) -> mapping
 _vpn_udp_lock = threading.Lock()
 
 
 def _vpn_emit(event: str, payload: dict) -> None:
-    """Ereignis ans Backend schicken - auch aus einem Hintergrund-Thread."""
+    """Send an event to the backend - also from a background thread."""
     try:
         asyncio.run_coroutine_threadsafe(
             sio.emit(event, payload, namespace="/agent"), _AGENT_LOOP)
@@ -2287,12 +2288,12 @@ def _vpn_emit(event: str, payload: dict) -> None:
 
 def _vpn_reader(stream_id: str, sock: socket.socket, tunnel: str) -> None:
     """
-    Liest alles, was vom Ziel zurückkommt, und schickt es ans Backend.
+    Reads everything that comes back from the target and sends it to the backend.
 
-    Läuft in einem eigenen Thread. Das ist hier der ehrlichere Weg als
-    asyncio: die Sockets sind gewöhnliche, blockierende Sockets, und ein
-    Thread pro Verbindung ist bei den überschaubaren Stückzahlen eines
-    Tunnels unproblematisch - anders als hunderte Dauerverbindungen.
+    Runs in its own thread. That is the more honest way here than asyncio:
+    the sockets are ordinary, blocking sockets, and one thread per connection
+    is unproblematic at the manageable counts of a tunnel - unlike hundreds of
+    permanent connections.
     """
     try:
         while True:
@@ -2325,12 +2326,12 @@ def _vpn_drop_stream(stream_id: str, notify: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# WireGuard-VPN (Modul "vpn"): Das Backend erzeugt die komplette Konfiguration
-# (Schluessel, Adresse, Host) und schickt sie hierher; der Agent wendet sie nur an.
+# WireGuard VPN (module "vpn"): the backend generates the complete configuration
+# (keys, address, host) and sends it here; the agent only applies it.
 #   wg-join  {tunnel, peer, name, conf}   ->  wg-result {tunnel, peer, ok, error}
 #   wg-leave {tunnel, name}
-# Linux: wireguard-tools (wg-quick) noetig. Windows: WireGuard fuer Windows (Dienst).
-# Gleiche Logik wie modules/node/vpn/wgsys.py (hier kompakt, der Agent ist eine Datei).
+# Linux: wireguard-tools (wg-quick) needed. Windows: WireGuard for Windows (service).
+# Same logic as modules/node/vpn/wgsys.py (compact here, the agent is a single file).
 # ---------------------------------------------------------------------------
 _WG_NAME = re.compile(r"^[A-Za-z0-9_=+.-]{1,15}$")
 
@@ -2352,9 +2353,9 @@ def _wg_exe():
 
 
 def _child_env():
-    """Umgebung fuer Fremdprogramme (wireguard.exe, netsh, ...). Eine mit PyInstaller gebaute
-    .exe setzt eigene DLL-/Pfad-Variablen; erben Kindprozesse die, meldet WireGuard
-    "DLL nicht gefunden". Darum hier ohne _MEI*/_PYI*-Variablen und mit dem urspruenglichen PATH."""
+    """Environment for external programs (wireguard.exe, netsh, ...). An .exe built with
+    PyInstaller sets its own DLL/path variables; if child processes inherit them, WireGuard
+    reports "DLL not found". Hence without _MEI*/_PYI* variables and with the original PATH."""
     env = dict(os.environ)
     if getattr(sys, "frozen", False):
         for k in list(env):
@@ -2372,7 +2373,7 @@ def _wg_run(cmd, timeout=90):
         try:
             import ctypes
             k32 = ctypes.windll.kernel32
-            k32.SetDllDirectoryW(None)            # DLL-Suchpfad der .exe nicht an Kindprozesse vererben
+            k32.SetDllDirectoryW(None)            # do not pass the .exe DLL search path to child processes
         except Exception:
             k32 = None
     try:
@@ -2388,22 +2389,22 @@ def _wg_run(cmd, timeout=90):
 
 
 def _wg_gui_dir():
-    """Konfigurationsablage der WireGuard-App: Dateien hier zeigt die App in ihrer Tunnelliste an
-    (der WireGuard-Manager verschluesselt sie selbst zu <name>.conf.dpapi)."""
+    """Configuration store of the WireGuard app: files here are shown by the app in its tunnel list
+    (the WireGuard manager encrypts them itself into <name>.conf.dpapi)."""
     return os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "WireGuard", "Data", "Configurations")
 
 
 def _wg_svc_exists(name):
-    """Gibt es den WireGuard-Tunneldienst schon? (wireguard.exe zeigt sonst bei /uninstalltunnelservice
-    ein Fenster "Der angegebene Dienst ist kein installierter Dienst" und wartet auf OK.)"""
+    """Does the WireGuard tunnel service already exist? (otherwise wireguard.exe shows a window
+    "The specified service is not an installed service" on /uninstalltunnelservice and waits for OK.)"""
     code, _ = _wg_run(["sc", "query", "WireGuardTunnel$" + name], 20)
     return code == 0
 
 
 def _wg_dpapi_encrypt(data, name):
-    """Konfiguration so verschluesseln, wie es die WireGuard-App selbst tut (DPAPI, Beschreibung =
-    Tunnelname). Der Agent laeuft als SYSTEM - wie der WireGuard-Manager -, daher kann die App
-    die Datei lesen und zeigt den Tunnel in ihrer Liste an."""
+    """Encrypt the configuration the same way the WireGuard app does (DPAPI, description =
+    tunnel name). The agent runs as SYSTEM - like the WireGuard manager - so the app can
+    read the file and shows the tunnel in its list."""
     import ctypes
     from ctypes import wintypes
 
@@ -2415,7 +2416,7 @@ def _wg_dpapi_encrypt(data, name):
     CRYPTPROTECT_UI_FORBIDDEN = 0x1
     if not ctypes.windll.crypt32.CryptProtectData(ctypes.byref(blob_in), ctypes.c_wchar_p(name), None, None, None,
                                                   CRYPTPROTECT_UI_FORBIDDEN, ctypes.byref(blob_out)):
-        raise OSError(ctypes.GetLastError(), "CryptProtectData fehlgeschlagen")
+        raise OSError(ctypes.GetLastError(), "CryptProtectData failed")
     try:
         return ctypes.string_at(blob_out.pbData, blob_out.cbData)
     finally:
@@ -2423,8 +2424,8 @@ def _wg_dpapi_encrypt(data, name):
 
 
 def _wg_win_install(exe, name, conf):
-    """Windows: Tunnel in die Ablage der WireGuard-App legen (verschluesselt, damit die App ihn
-    in ihrer Liste zeigt) und als Dienst starten -> sichtbar UND aktiv. Ohne Fehlerfenster."""
+    """Windows: place the tunnel in the WireGuard app's store (encrypted, so the app shows it
+    in its list) and start it as a service -> visible AND active. Without an error window."""
     if _wg_svc_exists(name):
         _wg_run([exe, "/uninstalltunnelservice", name], 60)
         for _ in range(20):
@@ -2442,24 +2443,24 @@ def _wg_win_install(exe, name, conf):
     try:
         with open(target, "wb") as f:
             f.write(_wg_dpapi_encrypt(conf.encode("utf-8"), name))
-    except Exception as e:                                       # Rueckfall: Klartext (laeuft, App zeigt ihn evtl. nicht)
-        _print(f"[wg] Verschluesseln fuer die WireGuard-App nicht moeglich ({e}) - nutze Klartext")
+    except Exception as e:                                       # fallback: plaintext (works, app may not show it)
+        _print(f"[wg] Could not encrypt for the WireGuard app ({e}) - using plaintext")
         target = os.path.join(_wg_conf_dir(), name + ".conf")
         with open(target, "w", encoding="utf-8") as f:
             f.write(conf)
     code, out = _wg_run([exe, "/installtunnelservice", target])
     if code == 0:
-        for _ in range(20):                                      # Dienst wirklich da?
+        for _ in range(20):                                      # is the service really there?
             if _wg_svc_exists(name):
                 break
             time.sleep(0.5)
         else:
-            return 1, "Der WireGuard-Tunneldienst wurde nicht angelegt"
+            return 1, "The WireGuard tunnel service was not created"
     return code, out
 
 
 def _wg_install():
-    """WireGuard beim ersten Tunnel nachladen (Agent laeuft als root/SYSTEM)."""
+    """Install WireGuard on the first tunnel (agent runs as root/SYSTEM)."""
     try:
         if IS_WINDOWS:
             if shutil.which("winget"):
@@ -2481,10 +2482,10 @@ def _wg_up(name, conf):
         _wg_install()
         exe = _wg_exe()
     if not exe:
-        raise RuntimeError("WireGuard fehlt – " + ("WireGuard für Windows installieren" if IS_WINDOWS
-                                                  else "Paket wireguard-tools installieren"))
+        raise RuntimeError("WireGuard missing - " + ("install WireGuard for Windows" if IS_WINDOWS
+                                                  else "install the wireguard-tools package"))
     if name.startswith("rmt"):
-        # Endpunkt-Test: Reste frueherer Tests (rmt*) zuerst wegraeumen
+        # Endpoint test: clean up leftovers of earlier tests (rmt*) first
         for old in os.listdir(_wg_conf_dir()):
             if old.startswith("rmt") and old.endswith(".conf") and old[:-5] != name:
                 try:
@@ -2505,12 +2506,12 @@ def _wg_up(name, conf):
             _wg_run(["wg-quick", "down", name], 60)
         code, out = _wg_run(["wg-quick", "up", name])
     if code != 0:
-        raise RuntimeError(out.strip()[-400:] or "WireGuard-Fehler %d" % code)
+        raise RuntimeError(out.strip()[-400:] or "WireGuard error %d" % code)
 
 
 def _wg_firewall(name, allow_from, add=True):
-    """Eingehenden Verkehr aus dem VPN-Netz zulassen (Ping, Freigaben, Remote-Dienste der Teilnehmer).
-    Windows: Firewall-Regel je Tunnel. Linux: ufw bzw. firewalld, falls aktiv (sonst ist meist nichts zu tun)."""
+    """Allow inbound traffic from the VPN network (ping, shares, remote services of the peers).
+    Windows: a firewall rule per tunnel. Linux: ufw or firewalld, if active (otherwise usually nothing to do)."""
     rule = "RMM-VPN " + name
     try:
         if IS_WINDOWS:
@@ -2531,7 +2532,7 @@ def _wg_firewall(name, allow_from, add=True):
             if code == 0:
                 _wg_run(["firewall-cmd", "--zone=trusted", ("--add-interface=" if add else "--remove-interface=") + name], 20)
     except Exception as e:
-        _print(f"[wg] Firewall {name}: {e}")
+        _print(f"[wg] firewall {name}: {e}")
 
 
 def _wg_down(name):
@@ -2539,9 +2540,9 @@ def _wg_down(name):
     exe = _wg_exe()
     if exe:
         if IS_WINDOWS:
-            if _wg_svc_exists(name):                               # sonst Fehlerfenster von wireguard.exe
+            if _wg_svc_exists(name):                               # otherwise an error window from wireguard.exe
                 _wg_run([exe, "/uninstalltunnelservice", name], 60)
-            for old in (name + ".conf", name + ".conf.dpapi"):     # auch aus der WireGuard-App entfernen
+            for old in (name + ".conf", name + ".conf.dpapi"):     # also remove it from the WireGuard app
                 try:
                     os.remove(os.path.join(_wg_gui_dir(), old))
                 except OSError:
@@ -2552,7 +2553,7 @@ def _wg_down(name):
         os.remove(os.path.join(_wg_conf_dir(), name + ".conf"))
     except OSError:
         pass
-    if IS_WINDOWS:                                                 # Rest aus der Zeit vor der Umbenennung
+    if IS_WINDOWS:                                                 # leftover from before the rename
         legacy = os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "Rapalle", "wireguard")
         try:
             os.remove(os.path.join(legacy, name + ".conf"))
@@ -2560,7 +2561,7 @@ def _wg_down(name):
             pass
         for d in (legacy, os.path.dirname(legacy)):
             try:
-                os.rmdir(d)                                        # nur wenn leer
+                os.rmdir(d)                                        # only if empty
             except OSError:
                 pass
 
@@ -2571,12 +2572,12 @@ async def on_wg_join(payload):
     res = {"tunnel": payload.get("tunnel"), "peer": payload.get("peer"), "ok": False, "error": ""}
     try:
         if not _WG_NAME.match(name):
-            raise RuntimeError("ungültiger Tunnelname")
+            raise RuntimeError("invalid tunnel name")
         await asyncio.to_thread(_wg_up, name, str(payload.get("conf") or ""))
         if payload.get("allow_from"):
             await asyncio.to_thread(_wg_firewall, name, str(payload.get("allow_from")), True)
         res["ok"] = True
-        _print(f"[wg] Tunnel {name} verbunden")
+        _print(f"[wg] tunnel {name} connected")
     except Exception as e:
         res["error"] = str(e)
         _print(f"[wg] Tunnel {name}: {e}")
@@ -2589,14 +2590,14 @@ async def on_wg_leave(payload):
     if _WG_NAME.match(name):
         try:
             await asyncio.to_thread(_wg_down, name)
-            _print(f"[wg] Tunnel {name} entfernt")
+            _print(f"[wg] tunnel {name} removed")
         except Exception as e:
-            _print(f"[wg] Tunnel {name} entfernen: {e}")
+            _print(f"[wg] removing tunnel {name}: {e}")
 
 
 @sio.on("vpn-open", namespace="/agent")
 async def on_vpn_open(payload):
-    """Neue Verbindung durch den Tunnel aufbauen."""
+    """Open a new connection through the tunnel."""
     stream_id = payload.get("stream") or ""
     tunnel = payload.get("tunnel") or ""
     host = payload.get("host") or ""
@@ -2607,11 +2608,11 @@ async def on_vpn_open(payload):
     with _vpn_streams_lock:
         too_many = len(_vpn_streams) >= VPN_MAX_STREAMS
     if too_many:
-        _print(f"[vpn] Grenze von {VPN_MAX_STREAMS} Verbindungen erreicht - "
-               f"{host}:{port} abgelehnt")
+        _print(f"[vpn] limit of {VPN_MAX_STREAMS} connections reached - "
+               f"{host}:{port} rejected")
         await sio.emit("vpn-open-result",
                        {"tunnel": tunnel, "stream": stream_id, "ok": False,
-                        "error": "zu viele offene Verbindungen"},
+                        "error": "too many open connections"},
                        namespace="/agent")
         return
 
@@ -2636,14 +2637,14 @@ async def on_vpn_open(payload):
                                       "ok": True})
         reader.start()
 
-    # Der Verbindungsaufbau blockiert bis zu VPN_CONNECT_TIMEOUT Sekunden -
-    # das gehört in einen Thread, sonst steht der ganze Agent still.
+    # Establishing the connection blocks for up to VPN_CONNECT_TIMEOUT seconds -
+    # that belongs in a thread, otherwise the whole agent stalls.
     threading.Thread(target=_connect, daemon=True).start()
 
 
 @sio.on("vpn-data", namespace="/agent")
 async def on_vpn_data(payload):
-    """Bytes aus dem Tunnel an das Ziel weiterreichen."""
+    """Forward bytes from the tunnel to the target."""
     stream_id = payload.get("stream") or ""
     with _vpn_streams_lock:
         entry = _vpn_streams.get(stream_id)
@@ -2661,7 +2662,7 @@ async def on_vpn_data(payload):
 
 @sio.on("vpn-close", namespace="/agent")
 async def on_vpn_close(payload):
-    """Verbindung schliessen (Gegenstelle im Tunnel ist fertig)."""
+    """Close the connection (the peer in the tunnel is done)."""
     _vpn_drop_stream(payload.get("stream") or "", notify=False)
 
 
@@ -2671,7 +2672,7 @@ async def on_vpn_close(payload):
 
 def _vpn_udp_reader(key: tuple, sock: socket.socket, tunnel: str,
                     src: str, sport: int, host: str, port: int) -> None:
-    """Wartet auf Antwort-Datagramme und schickt sie durch den Tunnel zurück."""
+    """Waits for response datagrams and sends them back through the tunnel."""
     try:
         while True:
             sock.settimeout(VPN_UDP_IDLE)
@@ -2683,8 +2684,8 @@ def _vpn_udp_reader(key: tuple, sock: socket.socket, tunnel: str,
                 break
             _vpn_emit("vpn-udp", {
                 "tunnel": tunnel,
-                # 'host/port' ist hier der Absender im Netz des Clients,
-                # 'dst/dport' der Benutzer im Tunnel.
+                # 'host/port' here is the sender on the client's network,
+                # 'dst/dport' the user in the tunnel.
                 "host": host, "port": port,
                 "dst": src, "dport": sport,
                 "data": base64.b64encode(data).decode(),
@@ -2701,7 +2702,7 @@ def _vpn_udp_reader(key: tuple, sock: socket.socket, tunnel: str,
 
 @sio.on("vpn-udp", namespace="/agent")
 async def on_vpn_udp(payload):
-    """Ein UDP-Datagramm aus dem Tunnel verschicken (z.B. DNS)."""
+    """Send a UDP datagram from the tunnel (e.g. DNS)."""
     tunnel = payload.get("tunnel") or ""
     host = payload.get("host") or ""
     port = int(payload.get("port") or 0)
@@ -2721,7 +2722,7 @@ async def on_vpn_udp(payload):
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             except Exception as e:
-                _print(f"[vpn] UDP-Socket fehlgeschlagen: {e}")
+                _print(f"[vpn] UDP socket failed: {e}")
                 return
             entry = {"sock": sock}
             _vpn_udp[key] = entry
@@ -2731,7 +2732,7 @@ async def on_vpn_udp(payload):
     try:
         entry["sock"].sendto(data, (host, port))
     except Exception as e:
-        _print(f"[vpn] UDP an {host}:{port} fehlgeschlagen: {e}")
+        _print(f"[vpn] UDP to {host}:{port} failed: {e}")
 
 
 # ----------------------------------------------------------------------
@@ -2741,12 +2742,13 @@ async def on_vpn_udp(payload):
 @sio.on("vpn-ping", namespace="/agent")
 async def on_vpn_ping(payload):
     """
-    Erreichbarkeitsprüfung durch den Tunnel.
+    Reachability check through the tunnel.
 
-    Echte ICMP-Pakete zu bauen setzt einen Raw-Socket und damit Root- bzw.
-    Administratorrechte voraus - die hat der Agent bewusst nicht überall.
-    Deshalb wird das System-Werkzeug 'ping' benutzt; das Ergebnis (erreichbar
-    ja/nein) reicht für die Antwort, die das Backend im Tunnel erzeugt.
+    Building real ICMP packets requires a raw socket and thus root or
+    administrator rights - which the agent deliberately does not have
+    everywhere. Therefore the system tool 'ping' is used; the result
+    (reachable yes/no) is enough for the response the backend generates in
+    the tunnel.
     """
     tunnel = payload.get("tunnel") or ""
     host = payload.get("host") or ""
@@ -2774,21 +2776,21 @@ async def on_vpn_ping(payload):
 
 
 # ======================================================================
-# NODE (Installation & Ueberwachung)
+# NODE (installation & supervision)
 # ----------------------------------------------------------------------
-# Eine NODE ist ein eigener Prozess (src/node/main.py), der UNABHAENGIG vom
-# Agenten laeuft - mit eigener Verbindung zum Backend und eigenem Token. Der
-# Agent kuemmert sich nur um das Drumherum:
+# A NODE is a separate process (src/node/main.py) that runs INDEPENDENTLY of
+# the agent - with its own connection to the backend and its own token. The
+# agent only takes care of the surroundings:
 #
-#   node-install  Paket (ZIP) vom Backend holen, nach ./node/ entpacken,
-#                 node.json schreiben, als Dienst einrichten und starten
-#   node-ensure   sicherstellen, dass die Node laeuft und aktuell ist
-#   node-remove   stoppen, Dienst entfernen, ./node/ loeschen
+#   node-install  fetch the package (ZIP) from the backend, extract to ./node/,
+#                 write node.json, set it up as a service and start it
+#   node-ensure   make sure the node is running and up to date
+#   node-remove   stop it, remove the service, delete ./node/
 #
-# Dienst (je nach System): systemd (Linux, root) / geplante Aufgabe (Windows) /
-# launchd (macOS, root) - sonst ein abgekoppelter Prozess, den der Wachhund
-# (node_watchdog_loop) bei Bedarf neu startet.
-# Ohne 'node-install' liegt auf dem Client keine einzige Zeile Node-Code.
+# Service (depending on the system): systemd (Linux, root) / scheduled task
+# (Windows) / launchd (macOS, root) - otherwise a detached process that the
+# watchdog (node_watchdog_loop) restarts when needed.
+# Without 'node-install' there is not a single line of node code on the client.
 # ======================================================================
 
 NODE_DIR = Path(os.path.dirname(os.path.abspath(__file__))) / "node"
@@ -2841,7 +2843,7 @@ def _node_extract(data: bytes) -> None:
             if name.endswith("/") or name == "node.json" or name.split("/")[0] in ("data", "__pycache__"):
                 continue
             target = (NODE_DIR / name).resolve()
-            target.relative_to(base)                    # verhindert ../ im ZIP
+            target.relative_to(base)                    # prevents ../ in the ZIP
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(z.read(name))
 
@@ -2859,7 +2861,7 @@ def _node_is_root() -> bool:
 
 
 def _node_start_process() -> None:
-    """Abgekoppelter Prozess (ueberlebt den Agenten, wird vom Wachhund neu gestartet)."""
+    """Detached process (survives the agent, restarted by the watchdog)."""
     kw: dict = {"cwd": str(NODE_DIR), "stdin": subprocess.DEVNULL,
                 "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
     if os.name == "nt":
@@ -2870,7 +2872,7 @@ def _node_start_process() -> None:
 
 
 def _node_service_install() -> str:
-    """Richtet die Node als Dienst ein und startet sie. Gibt die Betriebsart zurueck."""
+    """Sets up the node as a service and starts it. Returns the operating mode."""
     py, main = sys.executable, str(NODE_DIR / "main.py")
     if sys.platform.startswith("linux") and _node_is_root() and shutil.which("systemctl") and os.path.isdir("/run/systemd/system"):
         unit = (f"[Unit]\nDescription=BYTERA RMM Node\nAfter=network-online.target docker.service\nWants=network-online.target\n\n"
@@ -2881,14 +2883,14 @@ def _node_service_install() -> str:
         code, out = _node_run(["systemctl", "enable", "--now", NODE_SERVICE])
         if code == 0:
             return "systemd"
-        _print(f"[node] systemd-Dienst nicht moeglich: {out.strip()[:200]}")
+        _print(f"[node] systemd service not possible: {out.strip()[:200]}")
     elif os.name == "nt":
         code, out = _node_run(["schtasks", "/create", "/tn", NODE_TASK, "/tr", f'"{py}" "{main}"', "/sc", "onstart",
                                "/ru", "SYSTEM", "/rl", "HIGHEST", "/f"])
         if code == 0:
             _node_run(["schtasks", "/run", "/tn", NODE_TASK])
             return "task"
-        _print(f"[node] Geplante Aufgabe nicht moeglich: {out.strip()[:200]}")
+        _print(f"[node] scheduled task not possible: {out.strip()[:200]}")
     elif sys.platform == "darwin" and _node_is_root():
         plist = ('<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>'
                  '<key>Label</key><string>net.bytera.node</string>'
@@ -2935,10 +2937,10 @@ def _node_service_remove() -> None:
 
 
 def _node_do_install(payload: dict) -> str:
-    """Blockierend (im Thread ausfuehren): Paket holen, entpacken, konfigurieren, starten."""
+    """Blocking (run in a thread): fetch package, extract, configure, start."""
     data = _node_download(str(payload.get("path") or "/api/nodes/package"))
     if NODE_DIR.exists():
-        _node_service_remove()                         # alte Version sauber beenden
+        _node_service_remove()                         # cleanly stop the old version
     _node_extract(data)
     cfg = {"backend_url": BACKEND_URL, "client_id": str(payload.get("client_id") or DEVICE_ID),
            "token": str(payload.get("token") or ""),
@@ -2957,9 +2959,9 @@ def _node_do_install(payload: dict) -> str:
 
 
 def _node_do_update(payload: dict) -> None:
-    """Neues Paket einspielen (node.json und data/ bleiben), Node neu starten."""
+    """Apply a new package (node.json and data/ stay), restart the node."""
     data = _node_download(str(payload.get("path") or "/api/nodes/package"))
-    _node_service_remove()                              # liest .mode, um den alten Dienst zu finden
+    _node_service_remove()                              # reads .mode to find the old service
     _node_extract(data)
     (NODE_DIR / ".hash").write_text(str(payload.get("hash") or ""), encoding="utf-8")
     (NODE_DIR / ".mode").write_text(_node_service_install(), encoding="utf-8")
@@ -2974,13 +2976,13 @@ async def _node_report(op: str, ok: bool, error: str = "", **extra) -> None:
 
 @sio.on("node-install", namespace="/agent")
 async def on_node_install(payload):
-    _print("[node] Installation angefordert")
+    _print("[node] installation requested")
     try:
         mode = await asyncio.get_running_loop().run_in_executor(None, _node_do_install, payload or {})
-        _print(f"[node] installiert (Betriebsart: {mode})")
+        _print(f"[node] installed (operating mode: {mode})")
         await _node_report("install", True, mode=mode)
     except Exception as e:
-        _print(f"[node] Installation fehlgeschlagen: {e}")
+        _print(f"[node] installation failed: {e}")
         await _node_report("install", False, str(e))
 
 
@@ -2989,23 +2991,23 @@ async def on_node_ensure(payload):
     payload = payload or {}
     try:
         if not _node_installed():
-            await _node_report("ensure", False, "Node-Dateien fehlen auf dem Client - bitte die Node neu aktivieren.")
+            await _node_report("ensure", False, "Node files are missing on the client - please re-activate the node.")
             return
         loop = asyncio.get_running_loop()
         if payload.get("hash") and payload["hash"] != _node_hash():
-            _print("[node] Aktualisierung ...")
+            _print("[node] updating ...")
             await loop.run_in_executor(None, _node_do_update, payload)
         elif not _node_pid():
             await loop.run_in_executor(None, _node_start_process if _node_mode() in ("", "process") else _node_service_install)
         await _node_report("ensure", True)
     except Exception as e:
-        _print(f"[node] ensure fehlgeschlagen: {e}")
+        _print(f"[node] ensure failed: {e}")
         await _node_report("ensure", False, str(e))
 
 
 @sio.on("node-remove", namespace="/agent")
 async def on_node_remove(payload):
-    _print("[node] Entfernen angefordert")
+    _print("[node] removal requested")
     try:
         def _remove():
             _node_service_remove()
@@ -3013,51 +3015,51 @@ async def on_node_remove(payload):
         await asyncio.get_running_loop().run_in_executor(None, _remove)
         await _node_report("remove", True)
     except Exception as e:
-        _print(f"[node] Entfernen fehlgeschlagen: {e}")
+        _print(f"[node] removal failed: {e}")
         await _node_report("remove", False, str(e))
 
 
 async def node_watchdog_loop():
-    """Startet die Node neu, wenn sie (ohne Dienst) nicht mehr laeuft."""
+    """Restarts the node if it (without a service) is no longer running."""
     while True:
         await asyncio.sleep(60)
         try:
             if _node_installed() and _node_mode() in ("", "process") and not _node_pid():
-                _print("[node] Prozess lief nicht mehr - starte neu")
+                _print("[node] process was no longer running - restarting")
                 await asyncio.get_running_loop().run_in_executor(None, _node_start_process)
         except Exception as e:
-            _print(f"[node] Wachhund: {e}")
+            _print(f"[node] watchdog: {e}")
 
 
 # ======================================================================
-# WARTUNGSMODUS / DIAGNOSE (Agent-Seite)
+# MAINTENANCE MODE / DIAGNOSTICS (agent side)
 # ----------------------------------------------------------------------
-# Wenn das Backend den Wartungsmodus einschaltet, schreibt der Agent alles
-# mit und liefert es regelmaessig ab. Damit liegen Backend- und
-# Agent-Ausgabe in EINER Zeitachse - bei einem Absturz kurz nach dem
-# Verbindungsaufbau ist genau das die entscheidende Frage: was ist auf
-# beiden Seiten in derselben Sekunde passiert?
+# When the backend turns on maintenance mode, the agent records everything
+# and uploads it regularly. This puts backend and agent output on ONE
+# timeline - on a crash shortly after the connection is established that is
+# exactly the decisive question: what happened on both sides in the same
+# second?
 #
-# Mitgeschrieben wird alles, was sonst still verschwindet:
-#   * jede Zeile ueber log/_print (haengt bereits am Root-Logger)
-#   * Ausnahmen in Threads (threading.excepthook)
-#   * Ausnahmen in asyncio-Aufgaben (Loop-Exception-Handler)
-#   * regelmaessige Messwerte (Speicher, Threads, Dateideskriptoren)
+# Recorded is everything that otherwise disappears silently:
+#   * every line via log/_print (already attached to the root logger)
+#   * exceptions in threads (threading.excepthook)
+#   * exceptions in asyncio tasks (loop exception handler)
+#   * regular measurements (memory, threads, file descriptors)
 #
-# Der Puffer laeuft IMMER mit, auch ohne Wartungsmodus. Nur das Hochladen
-# haengt am Schalter. So sind beim Einschalten die letzten Minuten sofort
-# dabei, statt erst ab dem Moment der Aktivierung.
+# The buffer ALWAYS runs, even without maintenance mode. Only the upload
+# depends on the switch. This way the last minutes are included immediately
+# when it is turned on, instead of only from the moment of activation.
 # ======================================================================
 
 _DIAG = {
     "enabled": False,
-    "queue": _collections.deque(maxlen=4000),   # noch nicht abgeliefert
+    "queue": _collections.deque(maxlen=4000),   # not yet uploaded
     "lock": threading.Lock(),
 }
 
 
 def _diag_add(line: str, level: str = "INFO") -> None:
-    """Eine Zeile in die Abliefer-Warteschlange. Darf nie werfen."""
+    """Add one line to the upload queue. Must never raise."""
     try:
         stamp = time.strftime("%H:%M:%S")
         with _DIAG["lock"]:
@@ -3067,7 +3069,7 @@ def _diag_add(line: str, level: str = "INFO") -> None:
 
 
 class _DiagHandler(logging.Handler):
-    """Haengt am Root-Logger und faengt damit alles ab, was _print schreibt."""
+    """Attached to the root logger, thereby capturing everything _print writes."""
 
     def emit(self, record):
         try:
@@ -3084,19 +3086,19 @@ def _diag_thread_hook(args):
     text = "".join(_tb.format_exception(args.exc_type, args.exc_value,
                                         args.exc_traceback))
     name = args.thread.name if args.thread else "?"
-    _print(f"[diag] Unbehandelte Ausnahme im Thread {name}:\n{text}")
+    _print(f"[diag] Unhandled exception in thread {name}:\n{text}")
 
 
 def _diag_loop_handler(loop, context):
     """
-    Ausnahmen aus asyncio-Aufgaben.
+    Exceptions from asyncio tasks.
 
-    Ohne diesen Haken meldet Python nur irgendwann spaeter "Task exception
-    was never retrieved" - zu einem Zeitpunkt, der mit der Ursache nichts
-    mehr zu tun hat.
+    Without this hook, Python only reports "Task exception was never
+    retrieved" at some later point - at a time that no longer has anything
+    to do with the cause.
     """
     exc = context.get("exception")
-    msg = context.get("message") or "asyncio-Fehler"
+    msg = context.get("message") or "asyncio error"
     if exc:
         import traceback as _tb
         detail = "".join(_tb.format_exception(type(exc), exc, exc.__traceback__))
@@ -3106,36 +3108,36 @@ def _diag_loop_handler(loop, context):
 
 
 def _diag_install() -> None:
-    """Einmalig beim Start. Laeuft unabhaengig vom Schalter."""
+    """Once at startup. Runs independently of the switch."""
     try:
         logging.getLogger().addHandler(_DiagHandler())
         threading.excepthook = _diag_thread_hook
         _AGENT_LOOP.set_exception_handler(_diag_loop_handler)
     except Exception as e:
-        print(f"[diag] Einhaengen fehlgeschlagen: {e}")
+        print(f"[diag] hook installation failed: {e}")
     _start_loop_watchdog()
 
 
 # ----------------------------------------------------------------------
-# Waechter fuer die Ereignisschleife des Agenten
+# Watchdog for the agent's event loop
 # ----------------------------------------------------------------------
-# Dasselbe Prinzip wie im Backend, aus demselben Grund: Ein Agent, dessen
-# Schleife haengt, ist nicht abgestuerzt - er lebt, meldet aber nichts mehr
-# und reagiert auf keinen Befehl. Im Dashboard steht er als "online" und
-# tut trotzdem nichts. Das ist die aergerlichste aller Stoerungen, weil sie
-# nach einem Fehler des Servers aussieht.
+# The same principle as in the backend, for the same reason: an agent whose
+# loop hangs has not crashed - it is alive but no longer reports anything
+# and responds to no command. In the dashboard it shows as "online" and
+# still does nothing. That is the most annoying of all faults, because it
+# looks like a server error.
 #
-# Ein Thread misst von aussen. Steht die Schleife zu lange, beendet sich der
-# Agent - der Dienst bzw. die Neustart-Logik in main() faengt ihn auf, und
-# nach Sekunden ist er zurueck.
+# A thread measures from the outside. If the loop stalls for too long, the
+# agent exits - the service or the restart logic in main() catches it, and
+# within seconds it is back.
 
 _AGENT_BEAT = {"t": 0.0, "worst": 0.0}
-# Ab hier gilt der Agent als haengend und startet neu.
+# From here on the agent is considered hung and restarts.
 AGENT_LOOP_KILL_S = float(os.getenv("AGENT_LOOP_KILL_S", "120") or 120)
 
 
 async def loop_heartbeat_agent():
-    """Setzt zweimal pro Sekunde einen Zeitstempel."""
+    """Sets a timestamp twice per second."""
     while True:
         _AGENT_BEAT["t"] = time.monotonic()
         await asyncio.sleep(0.5)
@@ -3155,7 +3157,7 @@ def _agent_watchdog_thread() -> None:
             continue
         if time.monotonic() - warned > 30:
             warned = time.monotonic()
-            _print(f"[diag] Ereignisschleife blockiert seit {lag:.0f}s")
+            _print(f"[diag] event loop blocked for {lag:.0f}s")
             try:
                 import traceback as _tb
                 for tid, frame in sys._current_frames().items():
@@ -3164,18 +3166,18 @@ def _agent_watchdog_thread() -> None:
             except Exception:
                 pass
         if AGENT_LOOP_KILL_S > 0 and lag >= AGENT_LOOP_KILL_S:
-            _print(f"[diag] NOTBREMSE: Schleife steht seit {lag:.0f}s - "
-                   f"der Agent startet sich neu.")
+            _print(f"[diag] EMERGENCY STOP: loop stalled for {lag:.0f}s - "
+                   f"the agent is restarting.")
             try:
                 path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     "last_crash.txt")
                 with open(path, "w", encoding="utf-8") as f:
                     f.write(time.strftime("%Y-%m-%d %H:%M:%S")
-                            + f"\nNotbremse: Ereignisschleife stand {lag:.0f}s\n")
+                            + f"\nEmergency stop: event loop stalled for {lag:.0f}s\n")
             except OSError:
                 pass
-            # Neu starten statt nur beenden: Ein beendeter Agent kaeme ohne
-            # Dienstverwaltung nicht von allein zurueck.
+            # Restart instead of just exiting: a stopped agent would not come
+            # back on its own without service management.
             try:
                 os.execv(sys.executable, [sys.executable] + sys.argv)
             except Exception:
@@ -3188,7 +3190,7 @@ def _start_loop_watchdog() -> None:
 
 
 def _diag_sample() -> str:
-    """Ein Messpunkt - billig genug fuer alle 30 Sekunden."""
+    """One measurement point - cheap enough for every 30 seconds."""
     parts = []
     try:
         p = psutil.Process()
@@ -3208,11 +3210,11 @@ def _diag_sample() -> str:
         pass
     parts.append(f"connected={sio.connected}")
     parts.append(f"registered={_REGISTERED.is_set()}")
-    return "MESSWERT " + " ".join(parts)
+    return "METRIC " + " ".join(parts)
 
 
 def _geo_wifi():
-    """Umliegende WLAN-Access-Points (BSSID + Signal in %). Leise bei Fehlern."""
+    """Nearby Wi-Fi access points (BSSID + signal in %). Quiet on errors."""
     aps = []
     try:
         if IS_WINDOWS:
@@ -3252,7 +3254,7 @@ def _geo_wifi():
                 aps.append({"mac": mac, "signal": int(pct / 2) - 100})
     except Exception:
         pass
-    # Duplikate zusammenfassen
+    # Merge duplicates
     seen = {}
     for a in aps:
         if a["mac"] not in seen:
@@ -3261,7 +3263,7 @@ def _geo_wifi():
 
 
 def _geo_os():
-    """Betriebssystem-Standort (nur wenn vom Nutzer erlaubt). Windows: System.Device."""
+    """Operating-system location (only if allowed by the user). Windows: System.Device."""
     try:
         if IS_WINDOWS:
             ps = ("$ErrorActionPreference='Stop';Add-Type -AssemblyName System.Device;"
@@ -3297,7 +3299,7 @@ def _geo_public_ip():
 
 @sio.on("geo-locate", namespace="/agent")
 async def on_geo_locate(payload):
-    """Backend bittet um Standortdaten (WLAN-APs, OS-Standort, öffentliche IP)."""
+    """The backend requests location data (Wi-Fi APs, OS location, public IP)."""
     rid = (payload or {}).get("requestId")
     try:
         wifi, os_loc, ip = await asyncio.gather(
@@ -3313,26 +3315,26 @@ async def on_geo_locate(payload):
 
 @sio.on("diag-mode", namespace="/agent")
 async def on_diag_mode(payload):
-    """Das Backend schaltet den Wartungsmodus ein oder aus."""
+    """The backend turns maintenance mode on or off."""
     enabled = bool((payload or {}).get("enabled"))
     was = _DIAG["enabled"]
     _DIAG["enabled"] = enabled
     if enabled and not was:
-        _print(f"[diag] Wartungsmodus EIN - Agent {AGENT_VERSION}, "
+        _print(f"[diag] maintenance mode ON - agent {AGENT_VERSION}, "
                f"PID {os.getpid()}, Python {sys.version.split()[0]}, "
                f"{platform.platform()}")
         _diag_report_last_crash()
     elif not enabled and was:
-        _print("[diag] Wartungsmodus AUS")
+        _print("[diag] maintenance mode OFF")
 
 
 def _diag_report_last_crash() -> None:
     """
-    Meldet einen frueheren Absturz nach.
+    Reports a previous crash after the fact.
 
-    Der Agent schreibt bei einem Absturz last_crash.txt und startet sich
-    neu. Diese Datei ist oft das einzige, was von einem Absturz uebrig
-    bleibt - sie gehoert ins Diagnosepaket.
+    On a crash the agent writes last_crash.txt and restarts itself. This
+    file is often the only thing left of a crash - it belongs in the
+    diagnostics package.
     """
     try:
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -3340,26 +3342,26 @@ def _diag_report_last_crash() -> None:
         if not os.path.isfile(path):
             return
         with open(path, "r", encoding="utf-8", errors="replace") as f:
-            _print("[diag] Letzter Absturz dieses Agenten:\n" + f.read()[:8000])
+            _print("[diag] Last crash of this agent:\n" + f.read()[:8000])
     except Exception as e:
-        _print(f"[diag] last_crash.txt nicht lesbar: {e}")
+        _print(f"[diag] last_crash.txt not readable: {e}")
 
 
 async def diag_upload_loop():
     """
-    Liefert die gesammelten Zeilen ab.
+    Uploads the collected lines.
 
-    In Haeppchen und mit Abstand: Ein Agent, der im Sekundentakt Logs
-    schickt, waere selbst eine Last - und der Wartungsmodus soll das
-    Problem finden, nicht vergroessern.
+    In small chunks and with spacing: an agent that sends logs every second
+    would itself be a load - and maintenance mode is meant to find the
+    problem, not enlarge it.
     """
     while True:
         await asyncio.sleep(20)
         try:
             if not _DIAG["enabled"] or not sio.connected or not _REGISTERED.is_set():
-                # Nicht verbunden: Zeilen bleiben in der Warteschlange und
-                # gehen beim naechsten Mal mit. Genau die Zeilen aus einer
-                # Verbindungsstoerung sind die interessanten.
+                # Not connected: lines stay in the queue and go out next
+                # time. The lines from a connection fault are exactly the
+                # interesting ones.
                 continue
             _diag_add(_diag_sample(), "DEBUG")
             with _DIAG["lock"]:
@@ -3367,26 +3369,26 @@ async def diag_upload_loop():
                 _DIAG["queue"].clear()
             if not lines:
                 continue
-            # In Blöcken senden, damit keine übergrosse Nachricht entsteht.
+            # Send in blocks so that no oversized message is created.
             for i in range(0, len(lines), 200):
                 await sio.emit("diag-log", {"id": DEVICE_ID,
                                             "lines": lines[i:i + 200]},
                                namespace="/agent")
         except Exception as e:
-            print(f"[diag] Hochladen fehlgeschlagen: {e}")
+            print(f"[diag] upload failed: {e}")
 
 
 # ======================================================================
-# SELBSTHEILUNG: Hintergrundschleifen, die sich nie verabschieden
+# SELF-HEALING: background loops that never quietly disappear
 # ----------------------------------------------------------------------
-# Eine mit create_task() gestartete Schleife ist nach einer Ausnahme WEG -
-# lautlos. Der Agent laeuft dann scheinbar weiter, meldet aber keine
-# Metriken mehr oder reagiert nicht auf Befehle. Von aussen sieht das aus
-# wie "der Agent ist abgestuerzt", obwohl der Prozess noch lebt.
+# A loop started with create_task() is GONE after an exception - silently.
+# The agent then seemingly keeps running but no longer reports metrics or
+# responds to commands. From the outside this looks like "the agent has
+# crashed", even though the process is still alive.
 #
-# Diese Huelle faengt die Ausnahme, schreibt sie ins Log und startet die
-# Schleife neu - mit wachsendem Abstand, damit eine dauerhaft kaputte
-# Schleife nicht die CPU auslastet.
+# This wrapper catches the exception, writes it to the log and restarts the
+# loop - with growing spacing, so that a permanently broken loop does not
+# max out the CPU.
 # ======================================================================
 
 def _agent_supervise(name: str, factory):
@@ -3396,67 +3398,67 @@ def _agent_supervise(name: str, factory):
             started = time.monotonic()
             try:
                 await factory()
-                _print(f"[aufseher] '{name}' regulaer beendet")
+                _print(f"[supervisor] '{name}' ended normally")
                 return
             except asyncio.CancelledError:
                 raise
             except Exception:
                 import traceback as _tb
-                _print(f"[aufseher] '{name}' abgestuerzt:\n{_tb.format_exc()}")
-                # Lief die Schleife lange, war es vermutlich ein Einzelfall.
-                # Stirbt sie sofort wieder, wird der Abstand groesser.
+                _print(f"[supervisor] '{name}' crashed:\n{_tb.format_exc()}")
+                # If the loop ran for a long time it was probably a one-off.
+                # If it dies again immediately, the spacing grows.
                 delay = 2.0 if time.monotonic() - started > 120 else min(delay * 2, 300.0)
-                _print(f"[aufseher] '{name}' startet in {delay:.0f}s neu")
+                _print(f"[supervisor] '{name}' restarting in {delay:.0f}s")
                 await asyncio.sleep(delay)
 
     return asyncio.create_task(runner(), name=f"supervised:{name}")
 
 
 # ==============================================================
-# INTERAKTIVES TERMINAL (echte PTY-Session)
+# INTERACTIVE TERMINAL (real PTY session)
 # ==============================================================
-# Statt einzelne Befehle auszuführen, hält der Agent pro Terminal-Fenster eine
-# ECHTE Shell offen (bash/sh auf Linux, cmd/powershell auf Windows). Damit
-# funktioniert alles wie in einem lokalen Terminal: 'cd' wirkt dauerhaft,
-# Editoren wie nano/vim laufen, Verlauf, Farben, interaktive Programme.
+# Instead of running individual commands, the agent keeps a REAL shell open
+# per terminal window (bash/sh on Linux, cmd/powershell on Windows). This way
+# everything works like in a local terminal: 'cd' is persistent, editors like
+# nano/vim run, plus history, colors, interactive programs.
 #
-# Linux/macOS: Python-Standardbibliothek 'pty' (kein Zusatzpaket nötig).
-# Windows:     'pywinpty' (ConPTY). Wird per Bootstrap automatisch installiert;
-#              fehlt es, wird eine klare Meldung ausgegeben.
+# Linux/macOS: Python standard library 'pty' (no extra package needed).
+# Windows:     'pywinpty' (ConPTY). Installed automatically via bootstrap;
+#              if it is missing, a clear message is printed.
 #
-# Datenfluss:
-#   Dashboard --term-open {session, shell, cols, rows}--> Agent startet Shell
-#   Dashboard --term-input {session, data}-------------> in die Shell schreiben
-#   Dashboard --term-resize {session, cols, rows}------> PTY-Größe anpassen
-#   Dashboard --term-close {session}-------------------> Shell beenden
-#   Agent     --term-output {session, data}------------> Ausgabe zum Dashboard
-#   Agent     --term-exit {session}--------------------> Shell wurde beendet
+# Data flow:
+#   Dashboard --term-open {session, shell, cols, rows}--> agent starts a shell
+#   Dashboard --term-input {session, data}-------------> write into the shell
+#   Dashboard --term-resize {session, cols, rows}------> adjust the PTY size
+#   Dashboard --term-close {session}-------------------> end the shell
+#   Agent     --term-output {session, data}------------> output to the dashboard
+#   Agent     --term-exit {session}--------------------> the shell has ended
 # --------------------------------------------------------------
 
-_terminals: dict = {}   # session_id -> Handle (plattformabhängig)
+_terminals: dict = {}   # session_id -> handle (platform-dependent)
 
 
 def _resolve_shell_cmd(shell: str, elevated: bool, mode: str = "admin") -> list | None:
-    """Bestimmt das Startkommando der Shell je nach Wunsch, Modus und Plattform.
+    """Determines the shell start command depending on request, mode and platform.
 
-    mode "admin": direkte Shell (Root/System - wie bisher).
-    mode "user":  POSIX startet /bin/login im PTY -> echte Username/Passwort-
-                  Abfrage über PAM, exakt wie an einer SSH-/TTY-Konsole.
-                  Rückgabe None = kein login-Programm gefunden.
+    mode "admin": direct shell (root/system - as before).
+    mode "user":  POSIX starts /bin/login in the PTY -> real username/password
+                  prompt via PAM, exactly as on an SSH/TTY console.
+                  Returns None = no login program found.
     """
     if IS_WINDOWS:
-        # Windows kennt hier nur die System-Shell (das Frontend bietet den
-        # Benutzer-Login dort gar nicht erst an).
+        # Windows only knows the system shell here (the frontend does not even
+        # offer the user login there).
         if shell == "powershell":
             return ["powershell.exe", "-NoLogo", "-NoProfile"]
         return ["cmd.exe"]
     if mode == "user":
         for candidate in ("/bin/login", "/usr/bin/login", "/sbin/login", "/usr/sbin/login"):
             if os.path.exists(candidate):
-                # -p: Umgebung (TERM!) an die Benutzer-Shell durchreichen.
+                # -p: pass the environment (TERM!) through to the user shell.
                 return [candidate, "-p"]
         return None
-    # POSIX: bevorzugt bash, sonst sh. 'shell' spielt hier keine Rolle.
+    # POSIX: prefer bash, otherwise sh. 'shell' is irrelevant here.
     for candidate in ("/bin/bash", "/bin/sh"):
         if os.path.exists(candidate):
             return [candidate, "-i"] if candidate.endswith("bash") else [candidate]
@@ -3464,7 +3466,7 @@ def _resolve_shell_cmd(shell: str, elevated: bool, mode: str = "admin") -> list 
 
 
 class _PosixTerminal:
-    """Interaktive Shell über ein echtes PTY (Linux/macOS)."""
+    """Interactive shell via a real PTY (Linux/macOS)."""
 
     def __init__(self, session_id, shell, cols, rows, loop, mode="admin"):
         import pty, fcntl, termios, struct
@@ -3473,20 +3475,20 @@ class _PosixTerminal:
         self.alive = True
         argv = _resolve_shell_cmd(shell, False, mode)
         if argv is None:
-            # Benutzer-Login gewünscht, aber kein login-Programm vorhanden.
-            raise RuntimeError("Kein /bin/login auf diesem System gefunden - "
-                              "Benutzer-Login nicht möglich")
+            # User login requested, but no login program available.
+            raise RuntimeError("No /bin/login found on this system - "
+                              "user login not possible")
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
-            # Kindprozess: Umgebung setzen und Shell starten.
+            # Child process: set the environment and start the shell.
             os.environ["TERM"] = "xterm-256color"
             try:
                 os.execvp(argv[0], argv)
             except Exception:
                 os._exit(1)
-        # Elternprozess: PTY-Größe setzen.
+        # Parent process: set the PTY size.
         self._set_size(cols, rows)
-        # Leser-Thread: liest PTY-Ausgabe und schickt sie ans Dashboard.
+        # Reader thread: reads PTY output and sends it to the dashboard.
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
         self._reader.start()
 
@@ -3541,15 +3543,15 @@ class _PosixTerminal:
 
 
 class _WinTerminal:
-    """Interaktive Shell über ConPTY (Windows, benötigt pywinpty)."""
+    """Interactive shell via ConPTY (Windows, requires pywinpty)."""
 
     def __init__(self, session_id, shell, cols, rows, loop):
         from winpty import PtyProcess
         self.session_id = session_id
         self.loop = loop
         self.alive = True
-        # winpty.PtyProcess.spawn erwartet einen KOMMANDOSTRING (keine Liste!).
-        # Eine Liste führt zu stillem Fehlschlag/Exception.
+        # winpty.PtyProcess.spawn expects a COMMAND STRING (not a list!).
+        # A list leads to a silent failure/exception.
         if shell == "powershell":
             cmd = "powershell.exe -NoLogo -NoProfile"
         else:
@@ -3603,7 +3605,7 @@ class _WinTerminal:
 
 
 def _pip(*args):
-    """pip im GLEICHEN Interpreter aufrufen, ohne Konsolenfenster."""
+    """Call pip in the SAME interpreter, without a console window."""
     kw = {}
     if platform.system() == "Windows":
         si = subprocess.STARTUPINFO()
@@ -3615,7 +3617,7 @@ def _pip(*args):
         return subprocess.run([sys.executable, "-m", "pip", *args],
                               capture_output=True, text=True, timeout=600, **kw)
     except Exception as e:
-        _print(f"[repair] pip {' '.join(args)} fehlgeschlagen: {e}")
+        _print(f"[repair] pip {' '.join(args)} failed: {e}")
         return None
 
 
@@ -3624,12 +3626,12 @@ _screen_repair_tried = False
 
 def _repair_screen() -> bool:
     """
-    Einmaliger Versuch, mss/Pillow (und pynput) wieder lauffaehig zu machen.
+    One-time attempt to make mss/Pillow (and pynput) runnable again.
 
-    Der haeufigste Fall ist nicht "Paket fehlt", sondern "Paket ist kaputt":
-    ein abgebrochener Download, eine halbe Installation oder ein Rest, den pip
-    fuer vorhanden haelt. Ein schlichtes 'pip install' meldet dann
-    "already satisfied" und aendert nichts - deshalb --force-reinstall.
+    The most common case is not "package missing" but "package broken":
+    an aborted download, a half install, or a leftover that pip considers
+    present. A plain 'pip install' then reports "already satisfied" and
+    changes nothing - hence --force-reinstall.
     """
     global _screen_repair_tried, _SCREEN_AVAILABLE, _INPUT_AVAILABLE
     global _SCREEN_ERROR, _INPUT_ERROR, mss, Image
@@ -3638,7 +3640,7 @@ def _repair_screen() -> bool:
         return _SCREEN_AVAILABLE
     _screen_repair_tried = True
 
-    _print(f"[repair] Bildaufnahme-Pakete neu installieren (Grund: {_SCREEN_ERROR})")
+    _print(f"[repair] reinstalling screen-capture packages (reason: {_SCREEN_ERROR})")
     _pip("install", "--no-cache-dir", "--force-reinstall", "mss>=9.0.0", "Pillow>=10.0.0")
     if not _INPUT_AVAILABLE:
         _pip("install", "--no-cache-dir", "--force-reinstall", "pynput>=1.7.0")
@@ -3654,7 +3656,7 @@ def _repair_screen() -> bool:
         mss, Image = _mss, _Image
         _SCREEN_AVAILABLE = True
         _SCREEN_ERROR = ""
-        _print("[repair] mss/Pillow erfolgreich nachinstalliert.")
+        _print("[repair] mss/Pillow reinstalled successfully.")
     except Exception as e:
         _SCREEN_AVAILABLE = False
         _SCREEN_ERROR = f"{type(e).__name__}: {e}"
@@ -3676,37 +3678,37 @@ _winpty_repair_tried = False
 
 def _winpty_diagnose() -> str:
     """
-    Sammelt, was man braucht, um ein kaputtes pywinpty einzuordnen.
+    Collects what is needed to make sense of a broken pywinpty.
 
-    Der typische Fehler 'No module named winpty._winpty' bedeutet fast immer:
-    Es liegt ein Paket namens 'winpty' im Suchpfad, dessen kompilierter Teil
-    (_winpty.pyd) fehlt - entweder ein Rest einer alten pywinpty-1.x-Version
-    oder das alte, andere PyPI-Paket 'winpty'. Ein 'pip install pywinpty'
-    aendert daran nichts, weil pip das vorhandene Verzeichnis als installiert
-    ansieht bzw. der Rest weiter davorliegt.
+    The typical error 'No module named winpty._winpty' almost always means:
+    there is a package named 'winpty' on the search path whose compiled part
+    (_winpty.pyd) is missing - either a leftover of an old pywinpty 1.x version
+    or the old, different PyPI package 'winpty'. A 'pip install pywinpty'
+    changes nothing, because pip considers the existing directory installed
+    or the leftover still shadows it.
 
-    Zweiter haeufiger Fall: 'pip install' lief in einem ANDEREN Python als dem,
-    mit dem der Agent laeuft. Deshalb steht der Interpreterpfad mit in der
-    Ausgabe - damit sieht man den Unterschied sofort.
+    Second common case: 'pip install' ran in a DIFFERENT Python than the one
+    the agent runs with. That is why the interpreter path is included in the
+    output - it shows the difference at a glance.
     """
     lines = [f"Python: {sys.executable}"]
     try:
         import importlib.util
         spec = importlib.util.find_spec("winpty")
-        lines.append(f"winpty gefunden unter: {getattr(spec, 'origin', None)}")
+        lines.append(f"winpty found at: {getattr(spec, 'origin', None)}")
     except Exception as e:
-        lines.append(f"winpty nicht auffindbar: {e}")
+        lines.append(f"winpty not found: {e}")
     try:
         from importlib.metadata import version, distributions
         try:
-            lines.append(f"pywinpty-Version: {version('pywinpty')}")
+            lines.append(f"pywinpty version: {version('pywinpty')}")
         except Exception:
-            lines.append("pywinpty: nicht als Paket registriert")
-        # Das ALTE, gleichnamige Paket 'winpty' ist die haeufigste Ursache.
+            lines.append("pywinpty: not registered as a package")
+        # The OLD, same-named package 'winpty' is the most common cause.
         for d in distributions():
             if (d.metadata.get("Name") or "").lower() == "winpty":
-                lines.append(f"ACHTUNG: altes Paket 'winpty' {d.version} installiert "
-                             f"- das kollidiert mit pywinpty")
+                lines.append(f"WARNING: old package 'winpty' {d.version} installed "
+                             f"- this collides with pywinpty")
     except Exception:
         pass
     return "\n".join(lines)
@@ -3714,9 +3716,9 @@ def _winpty_diagnose() -> str:
 
 def _winpty_repair() -> bool:
     """
-    Einmaliger Reparaturversuch: kollidierendes 'winpty' entfernen, Reste
-    loeschen und pywinpty sauber neu installieren. Gibt True zurueck, wenn
-    der Import danach klappt.
+    One-time repair attempt: remove the colliding 'winpty', delete leftovers
+    and cleanly reinstall pywinpty. Returns True if the import works
+    afterwards.
     """
     global _winpty_repair_tried
     if _winpty_repair_tried:
@@ -3724,12 +3726,12 @@ def _winpty_repair() -> bool:
     _winpty_repair_tried = True
 
     pip = _pip
-    _print("[term] Repariere pywinpty…")
-    # 1) Beide Pakete sauber entfernen (das alte 'winpty' ist der Stoerenfried).
+    _print("[term] repairing pywinpty…")
+    # 1) Remove both packages cleanly (the old 'winpty' is the troublemaker).
     pip("uninstall", "-y", "winpty")
     pip("uninstall", "-y", "pywinpty")
-    # 2) Uebrig gebliebenes Verzeichnis loeschen - ohne das findet Python
-    #    weiterhin ein 'winpty' ohne den kompilierten Teil.
+    # 2) Delete the leftover directory - without this Python still finds a
+    #    'winpty' without the compiled part.
     try:
         import site
         import shutil
@@ -3737,10 +3739,10 @@ def _winpty_repair() -> bool:
             leftover = Path(base) / "winpty"
             if leftover.is_dir():
                 shutil.rmtree(leftover, ignore_errors=True)
-                _print(f"[term] Rest entfernt: {leftover}")
+                _print(f"[term] leftover removed: {leftover}")
     except Exception as e:
-        _print(f"[term] Aufraeumen uebersprungen: {e}")
-    # 3) Neu installieren.
+        _print(f"[term] cleanup skipped: {e}")
+    # 3) Reinstall.
     pip("install", "--no-cache-dir", "--force-reinstall", "pywinpty>=2.0.0")
 
     try:
@@ -3749,28 +3751,27 @@ def _winpty_repair() -> bool:
         for name in [m for m in list(sys.modules) if m == "winpty" or m.startswith("winpty.")]:
             sys.modules.pop(name, None)
         importlib.import_module("winpty")
-        _print("[term] pywinpty erfolgreich repariert.")
+        _print("[term] pywinpty repaired successfully.")
         return True
     except Exception as e:
-        _print(f"[term] Reparatur fehlgeschlagen: {e}")
+        _print(f"[term] repair failed: {e}")
         return False
 
 
 class _WinPipeTerminal:
     """
-    Ersatz-Terminal fuer Windows OHNE pywinpty.
+    Fallback terminal for Windows WITHOUT pywinpty.
 
-    Statt eines echten ConPTY laeuft die Shell an normalen Pipes. Das ist
-    bewusst ein Kompromiss, aber ein brauchbarer: Befehle, Ausgabe und
-    Eingabe funktionieren. Was NICHT geht, sind Vollbild-Anwendungen
-    (nano-artige Editoren, Fortschrittsbalken mit Cursorsteuerung) und die
-    Groessenanpassung - dafuer braucht es ein echtes PTY.
+    Instead of a real ConPTY, the shell runs on normal pipes. This is a
+    deliberate compromise, but a usable one: commands, output and input work.
+    What does NOT work are full-screen applications (nano-like editors,
+    progress bars with cursor control) and resizing - those need a real PTY.
 
-    Der Sinn: Lieber ein eingeschraenktes Terminal als gar keins, wenn
-    pywinpty auf dem Rechner partout nicht laeuft.
+    The point: better a limited terminal than none at all, if pywinpty simply
+    will not run on the machine.
     """
 
-    LIMITED_NOTE = ("\x1b[33m[Eingeschränkter Modus: ohne pywinpty läuft die Shell "
+    LIMITED_NOTE = ("\x1b[33m[Limited mode: without pywinpty the shell runs "
                     "on plain pipes. Full-screen programs and resizing "
                     "do not work here.]\x1b[0m\r\n")
 
@@ -3806,10 +3807,10 @@ class _WinPipeTerminal:
                 chunk = self.proc.stdout.read(1)
                 if not chunk:
                     break
-                # Alles nachlesen, was schon bereitliegt, damit die Ausgabe
-                # nicht Zeichen fuer Zeichen durchs Netz tropft.
+                # Read everything already available, so the output does not
+                # trickle through the network character by character.
                 try:
-                    import msvcrt  # noqa: F401  (nur Windows)
+                    import msvcrt  # noqa: F401  (Windows only)
                 except Exception:
                     pass
                 extra = self.proc.stdout.read1(65536) if hasattr(self.proc.stdout, "read1") else b""
@@ -3832,7 +3833,7 @@ class _WinPipeTerminal:
             pass
 
     def resize(self, cols, rows):
-        pass          # ohne PTY nicht moeglich
+        pass          # not possible without a PTY
 
     def close(self):
         self.alive = False
