@@ -1,20 +1,20 @@
 """
-vpn.py - WireGuard-Tunnel des RMM vollautomatisch verwalten (Windows/Linux)
+vpn.py - fully automatic management of the RMM WireGuard tunnels (Windows/Linux)
 ==========================================================================
 
-Fragt jede Minute GET /api/vpn/my ab (alle aktiven Tunnel, in denen der angemeldete
-Benutzer Teilnehmer ist, mit fertiger WireGuard-Datei) und gleicht ab:
-  * neuer Tunnel           -> Datei ablegen, Tunnel anlegen und verbinden
-  * Datei geaendert        -> neu einrichten (z.B. neuer Endpunkt)
-  * Tunnel weg/abgelaufen  -> Verbindung trennen und Tunnel loeschen
-Nur Tunnel, die diese App selbst angelegt hat, werden je angefasst (Liste im
-App-Speicher). Abmelden entfernt alle davon.
+Polls GET /api/vpn/my every minute (all active tunnels the signed-in user is a
+participant of, with a ready WireGuard file) and reconciles:
+  * new tunnel             -> write the file, create the tunnel and connect
+  * file changed           -> set up again (e.g. new endpoint)
+  * tunnel gone/expired    -> disconnect and delete the tunnel
+Only tunnels this app created itself are ever touched (list in the app store).
+Signing out removes all of them.
 
-Windows: WireGuard fuer Windows muss installiert sein; das Einrichten als Dienst
-         braucht Administratorrechte (einmalige UAC-Abfrage je Aenderung).
-Linux:   wireguard-tools; Einrichten per pkexec (Passwortabfrage) bzw. direkt als root.
-Android: nicht automatisch moeglich - dort die Datei/den QR-Code im Dashboard (App
-         „VPN“) in die WireGuard-App uebernehmen.
+Windows: WireGuard for Windows must be installed; setting it up as a service
+         requires administrator rights (one UAC prompt per change).
+Linux:   wireguard-tools; set up via pkexec (password prompt) or directly as root.
+Android: not possible automatically - import the file/QR code from the dashboard (app
+         "VPN") into the WireGuard app.
 """
 from __future__ import annotations
 
@@ -38,10 +38,10 @@ def wg_exe() -> str | None:
 
 def supported() -> tuple[bool, str]:
     if platform.system() not in ("Windows", "Linux"):
-        return False, "Automatik nur unter Windows und Linux"
+        return False, "Automation only on Windows and Linux"
     if not wg_exe():
-        return False, ("WireGuard für Windows installieren (wireguard.com/install)" if IS_WINDOWS
-                       else "Paket „wireguard-tools“ installieren")
+        return False, ("Install WireGuard for Windows (wireguard.com/install)" if IS_WINDOWS
+                       else "Install the \"wireguard-tools\" package")
     return True, ""
 
 
@@ -52,17 +52,17 @@ def _conf_dir(data_dir: Path) -> Path:
 
 
 def _elevated(script_lines: list[str]) -> tuple[int, str]:
-    """Befehle mit Admin-/Root-Rechten ausfuehren (UAC bzw. pkexec).
-    Windows: die Befehle kommen in eine temporaere .ps1-Datei, die per UAC-Abfrage mit
-    Administratorrechten laeuft (keine Probleme mit Anfuehrungszeichen/Leerzeichen in Pfaden)."""
+    """Run commands with admin/root rights (UAC or pkexec).
+    Windows: the commands go into a temporary .ps1 file that runs via a UAC prompt with
+    administrator rights (no problems with quotes/spaces in paths)."""
     if IS_WINDOWS:
         import tempfile
         fd, path = tempfile.mkstemp(suffix=".ps1", prefix="rmm-")
         logp = path + ".log"
         with os.fdopen(fd, "w", encoding="utf-8-sig") as f:
             f.write("$ErrorActionPreference = 'Continue'\r\n")
-            # Ein per UAC gestarteter Prozess kann seine Ausgabe nicht an uns zurueckgeben -> in eine Datei.
-            # Write-Output wird umgeleitet; Fremdprogramme mit "| Write-Output" protokollieren.
+            # A process started via UAC cannot return its output to us -> into a file.
+            # Write-Output is redirected; log external programs with "| Write-Output".
             f.write(f"$RmmLog = '{logp}'\r\n")
             f.write("function Write-Output { param([Parameter(ValueFromPipeline=$true)]$InputObject) "
                     "process { Add-Content -LiteralPath $RmmLog -Value ([string]$InputObject) -Encoding UTF8 } }\r\n")
@@ -80,7 +80,7 @@ def _elevated(script_lines: list[str]) -> tuple[int, str]:
             except OSError:
                 pass
             if "abgebrochen" in out.lower() or "canceled by the user" in out.lower():
-                return 1, "Administratorrechte wurden abgelehnt."
+                return 1, "Administrator rights were declined."
             return p.returncode, out
         except Exception as e:  # noqa: BLE001
             return 1, str(e)
@@ -100,9 +100,9 @@ def _elevated(script_lines: list[str]) -> tuple[int, str]:
 
 
 def _dpapi_machine(data: bytes, name: str) -> bytes:
-    """Konfiguration im Format der WireGuard-App verschluesseln (<name>.conf.dpapi): DPAPI mit
-    Beschreibung = Tunnelname. CRYPTPROTECT_LOCAL_MACHINE, damit der WireGuard-Manager (SYSTEM)
-    die Datei lesen kann - so steht der Tunnel sofort in der App, ohne Manager-Neustart."""
+    """Encrypt the configuration in the WireGuard app format (<name>.conf.dpapi): DPAPI with
+    description = tunnel name. CRYPTPROTECT_LOCAL_MACHINE so the WireGuard manager (SYSTEM)
+    can read the file - this way the tunnel appears in the app immediately, without a manager restart."""
     import ctypes
     from ctypes import wintypes
 
@@ -114,7 +114,7 @@ def _dpapi_machine(data: bytes, name: str) -> bytes:
     flags = 0x1 | 0x4                                   # UI_FORBIDDEN | LOCAL_MACHINE
     if not ctypes.windll.crypt32.CryptProtectData(ctypes.byref(blob_in), ctypes.c_wchar_p(name), None, None, None,
                                                   flags, ctypes.byref(blob_out)):
-        raise OSError(ctypes.GetLastError(), "CryptProtectData fehlgeschlagen")
+        raise OSError(ctypes.GetLastError(), "CryptProtectData failed")
     try:
         return ctypes.string_at(blob_out.pbData, blob_out.cbData)
     finally:
@@ -122,8 +122,8 @@ def _dpapi_machine(data: bytes, name: str) -> bytes:
 
 
 class _Lock:
-    """Nur EIN Einrichten gleichzeitig (Hintergrund-Abgleich und „In PC-App aktivieren“ laufen in
-    verschiedenen Prozessen - zwei gleichzeitige Installationen ergaben „Tunnel existiert bereits“)."""
+    """Only ONE setup at a time (background sync and "Activate in PC app" run in
+    different processes - two simultaneous installs produced "tunnel already exists")."""
 
     def __init__(self, data_dir: Path):
         self.path = _conf_dir(data_dir) / ".install.lock"
@@ -131,20 +131,20 @@ class _Lock:
 
     def __enter__(self):
         import time as _t
-        for _ in range(240):                                    # bis 2 min warten
+        for _ in range(240):                                    # wait up to 2 min
             try:
                 self.fd = os.open(str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
                 os.write(self.fd, str(os.getpid()).encode())
                 return self
             except FileExistsError:
                 try:
-                    if _t.time() - self.path.stat().st_mtime > 300:   # liegengebliebene Sperre
+                    if _t.time() - self.path.stat().st_mtime > 300:   # stale lock left behind
                         self.path.unlink()
                         continue
                 except OSError:
                     pass
                 _t.sleep(0.5)
-        raise RuntimeError("Eine andere VPN-Einrichtung läuft noch – bitte gleich erneut versuchen.")
+        raise RuntimeError("Another VPN setup is still running - please try again shortly.")
 
     def __exit__(self, *exc):
         try:
@@ -157,12 +157,12 @@ class _Lock:
 
 
 def siblings(iface: str) -> list[str]:
-    """Andere WireGuard-Tunnel DESSELBEN RMM-Tunnels auf diesem PC (Name "r" + Tunnel-ID + Teilnehmer-ID).
-    Typisch: Auf dem PC laeuft auch der Agent, und der ist schon Teilnehmer. Beide Tunnel wuerden die
-    gleiche Route (z.B. 10.77.0.0/24) anlegen - Windows meldet dann "Das Objekt ist bereits vorhanden"."""
+    """Other WireGuard tunnels of the SAME RMM tunnel on this PC (name "r" + tunnel ID + participant ID).
+    Typical: the agent also runs on this PC and is already a participant. Both tunnels would create the
+    same route (e.g. 10.77.0.0/24) - Windows then reports "The object already exists"."""
     if len(iface) < 9 or not iface.startswith("r"):
         return []
-    prefix = iface[:9]                                   # "r" + 8 Zeichen Tunnel-ID
+    prefix = iface[:9]                                   # "r" + 8 chars of the tunnel ID
     out = []
     try:
         if IS_WINDOWS:
@@ -197,8 +197,8 @@ class SameDeviceError(RuntimeError):
 
 
 def install_locked(data_dir: Path, store, iface: str, conf: str, force: bool = False) -> bool:
-    """Einrichten mit Sperre; prueft danach erneut, ob ein anderer Prozess es schon erledigt hat.
-    Rueckgabe: True = eingerichtet, False = war schon aktuell."""
+    """Set up with a lock; afterwards checks again whether another process already did it.
+    Returns: True = set up, False = was already up to date."""
     h = hashlib.sha256(conf.encode()).hexdigest()[:16]
     with _Lock(data_dir):
         try:
@@ -207,12 +207,12 @@ def install_locked(data_dir: Path, store, iface: str, conf: str, force: bool = F
             pass
         managed = dict(store.get("vpn_managed", {}) or {})
         if managed.get(iface) == h and (not force or service_running(iface)):
-            # gleiche Konfiguration und Tunnel laeuft -> NICHT neu einrichten (ein zweites Einrichten
-            # entfernte den laufenden Tunnel und scheiterte dann an seinem noch vorhandenen Adapter)
+            # same config and the tunnel is running -> do NOT set up again (a second setup
+            # removed the running tunnel and then failed on its still-present adapter)
             return False
         sib = siblings(iface)
         if sib:
-            if iface in managed:                         # Reste eines frueheren Versuchs entfernen
+            if iface in managed:                         # remove remnants of an earlier attempt
                 try:
                     uninstall(data_dir, iface)
                 except Exception:
@@ -220,9 +220,9 @@ def install_locked(data_dir: Path, store, iface: str, conf: str, force: bool = F
                 managed.pop(iface, None)
                 store.set(vpn_managed=managed)
             raise SameDeviceError(
-                "Dieser PC ist schon Teilnehmer dieses Tunnels (der Agent auf diesem PC, Tunnel " + sib[0] + "). "
-                "Damit bist du hier bereits im VPN und erreichst die anderen Teilnehmer – ein zweiter Zugang auf "
-                "demselben PC geht nicht (gleiches Netz). Für deinen eigenen Zugang einen anderen PC benutzen.")
+                "This PC is already a participant of this tunnel (the agent on this PC, tunnel " + sib[0] + "). "
+                "You are therefore already in the VPN here and can reach the other participants - a second access on "
+                "the same PC is not possible (same network). Use a different PC for your own access.")
         install(data_dir, iface, conf)
         try:
             store.reload()
@@ -255,9 +255,9 @@ def install(data_dir: Path, iface: str, conf: str) -> None:
         pass
     exe = wg_exe()
     if IS_WINDOWS:
-        # Verschluesselt fuer die WireGuard-App (sofort in ihrer Liste), dann mit Adminrechten:
-        # alten Dienst nur entfernen, wenn es ihn gibt, warten bis er WIRKLICH weg ist (sonst
-        # "Objekt bereits vorhanden"), Datei in die App-Ablage legen und Tunnel starten.
+        # Encrypted for the WireGuard app (immediately in its list), then with admin rights:
+        # remove the old service only if it exists, wait until it is REALLY gone (otherwise
+        # "object already exists"), place the file in the app store and start the tunnel.
         import re as _re
         _m = _re.search(r"^Address\s*=\s*([0-9.]+)", conf, _re.M)
         ip = _m.group(1) if _m else ""
@@ -276,34 +276,34 @@ def install(data_dir: Path, iface: str, conf: str) -> None:
             "  & $exe /uninstalltunnelservice $n | Out-Null",
             "  for ($i = 0; $i -lt 20 -and (Svc); $i++) { Start-Sleep -Milliseconds 500 }",
             "  if (Svc) {",
-            "    # Dienst ist 'zum Loeschen markiert', solange der WireGuard-Manager ihn offen haelt",
+            "    # the service is 'marked for deletion' as long as the WireGuard manager keeps it open",
             "    Restart-Service -Name 'WireGuardManager' -Force -ErrorAction SilentlyContinue",
             "    for ($i = 0; $i -lt 20 -and (Svc); $i++) { Start-Sleep -Milliseconds 500 }",
             "  }",
             "}",
-            "if (Svc) { Write-Output 'Der alte WireGuard-Tunneldienst laesst sich nicht entfernen - bitte Rechner neu starten.'; exit 4 }",
-            "# Verwaister Netzwerkadapter gleichen Namens (abgestuerzter Tunnel) -> sonst 'Das Objekt ist bereits vorhanden'",
+            "if (Svc) { Write-Output 'The old WireGuard tunnel service cannot be removed - please restart the computer.'; exit 4 }",
+            "# orphaned network adapter of the same name (crashed tunnel) -> otherwise 'The object already exists'",
             "for ($i = 0; $i -lt 10; $i++) {",
             "  $a = Get-NetAdapter -Name $n -IncludeHidden -ErrorAction SilentlyContinue",
             "  if (-not $a) { break }",
             "  if ($i -ge 4 -and $a.PnPDeviceID) { pnputil /remove-device \"$($a.PnPDeviceID)\" | Out-Null }",
             "  Start-Sleep -Milliseconds 700",
             "}",
-            "# Alte RMM-Tunnel, die DIESELBE Adresse belegen (z.B. von einem frueheren, laengst geloeschten",
-            "# RMM-Tunnel; aeltere App-Versionen legten sie ohne Eintrag in der WireGuard-Liste an) -> entfernen.",
-            "# Sonst: 'unable to set ips: Das Objekt ist bereits vorhanden'.",
+            "# Old RMM tunnels occupying the SAME address (e.g. from an earlier, long-deleted",
+            "# RMM tunnel; older app versions created them without an entry in the WireGuard list) -> remove.",
+            "# Otherwise: 'unable to set ips: The object already exists'.",
             f"$ip = '{ip}'",
             "if ($ip) {",
             "  foreach ($x in @(Get-NetIPAddress -IPAddress $ip -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceAlias -ne $n })) {",
             "    $al = $x.InterfaceAlias",
             "    if ($al -like 'rmv*' -or $al -match '^r[0-9a-f]{14}$' -or $al -like 'rmt*') {",
-            "      Write-Output ('Entferne alten RMM-Tunnel ' + $al + ' (belegt ' + $ip + ')')",
+            "      Write-Output ('Removing old RMM tunnel ' + $al + ' (occupies ' + $ip + ')')",
             "      if (Get-Service -Name ('WireGuardTunnel$' + $al) -ErrorAction SilentlyContinue) { & $exe /uninstalltunnelservice $al | Out-Null }",
             "      for ($i = 0; $i -lt 20 -and (Get-Service -Name ('WireGuardTunnel$' + $al) -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 500 }",
             "      Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $d ($al + '.conf')), (Join-Path $d ($al + '.conf.dpapi')), (Join-Path (Join-Path $env:ProgramData 'Bytera') ($al + '.conf')), (Join-Path (Join-Path $env:ProgramData 'Rapalle') ($al + '.conf'))",
             "      for ($i = 0; $i -lt 10; $i++) { $a = Get-NetAdapter -Name $al -IncludeHidden -ErrorAction SilentlyContinue; if (-not $a) { break }; if ($i -ge 4 -and $a.PnPDeviceID) { pnputil /remove-device \"$($a.PnPDeviceID)\" | Out-Null }; Start-Sleep -Milliseconds 700 }",
             "    } else {",
-            "      Write-Output ('Die Adresse ' + $ip + ' ist auf diesem PC schon von \"' + $al + '\" belegt (kein RMM-Tunnel) - bitte dort trennen.')",
+            "      Write-Output ('The address ' + $ip + ' is already used on this PC by \"' + $al + '\" (not an RMM tunnel) - please disconnect it there.')",
             "      exit 6",
             "    }",
             "  }",
@@ -311,15 +311,15 @@ def install(data_dir: Path, iface: str, conf: str) -> None:
             "Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $d ($n + '.conf')), (Join-Path $d ($n + '.conf.dpapi'))",
             "$dst = Join-Path $d ($n + '.conf.dpapi')",
             "Copy-Item -Force -LiteralPath $src -Destination $dst",
-            "# Der WireGuard-Manager (laeuft, wenn die WireGuard-App offen ist) bemerkt die neue Datei und",
-            "# startet einen dazu LAUFENDEN Tunnel neu ('aktiviert - deaktiviert - existiert bereits').",
-            "# Darum erst warten, bis er die Datei verarbeitet hat, dann starten.",
+            "# The WireGuard manager (running when the WireGuard app is open) notices the new file and",
+            "# restarts a RUNNING tunnel for it ('activated - deactivated - already exists').",
+            "# So first wait until it has processed the file, then start.",
             "if (Get-Process -Name 'wireguard' -ErrorAction SilentlyContinue) { Start-Sleep -Seconds 4 } else { Start-Sleep -Milliseconds 500 }",
             "& $exe /installtunnelservice $dst | Out-Null",
             "for ($i = 0; $i -lt 20 -and -not (Svc); $i++) { Start-Sleep -Milliseconds 500 }",
-            "if (-not (Svc)) { Write-Output 'Der WireGuard-Tunneldienst wurde nicht angelegt.'; exit 3 }",
-            "# Bis 25 s auf 'Running' warten (StartPending ist normal, z.B. waehrend der Endpunkt-Name aufgeloest wird);",
-            "# Fehler erst, wenn der Dienst gestoppt bzw. verschwunden ist oder die Zeit abgelaufen ist.",
+            "if (-not (Svc)) { Write-Output 'The WireGuard tunnel service was not created.'; exit 3 }",
+            "# Wait up to 25 s for 'Running' (StartPending is normal, e.g. while the endpoint name is resolved);",
+            "# only an error once the service is stopped/gone or the time has run out.",
             "$s = $null",
             "for ($i = 0; $i -lt 50; $i++) {",
             "  $s = Svc",
@@ -327,16 +327,16 @@ def install(data_dir: Path, iface: str, conf: str) -> None:
             "  if ($i -ge 6 -and (-not $s -or $s.Status -eq 'Stopped')) { break }",
             "  Start-Sleep -Milliseconds 500",
             "}",
-            "if ($s -and $s.Status -eq 'Running') { Write-Output ('Tunnel laeuft (' + $n + ')') }",
+            "if ($s -and $s.Status -eq 'Running') { Write-Output ('Tunnel running (' + $n + ')') }",
             "if (-not $s -or $s.Status -ne 'Running') {",
-            "  Write-Output ('Tunnelstart aus der WireGuard-Ablage gescheitert (Status: ' + $(if ($s) { $s.Status } else { 'kein Dienst' }) + ').')",
-            "  Write-Output '--- WireGuard-Protokoll (Ende) ---'",
+            "  Write-Output ('Tunnel start from the WireGuard store failed (status: ' + $(if ($s) { $s.Status } else { 'no service' }) + ').')",
+            "  Write-Output '--- WireGuard log (end) ---'",
             "  & $exe /dumplog 2>&1 | Select-Object -Last 25 | ForEach-Object { Write-Output $_ }",
-            "  Write-Output '--- Netzwerk ---'",
+            "  Write-Output '--- Network ---'",
             "  Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceDescription -like '*WireGuard*' -or $_.InterfaceDescription -like '*Wintun*' } | ForEach-Object { Write-Output ('Adapter: ' + $_.Name + ' / ' + $_.Status + ' / ' + $_.InterfaceDescription) }",
-            f"  Get-NetIPAddress -IPAddress '{ip}' -ErrorAction SilentlyContinue | ForEach-Object {{ Write-Output ('IP {ip} schon vergeben auf: ' + $_.InterfaceAlias) }}",
-            f"  Get-NetRoute -DestinationPrefix '{route}' -ErrorAction SilentlyContinue | ForEach-Object {{ Write-Output ('Route {route} schon vorhanden auf: ' + $_.InterfaceAlias) }}",
-            "  # Rueckfall: Klartext-Konfiguration ausserhalb der WireGuard-Ablage (so wie beim Import von Hand)",
+            f"  Get-NetIPAddress -IPAddress '{ip}' -ErrorAction SilentlyContinue | ForEach-Object {{ Write-Output ('IP {ip} already assigned on: ' + $_.InterfaceAlias) }}",
+            f"  Get-NetRoute -DestinationPrefix '{route}' -ErrorAction SilentlyContinue | ForEach-Object {{ Write-Output ('Route {route} already present on: ' + $_.InterfaceAlias) }}",
+            "  # fallback: plaintext config outside the WireGuard store (like a manual import)",
             "  if (Svc) { & $exe /uninstalltunnelservice $n | Out-Null; for ($i = 0; $i -lt 20 -and (Svc); $i++) { Start-Sleep -Milliseconds 500 } }",
             "  $alt = Join-Path $env:ProgramData 'Bytera'",
             "  New-Item -ItemType Directory -Force -Path $alt | Out-Null",
@@ -345,8 +345,8 @@ def install(data_dir: Path, iface: str, conf: str) -> None:
             "  icacls $alt /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null",
             "  & $exe /installtunnelservice $alt | Out-Null",
             "  for ($i = 0; $i -lt 50; $i++) { $s = Svc; if ($s -and $s.Status -eq 'Running') { break }; if ($i -ge 6 -and (-not $s -or $s.Status -eq 'Stopped')) { break }; Start-Sleep -Milliseconds 500 }",
-            "  if ($s -and $s.Status -eq 'Running') { Write-Output 'RUECKFALL-OK'; exit 0 }",
-            "  Write-Output 'Auch der Rueckfall (Klartext-Datei) startet nicht.'",
+            "  if ($s -and $s.Status -eq 'Running') { Write-Output 'FALLBACK-OK'; exit 0 }",
+            "  Write-Output 'The fallback (plaintext file) does not start either.'",
             "  & $exe /dumplog 2>&1 | Select-Object -Last 12 | ForEach-Object { Write-Output $_ }",
             "  exit 5",
             "}",
@@ -359,16 +359,16 @@ def install(data_dir: Path, iface: str, conf: str) -> None:
     else:
         code, out = _elevated([f"install -m 600 '{path}' /etc/wireguard/{iface}.conf",
                                f"wg-quick down {iface} 2>/dev/null", f"wg-quick up {iface}"])
-    try:                                                  # Protokoll fuer die Fehlersuche (VPN-Bereich zeigt es an)
+    try:                                                  # log for troubleshooting (shown in the VPN area)
         import time as _t
         with open(_conf_dir(data_dir) / "vpn.log", "a", encoding="utf-8") as f:
             f.write(f"\n=== {_t.strftime('%Y-%m-%d %H:%M:%S')} install {iface} -> {code}\n{out.strip()}\n")
     except OSError:
         pass
     if code != 0:
-        raise RuntimeError((out.strip()[-2500:] or f"Fehler {code}") + f" (Code {code})")
-    if "RUECKFALL-OK" in out:
-        LAST_NOTE[iface] = "läuft (Rückfall: nicht in der WireGuard-Liste – Diagnose in vpn.log)"
+        raise RuntimeError((out.strip()[-2500:] or f"Error {code}") + f" (code {code})")
+    if "FALLBACK-OK" in out:
+        LAST_NOTE[iface] = "running (fallback: not in the WireGuard list - diagnostics in vpn.log)"
 
 
 LAST_NOTE: dict[str, str] = {}
@@ -395,8 +395,8 @@ import urllib.parse as _uparse
 
 
 def vpn_my_path(store) -> str:
-    """GET-Pfad fuer /api/vpn/my mit Geraete-Kennung, damit JEDES Geraet eine
-    eigene VPN-Adresse bekommt (mehrere Geraete am selben Konto = je eigene IP)."""
+    """GET path for /api/vpn/my with a device identifier, so EACH device gets its
+    own VPN address (several devices on the same account = one IP each)."""
     try:
         dev = (store.get("device_id") or "").strip()
     except Exception:
@@ -411,17 +411,17 @@ def vpn_my_path(store) -> str:
 
 
 class VpnSync:
-    """Hintergrund-Abgleich. get_api() liefert das aktuelle Api-Objekt (oder None)."""
+    """Background sync. get_api() returns the current Api object (or None)."""
 
     def __init__(self, store, data_dir: Path, get_api, on_status=None, interval: int = 60, refresh=None):
         self.store, self.data_dir, self.get_api = store, Path(data_dir), get_api
-        self.refresh = refresh            # Sitzung erneuern (Geraetetoken), wenn die alte abgelaufen ist
+        self.refresh = refresh            # renew the session (device token) when the old one has expired
         self.on_status = on_status or (lambda text: None)
         self.interval = interval
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._thread = None
-        self._failed: dict[str, float] = {}     # "<iface>:<hash>" -> Zeit; fehlgeschlagene nicht minuetlich wiederholen
+        self._failed: dict[str, float] = {}     # "<iface>:<hash>" -> time; do not retry failed ones every minute
 
     def managed(self) -> dict:
         return dict(self.store.get("vpn_managed", {}) or {})          # iface -> hash
@@ -455,7 +455,7 @@ class VpnSync:
 
     def sync(self):
         try:
-            self.store.reload()                 # Aenderungen anderer App-Prozesse (Link-Starter) uebernehmen
+            self.store.reload()                 # pick up changes from other app processes (link starter)
         except Exception:
             pass
         auto_on = bool(self.store.get("vpn_auto", True))
@@ -470,14 +470,14 @@ class VpnSync:
             data = api.request("GET", vpn_my_path(self.store))
         except ApiError as e:
             if e.status == 404:
-                return                                   # Modul "vpn" ist auf dem Server aus
+                return                                   # module "vpn" is off on the server
             if e.status != 401 or not self.refresh:
                 raise
             self.refresh()
             data = self.get_api().request("GET", vpn_my_path(self.store))
         self._cleanup_legacy()
-        manual = set(self.store.get("vpn_manual", []) or [])          # per Dashboard-Knopf aktiviert
-        off = set(self.store.get("vpn_off", []) or [])                 # im VPN-Bereich bewusst getrennt
+        manual = set(self.store.get("vpn_manual", []) or [])          # activated via the dashboard button
+        off = set(self.store.get("vpn_off", []) or [])                 # deliberately disconnected in the VPN area
         want = {t["iface"]: t for t in data.get("tunnels", [])
                 if ((auto_on and t.get("auto", True)) or t["iface"] in manual) and t["iface"] not in off}
         gone = manual - {t["iface"] for t in data.get("tunnels", [])}
@@ -486,10 +486,10 @@ class VpnSync:
         have = self.managed()
         if not ok:
             if want:
-                self.on_status(f"VPN: {len(want)} Tunnel verfügbar – {why}")
+                self.on_status(f"VPN: {len(want)} tunnels available - {why}")
             return
         changed = False
-        for iface in [i for i in have if i not in want]:          # abgelaufen/entfernt/getrennt -> loeschen
+        for iface in [i for i in have if i not in want]:          # expired/removed/disconnected -> delete
             uninstall_locked(self.data_dir, self.store, iface)   # pflegt vpn_managed selbst
             have.pop(iface, None)
         errors = []
@@ -498,13 +498,13 @@ class VpnSync:
             if have.get(iface) == h:
                 continue
             if iface in manual:
-                # Von Hand aktivierte Tunnel richtet NUR der VPN-Bereich/Link-Starter ein - der Hintergrund-
-                # Abgleich startete sonst einen zweiten Durchgang, der den ersten Tunnel wieder abbaute.
+                # manually activated tunnels are set up ONLY by the VPN area/link starter - otherwise the
+                # background sync would start a second pass that tore down the first tunnel again.
                 continue
             import time as _t
             key = f"{iface}:{h}"
-            if _t.time() - self._failed.get(key, 0) < 900:      # 15 min Pause (sonst staendige UAC-/Passwort-Abfragen)
-                errors.append(f"{t['name']}: Einrichtung fehlgeschlagen – neuer Versuch später")
+            if _t.time() - self._failed.get(key, 0) < 900:      # 15 min pause (otherwise constant UAC/password prompts)
+                errors.append(f"{t['name']}: setup failed - will retry later")
                 continue
             try:
                 install_locked(self.data_dir, self.store, iface, t["conf"])   # pflegt vpn_managed selbst
@@ -514,12 +514,12 @@ class VpnSync:
                 self._failed[key] = _t.time()
                 errors.append(f"{t['name']}: {str(e).strip().splitlines()[-1][:160] if str(e).strip() else e}")
         names = ", ".join(t["name"] for t in want.values())
-        self.on_status(("VPN-Fehler: " + "; ".join(errors)) if errors else
-                       (f"VPN verbunden: {names}" if want else "Kein VPN-Tunnel aktiv"))
+        self.on_status(("VPN error: " + "; ".join(errors)) if errors else
+                       (f"VPN connected: {names}" if want else "No VPN tunnel active"))
 
     def _cleanup_legacy(self):
-        """Tunnel aelterer App-Versionen ("rmv<Tunnel-ID>") entfernen - das Backend benutzt diese Namen nicht
-        mehr; sie liefen ggf. unsichtbar (nicht in der WireGuard-Liste) weiter und belegten Adresse und Route."""
+        """Remove tunnels of older app versions ("rmv<tunnel ID>") - the backend no longer uses these names;
+        they may have kept running invisibly (not in the WireGuard list) and occupied address and route."""
         if not IS_WINDOWS:
             return
         import time as _t
@@ -550,7 +550,7 @@ class VpnSync:
         for n in old:
             managed.pop(n, None)
         self.store.set(vpn_managed=managed)
-        self.on_status(f"Alte VPN-Tunnel entfernt: {', '.join(old)}")
+        self.on_status(f"Old VPN tunnels removed: {', '.join(old)}")
 
     def remove_all(self):
         for iface in list(self.managed()):

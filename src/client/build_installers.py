@@ -1,40 +1,40 @@
 #!/usr/bin/env python3
 """
-build_installers.py - baut ALLE Pakete des BYTERA RMM Clients
+build_installers.py - builds ALL packages of the BYTERA RMM Client
 ===================================================================
-(Gegenstueck zu src/backend/app/build_installers.py fuer den Agenten.)
+(Counterpart to src/backend/app/build_installers.py for the agent.)
 
-Ergebnis in src/client/release/  (das Modul "client" bietet sie unter
-Profil -> Client-App & Geraete und per Einzeiler zum Download an):
+Output in src/client/release/  (the "client" module offers them under
+Profile -> Client app & devices and as a one-liner for download):
 
-  Windows  ByteraClient-<v>-windows.exe   PyInstaller-Onefile (keine Abhaengigkeiten)
-           ByteraClient-<v>-windows.msi   Installer (Programme + Startmenue/Desktop), per GPO/Intune verteilbar
-           ByteraClient-<v>-windows.zip   die .exe zum Entpacken (ohne Installation)
-  Linux    bytera-client_<v>_all.deb      Debian/Ubuntu/Mint (Python 3 + Tk vom System)
+  Windows  ByteraClient-<v>-windows.exe   PyInstaller onefile (no dependencies)
+           ByteraClient-<v>-windows.msi   installer (Programs + Start menu/Desktop), deployable via GPO/Intune
+           ByteraClient-<v>-windows.zip   the .exe to extract (without installation)
+  Linux    bytera-client_<v>_all.deb      Debian/Ubuntu/Mint (Python 3 + Tk from the system)
            bytera-client-<v>-1.noarch.rpm Fedora/RHEL/openSUSE
            bytera-client-<v>-1-any.pkg.tar.xz   Arch/Manjaro
-           bytera-client-<v>-linux.tar.gz / .tgz / .tar   fuer alle Distributionen (install.sh liegt bei)
-  Android  ByteraClient-<v>-android.apk   native App (Android 6+), dauerhaft signiert
+           bytera-client-<v>-linux.tar.gz / .tgz / .tar   for all distributions (install.sh included)
+  Android  ByteraClient-<v>-android.apk   native app (Android 6+), permanently signed
 
-Werkzeuge:
-  Am einfachsten: Modul "Client-App" im Docker-Betrieb aktivieren - das Modul laedt dann ein
-  Bau-Image (bytera/rmm-client-builder) mit ALLEN Werkzeugen und baut darin (wie die Agent-Pakete
-  per Knopfdruck, aber fuer alle Formate).
-  Von Hand (Linux, z.B. Ubuntu 24.04):
-  exe   wine64 + Windows-Python mit PyInstaller  (--winpython C:\\pfad\\python.exe unter Wine)
-        oder direkt auf Windows: python build_installers.py --targets exe,zip,msi
-        (PyInstaller per pip und WiX als Download holt sich das Skript dort selbst, wie beim Agenten)
-  msi   wixl (Paket "wixl"/msitools), auf Windows WiX 3   deb/tar/tgz/pkg  nur Python
-  rpm   rpmbuild (Paket "rpm")
+Tools:
+  Easiest: enable the "Client app" module in Docker mode - the module then downloads a
+  build image (bytera/rmm-client-builder) with ALL tools and builds inside it (like the agent
+  packages at the push of a button, but for all formats).
+  By hand (Linux, e.g. Ubuntu 24.04):
+  exe   wine64 + Windows Python with PyInstaller  (--winpython C:\\path\\python.exe under Wine)
+        or directly on Windows: python build_installers.py --targets exe,zip,msi
+        (the script fetches PyInstaller via pip and WiX as a download itself, like for the agent)
+  msi   wixl (package "wixl"/msitools), on Windows WiX 3   deb/tar/tgz/pkg  Python only
+  rpm   rpmbuild (package "rpm")
   apk   aapt, javac, dalvik-exchange (dx), zipalign, apksigner, android-sdk-platform-23
 
-Aufruf:
-  python3 src/client/build_installers.py                    # alles, was mit den Werkzeugen geht
+Usage:
+  python3 src/client/build_installers.py                    # everything the tools allow
   python3 src/client/build_installers.py --targets deb,tar,apk
   python3 src/client/build_installers.py --list
-  python3 src/client/build_installers.py --tools            # welche Formate gehen hier? (JSON)
-  python3 src/client/build_installers.py --out DIR --set-version 1.2.1   # Server-Knopf "neu bauen"
-  python build_installers.py --prepare                      # Windows: PyInstaller + WiX vorab holen
+  python3 src/client/build_installers.py --tools            # which formats work here? (JSON)
+  python3 src/client/build_installers.py --out DIR --set-version 1.2.1   # server button "rebuild"
+  python build_installers.py --prepare                      # Windows: fetch PyInstaller + WiX in advance
 """
 from __future__ import annotations
 
@@ -55,18 +55,18 @@ HERE = Path(__file__).resolve().parent
 DESKTOP = HERE / "desktop"
 ANDROID = HERE / "android"
 RES = HERE / "resources"
-RELEASE = HERE / "release"          # Standard-Ausgabe (mitgelieferte Pakete); mit --out aenderbar
+RELEASE = HERE / "release"          # default output (bundled packages); changeable with --out
 ALL = ["exe", "msi", "zip", "deb", "rpm", "pkg", "tar", "tgz", "apk"]
-# Werkzeug-Ablage fuer Windows (PyInstaller/WiX); das Modul setzt sie auf data/modules/client/buildtools
+# tool store for Windows (PyInstaller/WiX); the module points it to data/modules/client/buildtools
 TOOLS_DIR = Path(os.environ.get("RMM_CLIENT_TOOLS") or (HERE / ".buildtools"))
 WIX_URL = "https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip"
 
 
 def set_version(v: str) -> None:
-    """__version__ im Desktop-Client setzen (die Android-App uebernimmt sie beim Bauen)."""
+    """Set __version__ in the desktop client (the Android app picks it up when building)."""
     import re as _re
     if not _re.fullmatch(r"\d+\.\d+\.\d+", v):
-        raise SystemExit(f"Ungueltige Version: {v} (Format 1.2.3)")
+        raise SystemExit(f"Invalid version: {v} (format 1.2.3)")
     p = DESKTOP / "bytera_client" / "__init__.py"
     s = p.read_text(encoding="utf-8")
     s = _re.sub(r'__version__\s*=\s*"[^"]*"', f'__version__ = "{v}"', s)
@@ -74,9 +74,9 @@ def set_version(v: str) -> None:
 
 
 def tools() -> dict:
-    """Welche Formate lassen sich auf DIESEM System bauen?"""
+    """Which formats can be built on THIS system?"""
     if os.name == "nt":
-        # Wie beim Agenten: PyInstaller (pip) und WiX (Download) holt sich das Skript selbst.
+        # Like for the agent: the script fetches PyInstaller (pip) and WiX (download) itself.
         return {"exe": True, "zip": True, "msi": True, "deb": True, "rpm": bool(shutil.which("rpmbuild")),
                 "pkg": True, "tar": True, "tgz": True, "apk": _apk_ok()}
     winpy = os.environ.get("RMM_WINPYTHON") or "/opt/winpy/python/python.exe"
@@ -97,37 +97,37 @@ def _apk_ok() -> bool:
         and (ANDROID / "signing" / "release.jks").exists()
 
 
-# ------------------------------------------------------------ Windows-Werkzeuge (wie beim Agenten)
+# ------------------------------------------------------------ Windows tools (like for the agent)
 def _ensure_crypto(py: str) -> None:
     """'cryptography' for the end-to-end encryption (bundled into the .exe)."""
     subprocess.run([py, "-m", "pip", "install", "--quiet", "cryptography>=41"], capture_output=True, text=True)
 
 
 def ensure_pyinstaller() -> None:
-    """PyInstaller vorhanden? Sonst per pip nachziehen (nur Windows)."""
+    """PyInstaller present? Otherwise install via pip (Windows only)."""
     try:
         import PyInstaller  # noqa: F401
         return
     except ImportError:
         pass
-    print("  PyInstaller fehlt - installiere per pip ...")
+    print("  PyInstaller missing - installing via pip ...")
     for extra in ([], ["--user"]):
         r = subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", *extra, "pyinstaller>=6.0,<7",
                             "cryptography>=41"],
                            capture_output=True, text=True)
         if r.returncode == 0:
             return
-    raise RuntimeError("PyInstaller konnte nicht per pip installiert werden:\n" + (r.stdout + r.stderr)[-1500:])
+    raise RuntimeError("PyInstaller could not be installed via pip:\n" + (r.stdout + r.stderr)[-1500:])
 
 
 def ensure_wix() -> tuple[Path, Path]:
-    """WiX 3 (candle/light) im Werkzeug-Ordner - bei Bedarf herunterladen (nur Windows)."""
+    """WiX 3 (candle/light) in the tool folder - download if needed (Windows only)."""
     for d in [TOOLS_DIR / "wix314"] + [Path(p) for p in (os.environ.get("WIX", ""),) if p]:
         for base in (d, d / "bin"):
             if (base / "candle.exe").exists() and (base / "light.exe").exists():
                 return base / "candle.exe", base / "light.exe"
     wix = TOOLS_DIR / "wix314"
-    print(f"  Lade WiX 3.14 nach {wix} ...")
+    print(f"  Downloading WiX 3.14 to {wix} ...")
     wix.mkdir(parents=True, exist_ok=True)
     archive = wix / "wix-binaries.zip"
     urllib.request.urlretrieve(WIX_URL, archive)
@@ -138,18 +138,18 @@ def ensure_wix() -> tuple[Path, Path]:
 
 
 def prepare() -> None:
-    """Werkzeuge vorab holen (das Modul ruft das beim Aktivieren auf)."""
+    """Fetch tools in advance (the module calls this on enable)."""
     if os.name == "nt":
         ensure_pyinstaller()
-        print(f"PyInstaller bereit")
-        print(f"WiX bereit: {ensure_wix()[0].parent}")
-    print("Formate: " + ", ".join(k for k, v in tools().items() if v))
+        print("PyInstaller ready")
+        print(f"WiX ready: {ensure_wix()[0].parent}")
+    print("Formats: " + ", ".join(k for k, v in tools().items() if v))
 
 
 def version() -> str:
-    """Nur die Zahl aus __version__ = "x.y.z" - robust gegen Kommentare hinter der Zeile.
-    (Frueher wurde alles hinter "=" genommen: mit Kommentar landeten Anfuehrungszeichen und "/"
-    in den Paketnamen -> Bau scheiterte, "Versionsnummer setzen" meldete Fehler.)"""
+    """Only the number from __version__ = "x.y.z" - robust against comments after the line.
+    (Previously everything after "=" was taken: with a comment, quotes and "/" ended up
+    in the package names -> the build failed, "set version number" reported an error.)"""
     import re as _re
     s = (DESKTOP / "bytera_client" / "__init__.py").read_text(encoding="utf-8")
     m = _re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', s, _re.M)
@@ -160,12 +160,12 @@ def run(cmd, **kw):
     print("  $", " ".join(str(c) for c in cmd))
     r = subprocess.run(cmd, capture_output=True, text=True, **kw)
     if r.returncode != 0:
-        raise RuntimeError(f"{cmd[0]} fehlgeschlagen:\n{(r.stdout + r.stderr)[-3000:]}")
+        raise RuntimeError(f"{cmd[0]} failed:\n{(r.stdout + r.stderr)[-3000:]}")
     return r
 
 
 def desktop_files() -> list[tuple[Path, str]]:
-    """(Quelle, Ziel relativ) aller Dateien des Desktop-Clients."""
+    """(source, relative target) of all desktop client files."""
     out = []
     for p in sorted(DESKTOP.rglob("*")):
         if p.is_file() and "__pycache__" not in p.parts:
@@ -190,18 +190,18 @@ def build_exe(v: str, winpython: str | None) -> Path:
             wine = _wine() or "/usr/lib/wine/wine64"
             py = winpython or os.environ.get("RMM_WINPYTHON") or "/opt/winpy/python/python.exe"
             if not Path(wine).exists() or not Path(py).exists():
-                raise RuntimeError("Fuer die .exe unter Linux werden wine64 und ein Windows-Python mit PyInstaller "
-                                   "gebraucht (--winpython). Alternativ auf Windows bauen.")
+                raise RuntimeError("For the .exe on Linux, wine64 and a Windows Python with PyInstaller are "
+                                   "needed (--winpython). Alternatively build on Windows.")
             env = dict(os.environ, WINEDEBUG="-all")
             # end-to-end encryption needs 'cryptography' inside the .exe
             subprocess.run([wine, py, "-m", "pip", "install", "--quiet", "cryptography>=41"], env=env,
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, timeout=900)
-            # Wine braucht eine Pipe als Ausgabe (Datei-Umleitung -> "Invalid handle")
+            # Wine needs a pipe as output (file redirection -> "Invalid handle")
             p = subprocess.Popen([wine, py, *args], cwd=work, env=env, stdout=subprocess.PIPE,
                                  stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True)
             log = p.communicate(timeout=1800)[0]
             if p.returncode != 0 or not (work / "dist" / "ByteraClient.exe").exists():
-                raise RuntimeError("PyInstaller (Wine) fehlgeschlagen:\n" + log[-3000:])
+                raise RuntimeError("PyInstaller (Wine) failed:\n" + log[-3000:])
         shutil.copy2(work / "dist" / "ByteraClient.exe", out)
     return out
 
@@ -209,18 +209,18 @@ def build_exe(v: str, winpython: str | None) -> Path:
 def build_zip(v: str, exe: Path) -> Path:
     out = RELEASE / f"ByteraClient-{v}-windows.zip"
     readme = ("BYTERA RMM Client\r\n======================\r\n\r\n"
-              "ByteraClient.exe starten - keine Installation noetig (Windows 10/11).\r\n"
-              "Fuer Startmenue/Desktop-Verknuepfung lieber die .msi verwenden.\r\n")
+              "Run ByteraClient.exe - no installation needed (Windows 10/11).\r\n"
+              "For a Start menu/desktop shortcut, prefer the .msi.\r\n")
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         z.write(exe, "ByteraClient/ByteraClient.exe")
-        z.writestr("ByteraClient/LIESMICH.txt", readme)
+        z.writestr("ByteraClient/README.txt", readme)
     return out
 
 
 def build_msi(v: str, exe: Path) -> Path:
     wixl = shutil.which("wixl")
     if not wixl and os.name != "nt":
-        raise RuntimeError("wixl fehlt (apt install wixl)")
+        raise RuntimeError("wixl missing (apt install wixl)")
     wix = ensure_wix() if os.name == "nt" and not wixl else None
     out = RELEASE / f"ByteraClient-{v}-windows.msi"
     ver4 = ".".join((v.split(".") + ["0", "0", "0"])[:3])
@@ -230,12 +230,12 @@ def build_msi(v: str, exe: Path) -> Path:
            Manufacturer="BYTERA" UpgradeCode="6B3F0E5A-2C4D-4E8B-9A71-5D2C8F1E0A34">
     <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine"
              Description="BYTERA RMM Client" Manufacturer="BYTERA" />
-    <MajorUpgrade DowngradeErrorMessage="Eine neuere Version ist bereits installiert." />
+    <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
     <Media Id="1" Cabinet="client.cab" EmbedCab="yes" />
     <Icon Id="AppIcon" SourceFile="rmmclient.ico" />
     <Property Id="ARPPRODUCTICON" Value="AppIcon" />
-    <!-- Auswahl im Installationsassistenten: 1 = mit Administratorrechten (VPN ohne Rueckfrage), 0 = ohne.
-         Unbeaufsichtigt: msiexec /i ByteraClient.msi /qn ADMINMODE=0 -->
+    <!-- Choice in the install wizard: 1 = with administrator rights (VPN without prompt), 0 = without.
+         Unattended: msiexec /i ByteraClient.msi /qn ADMINMODE=0 -->
     <Property Id="ADMINMODE" Value="1" />
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
@@ -288,21 +288,21 @@ def build_msi(v: str, exe: Path) -> Path:
 
 
 def _msi_add_wizard(msi: Path, t: Path, v: str) -> None:
-    """Installationsassistent nachtraeglich in die MSI (wixl kann keine Dialoge): Auswahl
-    „mit Administratorrechten“ / „ohne“ -> Property ADMINMODE -> HKLM\\Software\\BYTERA\\RMMClient\\AdminMode.
-    Die App wertet das beim ersten Start aus (geplante Aufgabe bzw. nie nachfragen)."""
+    """Add the install wizard to the MSI afterwards (wixl cannot do dialogs): choice
+    "with administrator rights" / "without" -> property ADMINMODE -> HKLM\\Software\\BYTERA\\RMMClient\\AdminMode.
+    The app evaluates it on first start (scheduled task or never ask)."""
     msibuild = shutil.which("msibuild")
     if not msibuild and shutil.which("apt-get") and hasattr(os, "geteuid") and os.geteuid() == 0:
-        subprocess.run(["apt-get", "install", "-y", "-q", "msitools"], capture_output=True)   # aelteres Bau-Image
+        subprocess.run(["apt-get", "install", "-y", "-q", "msitools"], capture_output=True)   # older build image
         msibuild = shutil.which("msibuild")
     if not msibuild:
-        print("  (msibuild fehlt - MSI ohne Assistent; apt install msitools)")
+        print("  (msibuild missing - MSI without wizard; apt install msitools)")
         return
 
     def idt(name, cols, types, key, rows):
         lines = ["\t".join(cols), "\t".join(types), "\t".join([name, *key])]
         lines += ["\t".join("" if c is None else str(c) for c in r) for r in rows]
-        # libmsi erwartet UTF-8 und speichert in der Codepage der MSI (1252)
+        # libmsi expects UTF-8 and stores in the MSI codepage (1252)
         (t / f"{name}.idt").write_bytes(("\r\n".join(lines) + "\r\n").encode("utf-8"))
         return f"{name}.idt"
 
@@ -318,21 +318,21 @@ def _msi_add_wizard(msi: Path, t: Path, v: str) -> None:
         idt("Control", ["Dialog_", "Control", "Type", "X", "Y", "Width", "Height", "Attributes", "Property", "Text",
                         "Control_Next", "Help"],
             ["s72", "s50", "s20", "i2", "i2", "i2", "i2", "I4", "S72", "L0", "S50", "L50"], ["Dialog_", "Control"],
-            [["ModeDlg", "Title", "Text", 20, 14, 330, 20, 3, None, "{\\DlgTitle}BYTERA RMM Client installieren", None, None],
+            [["ModeDlg", "Title", "Text", 20, 14, 330, 20, 3, None, "{\\DlgTitle}Install BYTERA RMM Client", None, None],
              ["ModeDlg", "Intro", "Text", 20, 40, 330, 34, 3, None,
-              "Wie soll die App laufen? VPN-Tunnel (WireGuard) brauchen unter Windows Administratorrechte.", None, None],
+              "How should the app run? VPN tunnels (WireGuard) require administrator rights on Windows.", None, None],
              ["ModeDlg", "Mode", "RadioButtonGroup", 20, 80, 330, 110, 3, "ADMINMODE", None, "Install", None],
-             ["ModeDlg", "Install", "PushButton", 230, 238, 60, 18, 3, None, "Installieren", "Cancel", None],
-             ["ModeDlg", "Cancel", "PushButton", 296, 238, 56, 18, 3, None, "Abbrechen", "Mode", None],
+             ["ModeDlg", "Install", "PushButton", 230, 238, 60, 18, 3, None, "Install", "Cancel", None],
+             ["ModeDlg", "Cancel", "PushButton", 296, 238, 56, 18, 3, None, "Cancel", "Mode", None],
              ["FinishDlg", "Text", "Text", 20, 20, 330, 80, 3, None,
-              "Der BYTERA RMM Client ist installiert. Die Verknüpfung liegt auf dem Desktop und im Startmenü.", None, None],
-             ["FinishDlg", "Done", "PushButton", 296, 132, 56, 18, 3, None, "Fertig", None, None]]),
+              "The BYTERA RMM Client is installed. The shortcut is on the desktop and in the Start menu.", None, None],
+             ["FinishDlg", "Done", "PushButton", 296, 132, 56, 18, 3, None, "Done", None, None]]),
         idt("RadioButton", ["Property", "Order", "Value", "X", "Y", "Width", "Height", "Text", "Help"],
             ["s72", "i2", "s64", "i2", "i2", "i2", "i4", "L0", "L50"], ["Property", "Order"],
             [["ADMINMODE", 1, "1", 0, 0, 330, 46,
-              "Mit Administratorrechten (empfohlen): startet immer als Administrator, VPN ohne Rückfragen", None],
+              "With administrator rights (recommended): always starts as administrator, VPN without prompts", None],
              ["ADMINMODE", 2, "0", 0, 56, 330, 46,
-              "Ohne Administratorrechte: keine Rückfragen beim Start, VPN ist dann nicht verfügbar", None]]),
+              "Without administrator rights: no prompts at start, VPN is then not available", None]]),
         idt("ControlEvent", ["Dialog_", "Control_", "Event", "Argument", "Condition", "Ordering"],
             ["s72", "s50", "s50", "s255", "S255", "I2"], ["Dialog_", "Control_", "Event", "Argument", "Condition"],
             [["ModeDlg", "Install", "EndDialog", "Return", "1", 1],
@@ -341,7 +341,7 @@ def _msi_add_wizard(msi: Path, t: Path, v: str) -> None:
     ]
     for f in files:
         run([msibuild, str(msi), "-i", f], cwd=t)
-    # Dialoge in die Oberflaechen-Reihenfolge: Assistent vor der Installation, "Fertig" danach (-1)
+    # dialogs into the UI sequence: wizard before the installation, "Done" after (-1)
     seq = subprocess.run(["msiinfo", "export", str(msi), "InstallUISequence"], capture_output=True, text=True).stdout
     rows = [ln.split("\t") for ln in seq.replace("\r", "").split("\n")[3:] if ln.strip()]
     rows = [r for r in rows if r[0] not in ("ModeDlg", "FinishDlg")]
@@ -350,7 +350,7 @@ def _msi_add_wizard(msi: Path, t: Path, v: str) -> None:
     prop = subprocess.run(["msiinfo", "export", str(msi), "Property"], capture_output=True, text=True).stdout
     prows = [ln.split("\t") for ln in prop.replace("\r", "").split("\n")[3:] if ln.strip()]
     prows = [r for r in prows if r[0] != "DefaultUIFont"] + [["DefaultUIFont", "DlgFont8"]]
-    for r in prows:                      # ADMINMODE an die (erhoehte) Installation weitergeben
+    for r in prows:                      # pass ADMINMODE on to the (elevated) installation
         if r[0] == "SecureCustomProperties" and "ADMINMODE" not in r[1]:
             r[1] = r[1] + ";ADMINMODE" if r[1] else "ADMINMODE"
     if not any(r[0] == "SecureCustomProperties" for r in prows):
@@ -362,13 +362,13 @@ def _msi_add_wizard(msi: Path, t: Path, v: str) -> None:
 
 # ============================================================== Linux
 LINUX_LAUNCHER = """#!/bin/sh
-# Startet den BYTERA RMM Client (Python 3 + Tk vom System)
+# Starts the BYTERA RMM Client (Python 3 + Tk from the system)
 exec python3 /opt/bytera-client/bytera-client.py "$@"
 """
 DESKTOP_ENTRY = """[Desktop Entry]
 Type=Application
 Name=BYTERA RMM
-Comment=RMM-Dashboard, Relay-Laufwerk, Remote-Shell und Fernbild
+Comment=RMM dashboard, relay drive, remote shell and remote screen
 Exec=bytera-client %u
 Icon=bytera-client
 Terminal=false
@@ -376,25 +376,25 @@ Categories=Network;RemoteAccess;
 MimeType=x-scheme-handler/bytera-rmm;
 StartupWMClass=Tk
 """
-# Uebergangs-Starter (Umbenennung RAPALLE.net RMM -> BYTERA RMM): Eine alte .tar-Installation
-# aktualisiert sich mit ihrem alten Update-Code - der sucht den Ordner "rapalle-client-*/app"
-# (im Paket ein Verweis auf den neuen Ordner) und startet danach "rapalle-client.py". Dieser
-# Starter ruft die neue App auf, die dann selbst an den neuen Ort umzieht (legacy.py).
+# Transition starter (rename RAPALLE.net RMM -> BYTERA RMM): an old .tar installation
+# updates itself with its old update code - which looks for the folder "rapalle-client-*/app"
+# (a reference to the new folder in the package) and then starts "rapalle-client.py". This
+# starter calls the new app, which then moves itself to the new location (legacy.py).
 LEGACY_SHIM = """#!/usr/bin/env python3
-# Uebergangs-Starter: startet den BYTERA RMM Client (frueher RAPALLE.net RMM).
+# Transition starter: starts the BYTERA RMM Client (formerly RAPALLE.net RMM).
 import os
 import sys
 here = os.path.dirname(os.path.abspath(__file__))
 os.execv(sys.executable, [sys.executable, os.path.join(here, "bytera-client.py"), *sys.argv[1:]])
 """
 LEGACY_LAUNCHER = """#!/bin/sh
-# Uebergangs-Starter (frueher RAPALLE.net RMM) - startet den BYTERA RMM Client
+# Transition starter (formerly RAPALLE.net RMM) - starts the BYTERA RMM Client
 exec /usr/bin/bytera-client "$@"
 """
 TAR_INSTALL = """#!/bin/sh
-# Installiert den BYTERA RMM Client fuer den aktuellen Benutzer (ohne root):
-#   ~/.local/share/bytera-client, ~/.local/bin/bytera-client, Startmenue-Eintrag.
-# Systemweit (nach /opt):  sudo ./install.sh --system
+# Installs the BYTERA RMM Client for the current user (without root):
+#   ~/.local/share/bytera-client, ~/.local/bin/bytera-client, Start menu entry.
+# System-wide (to /opt):  sudo ./install.sh --system
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 if [ "$1" = "--system" ]; then
@@ -403,12 +403,12 @@ else
   DEST="$HOME/.local/share/bytera-client"; BIN="$HOME/.local/bin"; APPS="$HOME/.local/share/applications"
   ICONS="$HOME/.local/share/icons/hicolor/256x256/apps"
 fi
-command -v python3 >/dev/null || { echo "python3 fehlt (z.B. sudo apt install python3 python3-tk)"; exit 1; }
-python3 -c "import tkinter" 2>/dev/null || echo "Hinweis: Tk fehlt - bitte python3-tk (Debian/Ubuntu) bzw. python3-tkinter (Fedora) installieren."
+command -v python3 >/dev/null || { echo "python3 missing (e.g. sudo apt install python3 python3-tk)"; exit 1; }
+python3 -c "import tkinter" 2>/dev/null || echo "Note: Tk missing - please install python3-tk (Debian/Ubuntu) or python3-tkinter (Fedora)."
 mkdir -p "$DEST" "$BIN" "$APPS" "$ICONS"
 cp -r "$HERE/app/." "$DEST/"
-rm -f "$DEST/rapalle-client.py"          # Uebergangs-Starter nur fuer Auto-Updates alter Installationen
-# Umbenennung: Installation unter altem Namen (RAPALLE.net RMM) entfernen
+rm -f "$DEST/rapalle-client.py"          # transition starter only for auto-updates of old installations
+# rename: remove installation under the old name (RAPALLE.net RMM)
 OLD="$(dirname "$DEST")/rapalle-client"
 if [ -d "$OLD" ]; then rm -rf "$OLD"; fi
 rm -f "$BIN/rapalle-client" "$APPS/rapalle-client.desktop" "$ICONS/rapalle-client.png"
@@ -416,12 +416,12 @@ printf '#!/bin/sh\\nexec python3 "%s/bytera-client.py" "$@"\\n' "$DEST" > "$BIN/
 chmod +x "$BIN/bytera-client"
 cp "$HERE/bytera-client.png" "$ICONS/bytera-client.png"
 sed "s|^Exec=.*|Exec=$BIN/bytera-client %u|" "$HERE/bytera-client.desktop" > "$APPS/bytera-client.desktop"
-echo "Installiert. Start ueber das Anwendungsmenue oder: $BIN/bytera-client"
+echo "Installed. Start via the application menu or: $BIN/bytera-client"
 """
 
 
 def _tar_dirs(tf: tarfile.TarFile, name: str) -> None:
-    """Fehlende Ordner-Eintraege anlegen (dpkg braucht sie)."""
+    """Create missing directory entries (dpkg needs them)."""
     seen = tf.__dict__.setdefault("_rmm_dirs", set())
     parts = name.split("/")[:-1]
     for i in range(1, len(parts) + 1):
@@ -442,7 +442,7 @@ def _tar_add(tf: tarfile.TarFile, name: str, data: bytes, mode: int = 0o644):
 
 
 def _tar_legacy(tf: tarfile.TarFile, base: str, v: str) -> None:
-    """Uebergang fuer alte .tar-Installationen (siehe LEGACY_SHIM)."""
+    """Transition for old .tar installations (see LEGACY_SHIM)."""
     _tar_add(tf, f"{base}/app/rapalle-client.py", LEGACY_SHIM.encode(), 0o755)
     ti = tarfile.TarInfo(f"rapalle-client-{v}")
     ti.type, ti.linkname, ti.mode, ti.mtime, ti.uname, ti.gname = tarfile.SYMTYPE, base, 0o777, int(time.time()), "root", "root"
@@ -457,7 +457,7 @@ def build_tar(v: str) -> list[Path]:
         with tarfile.open(out, mode) as tf:
             for src, rel in desktop_files():
                 _tar_add(tf, f"{base}/app/{rel}", src.read_bytes(), 0o755 if rel.endswith("bytera-client.py") else 0o644)
-            _tar_add(tf, f"{base}/app/.bytera-install", b"tar\n")              # Auto-Update: Installationsart
+            _tar_add(tf, f"{base}/app/.bytera-install", b"tar\n")              # auto-update: installation type
             _tar_add(tf, f"{base}/install.sh", TAR_INSTALL.encode(), 0o755)
             _tar_add(tf, f"{base}/bytera-client.desktop", DESKTOP_ENTRY.encode())
             _tar_add(tf, f"{base}/bytera-client.png", (RES / "rmmclient-256.png").read_bytes())
@@ -467,7 +467,7 @@ def build_tar(v: str) -> list[Path]:
 
 
 def build_tgz(v: str) -> Path:
-    """Wie .tar.gz, nur mit der Endung .tgz (manche Werkzeuge erwarten sie)."""
+    """Like .tar.gz, just with the .tgz extension (some tools expect it)."""
     base = f"bytera-client-{v}"
     out = RELEASE / f"bytera-client-{v}-linux.tgz"
     with tarfile.open(out, "w:gz") as tf:
@@ -482,22 +482,22 @@ def build_tgz(v: str) -> Path:
 
 
 def _system_tree(kind: str) -> list[tuple[str, bytes, int]]:
-    """Dateien einer systemweiten Installation (/opt + /usr) - fuer .deb, .rpm und .pkg gleich."""
+    """Files of a system-wide installation (/opt + /usr) - the same for .deb, .rpm and .pkg."""
     files = []
     for src, rel in desktop_files():
         files.append((f"opt/bytera-client/{rel}", src.read_bytes(), 0o755 if rel.endswith("bytera-client.py") else 0o644))
-    files.append(("opt/bytera-client/.bytera-install", f"{kind}\n".encode(), 0o644))   # Auto-Update: Installationsart
+    files.append(("opt/bytera-client/.bytera-install", f"{kind}\n".encode(), 0o644))   # auto-update: installation type
     files.append(("usr/bin/bytera-client", LINUX_LAUNCHER.encode(), 0o755))
-    files.append(("usr/bin/rapalle-client", LEGACY_LAUNCHER.encode(), 0o755))   # Uebergang: alter Neustart-Befehl
+    files.append(("usr/bin/rapalle-client", LEGACY_LAUNCHER.encode(), 0o755))   # transition: old restart command
     files.append(("usr/share/applications/bytera-client.desktop", DESKTOP_ENTRY.encode(), 0o644))
     files.append(("usr/share/icons/hicolor/256x256/apps/bytera-client.png", (RES / "rmmclient-256.png").read_bytes(), 0o644))
     return files
 
 
 def build_rpm(v: str) -> Path:
-    """.rpm (noarch) per rpmbuild - Fedora, RHEL/Alma/Rocky, openSUSE."""
+    """.rpm (noarch) via rpmbuild - Fedora, RHEL/Alma/Rocky, openSUSE."""
     if not shutil.which("rpmbuild"):
-        raise RuntimeError("rpmbuild fehlt (apt install rpm / dnf install rpm-build)")
+        raise RuntimeError("rpmbuild missing (apt install rpm / dnf install rpm-build)")
     out_name = f"bytera-client-{v}-1.noarch.rpm"
     with tempfile.TemporaryDirectory() as td:
         top = Path(td) / "rpmbuild"
@@ -525,8 +525,8 @@ Obsoletes:      rapalle-client
 Provides:       rapalle-client
 
 %description
-Das RMM-Dashboard als App: gespeicherte Anmeldung, Relay als Laufwerk im
-Dateimanager, Remote-Shell im eigenen Fenster und Fernbild per RDP/VNC.
+The RMM dashboard as an app: stored sign-in, relay as a drive in the
+file manager, remote shell in its own window and remote screen via RDP/VNC.
 
 %install
 mkdir -p %{{buildroot}}
@@ -549,14 +549,14 @@ command -v update-desktop-database >/dev/null && update-desktop-database -q /usr
              "--define", "_build_id_links none", str(specfile)])
         built = next((top / "RPMS").rglob("*.rpm"), None)
         if not built:
-            raise RuntimeError("rpmbuild hat kein Paket erzeugt")
+            raise RuntimeError("rpmbuild produced no package")
         out = RELEASE / out_name
         shutil.copy2(built, out)
     return out
 
 
 def build_pkg(v: str) -> Path:
-    """Arch-/Manjaro-Paket (.pkg.tar.xz) - selbst gebaut, ohne makepkg (wie beim Agenten)."""
+    """Arch/Manjaro package (.pkg.tar.xz) - built ourselves, without makepkg (like for the agent)."""
     pv = v.replace("-", "_")
     out = RELEASE / f"bytera-client-{pv}-1-any.pkg.tar.xz"
     tree = _system_tree("pkg")
@@ -565,13 +565,13 @@ def build_pkg(v: str) -> Path:
                f"url = https://rapalle.net\nbuilddate = {int(time.time())}\npackager = BYTERA\n"
                f"size = {size}\narch = any\nlicense = MIT\nreplaces = rapalle-client\nconflict = rapalle-client\n"
                f"depend = python\ndepend = tk\n"
-               f"optdepend = chromium: Dashboard als App-Fenster\noptdepend = libsecret: Anmeldung im Schluesselbund\n"
-               f"optdepend = freerdp: Fernbild per RDP\noptdepend = tigervnc: Fernbild per VNC\n")
+               f"optdepend = chromium: dashboard as an app window\noptdepend = libsecret: sign-in in the keyring\n"
+               f"optdepend = freerdp: remote screen via RDP\noptdepend = tigervnc: remote screen via VNC\n")
     install = ("post_install() {\n  command -v update-desktop-database >/dev/null && "
                "update-desktop-database -q /usr/share/applications || true\n}\n\n"
                "post_upgrade() {\n  post_install\n}\n")
     with tarfile.open(out, "w:xz") as tf:
-        _tar_add(tf, ".PKGINFO", pkginfo.encode())          # muss der ERSTE Eintrag sein
+        _tar_add(tf, ".PKGINFO", pkginfo.encode())          # must be the FIRST entry
         _tar_add(tf, ".INSTALL", install.encode())
         for rel, data, mode in tree:
             _tar_add(tf, rel, data, mode)
@@ -579,7 +579,7 @@ def build_pkg(v: str) -> Path:
 
 
 def build_deb(v: str) -> Path:
-    """.deb ohne dpkg-deb (ar + tar), laeuft also auf jedem Bausystem."""
+    """.deb without dpkg-deb (ar + tar), so it runs on any build system."""
     out = RELEASE / f"bytera-client_{v}_all.deb"
     data = io.BytesIO()
     size = 0
@@ -595,8 +595,8 @@ def build_deb(v: str) -> Path:
                f"Suggests: freerdp3-x11 | freerdp2-x11 | remmina, tigervnc-viewer\n"
                f"Installed-Size: {max(1, size // 1024)}\nMaintainer: BYTERA <support@rapalle.net>\n"
                f"Description: BYTERA RMM Client\n"
-               f" Das RMM-Dashboard als App: gespeicherte Anmeldung, Relay als Laufwerk im\n"
-               f" Dateimanager, Remote-Shell im eigenen Fenster und Fernbild per RDP/VNC.\n")
+               f" The RMM dashboard as an app: stored sign-in, relay as a drive in the\n"
+               f" file manager, remote shell in its own window and remote screen via RDP/VNC.\n")
     ctl = io.BytesIO()
     with tarfile.open(fileobj=ctl, mode="w:gz") as tf:
         _tar_add(tf, "./control", control.encode())
@@ -621,11 +621,11 @@ def build_apk(v: str) -> Path:
     tools = {t: shutil.which(t) for t in ("aapt", "javac", "dalvik-exchange", "zipalign", "apksigner")}
     missing = [t for t, p in tools.items() if not p] + ([] if jar.exists() else ["android-sdk-platform-23"])
     if missing:
-        raise RuntimeError("Fehlende Werkzeuge: " + ", ".join(missing) +
+        raise RuntimeError("Missing tools: " + ", ".join(missing) +
                            " (apt install aapt openjdk-17-jdk-headless dalvik-exchange zipalign apksigner android-sdk-platform-23)")
     ks, kspass = ANDROID / "signing" / "release.jks", ANDROID / "signing" / "keystore.pass"
     if not ks.exists():
-        raise RuntimeError("Signier-Schluessel fehlt: src/client/android/signing/release.jks")
+        raise RuntimeError("Signing key missing: src/client/android/signing/release.jks")
     out = RELEASE / f"ByteraClient-{v}-android.apk"
     code = int("".join(f"{int(x):02d}" for x in (v.split(".") + ["0", "0"])[:3]))   # 1.0.0 -> 10000
     with tempfile.TemporaryDirectory() as td:
@@ -658,22 +658,22 @@ def build_apk(v: str) -> Path:
 
 # ============================================================== main
 def main():
-    ap = argparse.ArgumentParser(description="Baut die Pakete des BYTERA RMM Clients")
-    ap.add_argument("--targets", default=",".join(ALL), help="Komma-Liste aus: " + ",".join(ALL))
-    ap.add_argument("--winpython", help="Windows-python.exe (unter Wine) mit PyInstaller")
-    ap.add_argument("--list", action="store_true", help="vorhandene Pakete anzeigen")
-    ap.add_argument("--keep-old", action="store_true", help="aeltere Versionen in release/ nicht loeschen")
-    ap.add_argument("--out", help="Ausgabeordner statt src/client/release")
-    ap.add_argument("--set-version", help="Version vorher setzen (z. B. 1.2.1)")
-    ap.add_argument("--tools", action="store_true", help="verfuegbare Formate als JSON ausgeben")
-    ap.add_argument("--available", action="store_true", help="nur Formate bauen, fuer die Werkzeuge da sind")
-    ap.add_argument("--prepare", action="store_true", help="Werkzeuge vorab holen (Windows: PyInstaller + WiX)")
+    ap = argparse.ArgumentParser(description="Builds the packages of the BYTERA RMM Client")
+    ap.add_argument("--targets", default=",".join(ALL), help="Comma list of: " + ",".join(ALL))
+    ap.add_argument("--winpython", help="Windows python.exe (under Wine) with PyInstaller")
+    ap.add_argument("--list", action="store_true", help="show existing packages")
+    ap.add_argument("--keep-old", action="store_true", help="do not delete older versions in release/")
+    ap.add_argument("--out", help="output folder instead of src/client/release")
+    ap.add_argument("--set-version", help="set the version first (e.g. 1.2.1)")
+    ap.add_argument("--tools", action="store_true", help="print available formats as JSON")
+    ap.add_argument("--available", action="store_true", help="build only formats for which tools are available")
+    ap.add_argument("--prepare", action="store_true", help="fetch tools in advance (Windows: PyInstaller + WiX)")
     a = ap.parse_args()
     global RELEASE
-    if a.out:                               # Ausgabeordner IMMER zuerst anlegen (Bau-Container holt /out ab,
-        RELEASE = Path(a.out).resolve()     # auch wenn der Bau scheitert -> sonst "/out not found")
+    if a.out:                               # ALWAYS create the output folder first (the build container collects /out,
+        RELEASE = Path(a.out).resolve()     # even if the build fails -> otherwise "/out not found")
         RELEASE.mkdir(parents=True, exist_ok=True)
-    if a.set_version:                       # vor --tools: "--set-version X --tools" setzt und meldet
+    if a.set_version:                       # before --tools: "--set-version X --tools" sets and reports
         set_version(a.set_version)
     if a.prepare:
         prepare()
@@ -696,9 +696,9 @@ def main():
         skipped = [t for t in targets if not av.get(t)]
         targets = [t for t in targets if av.get(t)]
         if skipped:
-            print(f"Übersprungen (Werkzeuge fehlen hier): {', '.join(skipped)}")
+            print(f"Skipped (tools missing here): {', '.join(skipped)}")
     if not a.keep_old:
-        # Alte Versionen nur fuer die Formate entfernen, die jetzt neu gebaut werden
+        # remove old versions only for the formats being rebuilt now
         exts = {"exe": "-windows.exe", "zip": "-windows.zip", "msi": "-windows.msi", "deb": "_all.deb",
                 "rpm": ".noarch.rpm", "pkg": "-any.pkg.tar.xz", "tar": "-linux.tar", "tgz": "-linux.tgz",
                 "apk": "-android.apk"}
@@ -718,7 +718,7 @@ def main():
         if name not in targets:
             continue
         if name in ("zip", "msi") and not exe.exists():
-            failed.append((name, "braucht zuerst die .exe"))
+            failed.append((name, "needs the .exe first"))
             continue
         print(f"\n== {name}")
         try:
@@ -726,10 +726,10 @@ def main():
             for p in (res if isinstance(res, list) else [res]):
                 print(f"  -> {p.name} ({p.stat().st_size:,} Bytes)")
                 ok.append(p.name)
-        except Exception as e:      # noqa: BLE001 - weiter mit dem naechsten Paket
+        except Exception as e:      # noqa: BLE001 - continue with the next package
             print(f"  !! {e}")
             failed.append((name, str(e).splitlines()[0]))
-    print(f"\nFertig: {len(ok)} Paket(e)" + (f", fehlgeschlagen: {', '.join(n for n, _ in failed)}" if failed else ""))
+    print(f"\nDone: {len(ok)} package(s)" + (f", failed: {', '.join(n for n, _ in failed)}" if failed else ""))
     sys.exit(1 if failed and not ok else 0)
 
 

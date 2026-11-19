@@ -1,9 +1,9 @@
-# gui.py - Oberflaeche des Desktop-Clients (tkinter = Teil von Python, keine Abhaengigkeiten)
+# gui.py - UI of the desktop client (tkinter = part of Python, no dependencies)
 # -------------------------------------------------------------------------------------------
-#   Anmeldemaske  Server, Benutzer, Passwort, Verzeichnis (SSO), 2FA-Code, Geraetename
-#   Hauptfenster  Dashboard oeffnen, Relay-Laufwerk, Remote-Shell, Fernbild (RDP/VNC),
-#                 Autostart, Abmelden
-# Netzwerk laeuft in Hintergrund-Threads; Ergebnisse kommen per root.after zurueck.
+#   Login form    server, user, password, directory (SSO), 2FA code, device name
+#   Main window   open dashboard, relay drive, remote shell, remote screen (RDP/VNC),
+#                 autostart, sign out
+# Network runs in background threads; results come back via root.after.
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def resource(name: str) -> Path:
 class ClientApp:
     def __init__(self, minimized: bool = False):
         self.store = Store(default_data_dir())
-        # WireGuard-Tunnel aus dem RMM vollautomatisch einrichten/entfernen (vpn.py)
+        # fully automatic setup/removal of RMM WireGuard tunnels (vpn.py)
         from . import vpn as _vpn
         self.vpn = _vpn.VpnSync(self.store, default_data_dir(), lambda: self.api,
                                 on_status=lambda text: self.root.after(0, self._vpn_status, text),
@@ -49,15 +49,15 @@ class ClientApp:
         self.root.configure(bg=BG)
         self._icon()
         self._style()
-        # Strg+A = alles markieren (Tk-Standard unter Linux waere "Zeilenanfang")
+        # Ctrl+A = select all (Tk default on Linux would be "start of line")
         for cls in ("TEntry", "Entry"):
             self.root.bind_class(cls, "<Control-a>", self._select_all)
             self.root.bind_class(cls, "<Control-A>", self._select_all)
         self.frame = None
-        # Ladeleiste unten: "⏳ … [■ Stopp]" waehrend laengerer Aktionen
+        # loading bar at the bottom: "… [Stop]" during longer actions
         self.busy_bar = tk.Frame(self.root, bg=PANEL)
-        # Knopf ZUERST packen, damit er bei langem Text nie aus dem Fenster rutscht
-        self.busy_btn = ttk.Button(self.busy_bar, text="■ Stopp", style="Danger.TButton")
+        # pack the button FIRST so it never slides out of the window with long text
+        self.busy_btn = ttk.Button(self.busy_bar, text="Stop", style="Danger.TButton")
         self.busy_btn.pack(side="right", padx=8, pady=4)
         self.busy_label = tk.Label(self.busy_bar, text="", bg=PANEL, fg=FG, anchor="w", font=("Segoe UI", 9),
                                    width=1, wraplength=300, justify="left")
@@ -65,10 +65,10 @@ class ClientApp:
         self._busy_token = None
         if minimized:
             self.root.iconify()
-        self.show_busy("Verbinde …")
+        self.show_busy("Connecting …")
         self.root.after(50, self.auto_login)
 
-    # ------------------------------------------------------------- Optik
+    # ------------------------------------------------------------- Appearance
     def _icon(self):
         try:
             if os.name == "nt" and resource("rmmclient.ico").exists():
@@ -109,9 +109,9 @@ class ClientApp:
         return "break"
 
     def _new_frame(self):
-        # Scrollbarer Inhalt: passt der Inhalt nicht ins Fenster, erscheint rechts
-        # eine Scrollleiste (vorher wurde alles unten abgeschnitten). self.frame
-        # bleibt der INNERE Inhalts-Frame, alle Aufrufer funktionieren unveraendert.
+        # Scrollable content: if the content does not fit the window, a scrollbar
+        # appears on the right (previously everything was cut off at the bottom). self.frame
+        # stays the INNER content frame, all callers work unchanged.
         if getattr(self, "_scroll_host", None) is not None:
             try: self._scroll_host.destroy()
             except Exception: pass
@@ -127,16 +127,16 @@ class ClientApp:
 
         def _resize(_e=None):
             canvas.configure(scrollregion=canvas.bbox("all"))
-            canvas.itemconfigure(win_id, width=canvas.winfo_width())   # Inhalt auf Fensterbreite
-            # Scrollleiste nur zeigen, wenn noetig.
+            canvas.itemconfigure(win_id, width=canvas.winfo_width())   # content to window width
+            # only show the scrollbar when needed.
             need = inner.winfo_reqheight() > canvas.winfo_height()
             if need and not vbar.winfo_ismapped(): vbar.pack(side="right", fill="y")
             elif not need and vbar.winfo_ismapped(): vbar.pack_forget()
         inner.bind("<Configure>", _resize)
         canvas.bind("<Configure>", _resize)
-        self.root.after_idle(_resize)      # nach dem ersten Layout sicher neu bewerten
+        self.root.after_idle(_resize)      # re-evaluate reliably after the first layout
 
-        # Mausrad / Touchpad (Windows/macOS: <MouseWheel>, Linux: Button-4/5)
+        # mouse wheel / touchpad (Windows/macOS: <MouseWheel>, Linux: Button-4/5)
         def _wheel(e):
             if inner.winfo_reqheight() <= canvas.winfo_height():
                 return
@@ -155,8 +155,8 @@ class ClientApp:
         self.frame = inner
         return self.frame
 
-    # ------------------------------------------------------------- Ladeleiste + Stopp
-    def bar_show(self, text: str, on_stop, button: str = "■ Stopp"):
+    # ------------------------------------------------------------- Loading bar + stop
+    def bar_show(self, text: str, on_stop, button: str = "Stop"):
         self.busy_label.config(text=text)
         self.busy_btn.config(text=button, command=on_stop)
         if not self.busy_bar.winfo_ismapped():
@@ -172,9 +172,9 @@ class ClientApp:
             self.busy_label.config(text=text)
 
     def bg(self, fn, done, *args, busy: str | None = None):
-        """fn(*args) im Hintergrund; done(result, error) danach im UI-Thread.
-        busy="Text" zeigt die Ladeleiste mit Stopp-Knopf: Stopp bricht laufende Befehle/Downloads ab,
-        das Ergebnis wird dann verworfen."""
+        """fn(*args) in the background; done(result, error) afterwards in the UI thread.
+        busy="text" shows the loading bar with a stop button: stop cancels running commands/downloads,
+        the result is then discarded."""
         token = {"cancelled": False}
         if busy:
             def stop():
@@ -182,20 +182,20 @@ class ClientApp:
                 features.cancel_current()
                 updater.cancel()
                 self.bar_hide()
-                self.info("Abgebrochen.")
+                self.info("Cancelled.")
                 if getattr(self, "btn_login", None) is not None:
                     try:
                         self.btn_login.state(["!disabled"])
-                        self.lbl_status.config(text="Abgebrochen.")
+                        self.lbl_status.config(text="Cancelled.")
                     except Exception:
                         pass
             self._busy_token = token
-            self.bar_show(f"⏳ {busy}", stop)
+            self.bar_show(f"{busy}", stop)
 
         def run():
             try:
                 res, err = fn(*args), None
-            except Exception as e:      # noqa: BLE001 - Meldung geht an den Benutzer
+            except Exception as e:      # noqa: BLE001 - message goes to the user
                 res, err = None, e
 
             def finish():
@@ -228,23 +228,23 @@ class ClientApp:
                 self.root.after(3000, lambda: self.check_update(auto=True))
             elif isinstance(err, ApiError) and err.status == 401:
                 self.store.clear_token()
-                self.show_login(f"Bitte neu anmelden: {err}")
+                self.show_login(f"Please sign in again: {err}")
             else:
                 self.show_offline(str(err))
         self.bg(api.session, done, token)
 
     def show_offline(self, msg):
         f = self._new_frame()
-        ttk.Label(f, text="Keine Verbindung", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(f, text="No connection", style="Title.TLabel").pack(anchor="w")
         ttk.Label(f, text=msg, style="Sub.TLabel", wraplength=380).pack(anchor="w", pady=(8, 16))
-        ttk.Button(f, text="Erneut versuchen", style="Accent.TButton", command=self.auto_login).pack(fill="x")
-        ttk.Button(f, text="Anders anmelden", command=self.show_login).pack(fill="x", pady=(8, 0))
+        ttk.Button(f, text="Try again", style="Accent.TButton", command=self.auto_login).pack(fill="x")
+        ttk.Button(f, text="Sign in differently", command=self.show_login).pack(fill="x", pady=(8, 0))
 
-    # ------------------------------------------------------------- Anmeldung
+    # ------------------------------------------------------------- Sign-in
     def show_login(self, message: str = ""):
         f = self._new_frame()
         ttk.Label(f, text="BYTERA RMM", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(f, text=f"Client {__version__} – einmal anmelden, danach bleibt die Anmeldung gespeichert.",
+        ttk.Label(f, text=f"Client {__version__} - sign in once, the sign-in is then kept.",
                   style="Sub.TLabel", wraplength=390).pack(anchor="w", pady=(2, 12))
         self.v = {k: tk.StringVar(value=val) for k, val in {
             "server": self.store.get("server", ""), "user": self.store.get("username", ""), "pass": "",
@@ -257,18 +257,18 @@ class ClientApp:
             e.pack(fill="x")
             return e
 
-        e_server = field("Server-Adresse", "server")
+        e_server = field("Server address", "server")
         e_server.bind("<FocusOut>", lambda e: self.load_realms())
-        field("Benutzername", "user")
-        e_pass = field("Passwort", "pass", show="•")
-        ttk.Label(f, text="Anmelden über", style="Sub.TLabel").pack(anchor="w", pady=(6, 1))
-        self.realm_ids, self.cb_realm = ["local"], ttk.Combobox(f, values=["Lokales Konto"], state="readonly")
+        field("Username", "user")
+        e_pass = field("Password", "pass", show="•")
+        ttk.Label(f, text="Sign in via", style="Sub.TLabel").pack(anchor="w", pady=(6, 1))
+        self.realm_ids, self.cb_realm = ["local"], ttk.Combobox(f, values=["Local account"], state="readonly")
         self.cb_realm.current(0)
         self.cb_realm.pack(fill="x")
-        field("Einmalcode (2FA) – nur wenn aktiviert", "code")
-        field("Name dieses Geräts", "name")
-        ttk.Checkbutton(f, text="Zertifikat nicht prüfen (selbst signiert)", variable=self.v_insecure).pack(anchor="w", pady=(8, 0))
-        self.btn_login = ttk.Button(f, text="Anmelden", style="Accent.TButton", command=self.do_login)
+        field("One-time code (2FA) - only if enabled", "code")
+        field("Name of this device", "name")
+        ttk.Checkbutton(f, text="Do not verify certificate (self-signed)", variable=self.v_insecure).pack(anchor="w", pady=(8, 0))
+        self.btn_login = ttk.Button(f, text="Sign in", style="Accent.TButton", command=self.do_login)
         self.btn_login.pack(fill="x", pady=(14, 0))
         self.lbl_status = ttk.Label(f, text=message, style="Sub.TLabel", wraplength=390)
         self.lbl_status.pack(anchor="w", pady=(10, 0))
@@ -287,20 +287,20 @@ class ClientApp:
             if err or not realms or not self.cb_realm.winfo_exists():
                 return
             self.realm_ids = ["local"] + [r["id"] for r in realms]
-            self.cb_realm["values"] = ["Lokales Konto"] + [r["name"] for r in realms]
+            self.cb_realm["values"] = ["Local account"] + [r["name"] for r in realms]
         self.bg(api.realms, done)
 
     def do_login(self):
         try:
             api = Api(self.v["server"].get(), verify_tls=not self.v_insecure.get(), store=self.store)
         except ApiError as e:
-            self.lbl_status.config(text=f"Fehler: {e}")
+            self.lbl_status.config(text=f"Error: {e}")
             return
         idx = self.cb_realm.current() if self.cb_realm.current() >= 0 else 0
         realm = self.realm_ids[idx] if idx < len(self.realm_ids) else "local"
         user, pw, code, name = self.v["user"].get().strip(), self.v["pass"].get(), self.v["code"].get().strip(), self.v["name"].get().strip()
         self.btn_login.state(["disabled"])
-        self.lbl_status.config(text="Melde an …")
+        self.lbl_status.config(text="Signing in …")
 
         def work():
             api.login(user, pw, realm, code)
@@ -310,7 +310,7 @@ class ClientApp:
             self.btn_login.state(["!disabled"])
             if err:
                 msg = str(err)
-                self.lbl_status.config(text="Bitte den Einmalcode aus der Authenticator-App eingeben." if msg == "2fa_required" else f"Fehler: {msg}")
+                self.lbl_status.config(text="Please enter the one-time code from the authenticator app." if msg == "2fa_required" else f"Error: {msg}")
                 return
             self.store.set(server=api.server, username=user, insecure=bool(self.v_insecure.get()),
                            device_name=name, device_id=res["device"]["id"])
@@ -319,13 +319,13 @@ class ClientApp:
             self.show_main()
             self.open_dashboard()
             self.root.after(3000, lambda: self.check_update(auto=True))
-        self.bg(work, done, busy="Melde an …")
+        self.bg(work, done, busy="Signing in …")
 
-    # ------------------------------------------------------------- Hauptfenster
+    # ------------------------------------------------------------- Main window
     def show_main(self):
         f = self._new_frame()
         ttk.Label(f, text="BYTERA RMM", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(f, text=f"Angemeldet als {self.store.get('username')}\n{self.api.server}",
+        ttk.Label(f, text=f"Signed in as {self.store.get('username')}\n{self.api.server}",
                   style="Sub.TLabel").pack(anchor="w", pady=(2, 16))
 
         def btn(text, cmd, style="TButton"):
@@ -333,16 +333,16 @@ class ClientApp:
             b.pack(fill="x", pady=3)
             return b
 
-        btn("Dashboard öffnen", self.open_dashboard, "Accent.TButton")
+        btn("Open dashboard", self.open_dashboard, "Accent.TButton")
         mounted = bool(self.store.get("drive_letter") or self.store.get("linux_mount"))
-        self.btn_mount = btn("Relay-Laufwerk trennen" if mounted else "Relay als Laufwerk verbinden", self.toggle_mount)
-        btn("Remote-Shell …", lambda: self.choose_client("Remote-Shell", self.open_shell))
-        btn("RMM-Konsole", self.open_console)
-        # Fernbild: auch Offline-Agenten anbieten - direkte Verbindung (lokale IP/VPN) braucht keinen Agenten
-        btn("Fernbild (Remotedesktop) …", lambda: self.choose_client("Fernbild per Remotedesktop", lambda c: self.screen(c, "rdp"), online_only=False))
-        btn("Fernbild (VNC) …", lambda: self.choose_client("Fernbild per VNC", lambda c: self.screen(c, "vnc"), online_only=False))
+        self.btn_mount = btn("Disconnect relay drive" if mounted else "Connect relay as a drive", self.toggle_mount)
+        btn("Remote shell …", lambda: self.choose_client("Remote shell", self.open_shell))
+        btn("RMM console", self.open_console)
+        # Remote screen: also offer offline agents - a direct connection (local IP/VPN) needs no agent
+        btn("Remote screen (Remote Desktop) …", lambda: self.choose_client("Remote screen via Remote Desktop", lambda c: self.screen(c, "rdp"), online_only=False))
+        btn("Remote screen (VNC) …", lambda: self.choose_client("Remote screen via VNC", lambda c: self.screen(c, "vnc"), online_only=False))
         ttk.Separator(f).pack(fill="x", pady=12)
-        # VPN: Tunnel, in denen ich Teilnehmer bin, automatisch einrichten, verbinden und bei Ablauf loeschen
+        # VPN: automatically set up, connect and (on expiry) delete tunnels I am a participant of
         self.v_vpn = tk.BooleanVar(value=bool(self.store.get("vpn_auto", True)))
 
         def _vpn_toggle():
@@ -350,11 +350,11 @@ class ClientApp:
             if self.v_vpn.get():
                 self.vpn.now()
             else:
-                self.bg(self.vpn.remove_all, lambda *_: self._vpn_status("VPN-Automatik aus – Tunnel entfernt"))
-        ttk.Checkbutton(f, text="VPN-Tunnel automatisch verwalten", variable=self.v_vpn, command=_vpn_toggle).pack(anchor="w")
-        self.lbl_vpn = ttk.Label(f, text="VPN: wird geprüft …", style="Sub.TLabel")
+                self.bg(self.vpn.remove_all, lambda *_: self._vpn_status("VPN automation off - tunnels removed"))
+        ttk.Checkbutton(f, text="Manage VPN tunnels automatically", variable=self.v_vpn, command=_vpn_toggle).pack(anchor="w")
+        self.lbl_vpn = ttk.Label(f, text="VPN: checking …", style="Sub.TLabel")
         self.lbl_vpn.pack(anchor="w", pady=(2, 4))
-        # VPN-Bereich direkt im Hauptfenster (Echtzeit-Zustand, Verbinden/Trennen)
+        # VPN area directly in the main window (real-time state, connect/disconnect)
         from .vpnpanel import VpnPanel
         if getattr(self, "vpnpanel", None):
             self.vpnpanel.stop()
@@ -362,19 +362,19 @@ class ClientApp:
         self.vpn.start()
         ttk.Separator(f).pack(fill="x", pady=8)
         self.v_auto = tk.BooleanVar(value=autostart.is_enabled())
-        ttk.Checkbutton(f, text="Mit der Anmeldung am Computer starten", variable=self.v_auto,
+        ttk.Checkbutton(f, text="Start when signing in to the computer", variable=self.v_auto,
                         command=self.toggle_autostart).pack(anchor="w")
         self.v_open = tk.BooleanVar(value=bool(self.store.get("open_on_start", True)))
-        ttk.Checkbutton(f, text="Dashboard beim Start öffnen", variable=self.v_open,
+        ttk.Checkbutton(f, text="Open dashboard at startup", variable=self.v_open,
                         command=lambda: self.store.set(open_on_start=bool(self.v_open.get()))).pack(anchor="w", pady=(4, 0))
         self.v_close = tk.BooleanVar(value=bool(self.store.get("close_after_dashboard", False)))
-        ttk.Checkbutton(f, text="Fenster schließen, wenn Dashboard aufgeht", variable=self.v_close,
+        ttk.Checkbutton(f, text="Close window when the dashboard opens", variable=self.v_close,
                         command=lambda: self.store.set(close_after_dashboard=bool(self.v_close.get()))).pack(anchor="w", pady=(4, 0))
         self.v_auto_upd = tk.BooleanVar(value=bool(self.store.get("auto_update", True)))
-        ttk.Checkbutton(f, text="Automatisch aktualisieren", variable=self.v_auto_upd,
+        ttk.Checkbutton(f, text="Update automatically", variable=self.v_auto_upd,
                         command=lambda: self.store.set(auto_update=bool(self.v_auto_upd.get()))).pack(anchor="w", pady=(4, 0))
-        btn(f"Nach Updates suchen  (Version {__version__})", lambda: self.check_update(auto=False)).pack_configure(pady=(10, 0))
-        btn("Dieses Gerät abmelden", self.logout, "Danger.TButton").pack_configure(pady=(14, 0))
+        btn(f"Check for updates  (version {__version__})", lambda: self.check_update(auto=False)).pack_configure(pady=(10, 0))
+        btn("Sign out this device", self.logout, "Danger.TButton").pack_configure(pady=(14, 0))
         self.lbl_info = ttk.Label(f, text="", style="Sub.TLabel", wraplength=390)
         self.lbl_info.pack(anchor="w", pady=(10, 0))
 
@@ -382,39 +382,39 @@ class ClientApp:
         if getattr(self, "lbl_info", None) and self.lbl_info.winfo_exists():
             self.lbl_info.config(text=text)
 
-    # ------------------------------------------------------------- Aktionen
-    def _fresh(self, then, busy: str = "Verbinde …"):
-        """Vor jedem Oeffnen eine frische Sitzung holen (Token laeuft so nie ab)."""
+    # ------------------------------------------------------------- Actions
+    def _fresh(self, then, busy: str = "Connecting …"):
+        """Fetch a fresh session before each open (so the token never expires)."""
         def done(res, err):
             if err:
                 if isinstance(err, ApiError) and err.status == 401:
                     self.store.clear_token()
-                    return self.show_login(f"Abgemeldet: {err}")
+                    return self.show_login(f"Signed out: {err}")
                 return messagebox.showerror("BYTERA RMM", str(err))
             then()
         self.bg(self.api.session, done, self.store.load_token(), busy=busy)
 
     def open_dashboard(self):
         def opened():
-            self.info("Dashboard geöffnet in " + browser.open_app_window(self.api.dashboard_url(), default_data_dir() / "browser"))
+            self.info("Dashboard opened in " + browser.open_app_window(self.api.dashboard_url(), default_data_dir() / "browser"))
             if self.store.get("close_after_dashboard", False):
                 self._auto_close(4)
-        self._fresh(opened, busy="Öffne Dashboard …")
+        self._fresh(opened, busy="Opening dashboard …")
 
     def open_console(self):
-        """RMM-Konsole (Modul "console"): Geraete, Live-Metriken, Terminal, Befehle - mit Tab-Vervollstaendigung."""
+        """RMM console (module "console"): devices, live metrics, terminal, commands - with tab completion."""
         self._fresh(lambda: browser.open_app_window(self.api.dashboard_url("console"), default_data_dir() / "browser",
-                                                    size=(1100, 680)), busy="Öffne RMM-Konsole …")
+                                                    size=(1100, 680)), busy="Opening RMM console …")
 
     def _auto_close(self, seconds: int):
-        """Kontrollfenster nach dem Oeffnen des Dashboards schliessen - mit "Offen lassen"."""
+        """Close the control window after the dashboard opens - with "Keep open"."""
         token = {"keep": False}
         self._busy_token = token
 
         def keep():
             token["keep"] = True
             self.bar_hide()
-            self.info("Kontrollfenster bleibt offen.")
+            self.info("Control window stays open.")
 
         def tick(n):
             if token["keep"] or self._busy_token is not token:
@@ -422,29 +422,29 @@ class ClientApp:
             if n <= 0:
                 self.root.destroy()
                 return
-            self.bar_show(f"Dashboard offen – Fenster schließt in {n} s", keep, button="Offen lassen")
+            self.bar_show(f"Dashboard open - window closes in {n} s", keep, button="Keep open")
             self.root.after(1000, lambda: tick(n - 1))
         tick(seconds)
 
     def open_shell(self, client):
         self._fresh(lambda: browser.open_app_window(self.api.dashboard_url("terminal", client["id"]),
-                                                    default_data_dir() / "browser", size=(1000, 640)), busy="Öffne Remote-Shell …")
+                                                    default_data_dir() / "browser", size=(1000, 640)), busy="Opening remote shell …")
 
     def screen(self, client, protocol):
-        """Fernbild: erst Ziel/Port waehlen (Gateway, lokale IP, eigene, letzte), dann verbinden."""
+        """Remote screen: first choose target/port (gateway, local IP, custom, last), then connect."""
         def got(info, err):
             if err:
-                return messagebox.showerror("Fernbild", str(err))
+                return messagebox.showerror("Remote screen", str(err))
             self.connect_dialog(client, protocol, info)
-        self.bg(self.api.target_info, got, client["id"], protocol, busy="Lade Verbindungsoptionen …")
+        self.bg(self.api.target_info, got, client["id"], protocol, busy="Loading connection options …")
 
     def connect_dialog(self, client, protocol, info):
-        name = "Remotedesktop" if protocol == "rdp" else "VNC"
+        name = "Remote Desktop" if protocol == "rdp" else "VNC"
         std = info["standard_port"]
         d = info.get("default") or {}
         last = info.get("last")
         win = tk.Toplevel(self.root)
-        win.title(f"Fernbild per {name} – {client.get('hostname')}")
+        win.title(f"Remote screen via {name} - {client.get('hostname')}")
         win.configure(bg=BG)
         win.transient(self.root)
         win.resizable(False, False)
@@ -458,14 +458,14 @@ class ClientApp:
         v_port = tk.StringVar(value=str(d.get("port") or ""))
         v_remember = tk.BooleanVar(value=False)
 
-        ttk.Label(f, text="Ziel", style="Sub.TLabel").pack(anchor="w")
+        ttk.Label(f, text="Target", style="Sub.TLabel").pack(anchor="w")
         rb = {}
-        rb["gateway"] = ttk.Radiobutton(f, text="RMM-Gateway (Server leitet weiter, nur von diesem Gerät erreichbar)",
+        rb["gateway"] = ttk.Radiobutton(f, text="RMM gateway (server forwards, reachable only from this device)",
                                         value="gateway", variable=host_mode)
-        rb["local"] = ttk.Radiobutton(f, text=f"Lokale IP des Geräts: {info.get('local_ip') or 'nicht bekannt'}",
+        rb["local"] = ttk.Radiobutton(f, text=f"Local IP of the device: {info.get('local_ip') or 'unknown'}",
                                       value="local", variable=host_mode)
         if last:
-            rb["last"] = ttk.Radiobutton(f, text=f"Letzte Verbindung: {last.get('display', '')}", value="last",
+            rb["last"] = ttk.Radiobutton(f, text=f"Last connection: {last.get('display', '')}", value="last",
                                          variable=host_mode)
         for k in ("gateway", "local", "last"):
             if k in rb:
@@ -480,7 +480,7 @@ class ClientApp:
                 host_mode.set("gateway" if info.get("gateway_available") else "custom")
         row = ttk.Frame(f)
         row.pack(fill="x", pady=(1, 8))
-        ttk.Radiobutton(row, text="Eigene Adresse:", value="custom", variable=host_mode).pack(side="left")
+        ttk.Radiobutton(row, text="Custom address:", value="custom", variable=host_mode).pack(side="left")
         e_host = ttk.Entry(row, textvariable=v_host, width=28)
         e_host.pack(side="left", padx=(6, 0), fill="x", expand=True)
         e_host.bind("<FocusIn>", lambda e: host_mode.set("custom"))
@@ -490,13 +490,13 @@ class ClientApp:
         prow.pack(fill="x", pady=(1, 8))
         rp_std = ttk.Radiobutton(prow, text=f"Standard ({std})", value="standard", variable=port_mode)
         rp_gw = ttk.Radiobutton(prow, text="RMM-Gateway", value="gateway", variable=port_mode)
-        rp_cu = ttk.Radiobutton(prow, text="Eigener:", value="custom", variable=port_mode)
+        rp_cu = ttk.Radiobutton(prow, text="Custom:", value="custom", variable=port_mode)
         e_port = ttk.Entry(prow, textvariable=v_port, width=7)
         for w in (rp_std, rp_gw, rp_cu):
             w.pack(side="left", padx=(0, 8))
         e_port.pack(side="left")
         e_port.bind("<FocusIn>", lambda e: port_mode.set("custom"))
-        ttk.Checkbutton(f, text="Als Standard für dieses Gerät merken", variable=v_remember).pack(anchor="w", pady=(2, 10))
+        ttk.Checkbutton(f, text="Remember as default for this device", variable=v_remember).pack(anchor="w", pady=(2, 10))
         status = ttk.Label(f, text="", style="Sub.TLabel", wraplength=420)
 
         def sync(*_):
@@ -504,7 +504,7 @@ class ClientApp:
             fixed = hm in ("gateway", "last")
             for w in (rp_std, rp_gw, rp_cu, e_port):
                 w.state(["disabled"] if fixed else ["!disabled"])
-            rp_gw.state(["disabled"])                      # Gateway-Port nur zusammen mit Gateway-Ziel
+            rp_gw.state(["disabled"])                      # gateway port only together with the gateway target
             if hm == "gateway":
                 port_mode.set("gateway")
             elif port_mode.get() == "gateway":
@@ -521,28 +521,28 @@ class ClientApp:
                     port = int(v_port.get())
                     assert 1 <= port <= 65535
                 except (ValueError, AssertionError):
-                    status.config(text="Bitte einen Port zwischen 1 und 65535 eingeben.")
+                    status.config(text="Please enter a port between 1 and 65535.")
                     return
             if hm == "custom" and not v_host.get().strip():
-                status.config(text="Bitte eine Adresse eingeben.")
+                status.config(text="Please enter an address.")
                 return
-            status.config(text="Verbinde …")
+            status.config(text="Connecting …")
 
             def done(res, err):
                 if err:
-                    status.config(text=f"Fehler: {err}")
+                    status.config(text=f"Error: {err}")
                     return
                 try:
                     msg = features.launch_screen(protocol, res["host"], int(res["port"]))
-                    hint = " (nur von diesem Gerät erreichbar)" if res.get("host_mode") == "gateway" else ""
+                    hint = " (reachable only from this device)" if res.get("host_mode") == "gateway" else ""
                     self.info(f"{msg}  {res['host']}:{res['port']}{hint}")
                     win.destroy()
                 except features.FeatureError as e:
                     status.config(text=str(e))
             self.bg(self.api.connect, done, client["id"], protocol, hm, v_host.get().strip(), pm, port,
-                    bool(v_remember.get()), busy="Baue Fernbild-Verbindung auf …")
+                    bool(v_remember.get()), busy="Setting up remote screen connection …")
 
-        ttk.Button(f, text="Verbinden", style="Accent.TButton", command=go).pack(fill="x")
+        ttk.Button(f, text="Connect", style="Accent.TButton", command=go).pack(fill="x")
         status.pack(anchor="w", pady=(8, 0))
         win.bind("<Return>", lambda e: go())
 
@@ -555,11 +555,11 @@ class ClientApp:
 
         def done(msg, err):
             if err:
-                return messagebox.showerror("Relay-Laufwerk", str(err))
+                return messagebox.showerror("Relay drive", str(err))
             self.info(msg)
             now = bool(self.store.get("drive_letter") or self.store.get("linux_mount"))
-            self.btn_mount.config(text="Relay-Laufwerk trennen" if now else "Relay als Laufwerk verbinden")
-        self.bg(fn, done, *args, busy="Trenne Laufwerk …" if mounted else "Verbinde Relay-Laufwerk …")
+            self.btn_mount.config(text="Disconnect relay drive" if now else "Connect relay as a drive")
+        self.bg(fn, done, *args, busy="Disconnecting drive …" if mounted else "Connecting relay drive …")
 
     def toggle_autostart(self):
         try:
@@ -575,9 +575,9 @@ class ClientApp:
             clients = sorted([c for c in clients if c.get("online") or not online_only],
                              key=lambda c: (not c.get("online"), (c.get("hostname") or "").lower()))
             if not clients:
-                return messagebox.showinfo(title, "Kein Gerät online." if online_only else "Keine Geräte sichtbar.")
+                return messagebox.showinfo(title, "No device online." if online_only else "No devices visible.")
             win = tk.Toplevel(self.root)
-            win.title(f"{title} – Gerät wählen")
+            win.title(f"{title} - choose a device")
             win.configure(bg=BG)
             win.geometry("380x420")
             win.transient(self.root)
@@ -610,11 +610,11 @@ class ClientApp:
                     on_choose(c)
             lb.bind("<Double-Button-1>", ok)
             win.bind("<Return>", ok)
-            ttk.Button(win, text="Öffnen", style="Accent.TButton", command=ok).pack(fill="x", padx=12, pady=12)
-        self.bg(self.api.clients, done, busy="Lade Geräteliste …")
+            ttk.Button(win, text="Open", style="Accent.TButton", command=ok).pack(fill="x", padx=12, pady=12)
+        self.bg(self.api.clients, done, busy="Loading device list …")
 
     def logout(self):
-        if not messagebox.askyesno("Abmelden", "Dieses Gerät abmelden? Die gespeicherte Anmeldung wird gelöscht."):
+        if not messagebox.askyesno("Sign out", "Sign out this device? The stored sign-in will be deleted."):
             return
         dev = self.store.get("device_id")
 
@@ -623,7 +623,7 @@ class ClientApp:
                 features.unmount_relay(self.store)
             except Exception:
                 pass
-            try:                                   # eigene VPN-Tunnel beim Abmelden entfernen
+            try:                                   # remove own VPN tunnels on sign-out
                 if getattr(self, "vpnpanel", None):
                     self.vpnpanel.stop()
                 self.vpn.stop()
@@ -639,7 +639,7 @@ class ClientApp:
         def done(_, __):
             self.store.clear_token()
             self.api = None
-            self.show_login("Abgemeldet.")
+            self.show_login("Signed out.")
         self.bg(work, done)
 
     # ------------------------------------------------------------- VPN
@@ -651,7 +651,7 @@ class ClientApp:
             pass
 
     def _refresh_session(self):
-        """Sitzung mit dem gespeicherten Geraetetoken erneuern (fuer Hintergrund-Abfragen)."""
+        """Renew the session with the stored device token (for background queries)."""
         token = self.store.load_token()
         if self.api is not None and token:
             self.api.session(token)
@@ -666,20 +666,20 @@ class ClientApp:
         def got(res, err):
             if err:
                 if not auto:
-                    messagebox.showerror("Update", f"Suche fehlgeschlagen: {err}")
+                    messagebox.showerror("Update", f"Search failed: {err}")
                 return
             if not res["newer"]:
                 if not auto:
-                    messagebox.showinfo("Update", res["reason"] or f"Die App ist aktuell (Version {res['current']}).")
+                    messagebox.showinfo("Update", res["reason"] or f"The app is up to date (version {res['current']}).")
                 return
-            if auto or messagebox.askyesno("Update", f"Version {res['latest']} ist verfügbar (installiert: {res['current']}).\n"
-                                                     "Jetzt installieren? Die App startet danach neu."):
+            if auto or messagebox.askyesno("Update", f"Version {res['latest']} is available (installed: {res['current']}).\n"
+                                                     "Install now? The app restarts afterwards."):
                 self.install_update(res)
-        self.bg(updater.check, got, self.api, busy=None if auto else "Suche nach Updates …")
+        self.bg(updater.check, got, self.api, busy=None if auto else "Searching for updates …")
 
     def install_update(self, res):
         def progress(done, total):
-            self.root.after(0, lambda: self.bar_text(f"⏳ Lade Update {res['latest']} … {done * 100 // total} %"))
+            self.root.after(0, lambda: self.bar_text(f"Downloading update {res['latest']} … {done * 100 // total} %"))
 
         def work():
             pkg = updater.download(self.api, res["file"], progress)
@@ -690,12 +690,12 @@ class ClientApp:
                 if not isinstance(err, updater.Cancelled):
                     messagebox.showerror("Update", str(err))
                 return
-            self.info(f"Update {res['latest']} wird installiert – die App startet neu …")
+            self.info(f"Installing update {res['latest']} - the app restarts …")
             if how == "exit":
                 self.root.after(500, self.root.destroy)
             else:
                 self.root.after(500, updater.restart)
-        self.bg(work, done, busy=f"Lade Update {res['latest']} …")
+        self.bg(work, done, busy=f"Downloading update {res['latest']} …")
 
     def run(self):
         self.root.mainloop()
@@ -704,27 +704,27 @@ class ClientApp:
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     link = next((a for a in argv if a.lower().startswith("bytera-rmm:")), None)
-    if link:                                    # aus dem Dashboard: RDP/VNC/SSH/Terminal extern oeffnen
+    if link:                                    # from the dashboard: open RDP/VNC/SSH/terminal externally
         from .launcher import handle
         return handle(link)
     deeplink = next((a for a in argv if a.lower().startswith("bytera://")), None)
-    if deeplink:                                # internes Adress-Schema bytera://<kind>/... (wie steam://)
+    if deeplink:                                # internal address scheme bytera://<kind>/... (like steam://)
         from .launcher import handle_deeplink
         return handle_deeplink(deeplink)
     try:
         from . import legacy
-        if legacy.migrate():                    # Umbenennung: App zieht an den neuen Ort um und startet dort neu
+        if legacy.migrate():                    # rename: the app moves to the new location and restarts there
             return
     except Exception:
         pass
     try:
         from . import urlscheme
-        urlscheme.register()                    # bytera-rmm:// fuer diesen Benutzer (Pfad kann sich aendern)
+        urlscheme.register()                    # bytera-rmm:// for this user (path can change)
     except Exception:
         pass
     try:
         from . import autostart
-        autostart.migrate_legacy()              # Autostart der App unter altem Namen (RAPALLE.net) umstellen
+        autostart.migrate_legacy()              # migrate the app autostart from the old name (RAPALLE.net)
     except Exception:
         pass
     ClientApp(minimized="--minimized" in argv).run()
