@@ -1,20 +1,20 @@
 """
-node_manager.py - Node-Verwaltung (Core)
+node_manager.py - node management (Core)
 ========================================
 
-Eine NODE ist ein eigener kleiner Prozess auf einem Client (src/node/main.py),
-der UNABHAENGIG vom Agenten laeuft:
+A NODE is a separate small process on a client (src/node/main.py) that runs
+INDEPENDENTLY of the agent:
 
-    Backend --(Befehl)--> Agent --(laedt & startet)--> Node-Prozess
-    Backend <--(eigene Socket.IO-Verbindung /node)---- Node-Prozess
+    Backend --(command)--> agent --(loads & starts)--> node process
+    Backend <--(own Socket.IO connection /node)------- node process
 
-  * Der Agent installiert/entfernt/ueberwacht die Node nur (Dienst, Prozess).
-  * Die Node prueft Docker (oder meldet, dass es installiert werden muss),
-    nimmt Node-MODULE entgegen (docker-compose-Dateien u.a. aus
-    src/modules/node/<name>/) und fuehrt sie aus.
-  * Eigenes Token je Node (gespeichert wird nur der Hash).
+  * The agent only installs/removes/monitors the node (service, process).
+  * The node checks Docker (or reports that it needs to be installed), accepts
+    node MODULES (docker-compose files and more from src/modules/node/<name>/)
+    and runs them.
+  * Own token per node (only the hash is stored).
 
-Module (src/modules/...) benutzen diese Datei ueber ctx.nodes (siehe modules.py).
+Modules (src/modules/...) use this file via ctx.nodes (see modules.py).
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ NS = "/node"
 LOG_LINES = 300
 PACKAGE_EXCLUDE = {"__pycache__", "data", "node.json", ".hash"}
 
-# --- Laufzeit ----------------------------------------------------------------
+# --- Runtime -----------------------------------------------------------------
 _sid_by_client: dict[str, str] = {}
 _client_by_sid: dict[str, str] = {}
 _pending: dict[str, asyncio.Future] = {}
@@ -51,7 +51,7 @@ _logs: dict[str, deque] = {}
 
 
 class NodeError(Exception):
-    """Fehler, der dem Benutzer angezeigt werden darf."""
+    """An error that may be shown to the user."""
 
 
 # =========================================================================
@@ -67,7 +67,7 @@ def _new_token() -> str:
 
 
 # =========================================================================
-# Node-Paket (src/node/ -> ZIP, wird vom Agenten geholt)
+# Node package (src/node/ -> ZIP, fetched by the agent)
 # =========================================================================
 
 def _package_files() -> list[Path]:
@@ -98,7 +98,7 @@ def package_zip() -> bytes:
 
 
 def node_version() -> str:
-    """Version aus src/node/main.py (__version__ = "x.y.z")."""
+    """Version from src/node/main.py (__version__ = "x.y.z")."""
     try:
         for line in (NODE_DIR / "main.py").read_text(encoding="utf-8").splitlines():
             if line.startswith("__version__"):
@@ -109,7 +109,7 @@ def node_version() -> str:
 
 
 # =========================================================================
-# Zustand fuer die Oberflaeche
+# State for the UI
 # =========================================================================
 
 def _public(rec: dict | None, client_id: str | None = None) -> dict:
@@ -160,25 +160,25 @@ def _add_log(client_id: str, line: str) -> None:
 
 
 # =========================================================================
-# Aktivieren / Deaktivieren (ueber den Agenten)
+# Enable / disable (via the agent)
 # =========================================================================
 
 async def enable(client_id: str) -> dict:
     client = await db.call(db.get_client, client_id)
     if not client:
-        raise NodeError("Unbekannter Client")
+        raise NodeError("Unknown client")
     if client_id not in state.client_id_to_sid:
-        raise NodeError("Der Agent dieses Clients ist offline - die Node kann nur bei verbundenem Agenten installiert werden.")
+        raise NodeError("The agent of this client is offline - the node can only be installed with a connected agent.")
     token = _new_token()
     await db.call(db.node_create, client_id, _hash(token))
-    _add_log(client_id, f"{_ts()} Node wird installiert ...")
+    _add_log(client_id, f"{_ts()} Node is being installed ...")
     ok = await send_to_agent(client_id, "node-install", {
         "path": "/api/nodes/package", "token": token, "client_id": client_id,
         "hash": package_hash(), "version": node_version(),
     })
     if not ok:
-        await db.call(db.node_update, client_id, state="error", error="Agent nicht erreichbar")
-        raise NodeError("Agent nicht erreichbar")
+        await db.call(db.node_update, client_id, state="error", error="Agent not reachable")
+        raise NodeError("Agent not reachable")
     await _broadcast(client_id)
     return await get_state(client_id)
 
@@ -187,7 +187,7 @@ async def disable(client_id: str) -> dict:
     rec = await db.call(db.node_get, client_id)
     if not rec:
         return await get_state(client_id)
-    # Token sofort entwerten, Verbindung trennen, Agent raeumt auf.
+    # Invalidate the token immediately, drop the connection, the agent cleans up.
     await db.call(db.node_update, client_id, state="removing", error=None,
                   token_hash=_hash(secrets.token_urlsafe(16)))
     sid = _sid_by_client.get(client_id)
@@ -197,25 +197,24 @@ async def disable(client_id: str) -> dict:
         except Exception:
             pass
     if not await send_to_agent(client_id, "node-remove", {"client_id": client_id}):
-        _add_log(client_id, f"{_ts()} Agent offline - die Node wird entfernt, sobald er wieder verbunden ist.")
+        _add_log(client_id, f"{_ts()} Agent offline - the node will be removed as soon as it reconnects.")
     await _broadcast(client_id)
     return await get_state(client_id)
 
 
 async def on_agent_online(client_id: str) -> None:
-    """Wird aufgerufen, wenn der Agent eines Clients sich (neu) verbindet."""
+    """Called when a client\047s agent (re)connects."""
     rec = await db.call(db.node_get, client_id)
     if not rec:
         return
     if rec["state"] == "removing":
         await send_to_agent(client_id, "node-remove", {"client_id": client_id})
     elif client_id not in _sid_by_client:
-        # Soll laufen, ist aber (noch) nicht verbunden. NICHT sofort eingreifen:
-        # Nach einem Backend-Neustart verbindet sich der Agent meist Sekunden VOR
-        # der Node. Ein sofortiges node-ensure liess den Agenten dann auf dem
-        # Host (z.B. PVE) die Node bzw. ihren Dienst anfassen, obwohl sie gleich
-        # von selbst wiederkam. Erst warten, dann nur eingreifen, wenn sie
-        # wirklich fehlt.
+        # Should run, but is not (yet) connected. Do NOT intervene immediately:
+        # after a backend restart the agent usually connects seconds BEFORE the
+        # node. An immediate node-ensure then had the agent touch the node or
+        # its service on the host (e.g. PVE), although it was about to come back
+        # on its own. Wait first, then intervene only if it is really missing.
         asyncio.create_task(_ensure_later(client_id))
 
 
@@ -225,7 +224,7 @@ _BOOT = time.time()
 async def _ensure_later(client_id: str) -> None:
     await asyncio.sleep(90 if time.time() - _BOOT < 180 else 30)
     if client_id in _sid_by_client:
-        return                                            # Node ist von selbst zurueck
+        return                                            # node came back on its own
     rec = await db.call(db.node_get, client_id)
     if not rec or rec["state"] == "removing" or not state.is_online(client_id):
         return
@@ -235,23 +234,23 @@ async def _ensure_later(client_id: str) -> None:
 
 @sio.on("node-agent-result", namespace="/agent")
 async def _agent_result(sid, payload):
-    """Antwort des Agenten auf node-install / node-remove / node-ensure."""
+    """The agent\047s answer to node-install / node-remove / node-ensure."""
     cid = state.sid_to_client_id.get(sid)
     if not cid or not isinstance(payload, dict):
         return
     op, ok, err = payload.get("op"), bool(payload.get("ok")), str(payload.get("error") or "")[:300]
-    _add_log(cid, f"{_ts()} Agent: {op} -> {'ok' if ok else 'FEHLER: ' + err}")
+    _add_log(cid, f"{_ts()} Agent: {op} -> {'ok' if ok else 'ERROR: ' + err}")
     if op == "remove" and ok:
         await db.call(db.node_delete, cid)
         _sid_by_client.pop(cid, None)
         await modules.emit("node_removed", client_id=cid)
     elif not ok:
-        await db.call(db.node_update, cid, state="error", error=err or "Fehlgeschlagen")
+        await db.call(db.node_update, cid, state="error", error=err or "Failed")
     await _broadcast(cid)
 
 
 # =========================================================================
-# Verbindung der Node selbst (/node)
+# Connection of the node itself (/node)
 # =========================================================================
 
 @sio.on("connect", namespace=NS)
@@ -268,7 +267,7 @@ async def _node_connect(sid, environ, auth):
         _sk.e2e_forget(sid)
         raise socketio.exceptions.ConnectionRefusedError("encryption required: update the node")
     old = _sid_by_client.get(cid)
-    if old and old != sid:                       # alte Verbindung ablösen
+    if old and old != sid:                       # replace the old connection
         try:
             await sio.disconnect(old, namespace=NS)
         except Exception:
@@ -276,7 +275,7 @@ async def _node_connect(sid, environ, auth):
     _sid_by_client[cid] = sid
     _client_by_sid[sid] = cid
     await db.call(db.node_update, cid, state="installed", error=None, last_seen=int(time.time() * 1000))
-    _add_log(cid, f"{_ts()} Node verbunden")
+    _add_log(cid, f"{_ts()} Node connected")
     await _broadcast(cid)
     await modules.emit("node_online", client_id=cid)
 
@@ -294,7 +293,7 @@ async def _node_disconnect(sid):
     if _sid_by_client.get(cid) == sid:
         _sid_by_client.pop(cid, None)
         _caps.pop(cid, None)
-        _add_log(cid, f"{_ts()} Node getrennt")
+        _add_log(cid, f"{_ts()} Node disconnected")
         await _broadcast(cid)
         await modules.emit("node_offline", client_id=cid)
 
@@ -350,14 +349,14 @@ async def _node_result(sid, payload):
 
 
 # =========================================================================
-# Befehle an die Node
+# Commands to the node
 # =========================================================================
 
 async def command(client_id: str, op: str, data: dict | None = None, timeout: float = 60) -> Any:
-    """Fuehrt einen Befehl auf der Node aus und wartet auf die Antwort."""
+    """Runs a command on the node and waits for the answer."""
     sid = _sid_by_client.get(client_id)
     if not sid:
-        raise NodeError("Die Node ist offline.")
+        raise NodeError("The node is offline.")
     rid = uuid.uuid4().hex
     fut: asyncio.Future = asyncio.get_running_loop().create_future()
     _pending[rid] = fut
@@ -366,14 +365,14 @@ async def command(client_id: str, op: str, data: dict | None = None, timeout: fl
         res = await asyncio.wait_for(fut, timeout)
     except asyncio.TimeoutError:
         _pending.pop(rid, None)
-        raise NodeError(f"Zeitueberschreitung bei '{op}'")
+        raise NodeError(f"Timeout on '{op}'")
     if not res.get("ok"):
-        raise NodeError(str(res.get("error") or f"'{op}' fehlgeschlagen"))
+        raise NodeError(str(res.get("error") or f"'{op}' failed"))
     return res.get("data")
 
 
 async def _refresh_quietly(client_id: str) -> None:
-    """Nach einer Aenderung den Zustand gleich neu holen (Fehler sind hier egal)."""
+    """Fetch the state again right after a change (errors do not matter here)."""
     try:
         await refresh(client_id)
     except Exception:
@@ -381,18 +380,18 @@ async def _refresh_quietly(client_id: str) -> None:
 
 
 async def update(client_id: str) -> dict:
-    """Neues Node-Paket auf den Client bringen (der Agent aktualisiert und startet die Node neu)."""
+    """Bring a new node package to the client (the agent updates and restarts the node)."""
     if not await db.call(db.node_get, client_id):
-        raise NodeError("Keine Node auf diesem Client")
+        raise NodeError("No node on this client")
     if not await send_to_agent(client_id, "node-ensure", {
             "path": "/api/nodes/package", "hash": package_hash(), "version": node_version()}):
-        raise NodeError("Der Agent dieses Clients ist offline")
-    _add_log(client_id, f"{_ts()} Node-Update angefordert")
+        raise NodeError("The agent of this client is offline")
+    _add_log(client_id, f"{_ts()} Node update requested")
     return await get_state(client_id)
 
 
 async def refresh(client_id: str) -> dict:
-    """Zustand von der Node neu abfragen (Docker, Module) und speichern."""
+    """Query the state from the node again (Docker, modules) and store it."""
     data = await command(client_id, "status", timeout=60)
     await _apply_report(client_id, data)
     return await get_state(client_id)
@@ -404,14 +403,14 @@ async def docker_install(client_id: str) -> Any:
 
 async def deploy_module(client_id: str, module_id: str, params: dict | None = None,
                         activate: bool = False) -> Any:
-    """Schickt den Node-Teil eines Moduls (src/modules/node/<id>/) an die Node und installiert ihn.
-    Seit Node 0.3.0 ist er danach AUS (je Node einzeln aktivieren). activate=True nur, wenn der
-    Benutzer genau diese Node fuer genau dieses Modul ausdruecklich gewaehlt hat (z.B. Cloudflare-Tunnel)."""
+    """Sends the node part of a module (src/modules/node/<id>/) to the node and installs it.
+    Since node 0.3.0 it is OFF afterwards (activate per node individually). activate=True only if
+    the user explicitly chose exactly this node for exactly this module (e.g. Cloudflare tunnel)."""
     if not modules.is_enabled(module_id):
-        raise NodeError(f"Das Modul '{module_id}' ist nicht aktiv (Modul-App).")
+        raise NodeError(f"The module '{module_id}' is not active (module app).")
     bundle = modules.node_bundle(module_id)
     if bundle is None:
-        raise NodeError(f"Das Modul '{module_id}' hat keinen Node-Teil.")
+        raise NodeError(f"The module '{module_id}' has no node part.")
     res = await command(client_id, "module-install", {"bundle": bundle, "params": params or {}}, timeout=300)
     if activate and not (isinstance(res, dict) and res.get("start")):
         res = {**(res if isinstance(res, dict) else {}),
@@ -434,14 +433,14 @@ async def module_action(client_id: str, module_id: str, action: str, data: dict 
 
 
 async def module_disabled(module_id: str) -> None:
-    """Ein Backend-Modul wurde ausgeschaltet: seinen Node-Teil von allen Nodes entfernen."""
+    """A backend module was switched off: remove its node part from all nodes."""
     for cid in list(_sid_by_client):
         rec = await db.call(db.node_get, cid)
         if rec and module_id in (rec.get("modules") or {}):
             try:
                 await remove_module(cid, module_id)
             except Exception as exc:
-                _add_log(cid, f"{_ts()} Modul {module_id} konnte nicht entfernt werden: {exc}")
+                _add_log(cid, f"{_ts()} module {module_id} could not be removed: {exc}")
 
 
 def _ts() -> str:
@@ -449,12 +448,12 @@ def _ts() -> str:
 
 
 # =========================================================================
-# Welche Node kann was? (Backend ODER Node waehlen - nur Nodes mit Modul)
+# Which node can do what? (choose backend OR node - only nodes with the module)
 # =========================================================================
-# Docker-API, WOL, Browser-, Mandanten- und Netzwerk-Abruf sind NODE-MODULE. Seit Node 0.3.0
-# ist jedes Modul nach dem Installieren AUS und wird je Node einzeln aktiviert. Eine Node ist
-# fuer ein Modul nur waehlbar, wenn es dort installiert UND aktiv (running) ist. Aeltere Nodes
-# mit fest eingebautem Docker/WOL zaehlen bewusst NICHT mehr (alles aus, bis aktiviert).
+# Docker API, WOL, browser, tenant and network access are NODE MODULES. Since node 0.3.0
+# every module is OFF after installing and is activated per node individually. A node is
+# selectable for a module only if it is installed AND active (running) there. Older nodes
+# with built-in Docker/WOL deliberately NO longer count (everything off until activated).
 _caps: dict[str, dict] = {}                     # client_id -> {version, modules{id: state}, ops}
 
 
@@ -463,7 +462,7 @@ def _mod_state(client_id: str, module_id: str) -> str:
 
 
 def _too_old(client_id: str) -> bool:
-    """Node vor 0.3.0: kennt die Einzel-Aktivierung nicht -> erst aktualisieren."""
+    """Node before 0.3.0: does not know per-module activation -> update first."""
     try:
         v = (_caps.get(client_id) or {}).get("version") or "0"
         return tuple(int(x) for x in v.split(".")[:3]) < (0, 3, 0)
@@ -472,13 +471,13 @@ def _too_old(client_id: str) -> bool:
 
 
 def node_has(client_id: str, module_id: str) -> bool:
-    """Ist das Node-Modul auf dieser (verbundenen) Node installiert UND aktiviert?"""
+    """Is the node module installed AND activated on this (connected) node?"""
     return not _too_old(client_id) and _mod_state(client_id, module_id) in ("running", "partial")
 
 
 def node_choices(module_id: str, user: dict | None = None) -> list[dict]:
-    """Alle verbundenen Nodes fuer eine Backend/Node-Auswahl:
-    [{id, name, online, installed, active, state}] - nur active=True ist waehlbar."""
+    """All connected nodes for a backend/node selection:
+    [{id, name, online, installed, active, state}] - only active=True is selectable."""
     from app.auth import can_access_client
     out = []
     for cid in list(_sid_by_client):
@@ -493,26 +492,26 @@ def node_choices(module_id: str, user: dict | None = None) -> list[dict]:
 
 def require_module(client_id: str, module_id: str) -> None:
     if client_id not in _sid_by_client:
-        raise NodeError("Die Node ist offline.")
+        raise NodeError("The node is offline.")
     name = (db.get_client(client_id) or {}).get("hostname") or client_id[:8]
     if _too_old(client_id):
-        raise NodeError(f"Die Node {name} ist veraltet – bitte zuerst „Node aktualisieren“ und das Modul "
-                        f"„{module_id}“ danach einzeln aktivieren.")
+        raise NodeError(f"The node {name} is outdated - please first run 'Update node' and then activate the "
+                        f"module '{module_id}' individually.")
     st = _mod_state(client_id, module_id)
     if not st:
-        raise NodeError(f"Auf der Node {name} ist das Modul „{module_id}“ nicht installiert. "
-                        f"Installieren und aktivieren: Node-App → Module oder Modul-App → {module_id} → Nodes.")
+        raise NodeError(f"The module '{module_id}' is not installed on the node {name}. "
+                        f"Install and activate: Node app -> Modules or Module app -> {module_id} -> Nodes.")
     if not node_has(client_id, module_id):
-        raise NodeError(f"Das Modul „{module_id}“ ist auf der Node {name} nicht aktiviert – "
-                        f"in der Node-App oder Modul-App → {module_id} → Nodes aktivieren.")
+        raise NodeError(f"The module '{module_id}' is not activated on the node {name} - "
+                        f"activate it in the Node app or Module app -> {module_id} -> Nodes.")
 
 
 # =========================================================================
-# Schmale API fuer Module (ctx.nodes)
+# Thin API for modules (ctx.nodes)
 # =========================================================================
 
 class NodesAPI:
-    """Das, was ein Modul ueber ctx.nodes von den Nodes sehen und tun darf."""
+    """What a module may see and do with the nodes via ctx.nodes."""
 
     def __init__(self, module_id: str):
         self.module_id = module_id

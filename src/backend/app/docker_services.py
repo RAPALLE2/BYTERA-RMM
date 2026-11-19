@@ -1,38 +1,37 @@
 """
 docker_services.py
 ------------------
-Zusatzdienste per Knopfdruck dazuschalten - aber NUR, wenn das Backend selbst
-in einem Container laeuft.
+Add extra services at the push of a button - but ONLY if the backend itself
+runs in a container.
 
-Hintergrund: Nativ installiert richtet man guacd oder eine SQL-Datenbank ganz
-normal auf dem Server ein. Im Container waere das umstaendlich - man muesste
-docker-compose.yml auf dem Host bearbeiten. Deshalb kann das Backend hier zwei
-Nachbar-Container selbst starten:
+Background: when installed natively, one sets up guacd or a SQL database
+normally on the server. In a container that would be cumbersome - one would
+have to edit docker-compose.yml on the host. Therefore the backend can start
+two neighbor containers itself here:
 
-    guacd   Apache guacd fuer RDP/VNC/SSH im Browser
-    db      MariaDB als externe Datenbank
+    guacd   Apache guacd for RDP/VNC/SSH in the browser
+    db      MariaDB as an external database
 
-Wie es funktioniert
--------------------
-Der Container spricht ueber den Docker-Socket (/var/run/docker.sock) mit dem
-Docker-Dienst des Hosts und legt die Container als GESCHWISTER an - nicht
-verschachtelt. Damit sie erreichbar sind, haengt das Backend sie in sein
-EIGENES Netzwerk; angesprochen werden sie dann ueber ihren Containernamen
-(z.B. "bytera-rmm-guacd:4822"), ganz ohne veroeffentlichte Ports.
+How it works
+------------
+The container talks via the Docker socket (/var/run/docker.sock) to the host's
+Docker service and creates the containers as SIBLINGS - not nested. To make
+them reachable, the backend attaches them to its OWN network; they are then
+addressed via their container name (e.g. "bytera-rmm-guacd:4822"), entirely
+without published ports.
 
-Voraussetzung: In docker-compose.yml muss der Socket eingehaengt sein:
+Prerequisite: the socket must be mounted in docker-compose.yml:
 
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
 
-Sicherheitshinweis: Wer Zugriff auf den Docker-Socket hat, hat faktisch
-Rootrechte auf dem Host. Deshalb sind alle Endpunkte hier Admin-only, und der
-Socket ist in docker-compose.yml bewusst auskommentiert - er wird erst
-eingehaengt, wenn diese Funktion wirklich gewuenscht ist.
+Security note: whoever has access to the Docker socket effectively has root on
+the host. Therefore all endpoints here are admin-only, and the socket is
+deliberately commented out in docker-compose.yml - it is mounted only when this
+feature is really wanted.
 
-Die Zugangsdaten der Datenbank werden beim Anlegen einmal erzeugt und in den
-Einstellungen hinterlegt, damit das Dashboard das Datenbank-Formular
-vorausfuellen kann.
+The database credentials are generated once on creation and stored in the
+settings, so the dashboard can pre-fill the database form.
 """
 
 from __future__ import annotations
@@ -49,18 +48,18 @@ from app.runtime_env import is_docker
 
 DOCKER_SOCKET = "/var/run/docker.sock"
 
-# Die beiden Dienste, die sich dazuschalten lassen.
+# The two services that can be added.
 SERVICES: dict[str, dict[str, Any]] = {
     "guacd": {
         "label": "Guacamole (guacd)",
-        "purpose": "Remote-Desktop im Browser: RDP, VNC, SSH und Telnet.",
+        "purpose": "Remote desktop in the browser: RDP, VNC, SSH and Telnet.",
         "image": "guacamole/guacd:1.5.5",
         "container": "bytera-rmm-guacd",
         "port": 4822,
     },
     "db": {
-        "label": "SQL-Datenbank (MariaDB)",
-        "purpose": "Externe Datenbank statt der lokalen SQLite-Datei.",
+        "label": "SQL database (MariaDB)",
+        "purpose": "External database instead of the local SQLite file.",
         "image": "mariadb:11",
         "container": "bytera-rmm-db",
         "port": 3306,
@@ -70,10 +69,10 @@ SERVICES: dict[str, dict[str, Any]] = {
     },
 }
 
-# Namen vor der Umbenennung (RAPALLE.net RMM -> BYTERA RMM). Vorhandene Container
-# werden umbenannt (migrate_legacy), das Datenbank-Volume wird beim naechsten
-# Neuanlegen des Containers in das neue Volume kopiert (das alte bleibt als
-# Sicherung liegen).
+# Names before the rename (RAPALLE.net RMM -> BYTERA RMM). Existing containers
+# are renamed (migrate_legacy), the database volume is copied into the new
+# volume on the next recreation of the container (the old one stays as a
+# backup).
 LEGACY: dict[str, dict[str, str]] = {
     "guacd": {"container": "rapalle-rmm-guacd"},
     "db": {"container": "rapalle-rmm-db", "volume": "rapalle-rmm-dbdata"},
@@ -81,11 +80,11 @@ LEGACY: dict[str, dict[str, str]] = {
 
 
 # ==========================================================================
-# Winziger Docker-API-Client (ueber den Unix-Socket, ohne Zusatzpakete)
+# Tiny Docker API client (via the Unix socket, without extra packages)
 # ==========================================================================
 
 class _UnixHTTPConnection(http.client.HTTPConnection):
-    """http.client, das statt TCP auf einen Unix-Socket spricht."""
+    """http.client that talks to a Unix socket instead of TCP."""
 
     def __init__(self, path: str, timeout: float = 60):
         super().__init__("localhost", timeout=timeout)
@@ -103,7 +102,7 @@ class DockerError(RuntimeError):
 
 
 def _api(method: str, path: str, body: dict | None = None, timeout: float = 60) -> Any:
-    """Ein Aufruf gegen die Docker-Engine-API. Gibt JSON oder rohen Text zurueck."""
+    """One call against the Docker Engine API. Returns JSON or raw text."""
     conn = _UnixHTTPConnection(DOCKER_SOCKET, timeout=timeout)
     try:
         payload = json.dumps(body).encode() if body is not None else None
@@ -131,7 +130,7 @@ def _api(method: str, path: str, body: dict | None = None, timeout: float = 60) 
 
 
 def socket_available() -> bool:
-    """Ist der Docker-Socket eingehaengt UND ansprechbar?"""
+    """Is the Docker socket mounted AND reachable?"""
     try:
         _api("GET", "/_ping", timeout=5)
         return True
@@ -140,13 +139,13 @@ def socket_available() -> bool:
 
 
 # ==========================================================================
-# Eigener Container: Netzwerk ermitteln
+# Own container: determine the network
 # ==========================================================================
 
 def _self_container() -> dict | None:
     """
-    Die Beschreibung des EIGENEN Containers. Der Hostname entspricht in Docker
-    standardmaessig der (gekuerzten) Container-ID.
+    The description of the OWN container. In Docker the hostname is by default
+    the (shortened) container ID.
     """
     import os
     for ident in (os.getenv("HOSTNAME", ""), "/" + os.getenv("HOSTNAME", "")):
@@ -160,12 +159,12 @@ def _self_container() -> dict | None:
 
 
 def _self_network() -> str | None:
-    """Name des Netzwerks, in dem das Backend haengt (fuer die Nachbarn)."""
+    """Name of the network the backend is attached to (for the neighbors)."""
     info = _self_container()
     if not info:
         return None
     nets = (info.get("NetworkSettings") or {}).get("Networks") or {}
-    # "bridge" nur als letzte Wahl - dort funktioniert die Namensaufloesung nicht.
+    # "bridge" only as a last resort - name resolution does not work there.
     for name in nets:
         if name != "bridge":
             return name
@@ -174,9 +173,9 @@ def _self_network() -> str | None:
 
 def _host_path_for(container_path: str) -> str | None:
     """
-    Zu einem Pfad IM Container den passenden Host-Pfad finden.
-    Wird gebraucht, damit guacd seine Aufzeichnungen in denselben Ordner legt,
-    den das Backend spaeter ausliest.
+    Find the matching host path for a path IN the container.
+    Needed so guacd puts its recordings in the same folder the backend reads
+    later.
     """
     info = _self_container()
     if not info:
@@ -193,7 +192,7 @@ def _host_path_for(container_path: str) -> str | None:
 
 
 # ==========================================================================
-# Status / Ein- und Ausschalten
+# Status / switching on and off
 # ==========================================================================
 
 def _find_container(name: str) -> dict | None:
@@ -214,10 +213,10 @@ _migrated = False
 
 def migrate_legacy() -> list[str]:
     """
-    Container mit altem Namen (rapalle-rmm-*) auf den neuen Namen umbenennen und
-    die Einstellungen nachziehen, die den Containernamen als Host enthalten.
-    Umbenennen geht im laufenden Betrieb - das Docker-DNS kennt danach den neuen
-    Namen. Idempotent; laeuft beim Start und vor jeder Aktion hoechstens einmal.
+    Rename containers with the old name (rapalle-rmm-*) to the new name and
+    update the settings that contain the container name as the host. Renaming
+    works during operation - the Docker DNS then knows the new name. Idempotent;
+    runs at most once at start and before each action.
     """
     global _migrated
     done: list[str] = []
@@ -253,7 +252,7 @@ def _volume_exists(name: str) -> bool:
 
 
 def _copy_volume(src: str, dst: str, image: str) -> None:
-    """Inhalt eines Volumes in ein anderes kopieren (Hilfscontainer, Dienst steht dabei)."""
+    """Copy the content of a volume into another (helper container, the service is stopped meanwhile)."""
     _create_volume(dst)
     cfg = {"Image": image, "Entrypoint": ["sh", "-c"], "Cmd": ["cp -a /from/. /to/"],
            "HostConfig": {"Binds": [f"{src}:/from:ro", f"{dst}:/to"]}}
@@ -263,7 +262,7 @@ def _copy_volume(src: str, dst: str, image: str) -> None:
         _api("POST", f"/containers/{cid}/start", timeout=60)
         res = _api("POST", f"/containers/{cid}/wait", timeout=1800) or {}
         if int(res.get("StatusCode", 1)) != 0:
-            raise DockerError(f"Kopieren von Volume {src} nach {dst} fehlgeschlagen")
+            raise DockerError(f"copying volume {src} to {dst} failed")
     finally:
         try:
             _api("DELETE", f"/containers/{cid}?force=1", timeout=60)
@@ -272,7 +271,7 @@ def _copy_volume(src: str, dst: str, image: str) -> None:
 
 
 def status() -> dict:
-    """Zustand aller Zusatzdienste - Grundlage fuer die Anzeige im Dashboard."""
+    """State of all extra services - basis for the display in the dashboard."""
     migrate_legacy()
     available = is_docker() and socket_available()
     out = {
@@ -303,7 +302,7 @@ def status() -> dict:
 
 
 def _pull(image: str) -> None:
-    """Image holen, falls es lokal fehlt (kann einen Moment dauern)."""
+    """Fetch the image if it is missing locally (may take a moment)."""
     name, _, tag = image.partition(":")
     _api("POST", f"/images/create?fromImage={name}&tag={tag or 'latest'}", timeout=900)
 
@@ -317,24 +316,24 @@ def _create_volume(name: str) -> None:
     try:
         _api("POST", "/volumes/create", {"Name": name})
     except DockerError:
-        pass   # existiert bereits
+        pass   # already exists
 
 
 def enable(key: str) -> dict:
     """
-    Dienst anlegen und starten. Laeuft er schon, wird er nur gestartet.
-    Danach stehen die passenden Werte in den Einstellungen bereit.
+    Create and start the service. If it is already running, it is only started.
+    Afterwards the matching values are available in the settings.
     """
     spec = SERVICES.get(key)
     if not spec:
-        raise DockerError(f"Unbekannter Dienst: {key}")
+        raise DockerError(f"Unknown service: {key}")
     if not is_docker():
-        raise DockerError("Diese Funktion gibt es nur im Container-Betrieb.")
+        raise DockerError("This feature only exists in container operation.")
     if not socket_available():
         raise DockerError(
-            "Der Docker-Socket ist nicht erreichbar. In docker-compose.yml "
-            "unter 'volumes' die Zeile '/var/run/docker.sock:/var/run/docker.sock' "
-            "aktivieren und 'docker compose up -d' ausfuehren."
+            "The Docker socket is not reachable. In docker-compose.yml, enable "
+            "the line '/var/run/docker.sock:/var/run/docker.sock' under 'volumes' "
+            "and run 'docker compose up -d'."
         )
 
     migrate_legacy()
@@ -352,7 +351,7 @@ def enable(key: str) -> dict:
             cfg["HostConfig"]["NetworkMode"] = network
 
         if key == "guacd":
-            # Aufzeichnungen sollen im selben Ordner landen wie beim Backend.
+            # Recordings should land in the same folder as the backend\047s.
             host_rec = _host_path_for("/app/src/backend/storage/recordings")
             if host_rec:
                 cfg["HostConfig"]["Binds"] = [f"{host_rec}:/recordings"]
@@ -361,7 +360,7 @@ def enable(key: str) -> dict:
             root_pw = db.get_setting("docker_db_root_password") or _gen_password()
             old_vol = LEGACY["db"]["volume"]
             if not _volume_exists(spec["volume"]) and _volume_exists(old_vol):
-                # Umbenennung: Daten aus dem alten Volume uebernehmen (altes bleibt als Sicherung)
+                # Rename: take over the data from the old volume (the old one stays as a backup)
                 _copy_volume(old_vol, spec["volume"], spec["image"])
             _create_volume(spec["volume"])
             cfg["Env"] = [
@@ -378,17 +377,17 @@ def enable(key: str) -> dict:
 
     _api("POST", f"/containers/{name}/start", timeout=120)
 
-    # --- Einstellungen vorbelegen -----------------------------------------
+    # --- Pre-fill the settings ---------------------------------------------
     if key == "guacd":
-        # Ansprechbar ueber den Containernamen im gemeinsamen Netzwerk.
+        # Addressable via the container name in the shared network.
         db.set_setting("guacd_host", name)
         db.set_setting("guacd_port", str(spec["port"]))
     elif key == "db":
         db.set_setting("docker_db_host", name)
         db.set_setting("docker_db_port", str(spec["port"]))
         db.set_setting("docker_db_user", spec["user"])
-        # Vorhandenen Namen behalten: eine uebernommene Datenbank (z.B. aus der Zeit
-        # vor der Umbenennung: rapalle_rmm) heisst im Server weiter so.
+        # Keep an existing name: a taken-over database (e.g. from before the
+        # rename: rapalle_rmm) keeps that name in the server.
         db.set_setting("docker_db_name", db.get_setting("docker_db_name") or spec["database"])
 
     return {"ok": True, "service": key, "container": name}
@@ -396,19 +395,19 @@ def enable(key: str) -> dict:
 
 def disable(key: str, remove: bool = True) -> dict:
     """
-    Dienst stoppen (und den Container entfernen). Daten bleiben erhalten: das
-    Datenbank-Volume wird bewusst NICHT geloescht, damit ein versehentliches
-    Abschalten nichts vernichtet.
+    Stop the service (and remove the container). Data is kept: the database
+    volume is deliberately NOT deleted, so an accidental shutdown destroys
+    nothing.
     """
     spec = SERVICES.get(key)
     if not spec:
-        raise DockerError(f"Unbekannter Dienst: {key}")
+        raise DockerError(f"Unknown service: {key}")
     if not socket_available():
-        raise DockerError("Docker-Socket nicht erreichbar.")
+        raise DockerError("Docker socket not reachable.")
 
     name = spec["container"]
     if not _find_container(name):
-        return {"ok": True, "service": key, "note": "war nicht vorhanden"}
+        return {"ok": True, "service": key, "note": "was not present"}
     try:
         _api("POST", f"/containers/{name}/stop?t=10", timeout=60)
     except DockerError:
@@ -419,24 +418,24 @@ def disable(key: str, remove: bool = True) -> dict:
 
 
 def restart(key: str) -> dict:
-    """Container des Dienstes neu starten (ohne ihn zu entfernen)."""
+    """Restart the service\047s container (without removing it)."""
     spec = SERVICES.get(key)
     if not spec:
-        raise DockerError(f"Unbekannter Dienst: {key}")
+        raise DockerError(f"Unknown service: {key}")
     if not socket_available():
-        raise DockerError("Docker-Socket nicht erreichbar.")
+        raise DockerError("Docker socket not reachable.")
     name = spec["container"]
     if not _find_container(name):
-        raise DockerError("Der Container existiert nicht - zuerst starten.")
+        raise DockerError("The container does not exist - start it first.")
     _api("POST", f"/containers/{name}/restart?t=10", timeout=90)
     return {"ok": True, "service": key}
 
 
 def details(key: str) -> dict:
-    """Ueberwachungsdaten eines Dienst-Containers (Zustand, Laufzeit, Neustarts, Gesundheit)."""
+    """Monitoring data of a service container (state, runtime, restarts, health)."""
     spec = SERVICES.get(key)
     if not spec:
-        raise DockerError(f"Unbekannter Dienst: {key}")
+        raise DockerError(f"Unknown service: {key}")
     out = {"key": key, "label": spec["label"], "image": spec["image"], "container": spec["container"],
            "available": socket_available(), "exists": False, "running": False, "state": "unavailable"}
     if not out["available"]:
@@ -459,8 +458,8 @@ def details(key: str) -> dict:
 
 def db_credentials() -> dict:
     """
-    Zugangsdaten der dazugeschalteten Datenbank - fuellt das Formular unter
-    Einstellungen -> Datenbank vor.
+    Credentials of the added database - pre-fills the form under
+    Settings -> Database.
     """
     if not db.get_setting("docker_db_host"):
         return {}
