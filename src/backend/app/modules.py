@@ -1,27 +1,27 @@
 """
-modules.py - Modul-Manager des RMM
+modules.py - module manager of the RMM
 ==================================
 
-Module sind optionale Funktionen (Tickets, Guacamole, Patching ...). Der Core
-laeuft ohne jedes Modul. Ein Modul liegt in
+Modules are optional features (tickets, Guacamole, patching ...). The core runs
+without any module. A module lives in
 
-    src/modules/<id>/module.json  +  Unterordner backend/ frontend/ node/ agent/ client/
+    src/modules/<id>/module.json  +  subfolders backend/ frontend/ node/ agent/ client/
 
-Ein Modul kann aus MEHREREN Teilen bestehen (z.B. backend + frontend). Die
-Teile werden ueber die gemeinsame "id" in der module.json zu EINEM Modul
-zusammengefasst - die Modul-App zeigt nur dieses eine Modul.
+A module can consist of SEVERAL parts (e.g. backend + frontend). The parts are
+combined via the shared "id" in module.json into ONE module - the module app
+shows only this one module.
 
-Grundregeln
+Basic rules
 -----------
-* Alle Module sind standardmaessig DEAKTIVIERT.
-* Ein Modul darf NIEMALS das Backend mitreissen. Jeder Aufruf in Modul-Code
-  (Start, Stop, Routen, Socket-Events, Hintergrundaufgaben, Event-Hooks) ist
-  abgesichert. Bei einem Absturz wird ein Crashbericht geschrieben, das Modul
-  automatisch deaktiviert und der Fehler in der Modul-App angezeigt.
-* Python-Pakete eines Moduls ("pip" in der module.json) werden erst beim
-  Aktivieren installiert.
+* All modules are DISABLED by default.
+* A module must NEVER take the backend down with it. Every call in module code
+  (start, stop, routes, socket events, background tasks, event hooks) is
+  guarded. On a crash a crash report is written, the module is disabled
+  automatically and the error is shown in the module app.
+* A module's Python packages ("pip" in module.json) are installed only on
+  activation.
 
-Siehe src/modules/backend/example/GUIDE.md fuer die Anleitung zum Selbstbauen.
+See src/modules/backend/example/GUIDE.md for the guide to building your own.
 """
 
 from __future__ import annotations
@@ -45,31 +45,31 @@ from app.paths import (
 
 AREAS = ("backend", "frontend", "agent", "client", "node")
 _ID_RE = re.compile(r"^[a-z][a-z0-9_-]{1,31}$")
-PKG_PREFIX = "rmm_mod_"                    # Python-Paketname eines geladenen Backend-Moduls
-MASK = "••••••••"                          # Platzhalter fuer gespeicherte Passwoerter
+PKG_PREFIX = "rmm_mod_"                    # Python package name of a loaded backend module
+MASK = "••••••••"                          # placeholder for stored passwords
 
-# Ereignisse, die der Core an Module meldet (Hook-Namen in der module.json).
+# Events that the core reports to modules (hook names in module.json).
 CORE_EVENTS = (
-    # Lebenszyklus des Moduls selbst (Hook-Funktion bekommt nur ctx)
-    "startup", "shutdown",                          # Modul wird geladen / entladen
-    "enable", "disable",                            # Benutzer schaltet das Modul ein / aus
-    "before_disable",                               # Veto: Text zurueckgeben = Abschalten verweigern
-    # Meldung, dass ein ANDERES Modul geschaltet wurde (data = {"module": id})
+    # Lifecycle of the module itself (hook function gets only ctx)
+    "startup", "shutdown",                          # module is loaded / unloaded
+    "enable", "disable",                            # user turns the module on / off
+    "before_disable",                               # veto: returning text = refuse shutdown
+    # Message that ANOTHER module was toggled (data = {"module": id})
     "module.enabled", "module.disabled",
-    # Dieselben Trigger wie bei Webhook-/Mail-Benachrichtigungen (notifier.TRIGGERS).
+    # The same triggers as webhook/mail notifications (notifier.TRIGGERS).
     # data = {"event", "client_id", "notification"}
     "client_online", "client_offline", "client_new", "agent_update",
     "cpu_high", "ram_high", "disk_high", "temp_high",
     "warranty_expiring", "warranty_expired",
     "website_up", "website_down", "user_login", "login_failed",
-    "user_deleted",                                 # Benutzer geloescht (data: user_id, username)
+    "user_deleted",                                 # user deleted (data: user_id, username)
     # Nodes (data = {"client_id"})
     "node_online", "node_offline", "node_removed",
 )
 
 _lock = threading.RLock()
-_api = None            # FastAPI-App
-_sio = None            # Socket.IO-Server
+_api = None            # FastAPI app
+_sio = None            # Socket.IO server
 _loop: asyncio.AbstractEventLoop | None = None
 _registry: dict[str, "Module"] = {}
 _discover_errors: list[dict] = []
@@ -79,11 +79,11 @@ _state_loaded = False
 
 
 # =========================================================================
-# Datenmodell
+# Data model
 # =========================================================================
 
 class ModuleError(Exception):
-    """Fehler, der dem Benutzer in der Modul-App angezeigt werden darf."""
+    """Error that may be shown to the user in the module app."""
 
 
 class Part:
@@ -96,7 +96,7 @@ class Module:
         self.id = mid
         self.parts: dict[str, Part] = {}
 
-    # --- zusammengefuehrte Metadaten (backend-Teil hat Vorrang) ---------
+    # --- merged metadata (backend part takes precedence) ---------
     def _ordered(self) -> list[Part]:
         order = sorted(self.parts.values(), key=lambda p: AREAS.index(p.area))
         return order
@@ -147,7 +147,7 @@ class Module:
 
 
 class Loaded:
-    """Laufzeit-Zustand eines aktiven Backend-Teils."""
+    """Runtime state of an active backend part."""
 
     def __init__(self, mid: str):
         self.mid = mid
@@ -162,7 +162,7 @@ class Loaded:
 
 
 # =========================================================================
-# Zustand (data/modules.json)
+# State (data/modules.json)
 # =========================================================================
 
 def _default_state() -> dict:
@@ -183,8 +183,8 @@ def _load_state() -> None:
                     for k in st:
                         if k in raw and isinstance(raw[k], type(st[k])):
                             st[k] = raw[k]
-        except Exception as exc:                # kaputte Datei darf nichts blockieren
-            print(f"[module] modules.json unlesbar, starte leer: {exc}")
+        except Exception as exc:                # a broken file must not block anything
+            print(f"[module] modules.json unreadable, starting empty: {exc}")
         _state, _state_loaded = st, True
 
 
@@ -196,16 +196,16 @@ def _save_state() -> None:
             tmp.write_text(json.dumps(_state, indent=2, ensure_ascii=False), encoding="utf-8")
             tmp.replace(MODULES_STATE_FILE)
         except Exception as exc:
-            print(f"[module] modules.json konnte nicht gespeichert werden: {exc}")
+            print(f"[module] modules.json could not be saved: {exc}")
 
 
 # =========================================================================
-# Entdecken
+# Discover
 # =========================================================================
 
 def discover() -> dict[str, Module]:
-    """Liest alle Module unter src/modules/<id>/ mit EINER module.json und den
-    Unterordnern backend/ frontend/ node/ ... (frueher: modules/<bereich>/<id>/)."""
+    """Reads all modules under src/modules/<id>/ with ONE module.json and the
+    subfolders backend/ frontend/ node/ ... (formerly: modules/<area>/<id>/)."""
     global _registry, _discover_errors
     reg: dict[str, Module] = {}
     errs: list[dict] = []
@@ -220,14 +220,14 @@ def discover() -> dict[str, Module]:
         try:
             man = json.loads(mf.read_text(encoding="utf-8"))
             if not isinstance(man, dict):
-                raise ValueError("module.json muss ein JSON-Objekt sein")
+                raise ValueError("module.json must be a JSON object")
             mid = str(man.get("id") or d.name)
             if not _ID_RE.match(mid):
-                raise ValueError(f"ungueltige id '{mid}' (a-z, 0-9, _ und -, 2-32 Zeichen)")
+                raise ValueError(f"invalid id '{mid}' (a-z, 0-9, _ and -, 2-32 characters)")
             man["id"] = mid
             mod = reg.setdefault(mid, Module(mid))
-            # Je vorhandenem Bereichs-Unterordner ein Part - alle teilen sich die
-            # EINE module.json; der Loader liest je Bereich die passenden Schluessel.
+            # One part per existing area subfolder - all share the ONE
+            # module.json; the loader reads the matching keys per area.
             for area in AREAS:
                 sub = d / area
                 if sub.is_dir():
@@ -241,21 +241,21 @@ def discover() -> dict[str, Module]:
 
 def get(mid: str) -> Module:
     if mid not in _registry:
-        raise ModuleError(f"Unbekanntes Modul: {mid}")
+        raise ModuleError(f"Unknown module: {mid}")
     return _registry[mid]
 
 
 # =========================================================================
-# Abfragen (auch fuer Core-Code gedacht)
+# Queries (also intended for core code)
 # =========================================================================
 
 def is_enabled(mid: str) -> bool:
-    """True, wenn das Modul aktiv UND geladen ist."""
+    """True if the module is active AND loaded."""
     return mid in _loaded
 
 
 def feature(mid: str, fid: str) -> bool:
-    """Ist die Teilfunktion 'fid' des (aktiven) Moduls 'mid' eingeschaltet?"""
+    """Is the sub-feature 'fid' of the (active) module 'mid' turned on?"""
     if mid not in _loaded:
         return False
     return _feature_on(mid, fid)
@@ -276,8 +276,8 @@ def _feature_on(mid: str, fid: str) -> bool:
 
 def use(mid: str, name: str):
     """
-    Liefert die Python-Datei <name>.py eines AKTIVEN Backend-Moduls oder None.
-    So greift Core-Code optional auf Modul-Funktionen zu:
+    Returns the Python file <name>.py of an ACTIVE backend module or None.
+    This is how core code optionally accesses module functions:
 
         rec = modules.use("recordings", "recording")
         if rec: rec.record_frame(...)
@@ -288,15 +288,15 @@ def use(mid: str, name: str):
     try:
         return importlib.import_module(f"{ld.pkg}.{name}")
     except Exception as exc:
-        report_crash(mid, exc, f"Import von {name}.py")
+        report_crash(mid, exc, f"import of {name}.py")
         return None
 
 
 class _OptionalAPI:
     """
-    None-sicherer Zugriff auf eine Datei eines Moduls (siehe optional()).
-    Ist das Modul aus oder abgestuerzt, ist jeder Aufruf ein stilles No-Op
-    und liefert None - der aufrufende Code laeuft einfach ohne die Funktion weiter.
+    None-safe access to a file of a module (see optional()).
+    If the module is off or crashed, every call is a silent no-op and returns
+    None - the calling code simply continues without the function.
     """
 
     def __init__(self, mid: str, name: str):
@@ -314,11 +314,11 @@ class _OptionalAPI:
 
 def optional(mid: str, name: str) -> "_OptionalAPI":
     """
-    Fuer Core-Code und andere Module:
+    For core code and other modules:
 
         recording = modules.optional("recordings", "recording")
-        recording.record_frame(...)        # tut nichts, wenn das Modul aus ist
-        if recording: ...                  # True, wenn das Modul aktiv ist
+        recording.record_frame(...)        # does nothing if the module is off
+        if recording: ...                  # True if the module is active
     """
     return _OptionalAPI(mid, name)
 
@@ -336,20 +336,20 @@ def setting(mid: str, key: str, default=None):
 
 
 # =========================================================================
-# Crash-Behandlung
+# Crash handling
 # =========================================================================
 
 def report_crash(mid: str, exc: BaseException | None, where: str,
                  *, source: str = "backend", extra: str = "", disable: bool = True) -> dict:
     """
-    Schreibt einen Crashbericht und deaktiviert das Modul (wenn das Limit
-    erreicht ist). Wirft NIE - ein Fehler hier darf niemanden mitreissen.
+    Writes a crash report and disables the module (if the limit is reached).
+    NEVER throws - an error here must not take anyone down.
     """
     now = time.time()
     tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)) if exc else (extra or "")
     summary = {
         "ts": int(now * 1000), "where": where, "source": source, "disabled": bool(disable),
-        "error": (f"{type(exc).__name__}: {exc}" if exc else (extra or "Unbekannter Fehler"))[:500],
+        "error": (f"{type(exc).__name__}: {exc}" if exc else (extra or "Unknown error"))[:500],
         "file": None,
     }
     try:
@@ -362,8 +362,8 @@ def report_crash(mid: str, exc: BaseException | None, where: str,
         summary["file"] = fn.name
         fn.write_text(json.dumps({**summary, "module": mid, "traceback": tb,
                                   "python": sys.version.split()[0]}, indent=2, ensure_ascii=False),
-                      encoding="utf-8")                      # nochmal, jetzt MIT Dateiname
-        for old in sorted(d.glob("crash-*.json"))[:-30]:     # nur die letzten 30 behalten
+                      encoding="utf-8")                      # again, now WITH the file name
+        for old in sorted(d.glob("crash-*.json"))[:-30]:     # keep only the last 30
             old.unlink(missing_ok=True)
     except Exception:
         pass
@@ -374,10 +374,10 @@ def report_crash(mid: str, exc: BaseException | None, where: str,
             lst.append(summary)
             del lst[:-20]
         _save_state()
-        print(f"[module] ABSTURZ in '{mid}' ({where}): {summary['error']}")
+        print(f"[module] CRASH in '{mid}' ({where}): {summary['error']}")
         try:
             from app.errors import report as _report
-            _report("RMM-MOD-001", exc, f"Modul '{mid}' ({where})", modul=mid)
+            _report("RMM-MOD-001", exc, f"module '{mid}' ({where})", module=mid)
         except Exception:
             pass
         window = float(_state.get("crash_window_s", 600))
@@ -386,7 +386,7 @@ def report_crash(mid: str, exc: BaseException | None, where: str,
         if disable and len(recent) >= limit and mid in _loaded:
             _schedule_deactivate(mid, crash=True)
     except Exception as e2:                                  # niemals werfen
-        print(f"[module] Crash-Behandlung fehlgeschlagen: {e2}")
+        print(f"[module] crash handling failed: {e2}")
     return summary
 
 
@@ -405,11 +405,11 @@ def _schedule_deactivate(mid: str, *, crash: bool) -> None:
 
 async def _disable_veto(mid: str) -> str | None:
     """
-    Fragt den Hook "before_disable" eines aktiven Moduls. Gibt er einen Text
-    zurueck (oder wirft er), darf das Modul NICHT abgeschaltet werden - der Text
-    ist die Begruendung. So schuetzt sich z.B. "sso" davor, dass sich niemand
-    mehr anmelden kann. Ein Fehler im Hook gilt bewusst als Veto: lieber ein
-    Modul zu lange aktiv als ein ausgesperrter Administrator.
+    Asks the "before_disable" hook of an active module. If it returns a text (or
+    throws), the module must NOT be turned off - the text is the reason. This is
+    how e.g. "sso" protects against nobody being able to sign in anymore. An
+    error in the hook is deliberately treated as a veto: better a module active
+    too long than a locked-out administrator.
     """
     ld = _loaded.get(mid)
     if ld is None or ld.entry is None:
@@ -426,31 +426,31 @@ async def _disable_veto(mid: str) -> str | None:
         raise
     except Exception as exc:
         report_crash(mid, exc, "Hook 'before_disable'", disable=False)
-        return f"Prüfung vor dem Abschalten fehlgeschlagen: {exc}"
+        return f"Check before shutdown failed: {exc}"
     return str(res) if res else None
 
 
 async def _deactivate_safely(mid: str, *, crash: bool) -> None:
     veto = await _disable_veto(mid)
     if veto:
-        print(f"[module] '{mid}' bleibt trotz Absturz aktiv - Abschalten verweigert: {veto}")
+        print(f"[module] '{mid}' stays active despite a crash - shutdown refused: {veto}")
         return
     try:
         await _deactivate(mid, run_hooks=True)
         with _lock:
             _state.setdefault("enabled", {})[mid] = False
         _save_state()
-        print(f"[module] '{mid}' wurde nach einem Absturz automatisch deaktiviert")
+        print(f"[module] '{mid}' was disabled automatically after a crash")
     except Exception as exc:
-        print(f"[module] Deaktivieren von '{mid}' fehlgeschlagen: {exc}")
+        print(f"[module] disabling '{mid}' failed: {exc}")
 
 
 # =========================================================================
-# Kontext fuer Modul-Code
+# Context for module code
 # =========================================================================
 
 class ModuleContext:
-    """Wird dem Modul-Code uebergeben (setup/Hooks). Alles hier ist abgesichert."""
+    """Passed to the module code (setup/hooks). Everything here is guarded."""
 
     def __init__(self, mid: str, backend_dir: Path | None):
         self.id = mid
@@ -493,16 +493,16 @@ class ModuleContext:
     # --- Nodes -------------------------------------------------------------------
     @property
     def nodes(self):
-        """Die Nodes aus Sicht dieses Moduls: list/get/online, deploy/remove/action des EIGENEN Node-Teils."""
+        """The nodes from this module's view: list/get/online, deploy/remove/action of its OWN node part."""
         from app.node_manager import NodesAPI
         return NodesAPI(self.id)
 
     # --- Hintergrundaufgaben ----------------------------------------------
     def spawn(self, name: str, factory: Callable[[], Any]):
-        """Startet eine Dauerschleife. Stuerzt sie ab -> Crashbericht + Modul aus."""
+        """Starts a continuous loop. If it crashes -> crash report + module off."""
         ld = _loaded.get(self.id)
         if ld is None:
-            raise ModuleError("Modul ist nicht geladen")
+            raise ModuleError("Module is not loaded")
         mid = self.id
 
         async def runner():
@@ -511,7 +511,7 @@ class ModuleContext:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                report_crash(mid, exc, f"Hintergrundaufgabe '{name}'")
+                report_crash(mid, exc, f"background task '{name}'")
 
         task = asyncio.get_running_loop().create_task(runner(), name=f"module:{mid}:{name}")
         ld.tasks.append(task)
@@ -519,10 +519,10 @@ class ModuleContext:
 
     # --- Socket.IO -----------------------------------------------------------
     def sio_on(self, event: str, handler: Callable, namespace: str = "/"):
-        """Registriert ein Socket.IO-Event; wird beim Deaktivieren wieder entfernt."""
+        """Registers a Socket.IO event; removed again on deactivation."""
         ld = _loaded.get(self.id)
         if ld is None or _sio is None:
-            raise ModuleError("Socket.IO nicht verfuegbar")
+            raise ModuleError("Socket.IO not available")
         mid = self.id
         is_async = asyncio.iscoroutinefunction(handler)
 
@@ -533,13 +533,13 @@ class ModuleContext:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    report_crash(mid, exc, f"Socket-Event '{event}'")
+                    report_crash(mid, exc, f"socket event '{event}'")
         else:
             def wrapped(*a, **kw):
                 try:
                     return handler(*a, **kw)
                 except Exception as exc:
-                    report_crash(mid, exc, f"Socket-Event '{event}'")
+                    report_crash(mid, exc, f"socket event '{event}'")
         wrapped.__name__ = getattr(handler, "__name__", "handler")
         _sio.on(event, namespace=namespace)(wrapped)
         ld.sio_handlers.append((namespace, event))
@@ -550,7 +550,7 @@ class ModuleContext:
 
 
 # =========================================================================
-# Routen einhaengen / aushaengen (immer VOR dem statischen Frontend-Mount)
+# Mount / unmount routes (always BEFORE the static frontend mount)
 # =========================================================================
 
 _PASS_EXC: tuple = ()
@@ -580,11 +580,11 @@ def _owner_of(scope) -> str | None:
 
 class GuardMiddleware:
     """
-    Faengt unbehandelte Ausnahmen aus Modul-Endpunkten ab (HTTP und WebSocket).
-    Sie sitzt INNERHALB von Starlettes ServerErrorMiddleware: HTTPException &
-    Co. werden vorher normal behandelt und erreichen sie nie - hier landen nur
-    echte Abstuerze. Die Zuordnung Pfad -> Modul steht in _guard_paths.
-    Unabhaengig von FastAPI-Interna, funktioniert mit jeder FastAPI-Version.
+    Catches unhandled exceptions from module endpoints (HTTP and WebSocket).
+    It sits INSIDE Starlette's ServerErrorMiddleware: HTTPException & co. are
+    handled normally before and never reach it - only real crashes land here.
+    The path -> module mapping is in _guard_paths. Independent of FastAPI
+    internals, works with any FastAPI version.
     """
 
     def __init__(self, app):
@@ -610,8 +610,8 @@ class GuardMiddleware:
             report_crash(mid, exc, f"Route {scope.get('path')}")
             try:
                 if scope["type"] == "http" and not started["v"]:
-                    body = json.dumps({"detail": f"Modul '{mid}' ist abgestuerzt und wurde "
-                                                 f"deaktiviert. Details in der Modul-App."}).encode()
+                    body = json.dumps({"detail": f"Module '{mid}' crashed and was "
+                                                 f"disabled. Details in the module app."}).encode()
                     await send({"type": "http.response.start", "status": 500,
                                 "headers": [(b"content-type", b"application/json"),
                                             (b"content-length", str(len(body)).encode())]})
@@ -633,14 +633,14 @@ def _router_patterns(router) -> list:
 
 
 def _routes_changed() -> None:
-    """Neuere FastAPI-Versionen cachen die Routenaufloesung - Cache ungueltig machen."""
+    """Newer FastAPI versions cache the route resolution - invalidate the cache."""
     mark = getattr(_api.router, "_mark_routes_changed", None)
     if callable(mark):
         mark()
 
 
 def _place_before_static(new_routes: list) -> None:
-    """Neue Routen muessen VOR dem '/'-Mount des Frontends stehen, sonst gewinnt dieser."""
+    """New routes must come BEFORE the frontend's '/' mount, otherwise that one wins."""
     from starlette.routing import Mount
     routes = _api.router.routes
     ids = {id(r) for r in new_routes}
@@ -674,7 +674,7 @@ def _mount_websocket(ld: Loaded, path: str, endpoint) -> None:
 
 
 # =========================================================================
-# Aktivieren / Deaktivieren
+# Enable / disable
 # =========================================================================
 
 def _pip_missing(reqs: list[str]) -> list[str]:
@@ -708,17 +708,17 @@ def _pip_install_blocking(reqs: list[str]) -> None:
             return
         err = (res.stderr or res.stdout or "").strip()
         if "externally-managed" not in err.lower() or extra:
-            raise ModuleError("pip-Installation fehlgeschlagen: " + err[-600:])
+            raise ModuleError("pip installation failed: " + err[-600:])
 
 
 async def _ensure_pip(mod: Module) -> list[str]:
     missing = _pip_missing(mod.pip)
     if missing:
-        print(f"[module] '{mod.id}': installiere {', '.join(missing)}")
+        print(f"[module] '{mod.id}': installing {', '.join(missing)}")
         await asyncio.get_running_loop().run_in_executor(None, _pip_install_blocking, missing)
         still = _pip_missing(mod.pip)
         if still:
-            raise ModuleError("Pakete nach der Installation weiterhin nicht erfuellt: " + ", ".join(still))
+            raise ModuleError("Packages still not satisfied after installation: " + ", ".join(still))
     return missing
 
 
@@ -732,14 +732,14 @@ def _dependents(mid: str, only_enabled: bool = True) -> list[str]:
 
 
 def _dep_order(mid: str, seen: list[str] | None = None) -> list[str]:
-    """Abhaengigkeiten zuerst, dann das Modul selbst."""
+    """Dependencies first, then the module itself."""
     seen = seen if seen is not None else []
     mod = get(mid)
     for dep in mod.requires:
         if dep not in _registry:
-            raise ModuleError(f"'{mid}' braucht das unbekannte Modul '{dep}'")
+            raise ModuleError(f"'{mid}' needs the unknown module '{dep}'")
         if dep in seen:
-            raise ModuleError(f"Zirkulaere Abhaengigkeit bei '{dep}'")
+            raise ModuleError(f"Circular dependency at '{dep}'")
         _dep_order(dep, seen)
     if mid not in seen:
         seen.append(mid)
@@ -752,7 +752,7 @@ async def _call_hook(ld: Loaded, event: str, payload: dict | None = None, *, lif
         return
     fn = getattr(ld.entry, name, None)
     if not callable(fn):
-        report_crash(ld.mid, None, f"Hook '{event}'", extra=f"Funktion '{name}' fehlt in {ld.entry.__name__}")
+        report_crash(ld.mid, None, f"hook '{event}'", extra=f"function '{name}' missing in {ld.entry.__name__}")
         return
     try:
         res = fn(ld.ctx) if lifecycle else fn(ld.ctx, payload or {})
@@ -763,7 +763,7 @@ async def _call_hook(ld: Loaded, event: str, payload: dict | None = None, *, lif
     except Exception as exc:
         report_crash(ld.mid, exc, f"Hook '{event}'")
         if lifecycle and event in ("startup", "enable"):
-            raise ModuleError(f"Hook '{event}' ist fehlgeschlagen: {exc}") from exc
+            raise ModuleError(f"Hook '{event}' failed: {exc}") from exc
 
 
 def _backend_part(mod: Module) -> Part | None:
@@ -771,7 +771,7 @@ def _backend_part(mod: Module) -> Part | None:
 
 
 async def _activate(mid: str, *, user_enable: bool) -> None:
-    """Laedt den Backend-Teil. Wirft bei Fehlern - der Aufrufer raeumt auf."""
+    """Loads the backend part. Throws on errors - the caller cleans up."""
     mod = get(mid)
     if mid in _loaded:
         return
@@ -783,7 +783,7 @@ async def _activate(mid: str, *, user_enable: bool) -> None:
         if bp:
             man = bp.manifest
             pkg = types.ModuleType(ld.pkg)
-            pkg.__path__ = [str(bp.path)]                    # Unterdateien: from rmm_mod_x import y
+            pkg.__path__ = [str(bp.path)]                    # subfiles: from rmm_mod_x import y
             pkg.__package__ = ld.pkg
             sys.modules[ld.pkg] = pkg
             importlib.invalidate_caches()
@@ -793,7 +793,7 @@ async def _activate(mid: str, *, user_enable: bool) -> None:
                 entry = "module"
             if entry:
                 ld.entry = importlib.import_module(f"{ld.pkg}.{str(entry).removesuffix('.py')}")
-            # Router (optional je Teilfunktion)
+            # Routers (optional per sub-feature)
             for spec in man.get("routers", []) or []:
                 rname = spec if isinstance(spec, str) else spec.get("module")
                 feat = None if isinstance(spec, str) else spec.get("feature")
@@ -813,7 +813,7 @@ async def _activate(mid: str, *, user_enable: bool) -> None:
                 await _call_hook(ld, "enable", lifecycle=True)
         if _api is not None:
             _api.openapi_schema = None
-        print(f"[module] '{mid}' aktiv (v{mod.meta('version', '?')})")
+        print(f"[module] '{mid}' active (v{mod.meta('version', '?')})")
     except BaseException:
         await _deactivate(mid, run_hooks=False)
         raise
@@ -830,8 +830,8 @@ async def _deactivate(mid: str, *, run_hooks: bool, user_disable: bool = False) 
             if user_disable:
                 await _call_hook(ld, "disable", lifecycle=True)
         except Exception as exc:
-            print(f"[module] '{mid}': Shutdown-Hook fehlgeschlagen: {exc}")
-    _loaded.pop(mid, None)                                   # ab jetzt gilt es als inaktiv
+            print(f"[module] '{mid}': shutdown hook failed: {exc}")
+    _loaded.pop(mid, None)                                   # counts as inactive from now on
     for t in ld.tasks:
         t.cancel()
     for ns, ev in ld.sio_handlers:
@@ -853,27 +853,27 @@ async def _deactivate(mid: str, *, run_hooks: bool, user_disable: bool = False) 
     except Exception:
         pass
     if _registry.get(mid) and "node" in _registry[mid].parts:
-        try:                                               # Node-Teil von den Nodes entfernen
+        try:                                               # remove the node part from the nodes
             from app import node_manager
             await node_manager.module_disabled(mid)
         except Exception as exc:
-            print(f"[module] '{mid}': Node-Teil konnte nicht entfernt werden: {exc}")
+            print(f"[module] '{mid}': node part could not be removed: {exc}")
 
 
 # =========================================================================
-# Oeffentliche Steuerung (von der Modul-App benutzt)
+# Public control (used by the module app)
 # =========================================================================
 
 async def enable(mid: str, *, with_deps: bool = False) -> dict:
     _load_state()
     mod = get(mid)
     if not mod.available:
-        raise ModuleError(f"'{mid}' ist als nicht verfuegbar markiert")
+        raise ModuleError(f"'{mid}' is marked as unavailable")
     order = _dep_order(mid)
     missing = [d for d in order[:-1] if d not in _loaded]
     if missing and not with_deps:
         names = ", ".join(get(d).meta("name", d) for d in missing)
-        raise ModuleError(f"Benoetigt zuerst: {names}")
+        raise ModuleError(f"Requires first: {names}")
     done: list[str] = []
     for m in order:
         if m in _loaded:
@@ -885,11 +885,11 @@ async def enable(mid: str, *, with_deps: bool = False) -> dict:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            rep = report_crash(m, exc, "Aktivierung")
+            rep = report_crash(m, exc, "activation")
             with _lock:
                 _state.setdefault("enabled", {})[m] = False
             _save_state()
-            raise ModuleError(f"Aktivierung von '{m}' fehlgeschlagen: {rep['error']}") from exc
+            raise ModuleError(f"Activation of '{m}' failed: {rep['error']}") from exc
         with _lock:
             _state.setdefault("enabled", {})[m] = True
         done.append(m)
@@ -903,11 +903,11 @@ async def disable(mid: str, *, cascade: bool = False) -> dict:
     deps = _dependents(mid)
     if deps and not cascade:
         names = ", ".join(get(d).meta("name", d) for d in deps)
-        raise ModuleError(f"Wird noch benoetigt von: {names}")
-    for m in deps + [mid]:                                   # Veto VOR jeder Aenderung pruefen
+        raise ModuleError(f"Still required by: {names}")
+    for m in deps + [mid]:                                   # check the veto BEFORE any change
         veto = await _disable_veto(m)
         if veto:
-            raise ModuleError(f"'{get(m).meta('name', m)}' kann nicht deaktiviert werden: {veto}")
+            raise ModuleError(f"'{get(m).meta('name', m)}' cannot be disabled: {veto}")
     done: list[str] = []
     for d in deps:
         await _deactivate(d, run_hooks=True, user_disable=True)
@@ -921,28 +921,28 @@ async def disable(mid: str, *, cascade: bool = False) -> dict:
 
 
 async def reload(mid: str) -> None:
-    """Laedt ein aktives Modul neu (z.B. nach dem Umschalten einer Teilfunktion)."""
+    """Reloads an active module (e.g. after toggling a sub-feature)."""
     if mid not in _loaded:
         return
     await _deactivate(mid, run_hooks=True)
     try:
         await _activate(mid, user_enable=False)
     except Exception as exc:
-        rep = report_crash(mid, exc, "Neuladen")
+        rep = report_crash(mid, exc, "reload")
         _state.setdefault("enabled", {})[mid] = False
         _save_state()
-        raise ModuleError(f"Neuladen fehlgeschlagen: {rep['error']}") from exc
+        raise ModuleError(f"Reload failed: {rep['error']}") from exc
 
 
 # =========================================================================
-# Start / Ende des Backends
+# Backend start / end
 # =========================================================================
 
 def init(api, sio) -> None:
-    """Wird einmal von main.py aufgerufen, bevor der Server Anfragen annimmt."""
+    """Called once by main.py before the server accepts requests."""
     global _api, _sio
     _api, _sio = api, sio
-    api.add_middleware(GuardMiddleware)        # Absturzschutz fuer Modul-Routen
+    api.add_middleware(GuardMiddleware)        # crash protection for module routes
     _load_state()
     discover()
     MODULES_DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -959,12 +959,11 @@ def _styles_used() -> bool:
 
 def _adopt_former_core_features() -> None:
     """
-    Funktionen, die frueher fest im Core (oder in einem anderen Modul) steckten
-    und jetzt eigene Module sind: Wurden
-    sie schon benutzt, wird das Modul beim ERSTEN Start nach dem Update
-    automatisch eingeschaltet. Sonst waeren z.B. AD-Benutzer ploetzlich
-    ausgesperrt. Hat der Administrator ein Modul schon einmal selbst geschaltet
-    (Eintrag in modules.json vorhanden), wird nichts veraendert.
+    Features that used to be built into the core (or another module) and are now
+    their own modules: if they were already in use, the module is turned on
+    automatically on the FIRST start after the update. Otherwise e.g. AD users
+    would suddenly be locked out. If the administrator has already toggled a
+    module themselves (entry present in modules.json), nothing is changed.
     """
     en = _state.setdefault("enabled", {})
     def _db():
@@ -984,7 +983,7 @@ def _adopt_former_core_features() -> None:
         return public or (d.is_dir() and any(d.iterdir()))
 
     def _tickets_used():
-        # Tickets steckten frueher im Modul "collab" (Teilfunktion "tickets").
+        # Tickets used to be in the module "collab" (sub-feature "tickets").
         return bool(en.get("collab")) and _state.get("features", {}).get("collab", {}).get("tickets", True) is not False
 
     checks = {
@@ -992,13 +991,13 @@ def _adopt_former_core_features() -> None:
         "sql": lambda: __import__("app.dbsync", fromlist=["dbsync"]).load_config().get("mode") == "external",
         "notify": _notify_used,
         "tickets": _tickets_used,
-        # "collab" (Notizheft) braucht seit Version 1.2 das Modul "spaces".
+        # "collab" (notebook) needs the module "spaces" since version 1.2.
         "spaces": lambda: bool(en.get("collab")),
-        # Deployment steckte frueher im Relay-Modul: aktivieren, wenn das Relay
-        # an ist und die Seite freigeschaltet war oder im Ordner etwas liegt.
+        # Deployment used to be in the relay module: enable when the relay is
+        # on and the page was published or something is in the folder.
         "deployment": _deployment_used,
-        # Classic/Classic Hard steckten frueher im Core: aktivieren, wenn ein
-        # Benutzer oder der Standard der Installation einen davon nutzt.
+        # Classic/Classic Hard used to be in the core: enable when a user or the
+        # installation default uses one of them.
         "styles": _styles_used,
     }
     for mid, used in checks.items():
@@ -1007,13 +1006,13 @@ def _adopt_former_core_features() -> None:
         try:
             if used():
                 en[mid] = True
-                print(f"[module] '{mid}' wurde bisher genutzt - automatisch aktiviert (Update-Uebernahme)")
+                print(f"[module] '{mid}' was in use so far - enabled automatically (update adoption)")
         except Exception as exc:
-            print(f"[module] Update-Uebernahme fuer '{mid}' fehlgeschlagen: {exc}")
+            print(f"[module] update adoption for '{mid}' failed: {exc}")
 
 
 async def load_enabled() -> None:
-    """Laedt alle aktivierten Module. Ein Fehler betrifft NUR das jeweilige Modul."""
+    """Loads all enabled modules. An error affects ONLY the respective module."""
     global _loop
     _loop = asyncio.get_running_loop()
     _load_state()
@@ -1026,25 +1025,25 @@ async def load_enabled() -> None:
                 if x not in ordered:
                     ordered.append(x)
         except Exception as exc:
-            report_crash(m, exc, "Abhaengigkeiten")
+            report_crash(m, exc, "dependencies")
             _state["enabled"][m] = False
     for m in ordered:
         if not _state["enabled"].get(m) and m not in wanted:
-            # Abhaengigkeit eines aktiven Moduls, selbst aber aus (z.B. nach einem Update, das
-            # eine neue Abhaengigkeit einfuehrt): automatisch mit einschalten - sonst liefe das
-            # abhaengige Modul ohne seine Grundlage.
+            # Dependency of an active module but itself off (e.g. after an update
+            # that introduces a new dependency): turn it on automatically -
+            # otherwise the dependent module would run without its basis.
             users = [w for w in wanted if m in _dep_order(w)]
             if not users:
                 continue
             _state["enabled"][m] = True
-            print(f"[module] '{m}' automatisch mit aktiviert (gebraucht von: {', '.join(users)})")
+            print(f"[module] '{m}' enabled automatically (needed by: {', '.join(users)})")
         try:
             await _ensure_pip(get(m))
             await _activate(m, user_enable=False)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            report_crash(m, exc, "Start")
+            report_crash(m, exc, "start")
             _state["enabled"][m] = False
     _save_state()
 
@@ -1054,15 +1053,15 @@ async def shutdown_all() -> None:
         try:
             await _deactivate(mid, run_hooks=True)
         except Exception as exc:
-            print(f"[module] Shutdown '{mid}': {exc}")
+            print(f"[module] shutdown '{mid}': {exc}")
 
 
 async def emit(event: str, /, **payload) -> None:
-    """Meldet ein Ereignis an alle aktiven Module, die den Hook dafuer haben.
+    """Reports an event to all active modules that have the hook for it.
 
-    "event" ist positionsgebunden (/), damit Aufrufer auch ein Feld namens
-    event im Payload mitgeben koennen (notifier.fire_event tut das). Vorher
-    gab das "multiple values for argument 'event'" - und kein Hook lief.
+    "event" is positional (/) so callers can also pass a field named event in
+    the payload (notifier.fire_event does that). Previously this gave
+    "multiple values for argument 'event'" - and no hook ran.
     """
     for mid, ld in list(_loaded.items()):
         if event in ld.hooks and event not in ("startup", "shutdown", "enable", "disable"):
@@ -1070,7 +1069,7 @@ async def emit(event: str, /, **payload) -> None:
 
 
 def emit_nowait(event: str, /, **payload) -> None:
-    """Fuer Aufrufer ohne laufende Ereignisschleife (Threads)."""
+    """For callers without a running event loop (threads)."""
     loop = _loop
     if loop is None or loop.is_closed() or not _loaded:
         return
@@ -1081,7 +1080,7 @@ def emit_nowait(event: str, /, **payload) -> None:
 
 
 # =========================================================================
-# Einstellungen & Teilfunktionen (Modul-App)
+# Settings & sub-features (module app)
 # =========================================================================
 
 def get_settings(mid: str) -> dict:
@@ -1113,15 +1112,15 @@ def set_settings(mid: str, values: dict) -> dict:
             try:
                 v = float(v) if "." in str(v) else int(v)
             except (TypeError, ValueError):
-                raise ModuleError(f"'{f.get('label', k)}' muss eine Zahl sein")
+                raise ModuleError(f"'{f.get('label', k)}' must be a number")
             if "min" in f and v < f["min"]:
-                raise ModuleError(f"'{f.get('label', k)}' ist kleiner als {f['min']}")
+                raise ModuleError(f"'{f.get('label', k)}' is smaller than {f['min']}")
             if "max" in f and v > f["max"]:
-                raise ModuleError(f"'{f.get('label', k)}' ist groesser als {f['max']}")
+                raise ModuleError(f"'{f.get('label', k)}' is greater than {f['max']}")
         elif typ == "select":
             opts = [o["value"] if isinstance(o, dict) else o for o in f.get("options", [])]
             if v not in opts:
-                raise ModuleError(f"Ungueltige Auswahl fuer '{f.get('label', k)}'")
+                raise ModuleError(f"Invalid choice for '{f.get('label', k)}'")
         else:
             v = "" if v is None else str(v)
         store[k] = v
@@ -1154,7 +1153,7 @@ def set_crash_policy(limit: int | None = None) -> dict:
 
 
 # =========================================================================
-# Darstellung fuer die API
+# Presentation for the API
 # =========================================================================
 
 def _status(mid: str) -> str:
@@ -1184,7 +1183,7 @@ def describe(mid: str) -> dict:
         "version": str(mod.meta("version", "0.0.0")),
         "description": mod.meta("description", ""),
         "author": mod.meta("author", ""),
-        "category": mod.meta("category", "Sonstiges"),
+        "category": mod.meta("category", "Other"),
         "icon": mod.meta("icon", "🧩"),
         "status": status,
         "enabled": status == "enabled",
@@ -1221,7 +1220,7 @@ def read_crashes(mid: str) -> list[dict]:
             try:
                 out.append(json.loads(f.read_text(encoding="utf-8")))
             except Exception:
-                out.append({"file": f.name, "error": "Bericht unlesbar"})
+                out.append({"file": f.name, "error": "report unreadable"})
     return out
 
 
@@ -1238,9 +1237,9 @@ def clear_crashes(mid: str) -> None:
 
 def node_bundle(mid: str) -> dict | None:
     """
-    Packt den NODE-Teil eines AKTIVEN Moduls (src/modules/node/<id>/) fuer den Versand an
-    eine Node: alle Dateien (base64) + Manifest. None, wenn es keinen Node-Teil gibt
-    oder das Modul nicht aktiv ist.
+    Packs the NODE part of an ACTIVE module (src/modules/node/<id>/) for sending to
+    a node: all files (base64) + manifest. None if there is no node part or the
+    module is not active.
     """
     import base64
     import hashlib
@@ -1257,7 +1256,7 @@ def node_bundle(mid: str) -> dict | None:
         data = p.read_bytes()
         total += len(data)
         if total > 4 * 1024 * 1024:
-            raise ModuleError(f"Node-Teil von '{mid}' ist groesser als 4 MB")
+            raise ModuleError(f"Node part of '{mid}' is larger than 4 MB")
         rel = p.relative_to(part.path).as_posix()
         files[rel] = base64.b64encode(data).decode()
         h.update(rel.encode()); h.update(data)
@@ -1266,7 +1265,7 @@ def node_bundle(mid: str) -> dict | None:
 
 
 def node_modules() -> list[dict]:
-    """Alle Module mit Node-Teil (fuer die Node-Oberflaeche), inkl. ob sie aktiv sind."""
+    """All modules with a node part (for the node UI), incl. whether they are active."""
     out = []
     for mid in sorted(_registry):
         mod = _registry[mid]
@@ -1284,7 +1283,7 @@ def node_modules() -> list[dict]:
 
 
 def frontend_manifest() -> list[dict]:
-    """Aktive Module mit Frontend-Teil - das laedt das Frontend nach dem Login."""
+    """Active modules with a frontend part - loaded by the frontend after login."""
     out = []
     for mid in sorted(_loaded):
         mod = _registry.get(mid)
@@ -1307,7 +1306,7 @@ def frontend_manifest() -> list[dict]:
 
 
 def frontend_file(mid: str, rel: str) -> Path | None:
-    """Sicher aufgeloester Pfad einer Frontend-Datei eines AKTIVEN Moduls."""
+    """Safely resolved path of a frontend file of an ACTIVE module."""
     if mid not in _loaded:
         return None
     mod = _registry.get(mid)
