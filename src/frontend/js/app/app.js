@@ -1,12 +1,12 @@
 // app.js
 // ------
-// Der zentrale Einstiegspunkt des Frontends. Verantwortlich für:
-//   1. Login-Ablauf (inkl. erzwungenem Passwortwechsel beim ersten Login)
-//   2. Laden der Daten (Profil, Hierarchie, Clients) nach dem Login
-//   3. Verkabeln aller Buttons (Startmenü, Benutzermenü, Sidebar, Taskbar)
-//   4. Live-Updates über Socket.IO (Client online/offline, Metriken)
-//   5. "Content-Router": entscheidet, welche App-Funktion den Inhalt eines
-//      Fensters rendert (renderWindowContent)
+// The central entry point of the frontend. Responsible for:
+//   1. login flow (incl. forced password change on first login)
+//   2. loading the data (profile, hierarchy, clients) after login
+//   3. wiring up all buttons (start menu, user menu, sidebar, taskbar)
+//   4. live updates via Socket.IO (client online/offline, metrics)
+//   5. "content router": decides which app function renders the content of a
+//      window (renderWindowContent)
 
 import { state } from "./state.js";
 import { hasAnyClientPerm, hasGlobalPerm, isAdmin } from "./state.js";
@@ -28,16 +28,16 @@ import { configurePersistence, scheduleSave, saveNow, loadState, applyExpanded, 
 import { initBars } from "./bars.js";
 import { initCrashGuard } from "./crashguard.js";
 
-// notify global verfügbar machen, damit alle Module (auch Fehlerbehandlung)
-// die schönen Slide-Down-Meldungen nutzen können.
+// Make notify globally available so all modules (including error handling) can
+// use the nice slide-down messages.
 window.notify = notify;
 window.notifyError = notifyError;
 
-// App-Fenster-Renderer
-// Registriert window.showPermissionDenied - der Dialog bei fehlenden Rechten.
+// App window renderers
+// Registers window.showPermissionDenied - the dialog for missing permissions.
 import "./permdenied.js";
-// renderDist wird LAZY geladen (siehe FEATURE_MODULES), damit eine
-// einzelne fehlende Datei nie den Login der gesamten SPA blockiert.
+// renderDist is loaded LAZILY (see FEATURE_MODULES), so a single missing file
+// never blocks the login of the entire SPA.
 import { loadModules, renderModuleApp, openModuleApp, moduleAppPerm, inactiveModuleBox, getModuleApi, onModulesChanged } from "./modules.js";
 import { handleAction as _clientHandleAction } from "./panel.js";
 import { selectClientExternal as _selectClientExternal } from "./sidebar.js";
@@ -48,23 +48,23 @@ import { initStartMenu, refreshStartMenu, setStartMenuUser, unlockCatalogPruning
 import { t, initLanguages, loadLocale } from "./i18n.js";
 
 // -----------------------------------------------------------------
-// Content-Router: welcher Renderer gehört zu welchem appId?
+// Content router: which renderer belongs to which appId?
 // -----------------------------------------------------------------
 
 const _featureWarned = new Set();
 
 async function loadFeature(mod, fn) {
-  // Dynamisch laden, Fehler abfangen. Rueckgabe: Renderer-Funktion oder null.
+  // Load dynamically, catch errors. Returns: renderer function or null.
   try {
     const m = await import(mod);
-    if (typeof m[fn] !== "function") throw new Error("Funktion " + fn + " fehlt in " + mod);
+    if (typeof m[fn] !== "function") throw new Error("Function " + fn + " is missing in " + mod);
     return m[fn];
   } catch (e) {
     if (!_featureWarned.has(mod)) {
       _featureWarned.add(mod);
-      const msg = "Ein Teil des RMM konnte nicht geladen werden: " + mod.split("/").pop()
-        + " (" + (e && e.message ? e.message : e) + "). Der Rest funktioniert weiter.";
-      try { notifyError ? notifyError(msg) : notify(msg, "error", 9000); } catch { /* egal */ }
+      const msg = "A part of the RMM could not be loaded: " + mod.split("/").pop()
+        + " (" + (e && e.message ? e.message : e) + "). The rest keeps working.";
+      try { notifyError ? notifyError(msg) : notify(msg, "error", 9000); } catch { /* ignore */ }
       console.error("[feature]", mod, e);
     }
     return null;
@@ -74,15 +74,15 @@ async function loadFeature(mod, fn) {
 async function _lazyRender(mod, fn, body, win) {
   const r = await loadFeature(mod, fn);
   if (r) return r(body, win);
-  body.innerHTML = '<div style="padding:16px;color:var(--danger)">Diese App konnte nicht geladen werden.'
-    + '<br><small>Vermutlich wurde beim Update eine Datei nicht mit hochgeladen. '
-    + 'Login und die übrigen Funktionen laufen normal weiter.</small></div>';
+  body.innerHTML = '<div style="padding:16px;color:var(--danger)">This app could not be loaded.'
+    + '<br><small>A file was probably not uploaded during the update. '
+    + 'Login and the other functions keep working normally.</small></div>';
 }
 
-// Jede App wird ERST beim Oeffnen geladen (dynamic import). Faellt eine Datei
-// aus (nach einem Update nicht mit hochgeladen, Syntaxfehler, 404), bleibt NUR
-// diese App betroffen - Login, Shell und alle anderen Apps laufen weiter. Das
-// ist das "try: import ... except: Hinweis"-Prinzip fuer das ganze Frontend.
+// Each app is loaded ONLY when opened (dynamic import). If a file fails (not
+// uploaded during an update, syntax error, 404), ONLY this app is affected -
+// login, shell and all other apps keep running. This is the
+// "try: import ... except: hint" principle for the whole frontend.
 const FEATURE_MODULES = {
   terminal:      ["../feature/terminal.js", "renderTerminal"],
   explorer:      ["../feature/explorer.js", "renderExplorer"],
@@ -110,18 +110,18 @@ for (const [appId, [mod, fn]] of Object.entries(FEATURE_MODULES)) {
 function renderWindowContent(body, win) {
   const renderer = APP_RENDERERS[win.appId];
   if (renderer) renderer(body, win);
-  else if (renderModuleApp(win.appId, body, win)) { /* App eines aktiven Moduls */ }
-  else inactiveModuleBox(body, win.appId);   // Modul aus oder abgestuerzt
+  else if (renderModuleApp(win.appId, body, win)) { /* app of an active module */ }
+  else inactiveModuleBox(body, win.appId);   // module off or crashed
 }
 
 // -----------------------------------------------------------------
-// Daten laden & Oberfläche aktualisieren
+// Load data & refresh the UI
 // -----------------------------------------------------------------
 
 async function reloadHierarchy() {
   state.hierarchy = await api.getHierarchy();
-  // Offene Fenster (Add/Edit Client, ...) informieren, damit sie ihre
-  // Tenant-/Standort-Auswahlen SOFORT neu befüllen - ohne Fenster-Neuöffnen.
+  // Inform open windows (add/edit client, ...) so they refill their
+  // tenant/location selections IMMEDIATELY - without reopening the window.
   try { window.dispatchEvent(new CustomEvent("rmm:hierarchy-changed")); } catch {}
 }
 
@@ -129,68 +129,68 @@ async function reloadClients() {
   state.clients = await api.getClients();
 }
 
-// Effektive Rechte des Benutzers laden (für Frontend-Gating).
+// Load the user's effective permissions (for frontend gating).
 async function reloadPerms() {
   try {
     state.perms = await api.getEffectivePermissions();
   } catch {
-    // Fallback: keine Rechte-Info -> als "nur Admin sieht alles" behandeln wäre
-    // unsicher; stattdessen leere Rechte (Backend bleibt die harte Grenze).
+    // Fallback: no permission info -> treating it as "only admin sees all" would
+    // be unsafe; instead empty permissions (the backend stays the hard boundary).
     state.perms = { admin: false, global: {}, clients: {} };
   }
 }
 
-// Apps, die ausschließlich dem Super-Admin offenstehen (Backend: require_admin).
-// App-Key -> benötigtes globales Recht. Nicht gelistete Apps sind frei
-// zugänglich (z.B. Dashboard/Clients, Speedtest). 'settings' ist ein Sonderfall.
+// Apps available only to the super admin (backend: require_admin).
+// App key -> required global permission. Apps not listed are freely accessible
+// (e.g. dashboard/clients, speedtest). 'settings' is a special case.
 const APP_REQUIRED_PERM = {
   audit: "see_audit",
   permissions: "see_permissions",
   manage: "manage_hierarchy",
   "add-client": "add_client",
-  dist: "manage_dist",          // Verteilung (/dist) - Core, frueher Modul "dist"
+  dist: "manage_dist",          // distribution (/dist) - core, formerly module "dist"
 };
 
 function _appAllowed(appKey) {
   if (isAdmin()) return true;
-  // Einstellungen: sichtbar, wenn der Nutzer wenigstens einen Settings-Bereich
-  // sehen/bearbeiten darf (Einstellungen ansehen, SSO, Branding, Source oder
-  // Benutzer erstellen). Die einzelnen Tabs werden in der App zusätzlich gegated.
+  // Settings: visible if the user may see/edit at least one settings area
+  // (view settings, SSO, branding, source or create users). The individual
+  // tabs are additionally gated within the app.
   if (appKey === "settings") {
-    return hasGlobalPerm("see_settings") ||        // SSO: eigenes Modul "sso"
+    return hasGlobalPerm("see_settings") ||        // SSO: its own module "sso"
            hasGlobalPerm("manage_branding") || hasGlobalPerm("see_source") ||
            hasGlobalPerm("create_users");
   }
-  if (appKey.startsWith("webapp:")) return true;          // gespeicherte Web-Apps (Modul 'browser')
-  if (appKey === "modules") return hasGlobalPerm("manage_modules");   // Modul-App: globales Recht
-  if (appKey === "nodes") return hasAnyClientPerm("manage_nodes");    // Node-Uebersicht: Client-Recht auf mind. einem Client
-  const mperm = moduleAppPerm(appKey);                     // App eines Moduls: Recht aus der module.json
+  if (appKey.startsWith("webapp:")) return true;          // saved web apps (module 'browser')
+  if (appKey === "modules") return hasGlobalPerm("manage_modules");   // module app: global permission
+  if (appKey === "nodes") return hasAnyClientPerm("manage_nodes");    // node overview: client permission on at least one client
+  const mperm = moduleAppPerm(appKey);                     // app of a module: permission from module.json
   if (mperm !== undefined) return !mperm || hasGlobalPerm(mperm);
   const perm = APP_REQUIRED_PERM[appKey];
-  if (!perm) return true;               // frei zugängliche App
+  if (!perm) return true;               // freely accessible app
   return hasGlobalPerm(perm);
 }
 
 function applyAppVisibility() {
-  // Startmenü-Katalog (versteckte Original-Buttons) + Live-Menü aktualisieren.
+  // Start-menu catalog (hidden original buttons) + live menu refresh.
   document.querySelectorAll("#start-menu [data-app]").forEach((btn) => {
     btn.style.display = _appAllowed(btn.dataset.app) ? "" : "none";
   });
   try { refreshStartMenu(); } catch {}
-  // Benutzermenü: Einstellungen nur, wenn erlaubt.
+  // User menu: settings only if allowed.
   const settingsBtn = document.getElementById("btn-open-settings");
   if (settingsBtn) settingsBtn.style.display = _appAllowed("settings") ? "" : "none";
-  // Sidebar: "Client hinzufügen" (Enrollment) hängt am Recht 'add_client',
-  // "Hierarchie verwalten" an 'manage_hierarchy'.
+  // Sidebar: "Add client" (enrollment) depends on the 'add_client' permission,
+  // "Manage hierarchy" on 'manage_hierarchy'.
   const addBtn = document.getElementById("btn-add-client");
   if (addBtn) addBtn.style.display = (isAdmin() || hasGlobalPerm("add_client")) ? "" : "none";
   const mgmtBtn = document.getElementById("btn-manage-hierarchy");
   if (mgmtBtn) mgmtBtn.style.display = (isAdmin() || hasGlobalPerm("manage_hierarchy")) ? "" : "none";
 }
 
-// Name im Benutzermenü - mit ADMIN-Tag, wenn Vollzugriff besteht. Das gilt
-// sowohl für die Rolle 'admin' als auch für das Recht 'super_admin'
-// (admin_via === "permission" wird mit * gekennzeichnet).
+// Name in the user menu - with an ADMIN tag if full access exists. This applies
+// both to the role 'admin' and to the permission 'super_admin'
+// (admin_via === "permission" is marked with *).
 function drawUserMenuName(user) {
   const nameEl = document.getElementById("user-menu-name");
   if (!nameEl || !user) return;
@@ -199,16 +199,16 @@ function drawUserMenuName(user) {
   const tag = document.createElement("span");
   tag.textContent = user.admin_via === "permission" ? "ADMIN*" : "ADMIN";
   tag.title = user.admin_via === "permission"
-    ? t("u_vollzugriff_uber_das_recht_super_a") : "Rolle admin";
+    ? t("u_vollzugriff_uber_das_recht_super_a") : "Role admin";
   tag.style.cssText = "color:var(--warn,#f5a524);font-size:10px;font-weight:700;margin-left:5px";
   nameEl.appendChild(tag);
 }
 
 /**
- * Lädt Benutzer-Infos UND effektive Rechte neu und zeichnet alles nach, was
- * davon abhängt (ADMIN-Tag, Startmenü, Sidebar-Buttons, Hauptbereich).
- * Wird nach dem Speichern in der Rechte-Verwaltung aufgerufen, damit
- * Änderungen sofort sichtbar sind - ohne Strg+F5.
+ * Reloads user info AND effective permissions and redraws everything that
+ * depends on them (ADMIN tag, start menu, sidebar buttons, main area).
+ * Called after saving in the permission management so that changes are visible
+ * immediately - without Ctrl+F5.
  */
 export async function refreshPermissionsUi() {
   try {
@@ -223,7 +223,7 @@ export async function refreshPermissionsUi() {
     try { renderSidebar(); } catch {}
     try { renderMainContent(); } catch {}
   } catch (e) {
-    try { console.error("[perms] Aktualisieren fehlgeschlagen:", e); } catch {}
+    try { console.error("[perms] refresh failed:", e); } catch {}
   }
 }
 
@@ -234,9 +234,9 @@ async function refreshAll() {
 }
 
 // -----------------------------------------------------------------
-// Version: Single Source of Truth ist backend/version.txt (via
-// /api/version). Alle Anzeigen im Frontend werden von hier befüllt -
-// nirgends mehr hardcoden!
+// Version: the single source of truth is backend/version.txt (via
+// /api/version). All displays in the frontend are filled from here -
+// never hardcode it anywhere!
 // -----------------------------------------------------------------
 async function loadVersion() {
   try {
@@ -245,12 +245,12 @@ async function loadVersion() {
       el.textContent = v.backend || "";
       el.title = `Backend ${v.backend || "?"} · Agent ${v.agent || "?"}`;
     });
-  } catch { /* Version ist Kosmetik - Fehler nie den Start blockieren lassen */ }
+  } catch { /* version is cosmetic - never let an error block startup */ }
 }
 loadVersion();
 
 // -----------------------------------------------------------------
-// Login-Ablauf
+// Login flow
 // -----------------------------------------------------------------
 
 const loginScreen = () => document.getElementById("login-screen");
@@ -266,14 +266,14 @@ async function startSession(user) {
   state.user = user;
   applyTheme(user.theme);
   applyAccent(user.accent || "teal");
-  // Oberflaechen-Style: Der Core kennt nur "futuristic". Andere Styles setzt
-  // das Modul "styles" nach dem Laden der Module (bis dahin Futuristisch).
+  // UI style: the core only knows "futuristic". Other styles are set by the
+  // module "styles" after the modules load (futuristic until then).
   applyBaseStyle("futuristic");
-  try { await loadLocale(user.language || "de"); } catch { /* Puffer/Fallback */ }
+  try { await loadLocale(user.language || "de"); } catch { /* buffer/fallback */ }
   setLanguage(user.language || "de");
   applyStaticTranslations();
 
-  // Muss der User zuerst sein Passwort wechseln? (erster Login / Einmalpasswort)
+  // Must the user change their password first? (first login / one-time password)
   if (user.must_change_pw) {
     showOnly(changePwScreen());
     return;
@@ -282,59 +282,58 @@ async function startSession(user) {
   showOnly(appScreen());
   drawUserMenuName(user);
 
-  // Persistenz einrichten (pro Benutzer). Aufgeklappte Sidebar-Knoten müssen
-  // VOR dem ersten Render gesetzt werden, damit der Baum sofort korrekt aussieht.
+  // Set up persistence (per user). Expanded sidebar nodes must be set BEFORE
+  // the first render so the tree looks correct right away.
   configurePersistence({
     username: user.username,
     getExpanded: getExpandedIds,
     setExpanded: setExpandedIds,
   });
-  // Serverseitig gespeicherte UI-Einstellungen holen und in localStorage
-  // übernehmen (Server gewinnt) - VOR initFavorites()/loadState(), damit
-  // Favoriten, Layouts & Co. in jedem Browser identisch sind.
+  // Fetch server-side stored UI settings and apply them to localStorage
+  // (server wins) - BEFORE initFavorites()/loadState(), so favorites, layouts
+  // etc. are identical in every browser.
   await hydrateFromServer();
-  // Kopf-/Taskleiste automatisch ausblenden (pro Benutzer, rmm_bars:<user> wurde hydriert)
+  // Auto-hide the top/task bar (per user, rmm_bars:<user> was hydrated)
   try { initBars(user.username); } catch (e) { try { console.error(e); } catch {} }
-  // Sprache ggf. auf den Server-Stand umschalten (rmm_lang wurde hydriert).
+  // Switch the language to the server state if needed (rmm_lang was hydrated).
   try {
     const lang = localStorage.getItem("rmm_lang");
     if (lang && lang !== getLanguage()) setLanguage(lang);
   } catch {}
-  // Startmenue auf den ECHTEN Benutzer umstellen. initStartMenu() lief schon
-  // vor dem Login (state.user war null) und haette das Layout sonst dauerhaft
-  // unter "rmm_appmenu:default" gehalten - dieser Schluessel wird nicht mit dem
-  // Server abgeglichen, weshalb Ordner/Anordnung unter einer anderen URL fehlten.
+  // Switch the start menu to the REAL user. initStartMenu() already ran before
+  // login (state.user was null) and would otherwise have kept the layout
+  // permanently under "rmm_appmenu:default" - that key is not synced with the
+  // server, which is why folders/arrangement were missing under another URL.
   try { setStartMenuUser(user.username); } catch (e) { try { console.error(e); } catch {} }
-  initFavorites(user.username);   // Favoriten des Benutzers laden
-  initSidebarNav();               // Dashboard-Tab + Favoriten-Header verkabeln
+  initFavorites(user.username);   // load the user's favorites
+  initSidebarNav();               // wire up dashboard tab + favorites header
 
-  // Effektive Rechte ZUERST laden – sie werden sowohl für die Restore-Logik
-  // (Recht 'restore_session') als auch fürs UI-Gating gebraucht. Früher lief
-  // reloadPerms() erst später, wodurch 'restore_session' immer als "fehlt"
-  // galt und NICHTS wiederhergestellt wurde. (Rechte hängen nicht an Clients/
-  // Hierarchie, können also gefahrlos zuerst geladen werden.)
+  // Load effective permissions FIRST - they are needed both for the restore
+  // logic (permission 'restore_session') and for UI gating. Previously
+  // reloadPerms() ran only later, so 'restore_session' always counted as
+  // "missing" and NOTHING was restored. (Permissions do not depend on
+  // clients/hierarchy, so they can safely be loaded first.)
   await reloadPerms();
-  // Aktive Module laden (ein Fehler in einem Modul betrifft nur dieses). Faellt
-  // das Laden ganz aus, laeuft die Shell trotzdem - nur die Modul-Apps fehlen.
-  try { await loadModules(); } catch (e) { console.error("[modules] laden:", e); }
-  unlockCatalogPruning();     // jetzt kennt der Katalog auch die Modul-Apps
+  // Load active modules (an error in one module affects only that one). If
+  // loading fails entirely, the shell still runs - only the module apps are missing.
+  try { await loadModules(); } catch (e) { console.error("[modules] load:", e); }
+  unlockCatalogPruning();     // now the catalog also knows the module apps
   onModulesChanged(() => { try { applyAppVisibility(); } catch {} });
 
   const saved = loadState();
-  // Persönliche Wiederherstellungs-Einstellungen (Standard: alles wiederherstellen).
-  // Zusätzlich durch das globale Recht 'restore_session' gegated: fehlt es, wird
-  // immer sauber vom Dashboard gestartet.
+  // Personal restore settings (default: restore everything).
+  // Additionally gated by the global permission 'restore_session': if missing,
+  // it always starts cleanly from the dashboard.
   const mayRestore = hasGlobalPerm("restore_session");
-  // Sauberer Neustart über den Reload-Knopf in der Taskleiste: dieser eine
-  // Start ignoriert die gespeicherten Fenster/Apps und die Client-Auswahl.
-  // Der Merker wird dabei verbraucht - der naechste Reload verhaelt sich
-  // wieder normal.
+  // Clean restart via the reload button in the taskbar: this one start ignores
+  // the saved windows/apps and the client selection. The flag is consumed in
+  // the process - the next reload behaves normally again.
   const freshStart = consumeFreshStart();
-  // Einzelfenster-Modus (Client-App, z.B. Remote-Shell im eigenen Fenster):
-  //   /?solo=terminal&client=<id>   (auch explorer, vnc)
-  //   /?solo=console[&via=client]    RMM-Konsole (Modul "console", ohne Geraet)
-  // Zeigt nur dieses eine Fenster, stellt NICHTS wieder her und SPEICHERT
-  // nichts - die normale Fensteranordnung des Benutzers bleibt unberührt.
+  // Single-window mode (client app, e.g. remote shell in its own window):
+  //   /?solo=terminal&client=<id>   (also explorer, vnc)
+  //   /?solo=console[&via=client]    RMM console (module "console", no device)
+  // Shows only this one window, restores NOTHING and SAVES nothing - the user's
+  // normal window arrangement stays untouched.
   const soloParams = new URLSearchParams(location.search);
   const solo = SOLO_APPS.includes(soloParams.get("solo")) ? soloParams.get("solo") : null;
   const savedPrefs = (saved && saved.restorePrefs) || { client: true, folder: true, apps: true };
@@ -342,8 +341,8 @@ async function startSession(user) {
   if (!mayRestore) {
     restorePrefs = { client: false, folder: false, apps: false };
   } else if (freshStart) {
-    // Aufgeklappte Ordner der Sidebar bleiben erhalten - nur der ausgewählte
-    // Client und die offenen Apps/Fenster werden bewusst weggelassen.
+    // Expanded sidebar folders are kept - only the selected client and the
+    // open apps/windows are deliberately omitted.
     restorePrefs = { client: false, folder: !!savedPrefs.folder, apps: false };
   } else {
     restorePrefs = savedPrefs;
@@ -351,17 +350,17 @@ async function startSession(user) {
   if (freshStart) {
     try { console.info("[startSession] clean start: open windows will not be restored."); } catch {}
   }
-  // WICHTIG: Restore/Crash-Guard-Init defensiv kapseln. Ein Fehler hier darf den
-  // Login/das Dashboard NIEMALS blockieren (sonst bleibt man im leeren, „blurry"
-  // App-Screen hängen, weil das Login schon ausgeblendet ist).
+  // IMPORTANT: wrap the restore/crash-guard init defensively. An error here must
+  // NEVER block the login/dashboard (otherwise you get stuck on the empty,
+  // "blurry" app screen because the login is already hidden).
   try {
     if (saved) {
-      applyExpanded(saved);           // Aufklapp-Zustand + Layouts/Profile
-      // „Offene Ordner" (Sidebar-Baum) nur wiederherstellen, wenn gewünscht.
+      applyExpanded(saved);           // expand state + layouts/profiles
+      // Restore the "open folders" (sidebar tree) only if wanted.
       if (!restorePrefs.folder) {
         try { setExpandedIds([]); } catch {}
       }
-      // Auswahl: Client vs. Ordner getrennt steuerbar.
+      // Selection: client vs. folder controllable separately.
       if (saved.selection) {
         const selIsClient = saved.selection.type === "client";
         if ((selIsClient && restorePrefs.client) || (!selIsClient && restorePrefs.folder)) {
@@ -371,55 +370,54 @@ async function startSession(user) {
       if (restorePrefs.folder && saved.sidebar) { state.sidebar = saved.sidebar; applySidebarState(); }
     }
 
-    // Frontend-Crash-Guard: erkennt Abstürze/Einfrieren, protokolliert sie und
-    // startet die Oberfläche im Ernstfall neu (schleifensicher, siehe crashguard.js).
+    // Frontend crash guard: detects crashes/freezes, logs them and restarts the
+    // UI in an emergency (loop-safe, see crashguard.js).
     initCrashGuard({
       username: user.username,
       onPanic: () => {
         try { for (const w of [...(state.windows || [])]) closeWindow(w.key); } catch {}
-        try { saveNow(state); } catch {}   // ohne offene Fenster sichern
+        try { saveNow(state); } catch {}   // save without open windows
       },
     });
   } catch (e) {
-    try { console.error("[startSession] Restore/CrashGuard-Init fehlgeschlagen:", e); } catch {}
+    try { console.error("[startSession] restore/crash-guard init failed:", e); } catch {}
   }
 
-  // Organisationsweite Standard-Layouts laden (vom Admin gesetzt). Werden als
-  // Basis für Nutzer OHNE eigenes Layout und beim "Auf Standard zurücksetzen"
-  // verwendet. Fehler hier sind unkritisch (dann greift der eingebaute
-  // Standard).
+  // Load organization-wide default layouts (set by the admin). Used as the
+  // basis for users WITHOUT their own layout and on "reset to default". Errors
+  // here are non-critical (then the built-in default applies).
   try {
     const defs = await api.getDefaultLayouts();
     setOrgDefaults({ dash: defs.dash || null, fleet: defs.fleet || null });
-    // Org-weite Profil-Presets (Physisch/VMs/LXCs) für die Client-Ansicht.
+    // Org-wide profile presets (physical/VMs/LXCs) for the client view.
     setOrgProfilePresets({
       "Physisch": defs.dash_profile_physical || null,
       "VMs": defs.dash_profile_vm || null,
       "LXCs": defs.dash_profile_lxc || null,
     });
-  } catch { /* kein org-Standard erreichbar -> eingebauter Standard */ }
+  } catch { /* no org default reachable -> built-in default */ }
 
-  // (Effektive Rechte wurden bereits oben – vor der Restore-Logik – geladen.)
-  // AB HIER darf kein Fehler mehr aus startSession herausfliegen: sonst würde der
-  // Login-Handler den App-Screen wieder ausblenden und man käme nicht mehr rein.
-  // Jeder Schritt ist daher einzeln gekapselt – im Zweifel erscheint ein (ggf.
-  // leeres) Dashboard statt einer Login-Sackgasse.
+  // (Effective permissions were already loaded above - before the restore logic.)
+  // FROM HERE no error may escape startSession anymore: otherwise the login
+  // handler would hide the app screen again and you could not get in. Each step
+  // is therefore wrapped individually - in case of doubt a (possibly empty)
+  // dashboard appears instead of a login dead end.
   try { await refreshAll(); }
-  catch (e) { try { console.error("[startSession] refreshAll fehlgeschlagen:", e); } catch {} }
+  catch (e) { try { console.error("[startSession] refreshAll failed:", e); } catch {} }
 
   try { applyAppVisibility(); } catch (e) { try { console.error(e); } catch {} }
 
-  // Gespeicherte Fenster wiederherstellen (nach refreshAll, damit Clients/
-  // Hierarchie geladen sind und die Fenster-Inhalte korrekt rendern) – nur wenn
-  // der Benutzer „offene Apps wiederherstellen" aktiviert hat.
+  // Restore saved windows (after refreshAll, so clients/hierarchy are loaded
+  // and the window contents render correctly) - only if the user has enabled
+  // "restore open apps".
   if (solo) restorePrefs = { client: false, folder: false, apps: false };
   try { if (saved && restorePrefs.apps) restoreWindows(saved); }
-  catch (e) { try { console.error("[startSession] restoreWindows fehlgeschlagen:", e); } catch {} }
+  catch (e) { try { console.error("[startSession] restoreWindows failed:", e); } catch {} }
 
-  // Ab jetzt jede Fenster-/Baum-Änderung speichern.
+  // From now on save every window/tree change.
   try {
     if (solo) {
-      setOnWindowsChanged(() => renderTaskbar());          // Einzelfenster: nichts speichern
+      setOnWindowsChanged(() => renderTaskbar());          // single window: save nothing
       setOnTreeStateChanged(() => {});
     } else {
       setOnWindowsChanged(() => { renderTaskbar(); scheduleSave(state); });
@@ -429,8 +427,8 @@ async function startSession(user) {
   } catch (e) { try { console.error(e); } catch {} }
   if (solo) { openSolo(solo, soloParams); return; }
 
-  // Ungelesene Chat-Nachrichten beim Login als Notification anzeigen
-  // (nur mit Recht 'use_chat'; Fehler hier sind unkritisch).
+  // Show unread chat messages as a notification on login
+  // (only with the 'use_chat' permission; errors here are non-critical).
   try {
     if (isAdmin() || hasGlobalPerm("use_chat")) {
       const unread = await api.chatUnread();
@@ -444,19 +442,19 @@ async function startSession(user) {
           "info", 12000, { source: "chat" });
       }
     }
-  } catch (e) { try { console.error("[chat] Ungelesen-Check fehlgeschlagen:", e); } catch {} }
+  } catch (e) { try { console.error("[chat] unread check failed:", e); } catch {} }
 }
 
-// Öffnet die zuletzt offenen Fenster in ihrer gespeicherten Reihenfolge,
-// Geometrie und mit ihrem Status (minimiert/maximiert) erneut.
-// Apps, die im Einzelfenster-Modus geöffnet werden dürfen (alle brauchen einen Client).
+// Reopens the most recently open windows in their saved order, geometry and
+// with their state (minimized/maximized).
+// Apps that may be opened in single-window mode (all need a client).
 const SOLO_APPS = ["terminal", "explorer", "vnc", "console"];
 
 function openSolo(appId, params) {
-  if (appId === "console") {                 // RMM-Konsole (Modul) - braucht kein Geraet
+  if (appId === "console") {                 // RMM console (module) - needs no device
     document.body.classList.add("solo-mode");
-    document.title = "RMM-Konsole";
-    openWindow({ key: "solo-console", appId: "console", title: "RMM-Konsole", maximized: true,
+    document.title = "RMM console";
+    openWindow({ key: "solo-console", appId: "console", title: "RMM console", maximized: true,
                  props: { via: params.get("via") || "" } });
     return;
   }
@@ -464,7 +462,7 @@ function openSolo(appId, params) {
   const client = (state.clients || []).find((c) => c.id === cid);
   document.body.classList.add("solo-mode");
   if (!client) {
-    window.notify?.("Gerät nicht gefunden oder kein Zugriff.", "error", 10000);
+    window.notify?.("Device not found or no access.", "error", 10000);
     return;
   }
   const names = { terminal: t("terminal"), explorer: t("file_explorer"), vnc: t("remote_screen") };
@@ -477,18 +475,17 @@ function openSolo(appId, params) {
 function restoreWindows(saved) {
   const wins = saved.windows || [];
   if (!wins.length) return;
-  // In Fokus-Reihenfolge öffnen (letztes = oberstes). Fenster, die nicht in
-  // focusOrder stehen, hinten anstellen.
+  // Open in focus order (last = topmost). Windows not in focusOrder go last.
   const order = saved.focusOrder || [];
   wins.sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key));
   for (const w of wins) {
     try {
       openWindow({
-        singleton: true,   // Restore: exakt diesen Key wiederherstellen
+        singleton: true,   // restore: restore exactly this key
         key: w.key, appId: w.appId, title: w.title, props: w.props || {},
         clientColor: w.clientColor, w: w.w, h: w.h, x: w.x, y: w.y,
         minimized: w.minimized, maximized: w.maximized, pinned: !!w.pinned,
-        focus: false,   // Fokus am Ende gesetzt (Reihenfolge)
+        focus: false,   // focus set at the end (order)
       });
     } catch (e) {
       console.warn("[persist] could not restore window:", w.key, e);
@@ -497,12 +494,12 @@ function restoreWindows(saved) {
 }
 
 function initLoginForm() {
-  // Verfügbare AD-Realms ins Dropdown laden (zusätzlich zu "Lokal")
+  // Load available AD realms into the dropdown (in addition to "Local")
   const realmSelect = document.getElementById("login-realm");
   const userField = document.getElementById("login-username");
 
-  // Zuletzt genutzten Benutzernamen + Realm wiederherstellen (wie bei Proxmox).
-  // Gespeichert wird NUR Benutzername + Realm, NIEMALS das Passwort.
+  // Restore the last used username + realm (like Proxmox). Only the username
+  // + realm are stored, NEVER the password.
   let savedRealm = null;
   try {
     const raw = localStorage.getItem("rmm_login_hint");
@@ -520,11 +517,11 @@ function initLoginForm() {
       opt.textContent = r.name + " (AD)";
       realmSelect.appendChild(opt);
     }
-    // Gespeicherten Realm wählen, sofern noch vorhanden.
+    // Select the saved realm if it still exists.
     if (savedRealm && [...realmSelect.options].some((o) => o.value === savedRealm)) {
       realmSelect.value = savedRealm;
     }
-  }).catch(() => { /* Backend evtl. noch nicht bereit - egal, "Lokal" reicht */ });
+  }).catch(() => { /* backend maybe not ready yet - no matter, "Local" is enough */ });
 
   document.getElementById("login-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -538,22 +535,22 @@ function initLoginForm() {
         realmSelect.value,
         document.getElementById("login-code")?.value || ""
       );
-      // Benutzername + Realm merken (Passwort NICHT).
+      // Remember username + realm (NOT the password).
       try {
         localStorage.setItem("rmm_login_hint", JSON.stringify({ username, realm: realmSelect.value }));
       } catch {}
       saveToken(res.token);
       await startSession(res.user);
     } catch (err) {
-      // startSession blendet das Login sofort aus und zeigt den App-Screen.
-      // Schlägt danach etwas fehl, MUSS das Login wieder eingeblendet werden –
-      // sonst hängt man im leeren, „blurry" App-Screen fest und kann sich nicht
-      // mehr anmelden. Token verwerfen und Fehler sichtbar anzeigen.
+      // startSession hides the login immediately and shows the app screen. If
+      // something fails after that, the login MUST be shown again - otherwise
+      // you get stuck on the empty, "blurry" app screen and cannot log in
+      // anymore. Discard the token and show the error visibly.
       try { clearToken(); } catch {}
       try { showOnly(loginScreen()); } catch {}
-      // Das Backend meldet "2fa_required", wenn Passwort und Benutzername
-      // stimmen, aber noch der Einmalcode fehlt. Dann NICHT als Fehler
-      // darstellen, sondern das Code-Feld einblenden und den Fokus setzen.
+      // The backend reports "2fa_required" when password and username are
+      // correct but the one-time code is still missing. Then do NOT show it as
+      // an error but reveal the code field and set the focus.
       if (err && err.message === "2fa_required") {
         const row = document.getElementById("login-2fa-row");
         const code = document.getElementById("login-code");
@@ -562,9 +559,9 @@ function initLoginForm() {
         code?.focus();
         return;
       }
-      errBox.textContent = err && err.message ? err.message : "Anmeldung fehlgeschlagen";
+      errBox.textContent = err && err.message ? err.message : "Login failed";
       errBox.classList.remove("hidden");
-      // Nach einem Fehlversuch den alten Code verwerfen - er gilt ohnehin nur einmal.
+      // After a failed attempt discard the old code - it is single-use anyway.
       const codeField = document.getElementById("login-code");
       if (codeField) codeField.value = "";
     }
@@ -589,7 +586,7 @@ function initChangePwForm() {
 
     try {
       await api.changePassword(current, newPw);
-      // Nach erfolgreicher Änderung: frisches Profil holen und normal starten
+      // After a successful change: fetch a fresh profile and start normally
       const user = await api.me();
       await startSession(user);
     } catch (err) {
@@ -600,12 +597,12 @@ function initChangePwForm() {
 }
 
 // -----------------------------------------------------------------
-// Menüs & globale Buttons verkabeln
+// Wire up menus & global buttons
 // -----------------------------------------------------------------
 
-// Globale Suchleiste in der Topbar: entweder eine bytera://-Adresse direkt
-// eingeben (-> Modul "url-scheme" oeffnet das Ziel) oder frei suchen (Geraete +
-// Apps). Enter oeffnet den obersten Treffer bzw. die eingegebene Adresse.
+// Global search bar in the topbar: either enter a bytera:// address directly
+// (-> module "url-scheme" opens the target) or search freely (devices + apps).
+// Enter opens the top match resp. the entered address.
 function initGlobalSearch() {
   const inp = document.getElementById("global-search");
   const box = document.getElementById("global-search-results");
@@ -614,27 +611,27 @@ function initGlobalSearch() {
   function openUrl(url) {
     const api = getModuleApi("url-scheme");
     if (api && typeof api.resolve === "function") { api.resolve(url); return true; }
-    window.notify?.('Das Modul „URL-Schema" ist nicht aktiv - bytera://-Adressen gehen erst, wenn es eingeschaltet ist.', "warning", 7000);
+    window.notify?.('The "URL scheme" module is not active - bytera:// addresses only work once it is enabled.', "warning", 7000);
     return false;
   }
 
   function suggestions(q) {
     const out = [];
     const ql = q.toLowerCase();
-    // Geraete
+    // devices
     for (const c of (state.clients || [])) {
       if (!ql || (c.hostname || "").toLowerCase().includes(ql)) {
-        out.push({ icon: "🖥️", label: c.hostname || c.id, sub: "Gerät öffnen",
+        out.push({ icon: "🖥️", label: c.hostname || c.id, sub: "Open device",
                    run: () => window.byteraOpenTarget?.selectClient(c.id) });
       }
       if (out.length > 7) break;
     }
-    // Apps (Kacheln aus dem Startmenue)
+    // apps (tiles from the start menu)
     document.querySelectorAll("#start-menu [data-app], .app-catalog [data-app]").forEach((b) => {
       const label = b.textContent.trim();
       const app = b.dataset.app;
       if (app && (!ql || label.toLowerCase().includes(ql)) && out.length <= 12) {
-        out.push({ icon: "📦", label, sub: "App öffnen", run: () => openAppFromMenu(app) });
+        out.push({ icon: "📦", label, sub: "Open app", run: () => openAppFromMenu(app) });
       }
     });
     return out.slice(0, 10);
@@ -645,7 +642,7 @@ function initGlobalSearch() {
     const q = inp.value.trim();
     if (!q) { box.classList.add("hidden"); box.innerHTML = ""; items = []; return; }
     if (/^bytera:\/\//i.test(q)) {
-      items = [{ icon: "🔗", label: q, sub: "Adresse öffnen", run: () => openUrl(q) }];
+      items = [{ icon: "🔗", label: q, sub: "Open address", run: () => openUrl(q) }];
     } else {
       items = suggestions(q);
     }
@@ -653,7 +650,7 @@ function initGlobalSearch() {
     box.innerHTML = items.length
       ? items.map((it, i) => `<div class="gs-row${i === active ? " active" : ""}" data-i="${i}">
           <span class="gs-ic">${it.icon}</span><span class="gs-la">${esc(it.label)}</span><span class="gs-sub">${esc(it.sub)}</span></div>`).join("")
-      : `<div class="gs-empty">Keine Treffer</div>`;
+      : `<div class="gs-empty">No matches</div>`;
     box.classList.remove("hidden");
     box.querySelectorAll(".gs-row").forEach((r) =>
       r.addEventListener("mousedown", (e) => { e.preventDefault(); const it = items[+r.dataset.i]; close(); it && it.run(); }));
@@ -681,20 +678,20 @@ function initGlobalSearch() {
 }
 
 function initMenusAndButtons() {
-  // Benutzermenü (oben rechts)
+  // User menu (top right)
   const userMenuBtn = document.getElementById("user-menu-btn");
   const userMenu = document.getElementById("user-menu");
   userMenuBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     userMenu.classList.toggle("hidden");
   });
-  // Klick irgendwo anders schließt das Menü wieder
+  // A click anywhere else closes the menu again
   document.addEventListener("click", (e) => {
     if (userMenu.classList.contains("hidden")) return;
     if (userMenu.contains(e.target) || userMenuBtn.contains(e.target)) return;
     userMenu.classList.add("hidden");
   });
-  // Escape schließt ebenfalls
+  // Escape also closes it
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") userMenu.classList.add("hidden");
   });
@@ -705,14 +702,14 @@ function initMenusAndButtons() {
   });
   document.getElementById("btn-open-profile").addEventListener("click", () => {
     userMenu.classList.add("hidden");
-    openWindow({ key: "profile", appId: "profile", title: "Profil", w: 460, h: 560 });
+    openWindow({ key: "profile", appId: "profile", title: "Profile", w: 460, h: 560 });
   });
   document.getElementById("btn-open-notifications").addEventListener("click", () => {
     userMenu.classList.add("hidden");
-    openWindow({ key: "notifycenter", appId: "notifycenter", title: "Benachrichtigungen", w: 520, h: 600 });
+    openWindow({ key: "notifycenter", appId: "notifycenter", title: "Notifications", w: 520, h: 600 });
   });
-  // Punkt am Benutzermenü-Button + am Menüeintrag, solange ungelesene
-  // Benachrichtigungen vorhanden sind (Farbe = schwerste ungelesene Stufe).
+  // Dot on the user-menu button + on the menu entry while unread
+  // notifications exist (color = most severe unread level).
   attachUnreadDot(userMenuBtn);
   attachUnreadDot(document.getElementById("btn-open-notifications"));
   document.getElementById("btn-open-settings").addEventListener("click", () => {
@@ -720,53 +717,53 @@ function initMenusAndButtons() {
     openWindow({ key: "settings", appId: "settings", title: t("settings"), w: 560, h: 620 });
   });
 
-  // Startmenü (unten links)
+  // Start menu (bottom left)
   const startBtn = document.getElementById("taskbar-menu-btn");
   const startMenu = document.getElementById("start-menu");
   startBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     startMenu.classList.toggle("hidden");
   });
-  // Handy: eigener Menue-Knopf in der Topbar (drei waagerechte Striche) oeffnet das
-  // Anwendungsmenue DIREKT, ohne die Taskleiste ein-/auszublenden.
+  // Mobile: its own menu button in the topbar (three horizontal lines) opens
+  // the app menu DIRECTLY, without showing/hiding the taskbar.
   const mobMenuBtn = document.getElementById("mobile-menu-btn");
   mobMenuBtn?.addEventListener("click", (e) => {
     e.stopPropagation();
     startMenu.classList.toggle("hidden");
   });
-  // Klick auf den abgedunkelten Hintergrund (nicht auf eine Kachel) schließt das Menü
+  // A click on the dimmed background (not on a tile) closes the menu
   startMenu.addEventListener("click", (e) => {
     if (e.target === startMenu) startMenu.classList.add("hidden");
   });
-  // Escape schließt ebenfalls
+  // Escape also closes it
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") startMenu.classList.add("hidden");
   });
 
-  // App aus dem Anwendungsmenü öffnen (von startmenu.js aufgerufen).
-  // Auch fuer Dashboard-Kacheln erreichbar: eine Kachel kann so eine App
-  // oeffnen (z.B. die Musik-Favoriten den Audio-Player).
+  // Open an app from the app menu (called by startmenu.js). Also reachable for
+  // dashboard tiles: a tile can open an app this way (e.g. the music favorites
+  // open the audio player).
   window.openRmmApp = (app) => openAppFromMenu(app);
 
   function openAppFromMenu(app) {
     startMenu.classList.add("hidden");
-    if (openModuleApp(app)) return true;         // App eines aktiven Moduls
+    if (openModuleApp(app)) return true;         // app of an active module
     if (app === "nodes") openWindow({ key: "nodes", appId: "node", title: "Nodes", w: 760, h: 560 });
-    else if (app === "modules") openWindow({ key: "modules", appId: "modules", title: "Module", w: 980, h: 680 });
-    else if (app === "manage") openWindow({ key: "manage", appId: "manage", title: "Tenants & Standorte verwalten", w: 560, h: 620 });
+    else if (app === "modules") openWindow({ key: "modules", appId: "modules", title: "Modules", w: 980, h: 680 });
+    else if (app === "manage") openWindow({ key: "manage", appId: "manage", title: "Manage tenants & locations", w: 560, h: 620 });
     else if (app === "settings") openWindow({ key: "settings", appId: "settings", title: t("settings"), w: 560, h: 620 });
-    else if (app === "permissions") openWindow({ key: "permissions", appId: "permissions", title: "Berechtigungen", w: 820, h: 640 });
-    else if (app === "audit") openWindow({ key: "audit", appId: "audit", title: "Audit-Log", w: 720, h: 520 });
-    else if (app === "dist") openWindow({ key: "dist", appId: "dist", title: "Verteilung (/dist)", w: 900, h: 640 });
-    else if (app.startsWith("webapp:")) getModuleApi("browser")?.openWebApp?.(app);   // gespeicherte Web-App
+    else if (app === "permissions") openWindow({ key: "permissions", appId: "permissions", title: "Permissions", w: 820, h: 640 });
+    else if (app === "audit") openWindow({ key: "audit", appId: "audit", title: "Audit log", w: 720, h: 520 });
+    else if (app === "dist") openWindow({ key: "dist", appId: "dist", title: "Distribution (/dist)", w: 900, h: 640 });
+    else if (app.startsWith("webapp:")) getModuleApi("browser")?.openWebApp?.(app);   // saved web app
     else if (app === "clients") { minimizeAll(); state.selection = null; renderMainContent(); }
-    else return false;                           // unbekannt - der Aufrufer entscheidet
+    else return false;                           // unknown - the caller decides
     return true;
   }
 
-  // Oeffnen-Primitive fuer das URL-Schema-Modul ("url-scheme") global bereitstellen.
-  // Das Modul besitzt das Format (parse/resolve) und ruft diese Funktionen auf.
-  // So bleibt das Format ein Modul, die eigentliche Fenster-Logik aber im Core.
+  // Provide the open primitives for the URL-scheme module ("url-scheme") globally.
+  // The module owns the format (parse/resolve) and calls these functions.
+  // This keeps the format a module while the actual window logic stays in the core.
   window.byteraOpenTarget = {
     openApp: openAppFromMenu,
     openModuleApp,
@@ -774,78 +771,78 @@ function initMenusAndButtons() {
       const c = (state.clients || []).find((x) => x.id === clientId);
       if (!c) return false;
       if (action === "edit") openWindow({ key: `edit-${c.id}`, appId: "edit-client",
-        title: `${t("edit")} — ${c.hostname}`, props: { clientId: c.id }, w: 480, h: 520 });
+        title: `${t("edit")} - ${c.hostname}`, props: { clientId: c.id }, w: 480, h: 520 });
       else _clientHandleAction(action, c, null, { forceWeb: true, params: params || null });
       return true;
     },
-    // bytera://function/<name> -> Core-App/Menue per Name oeffnen.
+    // bytera://function/<name> -> open a core app/menu by name.
     runFunction: (name, _parts, _query) => {
       const n = String(name || "").toLowerCase();
       const map = { settings: "settings", audit: "audit", permissions: "permissions", modules: "modules",
                     nodes: "nodes", manage: "manage", dist: "dist", clients: "clients", profile: "profile" };
       if (map[n]) return openAppFromMenu(map[n]);
-      return openAppFromMenu(n);     // evtl. Modul-App
+      return openAppFromMenu(n);     // possibly a module app
     },
     selectClient: (id) => { try { _selectClientExternal(id); return true; } catch { state.selection = { type: "client", id }; renderMainContent(); return true; } },
     openNode: (id) => openWindow({ key: id ? `node-${id}` : "nodes", appId: "node",
-      title: id ? `Node – ${id}` : "Nodes", props: id ? { clientId: id } : {}, w: 820, h: 680 }) ?? true,
+      title: id ? `Node - ${id}` : "Nodes", props: id ? { clientId: id } : {}, w: 820, h: 680 }) ?? true,
     openSpace: (name, fullPath) => {
       const api = getModuleApi("spaces");
       if (!api) return false;
-      // Hat der Link einen Unterpfad (Teams/Projekt/ordner), direkt dorthin.
+      // If the link has a subpath (teams/project/folder), go there directly.
       const props = {};
       if (fullPath && fullPath.includes("/")) props.path = fullPath;
       else if (name) props.openSpace = name;
       openWindow({ key: "spaces", appId: "spaces", title: "Spaces", w: 900, h: 640, props });
       return true;
     },
-    openDist: (folder) => { openAppFromMenu("dist"); if (folder) window.notify?.("Verteilung geöffnet – Ordner: " + folder, "info", 3000); return true; },
-    notify: (m) => { try { window.notify?.(m, "error", 7000); } catch { /* egal */ } },
+    openDist: (folder) => { openAppFromMenu("dist"); if (folder) window.notify?.("Distribution opened - folder: " + folder, "info", 3000); return true; },
+    notify: (m) => { try { window.notify?.(m, "error", 7000); } catch { /* ignore */ } },
   };
-  // bytera://... aus dem Desktop-Client / Deep-Link weiterhin global aufrufbar -
-  // leitet an das Modul weiter (wenn aktiv).
-  window.byteraOpen = (url) => { try { getModuleApi("url-scheme")?.resolve?.(url); } catch { /* egal */ } };
+  // bytera://... from the desktop client / deep link still globally callable -
+  // forwards to the module (if active).
+  window.byteraOpen = (url) => { try { getModuleApi("url-scheme")?.resolve?.(url); } catch { /* ignore */ } };
 
-  // Anpassbares Anwendungsmenü (Drag & Drop, Ordner) initialisieren.
+  // Initialize the customizable app menu (drag & drop, folders).
   initStartMenu({
     root: startMenu,
     username: state.user?.username,
     onOpenApp: openAppFromMenu,
     allowed: _appAllowed,
   });
-  // (Gespeicherte Web-Apps registriert das Modul 'browser' selbst im Startmenue.)
+  // (Saved web apps are registered by the 'browser' module itself in the start menu.)
 
-  // Sidebar: Ein-/Ausklappen, Breite ziehen, Klick-zum-Ausklappen. Details in
-  // initSidebarResize() unten (inkl. Persistenz der Breite/Zustand).
+  // Sidebar: collapse/expand, drag width, click-to-expand. Details in
+  // initSidebarResize() below (incl. persistence of width/state).
   initSidebarResize();
 
-  // Tenants/Standorte verwalten (Zahnrad in der Sidebar-Kopfzeile)
+  // Manage tenants/locations (gear in the sidebar header)
   document.getElementById("btn-manage-hierarchy").addEventListener("click", () => {
-    openWindow({ key: "manage", appId: "manage", title: "Tenants & Standorte verwalten", w: 560, h: 620 });
+    openWindow({ key: "manage", appId: "manage", title: "Manage tenants & locations", w: 560, h: 620 });
   });
 
-  // "Client hinzufügen"
+  // "Add client"
   document.getElementById("btn-add-client").addEventListener("click", () => {
     openWindow({ key: "add-client", appId: "add-client", title: t("u_client_hinzufugen"), w: 560, h: 600 });
   });
 }
 
 // -----------------------------------------------------------------
-// Sidebar: Breite ziehen, Ein-/Ausklappen, Klick-zum-Ausklappen
+// Sidebar: drag width, collapse/expand, click-to-expand
 // -----------------------------------------------------------------
-const SB_COLLAPSED_W = 46;   // Breite im eingeklappten Zustand (siehe CSS)
-const SB_MIN_W = 170;        // kleinste "ausgeklappte" Breite
-const SB_MAX_W = 560;        // größte Breite
-const SB_SNAP = 90;          // zieht man schmaler als das -> gilt als eingeklappt
+const SB_COLLAPSED_W = 46;   // width when collapsed (see CSS)
+const SB_MIN_W = 170;        // smallest "expanded" width
+const SB_MAX_W = 560;        // largest width
+const SB_SNAP = 90;          // dragged narrower than this -> counts as collapsed
 
-// Wendet state.sidebar (Breite + collapsed) auf die DOM an.
+// Applies state.sidebar (width + collapsed) to the DOM.
 function applySidebarState() {
   const sb = document.getElementById("sidebar");
   if (!sb) return;
   const s = state.sidebar || (state.sidebar = { width: 260, collapsed: false });
   if (s.collapsed) {
     sb.classList.add("collapsed");
-    // Breite bleibt per CSS auf 46px; inline-Breite merkt sich den Ausklapp-Wert.
+    // Width stays at 46px via CSS; inline width remembers the expanded value.
     sb.style.width = (s.width || 260) + "px";
   } else {
     sb.classList.remove("collapsed");
@@ -869,30 +866,30 @@ function initSidebarResize() {
     persist();
   }
 
-  // « -Button: einklappen (nur relevant, wenn ausgeklappt).
+  // « button: collapse (only relevant when expanded).
   collapseBtn?.addEventListener("click", (e) => {
     e.stopPropagation();
     if (!state.sidebar.collapsed) setCollapsed(true);
     else setCollapsed(false);
   });
 
-  // Klick IRGENDWO auf die eingeklappte Sidebar -> wieder ausklappen.
+  // A click ANYWHERE on the collapsed sidebar -> expand again.
   sb.addEventListener("click", () => {
     if (state.sidebar.collapsed) setCollapsed(false);
   });
 
-  // --- Breite ziehen ---
+  // --- drag width ---
   let dragging = false;
   function onMove(clientX) {
     const left = sb.getBoundingClientRect().left;
     let w = clientX - left;
     if (w <= SB_SNAP) {
-      // So schmal wie eingeklappt gezogen -> als eingeklappt markieren,
-      // aber die zuletzt gewählte Ausklapp-Breite behalten (für's Wieder-Auf).
+      // Dragged as narrow as collapsed -> mark as collapsed, but keep the
+      // last chosen expanded width (for expanding again).
       if (!state.sidebar.collapsed) { state.sidebar.collapsed = true; sb.classList.add("collapsed"); }
       return;
     }
-    // wieder ausgeklappt
+    // expanded again
     if (state.sidebar.collapsed) { state.sidebar.collapsed = false; sb.classList.remove("collapsed"); }
     w = Math.max(SB_MIN_W, Math.min(SB_MAX_W, w));
     state.sidebar.width = w;
@@ -917,49 +914,49 @@ function initSidebarResize() {
 }
 
 // -----------------------------------------------------------------
-// Live-Updates über Socket.IO
+// Live updates via Socket.IO
 // -----------------------------------------------------------------
 
 function initLiveUpdates() {
-  // Client-Liste hat sich geändert (neuer Agent, online/offline) -> neu laden.
-  // Wir laden auch die Hierarchie neu, weil ein neu registrierter Client einen
-  // neuen Tenant (z.B. "Uncategorized") ausgelöst haben könnte, der sonst nicht
-  // in der Sidebar auftauchen würde.
+  // The client list changed (new agent, online/offline) -> reload. We also
+  // reload the hierarchy, because a newly registered client may have triggered
+  // a new tenant (e.g. "Uncategorized") that would otherwise not appear in the
+  // sidebar.
   dashboardSocket.on("clients:changed", async () => {
     await refreshAll();
     await reloadPerms();
     applyAppVisibility();
   });
 
-  // Live-Rückmeldungen des Agenten zu Update/Uninstall (Diagnose): zeigt an,
-  // was auf dem Client passiert - statt nur eines 60s-Timeouts.
+  // Live feedback from the agent about update/uninstall (diagnostics): shows
+  // what happens on the client - instead of just a 60s timeout.
   dashboardSocket.on("client:action-log", (d) => {
     const c = state.clients.find((x) => x.id === d.id);
     const name = c ? c.hostname : (d.id || "Client");
-    const kind = d.kind === "uninstall" ? "Deinstallation" : "Update";
+    const kind = d.kind === "uninstall" ? "Uninstall" : "Update";
     const level = d.stage === "error" ? "error"
       : (d.stage === "launched-fallback" ? "warn" : "info");
-    let msg = `${name}: ${kind} – ${d.stage}`;
+    let msg = `${name}: ${kind} - ${d.stage}`;
     if (d.detail) msg += `\n${d.detail}`;
-    if (d.agent_version) msg += `\n(Agent-Version: ${d.agent_version})`;
+    if (d.agent_version) msg += `\n(agent version: ${d.agent_version})`;
     window.notify?.(msg, level, 10000, { tag: `agent-${d.kind}:${d.id}` });
   });
 
-  // Fehler bei der Bildschirmübertragung (z.B. headless VM) als Notification
-  // + Eintrag im Audit-Log
+  // Error during screen transmission (e.g. headless VM) as a notification
+  // + entry in the audit log
   dashboardSocket.on("screen-error", (data) => {
     notifyError(data.error || t("u_fehler_bei_der_bildschirmubertragu"), "error", "remote-screen", 12000);
   });
 
-  // Agent-Absturz: Der Agent hat sich selbst neu gestartet und meldet den
-  // Fehler - dem Nutzer deutlich anzeigen (letzte Traceback-Zeile reicht).
+  // Agent crash: the agent restarted itself and reports the error - show it
+  // clearly to the user (the last traceback line is enough).
   dashboardSocket.on("client:agent-crashed", (d) => {
     const lastLine = String(d.error || "").trim().split("\n").filter(Boolean).slice(-1)[0] || t("app_unknown_error");
     notifyError(`⚠️ ${t("app_agent_crashed", { host: d.hostname || d.id, err: lastLine })}`,
       "error", `agent-crash-${d.id}`, 20000);
   });
 
-  // Neue Metriken für einen Client
+  // New metrics for a client
   dashboardSocket.on("client:metrics", ({ id, metrics }) => {
     const client = state.clients.find((c) => c.id === id);
     const wasOnline = client ? !!client.online : true;
@@ -973,17 +970,17 @@ function initLiveUpdates() {
     // icon derived from the metrics (e.g. a battery appeared) -> redraw the tree
     if (client && wasOnline && iconBefore !== clientIconType(client)) { try { renderSidebar(); } catch {} }
 
-    // Live-Refresh für Dashboard-Widgets (aggregierte Flotten-Werte).
+    // Live refresh for dashboard widgets (aggregated fleet values).
     try { window.dispatchEvent(new CustomEvent("metrics-updated", { detail: { id } })); } catch {}
 
-    // Gezieltes Update: nur die Werte/SVGs der sichtbaren Panels dieses
-    // Clients überschreiben - das Client-Panel wird NICHT neu eingefügt.
+    // Targeted update: overwrite only the values/SVGs of this client's visible
+    // panels - the client panel is NOT re-inserted.
     let touched = 0;
     try {
       touched = updateClientLayouts(id);
     } catch { touched = 0; }
-    try { touched += runMetricsHooks(id); } catch {}   // Styles (Modul "styles")
-    // Fallback nur für Ansichten, die (noch) kein Layout-Host-Update können.
+    try { touched += runMetricsHooks(id); } catch {}   // styles (module "styles")
+    // Fallback only for views that (still) cannot do a layout-host update.
     const sel = state.selection;
     if (!touched && sel && (
       (sel.type === "client" && sel.id === id) ||
@@ -991,14 +988,14 @@ function initLiveUpdates() {
     )) {
       renderMainContent();
     }
-    // Sidebar NICHT bei jedem Metrik-Tick neu bauen (verursachte Hover-
-    // Flackern/Springen der Client-Zeilen) - nur wenn sich der Online-Status
-    // sichtbar geändert hat (offline -> online).
+    // Do NOT rebuild the sidebar on every metric tick (caused hover flicker/
+    // jumping of the client rows) - only when the online status changed
+    // visibly (offline -> online).
     if (!wasOnline) renderSidebar();
   });
 
-  // Chat: neue Nachricht -> Toast, wenn ich Mitglied bin und nicht selbst
-  // der Absender. (Die Chat-App selbst aktualisiert sich über dasselbe Event.)
+  // Chat: new message -> toast if I am a member and not the sender myself.
+  // (The chat app itself updates via the same event.)
   dashboardSocket.on("chat:message", (d) => {
     try {
       const me = state.user?.id;
@@ -1006,19 +1003,19 @@ function initLiveUpdates() {
       if (!(d.member_ids || []).includes(me)) return;
       window.notify?.(
         `💬 ${d.conversation_type === "group"
-          ? `${d.sender_name} in „${d.conversation_name}“` : d.sender_name}:\n${d.preview || ""}`,
+          ? `${d.sender_name} in "${d.conversation_name}"` : d.sender_name}:\n${d.preview || ""}`,
         "info", 8000, { source: "chat", tag: `chat:${d.conversation_id}` });
     } catch {}
   });
 
-  // Benachrichtigungs-Regeln mit Kanal "Dashboard": Server pusht fertige
-  // Notifications (head/body/level) an alle verbundenen Dashboards.
+  // Notification rules with channel "Dashboard": the server pushes finished
+  // notifications (head/body/level) to all connected dashboards.
   dashboardSocket.on("notify:push", (n) => {
     try {
       const level = ["info", "success", "warn", "error"].includes(n.level) ? n.level
         : (n.level === "warning" ? "warn" : (n.level === "danger" ? "error" : "info"));
       window.notify?.(`${n.head || ""}\n${n.body || n.message || ""}`.trim(),
-        level, 10000, { source: "regel" });
+        level, 10000, { source: "rule" });
     } catch {}
   });
 
@@ -1034,8 +1031,8 @@ function initLiveUpdates() {
 // Start
 // -----------------------------------------------------------------
 
-// Legt einen Client-Drop auf dem Desktop (Fenster-Layer) als eigenes
-// Client-Fenster ab. Der Client bleibt in der Seitenleiste erhalten.
+// Drops a client onto the desktop (window layer) as its own client window.
+// The client stays in the sidebar.
 function initDesktopDrop() {
   const layer = document.getElementById("window-layer");
   const dropZone = document.getElementById("main-content") || document.body;
@@ -1071,27 +1068,27 @@ function initDesktopDrop() {
   });
 }
 
-// Ein einzelner Init-Schritt darf den Start nicht abbrechen: jeder laeuft in
-// seinem eigenen try/catch. So bleibt der Login bedienbar, selbst wenn ein
-// spaeterer Teil (Menues, Live-Updates, ...) Probleme macht.
+// A single init step must not abort startup: each runs in its own try/catch.
+// This keeps the login usable even if a later part (menus, live updates, ...)
+// has problems.
 function _step(name, fn) {
   try { fn(); } catch (e) { console.error("[init] " + name + ":", e); }
 }
 
 async function main() {
-  // Sprachen aus allen lang-Ordnern laden (Login-Fenster + Puffer übersetzen).
-  try { await initLanguages(); } catch { /* offline -> Puffer/Fallback */ }
+  // Load languages from all lang folders (translate the login window + buffer).
+  try { await initLanguages(); } catch { /* offline -> buffer/fallback */ }
   _step("translations", applyStaticTranslations);
 
-  // ZUERST den Login verkabeln - bevor irgendetwas anderes schiefgehen kann.
-  // Damit ist Anmelden immer moeglich, solange der Kern (dieses Modul) laedt.
+  // Wire up the login FIRST - before anything else can go wrong. This way
+  // logging in is always possible as long as the core (this module) loads.
   _step("login-form", initLoginForm);
   _step("change-pw-form", initChangePwForm);
 
   _step("content-renderer", () => setContentRenderer(renderWindowContent));
   _step("on-select", () => setOnSelect(renderMainContent));
   _step("dashedit", () => window.addEventListener("dashedit-changed", () => renderMainContent()));
-  // "Aenderungen -> alles neu laden" der Feature-Module lazy verkabeln.
+  // Lazily wire up the feature modules' "changes -> reload everything".
   loadFeature("../feature/editclient.js", "setEditOnChanged").then((fn) => fn && fn(refreshAll)).catch(() => {});
   loadFeature("../feature/manage.js", "setManageOnChanged").then((fn) => fn && fn(refreshAll)).catch(() => {});
 
@@ -1103,7 +1100,7 @@ async function main() {
   _step("live-updates", initLiveUpdates);
   _step("desktop-drop", initDesktopDrop);
 
-  // Ist noch ein gültiges Token vorhanden? Dann direkt einloggen.
+  // Is a valid token still present? Then log in directly.
   const token = localStorage.getItem("rmm_token");
   if (token) {
     try {
@@ -1111,16 +1108,16 @@ async function main() {
       await startSession(user);
       return;
     } catch {
-      clearToken(); // Token abgelaufen/ungültig -> normaler Login
+      clearToken(); // token expired/invalid -> normal login
     }
   }
   showOnly(loginScreen());
 }
 
 main().catch((e) => {
-  // Selbst wenn main() unerwartet scheitert: Login-Formular sichtbar machen und
-  // ein letztes Mal verkabeln, damit man sich trotzdem anmelden kann.
+  // Even if main() fails unexpectedly: show the login form and wire it up one
+  // last time so you can still log in.
   console.error("[init] main:", e);
-  try { initLoginForm(); } catch { /* egal */ }
-  try { showOnly(loginScreen()); } catch { /* egal */ }
+  try { initLoginForm(); } catch { /* ignore */ }
+  try { showOnly(loginScreen()); } catch { /* ignore */ }
 });
