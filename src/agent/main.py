@@ -7562,9 +7562,9 @@ except Exception:
 
 
 def _write_helper_script() -> str:
-    """Schreibt das Helfer-Skript neben agent.py und gibt den Pfad zurueck.
-    Der Agent laeuft als SYSTEM und darf dort schreiben; der Benutzer darf
-    lesen und ausfuehren - genau das wird gebraucht."""
+    """Writes the helper script next to agent.py and returns the path.
+    The agent runs as SYSTEM and may write there; the user may read and
+    execute - which is exactly what is needed."""
     path = Path(__file__).resolve().parent / _HELPER_FILENAME
     try:
         if not path.is_file() or path.read_text(encoding="utf-8") != _HELPER_SOURCE:
@@ -7579,7 +7579,7 @@ def _write_helper_script() -> str:
 
 
 def _win_session_id() -> int:
-    """Sitzungs-ID dieses Prozesses (-1, wenn nicht ermittelbar)."""
+    """Session ID of this process (-1 if it cannot be determined)."""
     if platform.system() != "Windows":
         return -1
     try:
@@ -7595,10 +7595,10 @@ def _win_session_id() -> int:
 
 def _win_console_session_id() -> int:
     """
-    ID der aktiven Konsolensitzung (die Sitzung mit Bildschirm/Tastatur).
-    Nur fuer die Diagnose: Weicht sie von der eigenen Sitzung ab, sitzt der
-    Agent in einer Sitzung OHNE sichtbaren Desktop - genau die Lage, in der
-    BitBlt scheitert. -1, wenn nicht ermittelbar.
+    ID of the active console session (the session with screen/keyboard).
+    For diagnostics only: if it differs from our own session, the agent sits
+    in a session WITHOUT a visible desktop - exactly the situation in which
+    BitBlt fails. -1 if it cannot be determined.
     """
     if platform.system() != "Windows":
         return -1
@@ -7610,15 +7610,14 @@ def _win_console_session_id() -> int:
         return -1
 
 
-# Sitzung, in der zuletzt ein Helfer gestartet wurde. Der Start laeuft ueber
-# mehrere Funktionen (Prozessstart, dann Socket-Annahme), deshalb hier abgelegt
-# statt durchgereicht.
+# Session in which a helper was last started. The start runs across several
+# functions (process start, then socket accept), so it is stored here instead
+# of passed through.
 _LAST_HELPER_SESSION = [None]
 
-# Vom Dashboard gewaehlte Windows-Sitzung (Mehrbenutzer: "erst einen Benutzer
-# waehlen"). None = automatisch die am besten geeignete Sitzung. Gilt fuer
-# Zustimmungsabfrage UND Aufnahme/Steuerung, damit beides denselben Benutzer
-# trifft.
+# Windows session chosen by the dashboard (multi-user: "pick a user first").
+# None = automatically the most suitable session. Applies to the consent
+# prompt AND capture/control, so both hit the same user.
 _PREFERRED_SESSION = [None]
 
 
@@ -7630,7 +7629,7 @@ def _set_preferred_session(sid):
 
 
 def _win_session_user(session_id: int) -> str:
-    """Anmeldename (DOMAENE\\Benutzer) einer Windows-Sitzung - '' wenn unbekannt."""
+    """Login name (DOMAIN\\user) of a Windows session - '' if unknown."""
     if platform.system() != "Windows":
         return ""
     try:
@@ -7658,9 +7657,9 @@ def _win_session_user(session_id: int) -> str:
 
 
 def _win_logged_in_users() -> list:
-    """Alle Windows-Sitzungen mit angemeldetem Benutzer - fuer die Auswahl im
-    Dashboard. Jeweils {session, user, state, console, active}. Reihenfolge wie
-    _win_user_sessions() (am besten geeignete zuerst)."""
+    """All Windows sessions with a logged-in user - for the selection in the
+    dashboard. Each {session, user, state, console, active}. Order as in
+    _win_user_sessions() (most suitable first)."""
     out = []
     try:
         console = _win_console_session_id()
@@ -7673,12 +7672,12 @@ def _win_logged_in_users() -> list:
                         "state": "active" if sid in active else "disconnected",
                         "console": sid == console, "active": sid in active})
     except Exception as e:
-        _print(f"[screen] Benutzerliste nicht lesbar: {e}")
+        _print(f"[screen] user list not readable: {e}")
     return out
 
 
 def _win_user_sessions_by_state(want_state: int) -> list:
-    """Sitzungs-IDs mit genau diesem WTS-State (0=aktiv, 4=getrennt)."""
+    """Session IDs with exactly this WTS state (0=active, 4=disconnected)."""
     if platform.system() != "Windows":
         return []
     try:
@@ -7707,22 +7706,22 @@ def _win_user_sessions_by_state(want_state: int) -> list:
 
 def _win_user_sessions() -> list[int]:
     """
-    Alle Windows-Sitzungen, in denen ein Benutzer angemeldet ist - sortiert
-    nach Eignung fuer eine Bildschirmaufnahme.
+    All Windows sessions in which a user is logged in - sorted by suitability
+    for a screen capture.
 
-    Warum nicht einfach WTSGetActiveConsoleSessionId()? Weil das NUR die
-    physische Konsole liefert (Monitor/Tastatur am Geraet). Bei einer
-    RDP-Verbindung - auch ueber das Guacamole-Gateway des RMM - hat der
-    Benutzer eine eigene Sitzung, und die Konsole ist leer. Der Helfer wurde
-    dann nie gestartet, obwohl jemand angemeldet war.
+    Why not just WTSGetActiveConsoleSessionId()? Because that returns ONLY the
+    physical console (monitor/keyboard at the device). With an RDP connection -
+    including via the RMM's Guacamole gateway - the user has their own session,
+    and the console is empty. The helper was then never started even though
+    someone was logged in.
 
-    Reihenfolge:
-      1. WTSActive  (angemeldet UND verbunden - hier ist wirklich ein Desktop)
-      2. WTSDisconnected (angemeldet, aber getrennt - Desktop existiert weiter,
-         die Aufnahme liefert das zuletzt gezeigte Bild)
-      3. Konsolensitzung zuerst innerhalb derselben Stufe, weil sie am
-         ehesten einen echten Monitor hat.
-    Sitzung 0 bleibt immer aussen vor - dort laufen die Dienste, kein Desktop.
+    Order:
+      1. WTSActive  (logged in AND connected - there really is a desktop here)
+      2. WTSDisconnected (logged in but disconnected - the desktop still exists,
+         the capture delivers the last shown image)
+      3. The console session first within the same tier, because it is most
+         likely to have a real monitor.
+    Session 0 is always left out - the services run there, no desktop.
     """
     if platform.system() != "Windows":
         return []
@@ -7748,16 +7747,16 @@ def _win_user_sessions() -> list[int]:
                 info = arr[i]
                 sid, state = int(info.SessionId), int(info.State)
                 if sid == 0:
-                    continue                    # Dienst-Sitzung, kein Desktop
+                    continue                    # service session, no desktop
                 if state == 0:                  # WTSActive
                     active.append(sid)
                 elif state == 4:                # WTSDisconnected
                     disconnected.append(sid)
-            # Konsolensitzung innerhalb ihrer Stufe nach vorne holen.
+            # Move the console session to the front within its tier.
             key = lambda x: (x != console, x)   # noqa: E731
             ordered = sorted(active, key=key) + sorted(disconnected, key=key)
-            # Hat das Dashboard einen Benutzer gewaehlt (Mehrbenutzer), kommt
-            # dessen Sitzung nach vorne - sofern sie noch existiert.
+            # If the dashboard chose a user (multi-user), that session comes
+            # to the front - provided it still exists.
             pref = _PREFERRED_SESSION[0]
             if pref is not None and pref in ordered:
                 ordered = [pref] + [x for x in ordered if x != pref]
@@ -7768,29 +7767,29 @@ def _win_user_sessions() -> list[int]:
             except Exception:
                 pass
     except Exception as e:
-        _print(f"[screen-helper] Sitzungsliste nicht lesbar: {e}")
-        # Rueckfallebene: wenigstens die Konsolensitzung versuchen.
+        _print(f"[screen-helper] session list not readable: {e}")
+        # Fallback: at least try the console session.
         cid = _win_console_session_id()
         return [cid] if cid > 0 else []
 
 
 def _needs_session_helper() -> bool:
-    """Muessen wir ueber einen Helfer gehen? Nur Windows, nur aus Sitzung 0."""
+    """Do we need to go through a helper? Windows only, only from session 0."""
     if platform.system() != "Windows":
         return False
     if os.environ.get("RMM_SCREEN_HELPER") == "1":
-        return False          # wir SIND der Helfer
+        return False          # we ARE the helper
     return _win_session_id() == 0
 
 
 def _win_start_in_user_session(args: list) -> bool:
     """
-    Startet ein Programm in der Sitzung des angemeldeten Benutzers.
+    Starts a program in the logged-in user's session.
 
-    Der Weg ist der uebliche fuer Dienste: Token der aktiven Konsolensitzung
-    holen (WTSQueryUserToken), duplizieren, Umgebungsblock erzeugen und den
-    Prozess auf dem sichtbaren Desktop "winsta0\\default" starten.
-    Voraussetzung ist, dass wir als SYSTEM laufen - sonst fehlt das Recht.
+    The approach is the usual one for services: get the token of the active
+    console session (WTSQueryUserToken), duplicate it, create an environment
+    block and start the process on the visible desktop "winsta0\\default".
+    The prerequisite is that we run as SYSTEM - otherwise the right is missing.
     """
     try:
         import ctypes
@@ -7801,22 +7800,22 @@ def _win_start_in_user_session(args: list) -> bool:
         wtsapi = ctypes.windll.wtsapi32
         userenv = ctypes.windll.userenv
 
-        # Sitzung suchen, in der wirklich jemand angemeldet ist.
+        # Find a session in which someone is really logged in.
         #
-        # WICHTIG: Frueher stand hier nur WTSGetActiveConsoleSessionId(). Das
-        # liefert ausschliesslich die PHYSISCHE Konsolensitzung (Monitor +
-        # Tastatur am Geraet). Wer sich per RDP - und damit auch ueber das
-        # Guacamole-Gateway des RMM - verbindet, sitzt aber in einer EIGENEN
-        # Sitzung; die Konsole ist dann leer und liefert 0 oder die ID einer
-        # Sitzung ohne Benutzer. Ergebnis: "Keine aktive Benutzersitzung
-        # gefunden", obwohl jemand angemeldet ist. Genau dieser Fall.
+        # IMPORTANT: previously this was only WTSGetActiveConsoleSessionId().
+        # That returns exclusively the PHYSICAL console session (monitor +
+        # keyboard at the device). But whoever connects via RDP - and thus also
+        # via the RMM's Guacamole gateway - sits in their OWN session; the
+        # console is then empty and returns 0 or the ID of a session without a
+        # user. Result: "no active user session found" even though someone is
+        # logged in. Exactly this case.
         #
-        # Deshalb werden jetzt ALLE Sitzungen durchgegangen und die erste
-        # genommen, fuer die sich ein Benutzertoken holen laesst.
+        # Therefore ALL sessions are now gone through and the first one is taken
+        # for which a user token can be obtained.
         candidates = _win_user_sessions()
         if not candidates:
-            _print("[screen-helper] Keine Sitzung mit angemeldetem Benutzer gefunden "
-                   "(niemand angemeldet?)")
+            _print("[screen-helper] no session with a logged-in user found "
+                   "(nobody logged in?)")
             return False
 
         session = None
@@ -7827,19 +7826,19 @@ def _win_start_in_user_session(args: list) -> bool:
                 session = cand
                 break
             last_err = ctypes.GetLastError()
-            _print(f"[screen-helper] Sitzung {cand}: WTSQueryUserToken "
-                   f"fehlgeschlagen (error {last_err})")
+            _print(f"[screen-helper] session {cand}: WTSQueryUserToken "
+                   f"failed (error {last_err})")
         if session is None:
-            _print(f"[screen-helper] Kein Benutzertoken erhalten "
-                   f"(zuletzt error {last_err}) - laeuft der Agent als SYSTEM?")
+            _print(f"[screen-helper] no user token obtained "
+                   f"(last error {last_err}) - is the agent running as SYSTEM?")
             return False
-        _print(f"[screen-helper] Nutze Sitzung {session} von {candidates}")
+        _print(f"[screen-helper] using session {session} of {candidates}")
         _LAST_HELPER_SESSION[0] = session
 
         dup = wintypes.HANDLE()
         # 2 = SecurityImpersonation, 1 = TokenPrimary
         if not advapi.DuplicateTokenEx(token, 0x02000000, None, 2, 1, ctypes.byref(dup)):
-            _print(f"[screen-helper] DuplicateTokenEx fehlgeschlagen "
+            _print(f"[screen-helper] DuplicateTokenEx failed "
                    f"(error {ctypes.GetLastError()})")
             k32.CloseHandle(token)
             return False
@@ -7866,7 +7865,7 @@ def _win_start_in_user_session(args: list) -> bool:
 
         si = STARTUPINFOW()
         si.cb = ctypes.sizeof(si)
-        si.lpDesktop = "winsta0\\default"     # der sichtbare Desktop
+        si.lpDesktop = "winsta0\\default"     # the visible desktop
         si.dwFlags = 0x00000001               # STARTF_USESHOWWINDOW
         si.wShowWindow = 0                    # SW_HIDE
         pi = PROCESS_INFORMATION()
@@ -7880,7 +7879,7 @@ def _win_start_in_user_session(args: list) -> bool:
             str(Path(args[1]).resolve().parent) if len(args) > 1 else None,
             ctypes.byref(si), ctypes.byref(pi))
         if not ok:
-            _print(f"[screen-helper] CreateProcessAsUser fehlgeschlagen "
+            _print(f"[screen-helper] CreateProcessAsUser failed "
                    f"(error {ctypes.GetLastError()})")
             return False
         _print(f"[screen-helper] helper started in session {session} "
@@ -7889,7 +7888,7 @@ def _win_start_in_user_session(args: list) -> bool:
         k32.CloseHandle(pi.hThread)
         return True
     except Exception as e:
-        _print(f"[screen-helper] Start fehlgeschlagen: {e}")
+        _print(f"[screen-helper] start failed: {e}")
         return False
 
 
@@ -7913,27 +7912,27 @@ def _sock_recv(sock) -> bytes | None:
 
 
 class _ScreenHelper:
-    """Verbindung des Agenten (Sitzung 0) zu seinem Helfer in der Benutzersitzung."""
+    """Connection of the agent (session 0) to its helper in the user session."""
 
     def __init__(self, server, conn):
         self.server = server
         self.conn = conn
         self.alive = True
-        # In welcher Windows-Sitzung laeuft dieser Helfer? _ensure_helper()
-        # vergleicht das mit der aktuellen Benutzersitzung.
+        # In which Windows session does this helper run? _ensure_helper()
+        # compares that with the current user session.
         self.session = None
-        # Der Socket wird von ZWEI Threads benutzt: der Event-Loop schickt
-        # Eingaben (jede Mausbewegung!), der Aufnahme-Thread liest Bilder und
-        # schickt Konfigurationen. Ohne Schloss ueberlappen zwei sendall() und
-        # zerstoeren die Laengen-Praefixe -> der Helfer liest Muell, der
-        # Steuerkanal stirbt lautlos. Genau so fiel die Fernsteuerung aus.
+        # The socket is used by TWO threads: the event loop sends input
+        # (every mouse move!), the capture thread reads frames and sends
+        # configs. Without a lock two sendall() calls overlap and destroy the
+        # length prefixes -> the helper reads garbage, the control channel dies
+        # silently. That is exactly how remote control failed.
         self._send_lock = threading.Lock()
 
     def _readable(self, timeout: float) -> bool:
-        """Wartet mit select() darauf, dass Daten anliegen.
-        Wichtig: NICHT socket.settimeout() benutzen. Das gilt fuer den ganzen
-        Socket - also auch fuer sendall() im anderen Thread, das dann mitten
-        in einer Nachricht abbrechen kann."""
+        """Waits with select() for data to arrive.
+        Important: do NOT use socket.settimeout(). That applies to the whole
+        socket - including sendall() in the other thread, which could then
+        break off in the middle of a message."""
         import select as _select
         try:
             r, _w, _e = _select.select([self.conn], [], [], max(0.0, timeout))
@@ -7948,36 +7947,36 @@ class _ScreenHelper:
 
         server = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
         server.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
-        server.bind(("127.0.0.1", 0))       # nur lokal, freier Port
+        server.bind(("127.0.0.1", 0))       # local only, free port
         server.listen(1)
         server.settimeout(timeout)
         port = server.getsockname()[1]
         key = secrets.token_hex(16)
 
-        # NICHT agent.py erneut starten - siehe Kommentar bei _HELPER_SOURCE.
+        # Do NOT start agent.py again - see the comment at _HELPER_SOURCE.
         script = _write_helper_script()
         exe = sys.executable
-        # Die Sprache wird als drittes Argument mitgegeben - der Helfer laeuft in
-        # einem eigenen Prozess und liest die .env des Agenten nicht.
+        # The language is passed as the third argument - the helper runs in its
+        # own process and does not read the agent's .env.
         cmd = [exe, script, str(port), key, AGENT_LANG]
         if IS_WINDOWS:
-            # Dienst in Sitzung 0 -> Helfer in die Benutzersitzung bringen.
+            # Service in session 0 -> bring the helper into the user session.
             if not _win_start_in_user_session(cmd):
                 server.close()
                 return None
         else:
-            # Linux/macOS: Der Agent laeuft bereits in der grafischen Sitzung des
-            # Benutzers (DISPLAY/XAUTHORITY gesetzt). Der Helfer erbt die Umgebung
-            # und kann so das Chat-/Rechte-Fenster anzeigen.
+            # Linux/macOS: the agent already runs in the user's graphical
+            # session (DISPLAY/XAUTHORITY set). The helper inherits the
+            # environment and can thus show the chat/permissions window.
             if not os.environ.get("DISPLAY") and sys.platform != "darwin":
-                _print("[screen-helper] kein DISPLAY - Chat-/Rechte-Fenster nicht möglich")
+                _print("[screen-helper] no DISPLAY - chat/permissions window not possible")
                 server.close()
                 return None
             try:
                 subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                  start_new_session=True)
             except Exception as e:
-                _print(f"[screen-helper] Helfer-Start (Linux) fehlgeschlagen: {e}")
+                _print(f"[screen-helper] helper start (Linux) failed: {e}")
                 server.close()
                 return None
 
@@ -7996,21 +7995,21 @@ class _ScreenHelper:
                 server.close()
                 return None
         except Exception as e:
-            _print(f"[screen-helper] Anmeldung fehlgeschlagen: {e}")
+            _print(f"[screen-helper] handshake failed: {e}")
             conn.close()
             server.close()
             return None
-        _print("[screen-helper] Helfer verbunden.")
-        # Ab jetzt blockierend: Wartezeiten regelt select() pro Leserichtung,
-        # damit ein Timeout nie ein laufendes sendall() zerreisst.
+        _print("[screen-helper] helper connected.")
+        # Blocking from here on: waits are handled by select() per read
+        # direction, so a timeout never tears apart a running sendall().
         try:
             conn.settimeout(None)
         except Exception:
             pass
         obj = cls(server, conn)
-        # Sitzung merken: _ensure_helper() vergleicht sie spaeter mit der
-        # aktuellen Benutzersitzung und startet den Helfer neu, wenn der
-        # Benutzer inzwischen woanders sitzt (Konsole <-> RDP).
+        # Remember the session: _ensure_helper() later compares it with the
+        # current user session and restarts the helper if the user has moved
+        # elsewhere in the meantime (console <-> RDP).
         obj.session = _LAST_HELPER_SESSION[0]
         return obj
 
@@ -8025,8 +8024,8 @@ class _ScreenHelper:
 
     def recv(self, timeout: float | None = None):
         """
-        Naechste Nachricht vom Helfer.
-        Rueckgabe: ("frame", meta, jpeg) | ("reply", obj, None) | None
+        Next message from the helper.
+        Returns: ("frame", meta, jpeg) | ("reply", obj, None) | None
         """
         try:
             if timeout is not None and not self._readable(timeout):
@@ -8035,10 +8034,10 @@ class _ScreenHelper:
         except Exception:
             return None
         if not msg:
-            # Gelesen werden konnte, aber nichts kam: Gegenseite hat die
-            # Verbindung geschlossen. Frueher wie "Zeitlimit" behandelt ->
-            # ping() klappte auf dem halb offenen Socket und die Schleife
-            # drehte ohne Bilder endlos weiter.
+            # Reading worked but nothing came: the other side closed the
+            # connection. Previously treated like a "timeout" -> ping() worked
+            # on the half-open socket and the loop spun on endlessly without
+            # frames.
             return ("eof", None, None) if msg is None else None
         if msg[:1] == b"S":
             try:
@@ -8051,15 +8050,15 @@ class _ScreenHelper:
         if msg[:1] == b"R":
             return "reply", json.loads(msg[1:].decode()), None
         if msg[:1] == b"A":
-            return "audio", None, msg[1:]          # Ton: mu-law, mono, 16 kHz
+            return "audio", None, msg[1:]          # sound: mu-law, mono, 16 kHz
         if msg[:1] == b"K":
-            return "keepalive", None, None         # Lebenszeichen des Helfers
-        return "unknown", None, None               # nicht als "Verbindung weg" werten
+            return "keepalive", None, None         # keep-alive from the helper
+        return "unknown", None, None               # do not treat as "connection lost"
 
     def ping(self) -> bool:
-        """Aktiver Verbindungstest: ein Ping an den Helfer. True = Leitung ok.
-        Der Helfer ignoriert unbekannte Steuerbefehle, es reicht, dass das
-        Senden nicht scheitert (sonst ist der Socket wirklich tot)."""
+        """Active connection test: a ping to the helper. True = line ok.
+        The helper ignores unknown control commands; it is enough that the
+        send does not fail (otherwise the socket is really dead)."""
         try:
             self.send({"cmd": "ping"})
             return True
@@ -8068,16 +8067,16 @@ class _ScreenHelper:
 
     def drain(self, seconds: float = 1.5) -> None:
         """
-        Restnachrichten der VORHERIGEN Sitzung wegwerfen.
-        Nach einem Stop liegen oft noch Bilder im Socket-Puffer. Wurden die
-        nicht abgeraeumt, verbrauchte die naechste Zustimmungsabfrage ihre
-        Wartezeit mit dem Lesen alter Frames - im Dashboard stand dann
-        'abgelehnt', obwohl niemand etwas angeklickt hatte.
+        Discard leftover messages from the PREVIOUS session.
+        After a stop, frames are often still in the socket buffer. If those
+        were not cleared, the next consent prompt spent its wait time reading
+        old frames - the dashboard then showed 'denied' even though nobody had
+        clicked anything.
         """
         end = time.time() + seconds
         while time.time() < end:
             if not self._readable(0.2):
-                return          # nichts mehr da - fertig
+                return          # nothing left - done
             try:
                 if _sock_recv(self.conn) is None:
                     self.alive = False
@@ -8087,18 +8086,17 @@ class _ScreenHelper:
                 return
 
     def ask_consent(self, who: str, timeout_s: int):
-        """Zustimmungsdialog IN der Benutzersitzung anzeigen lassen.
-        Aus Sitzung 0 ist ein Fenster fuer den Benutzer unsichtbar - genau
-        deshalb kam bisher 'Warte auf Bestaetigung', ohne dass am Bildschirm
-        etwas erschien.
+        """Have the consent dialog shown IN the user session.
+        From session 0 a window is invisible to the user - which is exactly why
+        'waiting for confirmation' used to appear without anything showing on
+        the screen.
 
-        Rueckgabe: True = zugelassen, False = abgelehnt/Zeit abgelaufen,
-        None = Verbindung zum Helfer gestoert. Nur bei None darf der Aufrufer
-        den Helfer neu starten und es erneut versuchen - eine echte Ablehnung
-        wird NICHT wiederholt.
+        Returns: True = allowed, False = denied/timed out,
+        None = connection to the helper broken. Only on None may the caller
+        restart the helper and try again - a real denial is NOT repeated.
         """
-        # Stream sicher anhalten und Reste abraeumen, damit die Antwort des
-        # Dialogs nicht hinter alten Bildern haengt.
+        # Stop the stream safely and clear leftovers, so the dialog's answer
+        # does not get stuck behind old frames.
         self.send({"cmd": "config", "stream": False})
         self.drain()
         if not self.alive:
@@ -8110,11 +8108,11 @@ class _ScreenHelper:
             got = self.recv(timeout=max(1.0, deadline - time.time()))
             if got is None:
                 self.alive = False
-                return None      # Leitung tot -> KEINE stille Ablehnung
+                return None      # line dead -> NO silent denial
             kind, obj, _ = got
             if kind == "eof":
                 self.alive = False
-                return None      # Helfer weg -> Aufrufer darf neu starten
+                return None      # helper gone -> caller may restart
             if kind == "reply" and "consent" in obj:
                 return bool(obj["consent"])
         return False
@@ -8129,14 +8127,14 @@ class _ScreenHelper:
 
 
 def _screen_helper_loop(loop, helper) -> bool:
-    """Nimmt die Bilder vom Helfer entgegen und schickt sie ans Dashboard.
-    Rueckgabe True = der Helfer ist WAEHREND der Sitzung weggebrochen (der
-    Aufrufer startet ihn neu), False = regulaer beendet oder Fehler gemeldet.
+    """Receives the frames from the helper and sends them to the dashboard.
+    Returns True = the helper broke away DURING the session (the caller
+    restarts it), False = ended normally or an error was reported.
 
-    Die Bilder laufen ueber _FLOW (Flusskontrolle): Ist die Leitung voll, wird
-    der Helfer NICHT blockiert (Chat/Rechte-Antworten laufen ueber denselben
-    Socket), sondern nur das neueste Bild gemerkt. Qualitaet/Breite des Helfers
-    folgen der Qualitaetsstufe der Flusskontrolle."""
+    The frames go through _FLOW (flow control): if the line is full, the helper
+    is NOT blocked (chat/permission replies go over the same socket), only the
+    newest frame is remembered. The helper's quality/width follow the flow
+    control's quality level."""
     def _cfg_tuple():
         return (_FLOW.quality(int(_screen_stream.get("quality", 60))),
                 int(_screen_stream.get("fps", 10)),
@@ -8162,8 +8160,8 @@ def _screen_helper_loop(loop, helper) -> bool:
             helper.send({"cmd": "refresh"})
         got = helper.recv(timeout=15.0)
         if got is None:
-            # 15 s GANZ still (der Helfer sendet sonst alle ~4 s ein Lebens-
-            # zeichen): Verbindung aktiv pruefen statt sofort aufzugeben.
+            # 15 s COMPLETELY silent (the helper otherwise sends a keep-alive
+            # every ~4 s): actively test the connection instead of giving up.
             if helper.ping():
                 continue
             helper.alive = False
@@ -8195,8 +8193,8 @@ def _screen_helper_loop(loop, helper) -> bool:
         _screen_stream["mon_left"] = meta.get("left", 0)
         _screen_stream["mon_top"] = meta.get("top", 0)
         if not sio.connected:
-            _FLOW.reset()                # ACKs der alten Verbindung kommen nie mehr
-            continue                     # Backend gerade weg - Bild verwerfen
+            _FLOW.reset()                # ACKs of the old connection never arrive
+            continue                     # backend gone right now - drop the frame
         _FLOW.offer({
             "id": DEVICE_ID, "image": base64.b64encode(jpeg).decode(),
             "width": meta.get("width"), "height": meta.get("height"),
@@ -8212,26 +8210,26 @@ def _screen_helper_loop(loop, helper) -> bool:
 
 def _ensure_helper(loop):
     """
-    Verbindung zum Helfer in der Benutzersitzung holen (oder aufbauen).
-    Wird sowohl fuer die Zustimmungsabfrage als auch fuer die Aufnahme
-    gebraucht - deshalb an einer Stelle gebuendelt.
+    Get (or set up) the connection to the helper in the user session.
+    Needed both for the consent prompt and for the capture - therefore bundled
+    in one place.
     """
     helper = _screen_stream.get("helper")
     if helper is not None and helper.alive:
-        # Sitzt der laufende Helfer noch in der RICHTIGEN Sitzung?
-        # Wechselt der Benutzer zwischen Konsole und RDP (oder meldet sich neu
-        # an), bekommt er eine ANDERE Sitzungs-ID. Der alte Helfer laeuft dann
-        # zwar noch, zeichnet aber einen Desktop auf, den niemand mehr sieht -
-        # und sein Zustimmungsdialog erscheint auf einem unsichtbaren
-        # Bildschirm. Deshalb hier vergleichen und ihn notfalls ersetzen.
+        # Does the running helper still sit in the RIGHT session?
+        # If the user switches between console and RDP (or logs in again), they
+        # get a DIFFERENT session ID. The old helper then keeps running but
+        # captures a desktop nobody sees anymore - and its consent dialog
+        # appears on an invisible screen. So compare here and replace it if
+        # necessary.
         if not IS_WINDOWS:
-            return helper                      # Linux/macOS: ein Helfer, keine Sitzungs-IDs
+            return helper                      # Linux/macOS: one helper, no session IDs
         want = _win_user_sessions()
         have = getattr(helper, "session", None)
         if not want or have is None or have == want[0]:
             return helper
-        _print(f"[screen-helper] Benutzer ist jetzt in Sitzung {want[0]}, "
-               f"der Helfer laeuft in {have} - starte ihn neu.")
+        _print(f"[screen-helper] user is now in session {want[0]}, "
+               f"the helper runs in {have} - restarting it.")
         try:
             helper.close()
         except Exception:
@@ -8243,14 +8241,14 @@ def _ensure_helper(loop):
 
 
 def _screen_capture_loop(loop):
-    """Läuft in einem eigenen Thread und schickt fortlaufend Bildschirm-Frames."""
+    """Runs in its own thread and continuously sends screen frames."""
     is_linux = platform.system() == "Linux"
 
-    # Windows-Sonderfall: Der Agent läuft als geplante Aufgabe unter SYSTEM und
-    # damit in Sitzung 0. Von dort ist der Desktop des angemeldeten Benutzers
-    # grundsätzlich nicht erreichbar ("Session-0-Isolation"). Deshalb starten
-    # wir einen Helfer IN der Benutzersitzung und lassen uns die Bilder von
-    # dort schicken. Details siehe _ScreenHelper.
+    # Windows special case: the agent runs as a scheduled task under SYSTEM
+    # and thus in session 0. From there the logged-in user's desktop is
+    # fundamentally unreachable ("session 0 isolation"). Therefore we start a
+    # helper IN the user session and have the frames sent from there. See
+    # _ScreenHelper for details.
     if _needs_session_helper():
         helper = _ensure_helper(loop)
         if helper is None:
@@ -8263,25 +8261,25 @@ def _screen_capture_loop(loop):
                 "rmm-screen-helper.log (type %TEMP% in Explorer). "
                 f"[Sessions with a signed-in user: {_win_user_sessions() or 'none'}]",
                 code="agent_err_no_helper",
-                # Die gefundenen Sitzungen mitschicken: Ohne diese Angabe war
-                # nicht zu unterscheiden, ob NIEMAND angemeldet ist oder ob der
-                # Start des Helfers in einer gefundenen Sitzung scheiterte -
-                # zwei voellig verschiedene Ursachen mit demselben Text.
+                # Send along the sessions found: without this it was not
+                # possible to tell whether NOBODY is logged in or whether the
+                # helper start failed in a session that was found - two totally
+                # different causes with the same text.
                 params={"sessions": ", ".join(str(x) for x in _win_user_sessions()) or "-"})
             _screen_stream["active"] = False
             return
-        # Bricht der Helfer mitten in der Sitzung weg (Absturz, Abmeldung,
-        # Bildschirmsperre mit Sitzungswechsel), wird er bis zu dreimal neu
-        # gestartet und die Sitzung laeuft weiter - ohne neue Zustimmung, sie
-        # wurde fuer DIESE Sitzung ja schon erteilt. Frueher blieb das Bild in
-        # dem Fall einfach stehen, ohne jede Meldung.
+        # If the helper breaks away mid-session (crash, logoff, screen lock
+        # with session switch), it is restarted up to three times and the
+        # session continues - without new consent, since it was already granted
+        # for THIS session. Previously the image just froze in that case,
+        # without any message.
         restarts = 0
         while True:
             try:
                 died = _screen_helper_loop(loop, helper)
             finally:
-                # Verbindung offen lassen: Die naechste Sitzung braucht sie fuer
-                # die Zustimmungsabfrage sofort wieder. Nur die Uebertragung anhalten.
+                # Keep the connection open: the next session needs it again
+                # immediately for the consent prompt. Only stop the transfer.
                 if helper.alive:
                     helper.send({"cmd": "config", "stream": False})
             if not died or not _screen_stream["active"]:
@@ -8292,7 +8290,7 @@ def _screen_capture_loop(loop):
                                      code="agent_err_helper_lost", params={})
                 _screen_stream["active"] = False
                 return
-            _print(f"[screen-helper] Helfer weggebrochen - Neustart {restarts}/3")
+            _print(f"[screen-helper] helper broke away - restart {restarts}/3")
             try:
                 helper.close()
             except Exception:
@@ -8311,8 +8309,8 @@ def _screen_capture_loop(loop):
     try:
         sct = mss.mss()
     except Exception as e:
-        # Kein Display erfassbar. Auf Linux/headless direkt auf Shell umschalten,
-        # sonst normale Fehlermeldung (Windows -> RDP-Angebot im Dashboard).
+        # No display capturable. On Linux/headless switch directly to shell,
+        # otherwise a normal error message (Windows -> RDP offer in the dashboard).
         if is_linux:
             _notify_screen_mode(loop, "shell", f"Screen not capturable: {e}",
                                 code="agent_mode_no_screen", params={"err": str(e)})
@@ -8322,8 +8320,8 @@ def _screen_capture_loop(loop):
         _screen_stream["active"] = False
         return
 
-    # Verfügbare Einzel-Bildschirme: sct.monitors[0] ist die Gesamtfläche,
-    # ab Index 1 die einzelnen Monitore. Anzahl = len - 1.
+    # Available individual screens: sct.monitors[0] is the whole area,
+    # from index 1 the individual monitors. Count = len - 1.
     mon_count = max(1, len(sct.monitors) - 1)
     cur_idx = -1
     monitor = None
@@ -8331,8 +8329,8 @@ def _screen_capture_loop(loop):
 
     def _select_monitor(idx):
         nonlocal monitor, screen_w, screen_h, cur_idx
-        # Index 0 = Gesamtfläche ALLER Monitore (mss.monitors[0]),
-        # 1..mon_count = einzelne Bildschirme.
+        # Index 0 = whole area of ALL monitors (mss.monitors[0]),
+        # 1..mon_count = individual screens.
         idx = max(0, min(int(idx), mon_count))
         monitor = sct.monitors[idx]
         screen_w, screen_h = monitor["width"], monitor["height"]
@@ -8343,8 +8341,8 @@ def _screen_capture_loop(loop):
 
     _select_monitor(_screen_stream.get("monitor", 1))
     consecutive_errors = 0
-    helper_retry_done = False   # Fallback auf die Benutzersitzung nur einmal
-    frames_ok = 0               # >0 = die Sitzung lief schon -> Fehler sind voruebergehend
+    helper_retry_done = False   # fall back to the user session only once
+    frames_ok = 0               # >0 = the session already ran -> errors are temporary
     paused = False
     last_crc = None
     last_sent = 0.0
@@ -8353,21 +8351,21 @@ def _screen_capture_loop(loop):
 
     while _screen_stream["active"]:
         try:
-            # Backend gerade nicht erreichbar: nichts aufnehmen, nur warten.
-            # Die Sitzung bleibt bestehen und laeuft nach dem Reconnect weiter.
+            # Backend not reachable right now: capture nothing, just wait.
+            # The session stays and continues after the reconnect.
             if not sio.connected:
-                # Offene Sende-Slots verwerfen: Die ACKs der alten Verbindung
-                # kommen nie mehr an - ohne Reset waere die "Leitung" nach dem
-                # Reconnect dauerhaft als voll markiert (eingefrorenes Bild).
+                # Discard open send slots: the ACKs of the old connection
+                # never arrive - without a reset the "line" would stay marked
+                # full after the reconnect (frozen image).
                 _FLOW.reset()
                 time.sleep(0.5)
                 continue
-            # Leitung voll? Dann nicht sinnlos weiter kodieren - kurz warten.
+            # Line full? Then do not keep encoding pointlessly - wait briefly.
             if _FLOW.congested():
                 time.sleep(0.05)
                 continue
 
-            # Live-Wechsel: hat das Dashboard einen anderen Monitor gewählt?
+            # Live switch: did the dashboard choose a different monitor?
             want = max(0, min(int(_screen_stream.get("monitor", 1)), mon_count))
             if want != cur_idx:
                 _select_monitor(want)
@@ -8378,14 +8376,14 @@ def _screen_capture_loop(loop):
                 mon_count = max(1, len(sct.monitors) - 1)
                 _select_monitor(min(cur_idx if cur_idx >= 0 else 1, mon_count))
             raw = sct.grab(monitor)
-            consecutive_errors = 0  # erfolgreich -> Fehlerzähler zurücksetzen
+            consecutive_errors = 0  # success -> reset the error counter
             if paused:
                 paused = False
                 _screen_status(loop, "live")
 
-            # Unveraendertes Bild nicht erneut schicken (spart auf ruhigen
-            # Bildschirmen fast die ganze Bandbreite). Alle 3 s trotzdem eins,
-            # damit das Dashboard sieht, dass die Sitzung lebt.
+            # Do not resend an unchanged frame (saves almost all bandwidth on
+            # quiet screens). One every 3 s anyway, so the dashboard sees that
+            # the session is alive.
             crc = _zlib.crc32(raw.bgra)
             now = time.time()
             force = bool(_screen_stream.get("force"))
@@ -8396,9 +8394,9 @@ def _screen_capture_loop(loop):
 
             img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
             _q_conf = max(10, min(int(_screen_stream.get("quality", 55)), 95))
-            # Zielbreite: fest gewaehlt (bytera://.../resolution=WxH) hat Vorrang,
-            # sonst automatisch nach Qualitaet (1920/1280). Die Flusskontrolle
-            # senkt Qualitaet/Breite bei langsamer Leitung zusaetzlich.
+            # Target width: a fixed choice (bytera://.../resolution=WxH) takes
+            # precedence, otherwise automatic by quality (1920/1280). Flow
+            # control additionally lowers quality/width on a slow line.
             _fixed_w = int(_screen_stream.get("width", 0) or 0)
             max_width = _fixed_w if _fixed_w > 0 else (1920 if _q_conf >= 70 else 1280)
             max_width = _FLOW.max_width(max_width)
@@ -8415,8 +8413,8 @@ def _screen_capture_loop(loop):
                 "image": b64,
                 "width": screen_w,
                 "height": screen_h,
-                "monitor_index": cur_idx,      # aktuell gestreamter Monitor
-                "monitor_count": mon_count,    # Anzahl verfügbarer Monitore
+                "monitor_index": cur_idx,      # currently streamed monitor
+                "monitor_count": mon_count,    # number of available monitors
             })
             last_crc = crc
             last_sent = now
@@ -8427,15 +8425,15 @@ def _screen_capture_loop(loop):
         except Exception as e:
             consecutive_errors += 1
             msg = str(e)
-            # Lief die Sitzung schon (es gab Bilder), ist ein Aufnahmefehler
-            # fast immer voruebergehend: Sperrbildschirm (Win+L), UAC-Abfrage,
-            # Aufloesungs-/Monitorwechsel, Benutzerwechsel. Frueher endete die
-            # Sitzung nach 5 Fehlern - jetzt wird pausiert und weiter versucht,
-            # bis jemand die Sitzung beendet.
+            # If the session already ran (there were frames), a capture error
+            # is almost always temporary: lock screen (Win+L), UAC prompt,
+            # resolution/monitor change, user switch. Previously the session
+            # ended after 5 errors - now it pauses and keeps trying until
+            # someone ends the session.
             if frames_ok > 0:
                 if not paused:
                     paused = True
-                    _print(f"[agent] Aufnahme pausiert ({msg}) - versuche weiter")
+                    _print(f"[agent] capture paused ({msg}) - keeping trying")
                     _screen_status(loop, "paused", "agent_screen_paused", msg)
                 try:
                     sct.close()
@@ -8444,21 +8442,21 @@ def _screen_capture_loop(loop):
                 sct = None
                 time.sleep(min(2.0, 0.3 * consecutive_errors))
                 continue
-            # Linux/headless: kein Sinn weiterzuprobieren -> Shell anbieten.
+            # Linux/headless: no point in trying further -> offer a shell.
             if is_linux:
                 _notify_screen_mode(loop, "shell", f"Screen capture aborted: {msg}",
                                     code="agent_mode_aborted", params={"err": msg})
                 _screen_stream["active"] = False
                 break
-            # Windows: typischer Fall headless/kein Desktop -> RDP-Angebot.
+            # Windows: typical case headless/no desktop -> RDP offer.
             if "denied" in msg.lower() or "bitblt" in msg.lower():
-                # ZWEITER VERSUCH ueber die Benutzersitzung (getrennte RDP-
-                # Sitzung, Task-Start "unabhaengig von der Anmeldung" usw.).
-                # Nur EINMAL versuchen, sonst Endlosschleife.
+                # SECOND ATTEMPT via the user session (disconnected RDP
+                # session, task start "independent of sign-in" etc.).
+                # Try only ONCE, otherwise an endless loop.
                 if IS_WINDOWS and not helper_retry_done and os.environ.get("RMM_SCREEN_HELPER") != "1":
                     helper_retry_done = True
-                    _print(f"[agent] Direkte Aufnahme scheitert ({msg}) - "
-                           f"versuche Helfer in der aktiven Benutzersitzung.")
+                    _print(f"[agent] direct capture fails ({msg}) - "
+                           f"trying the helper in the active user session.")
                     helper = _ensure_helper(loop)
                     if helper is not None:
                         try:
@@ -8482,7 +8480,7 @@ def _screen_capture_loop(loop):
                 )
                 _screen_stream["active"] = False
                 break
-            # Andere Fehler beim Start: ein paar Mal tolerieren, dann aufgeben
+            # Other errors at startup: tolerate a few times, then give up
             if consecutive_errors >= 5:
                 _notify_screen_error(loop, f"Screen capture aborted: {msg}",
                                      code="agent_err_aborted", params={"err": msg})
@@ -8499,19 +8497,19 @@ def _screen_capture_loop(loop):
 
 def _notify_screen_error(loop, message, code=None, params=None):
     """
-    Schickt eine Fehlermeldung ans Dashboard (einmalig).
+    Sends an error message to the dashboard (once).
 
-    WARUM code/params zusaetzlich zum Text?
-    Der Agent kennt die Sprache des Dashboard-Benutzers nicht - mehrere Personen
-    mit verschiedenen Spracheinstellungen koennen dasselbe Geraet ansehen. Statt
-    eines fertigen Satzes schickt der Agent daher einen Uebersetzungs-SCHLUESSEL
-    (`code`) und die Einsetzwerte (`params`); uebersetzt wird erst im Browser.
+    WHY code/params in addition to the text?
+    The agent does not know the dashboard user's language - several people with
+    different language settings can view the same device. So instead of a ready
+    sentence, the agent sends a translation KEY (`code`) and the substitution
+    values (`params`); translation happens in the browser.
 
-    `message` bleibt als Rueckfallebene erhalten und ist bewusst ENGLISCH:
-      - Ein aelteres Dashboard, das `code` nicht kennt, zeigt weiterhin Text.
-      - Die Agent-Konsole und das Protokoll bleiben lesbar.
-    Das Backend reicht die Nutzlast unveraendert weiter, es braucht also KEINE
-    Anpassung fuer die neuen Felder.
+    `message` is kept as a fallback and is deliberately ENGLISH:
+      - An older dashboard that does not know `code` still shows text.
+      - The agent console and the log stay readable.
+    The backend forwards the payload unchanged, so it needs NO adjustment for
+    the new fields.
     """
     _print(f"[agent] Screen error: {message}")
     payload = {"id": DEVICE_ID, "error": message}
@@ -8529,11 +8527,11 @@ def _notify_screen_error(loop, message, code=None, params=None):
 
 def _notify_screen_mode(loop, mode, reason="", code=None, params=None):
     """
-    Teilt dem Dashboard mit, WIE Remote-Zugriff möglich ist. Wichtigster Fall:
-    mode='shell' -> das Dashboard öffnet direkt eine Shell (headless/Shell-only).
+    Tells the dashboard HOW remote access is possible. Most important case:
+    mode='shell' -> the dashboard opens a shell directly (headless/shell-only).
 
-    `reason` ist die englische Rueckfallebene, `code`/`params` werden im
-    Dashboard uebersetzt (siehe _notify_screen_error).
+    `reason` is the English fallback, `code`/`params` are translated in the
+    dashboard (see _notify_screen_error).
     """
     _print(f"[agent] Screen mode: {mode} ({reason})")
     payload = {"id": DEVICE_ID, "mode": mode, "reason": reason}
@@ -8550,26 +8548,25 @@ def _notify_screen_mode(loop, mode, reason="", code=None, params=None):
 
 
 # ====================================================================
-# Virtueller Bildschirmtreiber (headless) - nur Windows
+# Virtual display driver (headless) - Windows only
 # --------------------------------------------------------------------
-# Ein "Indirect Display Driver" (IDD) stellt dem System einen Bildschirm
-# bereit, obwohl kein Monitor angeschlossen ist. Erst damit gibt es auf
-# einem headless-Server/VM ueberhaupt einen Desktop, den der Remote-
-# Bildschirm aufnehmen kann. Treiber + INF kommen als signiertes ZIP vom
-# RMM-Server (das Modul "headless-screen" laedt sie beim Aktivieren dorthin);
-# der Agent installiert sie als SYSTEM mit pnputil. Ohne URL wird nichts
-# installiert - es werden keine Binaerdateien mit dem Agenten ausgeliefert.
+# An "Indirect Display Driver" (IDD) provides the system with a screen even
+# though no monitor is connected. Only with it does a headless server/VM have
+# a desktop at all that the remote screen can capture. Driver + INF come as a
+# signed ZIP from the RMM server (the "headless-screen" module uploads them
+# there on activation); the agent installs them as SYSTEM with pnputil.
+# Without a URL nothing is installed - no binaries are shipped with the agent.
 # ====================================================================
 _VDISPLAY_DIR = Path(os.environ.get("ProgramData") or r"C:\ProgramData") / "ByteraRMM" / "vdisplay" \
     if platform.system() == "Windows" else Path("/tmp/rmm-vdisplay")
-_VDISPLAY_HWID = "Root\\ByteraIddSampleDriver"   # HardwareID der mitgelieferten INF
+_VDISPLAY_HWID = "Root\\ByteraIddSampleDriver"   # hardware ID of the bundled INF
 
 
 def _vdisplay_status() -> dict:
     """-> {supported, installed, present, active, driver, error}."""
     if not IS_WINDOWS:
         return {"supported": False, "installed": False, "present": False, "active": False,
-                "error": "Nur unter Windows verfuegbar"}
+                "error": "Only available on Windows"}
     out = {"supported": True, "installed": False, "present": False, "active": False, "error": ""}
     try:
         r = _run(["pnputil", "/enum-devices", "/connected"])
@@ -8578,7 +8575,7 @@ def _vdisplay_status() -> dict:
             out["present"] = True
     except Exception:
         pass
-    # Treiber im Treiberspeicher? (auch wenn gerade kein Geraet aktiv ist)
+    # Driver in the driver store? (even if no device is currently active)
     try:
         r = _run(["pnputil", "/enum-drivers"])
         low = (r.stdout or "").lower()
@@ -8586,7 +8583,7 @@ def _vdisplay_status() -> dict:
             out["installed"] = True
     except Exception:
         pass
-    # Aktiver (zusaetzlicher) Bildschirm vorhanden?
+    # Is an active (additional) screen present?
     try:
         import ctypes
         n = ctypes.windll.user32.GetSystemMetrics(80)   # SM_CMONITORS
@@ -8598,47 +8595,47 @@ def _vdisplay_status() -> dict:
 
 
 def _vdisplay_install(url: str, sha256: str = "") -> dict:
-    """Treiber-ZIP vom Server holen, pruefen, entpacken und als Geraet anlegen."""
+    """Fetch the driver ZIP from the server, verify, extract and create as a device."""
     if not IS_WINDOWS:
-        return {"ok": False, "error": "Der virtuelle Bildschirm wird nur unter Windows unterstuetzt."}
+        return {"ok": False, "error": "The virtual display is only supported on Windows."}
     if _win_session_id() != 0 and os.environ.get("RMM_SCREEN_HELPER") == "1":
-        return {"ok": False, "error": "Nur der Agent-Dienst (SYSTEM) kann den Treiber installieren."}
+        return {"ok": False, "error": "Only the agent service (SYSTEM) can install the driver."}
     if not url:
-        return {"ok": False, "error": "Kein Treiberpaket auf dem Server hinterlegt "
-                "(Modul „Headless-Bildschirm“ zuerst aktivieren)."}
+        return {"ok": False, "error": "No driver package stored on the server "
+                "(activate the \"Headless screen\" module first)."}
     try:
         import hashlib
         import urllib.request
         import zipfile
         _VDISPLAY_DIR.mkdir(parents=True, exist_ok=True)
         zpath = _VDISPLAY_DIR / "driver.zip"
-        # Relative Server-Adresse gegen die eigene Server-URL aufloesen und den
-        # Download mit dem Agent-Token absichern (die Datei liegt auf dem RMM).
+        # Resolve a relative server address against our own server URL and
+        # secure the download with the agent token (the file is on the RMM).
         full = url if "://" in url else (BACKEND_URL.rstrip("/") + "/" + url.lstrip("/"))
-        _print(f"[vdisplay] lade Treiberpaket: {full}")
+        _print(f"[vdisplay] downloading driver package: {full}")
         if full.startswith(BACKEND_URL.rstrip("/") + "/"):   # own server: token, encrypted
             blob = _backend_fetch("/" + full[len(BACKEND_URL.rstrip("/")):].lstrip("/"), timeout=180)
         else:
             with urllib.request.urlopen(urllib.request.Request(full), timeout=120) as resp:
                 blob = resp.read()
         if sha256 and hashlib.sha256(blob).hexdigest().lower() != sha256.lower():
-            return {"ok": False, "error": "Pruefsumme des Treiberpakets stimmt nicht - Abbruch."}
+            return {"ok": False, "error": "Driver package checksum does not match - aborting."}
         zpath.write_bytes(blob)
         with zipfile.ZipFile(zpath) as zf:
-            # Zip-Slip vermeiden
+            # Avoid zip slip
             for name in zf.namelist():
                 if name.startswith(("/", "\\")) or ".." in Path(name).parts:
-                    return {"ok": False, "error": f"Unsicherer Pfad im Paket: {name}"}
+                    return {"ok": False, "error": f"Unsafe path in the package: {name}"}
             zf.extractall(_VDISPLAY_DIR)
         inf = next(iter(_VDISPLAY_DIR.rglob("*.inf")), None)
         if not inf:
-            return {"ok": False, "error": "Im Treiberpaket ist keine INF-Datei enthalten."}
-        # 1) Treiber in den Treiberspeicher (signiert) aufnehmen
+            return {"ok": False, "error": "The driver package contains no INF file."}
+        # 1) Add the driver to the driver store (signed)
         r = _run(["pnputil", "/add-driver", str(inf), "/install"])
         log = (r.stdout or "") + (r.stderr or "")
         _print(f"[vdisplay] add-driver rc={r.returncode}: {log.strip()[:300]}")
-        # 2) Geraet anlegen (falls noch keins aktiv). Bevorzugt mit der
-        #    mitgelieferten Installationshilfe, sonst ueber die INF.
+        # 2) Create the device (if none active yet). Preferably with the
+        #    bundled install helper, otherwise via the INF.
         helper_exe = next(iter(_VDISPLAY_DIR.rglob("*nstall*.exe")), None)
         if not _vdisplay_status().get("present"):
             if helper_exe:
@@ -8647,24 +8644,24 @@ def _vdisplay_install(url: str, sha256: str = "") -> dict:
                 _run(["pnputil", "/add-device", "/hardwareid", _VDISPLAY_HWID])
         st = _vdisplay_status()
         if not (st.get("installed") or st.get("present")):
-            return {"ok": False, "error": "Installation lief durch, aber der Treiber ist nicht sichtbar. "
-                    "Moeglicher Grund: nicht signierter Treiber oder fehlende Rechte. "
+            return {"ok": False, "error": "Installation went through but the driver is not visible. "
+                    "Possible reason: unsigned driver or missing permissions. "
                     f"Details: {log.strip()[:300]}"}
-        return {"ok": True, "detail": "Virtueller Bildschirm installiert.", **st}
+        return {"ok": True, "detail": "Virtual display installed.", **st}
     except Exception as e:
-        return {"ok": False, "error": f"Installation fehlgeschlagen: {e}"}
+        return {"ok": False, "error": f"Installation failed: {e}"}
 
 
 def _vdisplay_remove() -> dict:
     if not IS_WINDOWS:
-        return {"ok": False, "error": "Nur unter Windows."}
+        return {"ok": False, "error": "Windows only."}
     try:
         helper_exe = next(iter(_VDISPLAY_DIR.rglob("*nstall*.exe")), None)
         if helper_exe:
             _run([str(helper_exe), "remove"])
         else:
             _run(["pnputil", "/remove-device", "/hardwareid", _VDISPLAY_HWID])
-        # Treiber aus dem Speicher nehmen
+        # Remove the driver from the store
         r = _run(["pnputil", "/enum-drivers"])
         pub = None
         cur = {}
@@ -8676,13 +8673,13 @@ def _vdisplay_remove() -> dict:
                 pub = cur["pub"]
         if pub:
             _run(["pnputil", "/delete-driver", pub, "/uninstall", "/force"])
-        return {"ok": True, "detail": "Virtueller Bildschirm entfernt."}
+        return {"ok": True, "detail": "Virtual display removed."}
     except Exception as e:
-        return {"ok": False, "error": f"Entfernen fehlgeschlagen: {e}"}
+        return {"ok": False, "error": f"Removal failed: {e}"}
 
 
 # ====================================================================
-# Registry (nur Windows) - lesen/schreiben/auflisten/loeschen
+# Registry (Windows only) - read/write/list/delete
 # ====================================================================
 _REG_HIVES = {}
 if IS_WINDOWS:
@@ -8704,7 +8701,7 @@ if IS_WINDOWS:
 
 
 def _reg_split(path: str):
-    """'HKLM\\Software\\Foo' -> (hive_const, 'Software\\Foo'). Akzeptiert / und \\."""
+    """'HKLM\\Software\\Foo' -> (hive_const, 'Software\\Foo'). Accepts / and \\."""
     import winreg as _wr
     path = (path or "").replace("/", "\\").strip("\\ ")
     if "\\" in path:
@@ -8713,12 +8710,12 @@ def _reg_split(path: str):
         root, sub = path, ""
     hive = _REG_HIVES.get(root.upper())
     if hive is None:
-        raise ValueError(f"Unbekannter Registry-Hive: {root}")
+        raise ValueError(f"Unknown registry hive: {root}")
     return hive, sub
 
 
 def _reg_list(path: str) -> dict:
-    """Werte + Unterschluessel eines Schluessels auflisten."""
+    """List values + subkeys of a key."""
     import winreg as _wr
     hive, sub = _reg_split(path)
     key = _wr.OpenKey(hive, sub, 0, _wr.KEY_READ)
@@ -8730,7 +8727,7 @@ def _reg_list(path: str) -> dict:
                 name, data, typ = _wr.EnumValue(key, i)
             except OSError:
                 break
-            values.append({"name": name or "(Standard)", "type": _REG_TYPE_NAME.get(typ, str(typ)),
+            values.append({"name": name or "(Default)", "type": _REG_TYPE_NAME.get(typ, str(typ)),
                            "data": _reg_jsonable(data)})
             i += 1
         i = 0
@@ -8800,7 +8797,7 @@ def _reg_delete(path: str, name: str | None) -> dict:
 
 def registry_op(op: str, data: dict) -> dict:
     if not IS_WINDOWS:
-        return {"ok": False, "error": "Registry gibt es nur unter Windows."}
+        return {"ok": False, "error": "The registry only exists on Windows."}
     try:
         path = data.get("path") or ""
         if op == "list":
@@ -8811,21 +8808,21 @@ def registry_op(op: str, data: dict) -> dict:
             return _reg_set(path, data.get("name") or "", data.get("type") or "REG_SZ", data.get("data"))
         if op == "delete":
             return _reg_delete(path, data.get("name"))
-        return {"ok": False, "error": f"Unbekannte Registry-Aktion: {op}"}
+        return {"ok": False, "error": f"Unknown registry action: {op}"}
     except FileNotFoundError:
-        return {"ok": False, "error": "Schlüssel/Wert nicht gefunden"}
+        return {"ok": False, "error": "Key/value not found"}
     except PermissionError:
-        return {"ok": False, "error": "Keine Berechtigung (als Administrator nötig)"}
+        return {"ok": False, "error": "No permission (administrator required)"}
     except Exception as e:      # noqa: BLE001
         return {"ok": False, "error": str(e)}
 
 
 # ====================================================================
-# Windows-Update: automatische Updates aus-/einschalten (Richtlinie)
+# Windows Update: turn automatic updates off/on (policy)
 # ====================================================================
-# Setzt HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU
-#   NoAutoUpdate = 1 (aus) / 0 (an).  Installation laeuft weiter ueber die
-#   Patch-Funktion (patch-scan/patch-apply), auch wenn die Automatik aus ist.
+# Sets HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU
+#   NoAutoUpdate = 1 (off) / 0 (on).  Installation still runs via the patch
+#   function (patch-scan/patch-apply), even when the automatic mode is off.
 _WU_AU_KEY = r"SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU"
 
 
@@ -8850,17 +8847,17 @@ def wu_auto_status() -> dict:
 
 def wu_set_auto(disabled: bool) -> dict:
     if not IS_WINDOWS:
-        return {"ok": False, "error": "Nur unter Windows."}
+        return {"ok": False, "error": "Windows only."}
     try:
         import winreg as _wr
         key = _wr.CreateKeyEx(_wr.HKEY_LOCAL_MACHINE, _WU_AU_KEY, 0, _wr.KEY_SET_VALUE)
         try:
             _wr.SetValueEx(key, "NoAutoUpdate", 0, _wr.REG_DWORD, 1 if disabled else 0)
-            # 2 = "benachrichtigen, nicht automatisch laden/installieren"
+            # 2 = "notify, do not download/install automatically"
             _wr.SetValueEx(key, "AUOptions", 0, _wr.REG_DWORD, 2 if disabled else 4)
         finally:
             _wr.CloseKey(key)
-        # Dienst benachrichtigen (best effort)
+        # Notify the service (best effort)
         try:
             subprocess.run(["gpupdate", "/target:computer", "/force"], timeout=60,
                            capture_output=True)
@@ -8868,25 +8865,25 @@ def wu_set_auto(disabled: bool) -> dict:
             pass
         return {"ok": True, **wu_auto_status()}
     except PermissionError:
-        return {"ok": False, "error": "Keine Berechtigung (als Administrator/SYSTEM nötig)"}
+        return {"ok": False, "error": "No permission (administrator/SYSTEM required)"}
     except Exception as e:      # noqa: BLE001
         return {"ok": False, "error": str(e)}
 
 
 def _someone_logged_in() -> bool:
     """
-    Prüft, ob am Gerät gerade jemand angemeldet ist. Nur dann wird um
-    Zustimmung gebeten - an unbeaufsichtigten Geräten (niemand angemeldet)
-    verbindet der Remote-Bildschirm direkt. Bei unklarer Lage wird zur
-    Sicherheit "angemeldet" angenommen (dann wird gefragt).
+    Checks whether someone is currently logged in at the device. Only then is
+    consent requested - on unattended devices (nobody logged in) the remote
+    screen connects directly. In an unclear situation "logged in" is assumed
+    for safety (then it asks).
     """
     try:
         if IS_WINDOWS:
-            r = _run(["quser"])           # Exit-Code 1 + leere Liste, wenn niemand angemeldet
+            r = _run(["quser"])           # exit code 1 + empty list if nobody is logged in
             out = (r.stdout or "").strip()
             return r.returncode == 0 and len(out.splitlines()) > 1
-        # Linux: 'who' erfasst klassische Logins; 'loginctl' zusätzlich
-        # xrdp-/Wayland-/Seat-Sitzungen, die 'who' teils nicht listet.
+        # Linux: 'who' captures classic logins; 'loginctl' additionally
+        # xrdp/Wayland/seat sessions that 'who' sometimes does not list.
         r = _run(["who"])
         if (r.stdout or "").strip():
             return True
@@ -8898,10 +8895,10 @@ def _someone_logged_in() -> bool:
 
 def _tk_consent_dialog(who: str, timeout_s: int) -> bool:
     """
-    Schön gestaltetes Tkinter-Zustimmungsfenster (dunkles Design, Countdown,
-    Zulassen/Ablehnen). Läuft blockierend im Executor-Thread. Wirft bei
-    Problemen (kein Tkinter/kein Display) - der Aufrufer fällt dann auf die
-    nativen Dialoge (MessageBox/zenity/...) zurück.
+    Nicely designed Tkinter consent window (dark theme, countdown,
+    allow/deny). Runs blocking in the executor thread. Raises on problems
+    (no Tkinter/no display) - the caller then falls back to the native
+    dialogs (MessageBox/zenity/...).
     """
     import tkinter as tk
 
@@ -8909,10 +8906,10 @@ def _tk_consent_dialog(who: str, timeout_s: int) -> bool:
     ACCENT = "#4f8cff"; DANGER = "#3a4356"
 
     result = {"allow": False}
-    # Windows-Taskleiste: Ohne eigene AppUserModelID gruppiert Windows das
-    # Fenster unter pythonw.exe und zeigt in der TASKLEISTE das Python-Icon,
-    # egal was iconphoto setzt. Mit eigener ID zieht die Taskleiste das
-    # Fenster-Icon (unser Logo).
+    # Windows taskbar: without its own AppUserModelID, Windows groups the
+    # window under pythonw.exe and shows the Python icon in the TASKBAR, no
+    # matter what iconphoto sets. With its own ID the taskbar takes the
+    # window icon (our logo).
     if IS_WINDOWS:
         try:
             import ctypes
@@ -8922,11 +8919,11 @@ def _tk_consent_dialog(who: str, timeout_s: int) -> bool:
     root = tk.Tk()
     root.withdraw()
     root.title("BYTERA RMM")
-    # Logo: logo.png (PNG!) liegt seit Install/Update neben agent.py.
-    # iconphoto kann PNG auf Windows UND Linux - iconbitmap dagegen nur echte
-    # .ico-Dateien (das alte favicon.ico war ein PNG -> blankes Icon).
-    # Mehrere Größen mitgeben, damit Titelleiste (klein) UND Taskleiste
-    # (mittel) jeweils eine scharfe Variante bekommen.
+    # Logo: logo.png (PNG!) sits next to agent.py since install/update.
+    # iconphoto can do PNG on Windows AND Linux - iconbitmap only real .ico
+    # files (the old favicon.ico was a PNG -> blank icon).
+    # Pass several sizes so the title bar (small) AND taskbar (medium) each
+    # get a sharp variant.
     _logo_img = None
     try:
         _logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
@@ -8936,7 +8933,7 @@ def _tk_consent_dialog(who: str, timeout_s: int) -> bool:
             for target in (64, 32, 16):
                 f = max(1, _logo_img.width() // target)
                 _sizes.append(_logo_img.subsample(f, f))
-            root._icon_refs = [_logo_img, *_sizes]   # GC-Schutz
+            root._icon_refs = [_logo_img, *_sizes]   # GC protection
             root.iconphoto(True, *_sizes, _logo_img)
     except Exception:
         _logo_img = None
@@ -8952,10 +8949,10 @@ def _tk_consent_dialog(who: str, timeout_s: int) -> bool:
     frame.pack()
     if _logo_img is not None:
         try:
-            # 1024er-Logo auf ~64 px fürs Fenster herunterrechnen.
+            # Scale the 1024px logo down to ~64 px for the window.
             _factor = max(1, _logo_img.width() // 64)
             _logo_small = _logo_img.subsample(_factor, _factor)
-            root._logo_refs = (_logo_img, _logo_small)   # GC-Schutz
+            root._logo_refs = (_logo_img, _logo_small)   # GC protection
             tk.Label(frame, image=_logo_small, bg=BG).pack()
         except Exception:
             tk.Label(frame, text="🖥️", font=("Segoe UI Emoji", 30), bg=BG, fg=TEXT).pack()
@@ -8994,14 +8991,14 @@ def _tk_consent_dialog(who: str, timeout_s: int) -> bool:
     def _tick():
         remaining["s"] -= 1
         if remaining["s"] <= 0:
-            _finish(False)   # keine Antwort -> ablehnen
+            _finish(False)   # no answer -> deny
             return
         countdown.config(text=_at("auto_deny_in", secs=remaining["s"]))
         root.after(1000, _tick)
     countdown.config(text=_at("auto_deny_in", secs=timeout_s))
     root.after(1000, _tick)
 
-    # Zentrieren + in den Vordergrund
+    # Center + bring to the front
     root.update_idletasks()
     w, h = root.winfo_reqwidth(), root.winfo_reqheight()
     x = (root.winfo_screenwidth() - w) // 2
@@ -9012,30 +9009,30 @@ def _tk_consent_dialog(who: str, timeout_s: int) -> bool:
         root.lift(); root.focus_force()
     except Exception:
         pass
-    root.protocol("WM_DELETE_WINDOW", lambda: _finish(False))   # X = ablehnen
+    root.protocol("WM_DELETE_WINDOW", lambda: _finish(False))   # X = deny
     root.mainloop()
     return result["allow"]
 
 
 def _ask_screen_consent(requested_by: str, timeout_s: int = 30) -> bool:
     """
-    Zeigt am Gerät eine Abfrage "Remote-Bildschirm zulassen?" und gibt True
-    zurück, wenn der Benutzer zustimmt. Keine Antwort innerhalb des Timeouts,
-    Ablehnung oder ein Fehler (kein Dialog möglich) bedeuten NEIN - verbunden
-    wird nur bei ausdrücklicher Bestätigung.
-    Läuft blockierend und wird deshalb im Executor ausgeführt.
+    Shows a prompt "Allow remote screen?" on the device and returns True if the
+    user consents. No answer within the timeout, a denial or an error (no
+    dialog possible) mean NO - a connection is made only on explicit
+    confirmation.
+    Runs blocking and is therefore executed in the executor.
     """
-    who = requested_by or "Ein Administrator"
+    who = requested_by or "An administrator"
 
-    # Sitzung 0: Ein Fenster, das WIR hier oeffnen, sieht der Benutzer nie -
-    # der Desktop gehoert einer anderen Sitzung. Deshalb laesst der Helfer den
-    # Dialog dort anzeigen. Genau das war der Grund, warum im Dashboard
-    # "Warte auf Bestaetigung" stand, am Bildschirm aber nichts erschien.
+    # Session 0: a window WE open here is never seen by the user - the desktop
+    # belongs to another session. Therefore the helper shows the dialog there.
+    # That was exactly the reason the dashboard showed "waiting for
+    # confirmation" while nothing appeared on the screen.
     if _needs_session_helper():
-        # Zwei Anlaeufe: Beim ersten kann die Leitung zum Helfer noch von der
-        # vorherigen Sitzung her tot sein (Helfer beendet, Abmeldung,
-        # Benutzerwechsel). Frueher wurde das als "abgelehnt" gewertet -
-        # deshalb stand nach Stop/Neustart einer Sitzung IMMER "abgelehnt" da.
+        # Two attempts: on the first, the line to the helper may still be dead
+        # from the previous session (helper ended, logoff, user switch).
+        # Previously this was treated as "denied" - which is why after a
+        # stop/restart of a session it ALWAYS showed "denied".
         for attempt in (1, 2):
             try:
                 helper = _ensure_helper(_AGENT_LOOP)
@@ -9050,9 +9047,9 @@ def _ask_screen_consent(requested_by: str, timeout_s: int = 30) -> bool:
                        f"reconnecting.")
             except Exception as e:
                 _print(f"[agent] consent via the helper failed "
-                       f"(Versuch {attempt}): {e}")
-            # Tote Verbindung wegwerfen, damit _ensure_helper einen neuen
-            # Helfer in der aktuellen Benutzersitzung startet.
+                       f"(attempt {attempt}): {e}")
+            # Discard the dead connection so _ensure_helper starts a new
+            # helper in the current user session.
             old = _screen_stream.get("helper")
             if old is not None:
                 try:
@@ -9067,12 +9064,12 @@ def _ask_screen_consent(requested_by: str, timeout_s: int = 30) -> bool:
     title = _at("consent_window")
     text = (_at("consent_body_1line", who=who) + "\n\n"
             + _at("consent_ask", secs=timeout_s))
-    # 1) Bevorzugt: das schön gestaltete Tkinter-Fenster (Windows + Linux).
+    # 1) Preferred: the nicely designed Tkinter window (Windows + Linux).
     try:
         return _tk_consent_dialog(who, timeout_s)
     except Exception as e:
         _print(f"[agent] tkinter dialog not possible ({e}) - using native dialog")
-    # 2) Fallbacks: native Dialoge des jeweiligen Systems.
+    # 2) Fallbacks: the native dialogs of the respective system.
     try:
         if IS_WINDOWS:
             import ctypes
@@ -9081,28 +9078,28 @@ def _ask_screen_consent(requested_by: str, timeout_s: int = 30) -> bool:
             flags = MB_YESNO | MB_ICONQUESTION | MB_SYSTEMMODAL | MB_SETFOREGROUND | MB_TOPMOST
             user32 = ctypes.windll.user32
             try:
-                # MessageBoxTimeoutW: wie MessageBox, aber mit Timeout (ms).
-                # Rückgabe 6 = Ja, 7 = Nein, 32000 = Timeout.
+                # MessageBoxTimeoutW: like MessageBox but with a timeout (ms).
+                # Returns 6 = Yes, 7 = No, 32000 = timeout.
                 res = user32.MessageBoxTimeoutW(0, text, title, flags, 0, timeout_s * 1000)
             except AttributeError:
                 res = user32.MessageBoxW(0, text, title, flags)
             return res == 6
-        # Linux (Desktop): zenity -> kdialog -> xmessage, was verfügbar ist.
+        # Linux (desktop): zenity -> kdialog -> xmessage, whichever is available.
         import shutil as _shutil
         if _shutil.which("zenity"):
             r = _run(["zenity", "--question", f"--title={title}", f"--text={text}",
                       f"--timeout={timeout_s}", f"--ok-label={_at('allow')}", f"--cancel-label={_at('deny')}"],
                      capture_output=True)
-            return r.returncode == 0   # 0=Ja, 1=Nein, 5=Timeout
+            return r.returncode == 0   # 0=Yes, 1=No, 5=timeout
         if _shutil.which("kdialog"):
             try:
                 r = _run(["kdialog", "--title", title, "--yesno", text],
                          capture_output=True, timeout=timeout_s + 5)
                 return r.returncode == 0
             except Exception:
-                return False           # Timeout/Fehler -> abgelehnt
+                return False           # timeout/error -> denied
         if _shutil.which("xmessage"):
-            # Exit-Code = Button-Wert; Timeout liefert 0 -> deshalb 101/102.
+            # Exit code = button value; timeout returns 0 -> hence 101/102.
             r = _run(["xmessage", "-center", "-timeout", str(timeout_s),
                       "-buttons", f"{_at('allow')}:101,{_at('deny')}:102", text],
                      capture_output=True)
@@ -9114,17 +9111,17 @@ def _ask_screen_consent(requested_by: str, timeout_s: int = 30) -> bool:
         return False
 
 
-# --- Chat-/Steuerfenster der laufenden Fernwartung (Agent-Seite) --------------
-# Oeffnet im Helfer (Benutzersitzung) das Fenster, in dem die Person vor dem PC
-# chatten, Admin-Rechte erlauben und die Verbindung trennen kann. Bei Silent-
-# Modus (require_consent == False) wird es NICHT geoeffnet.
+# --- Chat/control window of the running remote session (agent side) ----------
+# Opens in the helper (user session) the window where the person in front of
+# the PC can chat, allow admin rights and disconnect. In silent mode
+# (require_consent == False) it is NOT opened.
 _session = {"active": False, "by": "", "granted": False, "window": False,
-            # Berechtigungen, die der Benutzer im Sitzungsfenster schaltet (wie AnyDesk)
+            # permissions the user toggles in the session window (like AnyDesk)
             "perms": {"input": True, "clipboard": True, "files": True}}
 
 
 def _session_perm(name: str) -> bool:
-    """Darf der Administrator gerade <name> (input|clipboard)? Ohne aktive Sitzung: ja."""
+    """May the administrator currently do <name> (input|clipboard)? Without an active session: yes."""
     if not _session.get("active"):
         return True
     return bool((_session.get("perms") or {}).get(name, True))
@@ -9139,19 +9136,20 @@ def _session_perm_payload() -> dict:
 def _open_session_window(requested_by: str) -> None:
     helper = _screen_stream.get("helper")
     if helper is None or not helper.alive:
-        # Direkter Aufnahmeweg (Agent sitzt selbst in der Benutzersitzung): es gibt
-        # noch keinen Helfer. Das Chat-/Rechte-Fenster lebt aber IM Helfer - also
-        # hier einen fuer die Oberflaeche starten (Windows: in die Benutzersitzung,
-        # Linux/macOS: als Prozess mit geerbtem DISPLAY). Fruehere Ursache fuer
-        # "Chat geht nicht" / "kein Rechte-Fenster": ohne Helfer kam nie ein Fenster.
+        # Direct capture path (agent itself sits in the user session): there is
+        # no helper yet. But the chat/permissions window lives IN the helper -
+        # so start one here for the UI (Windows: into the user session,
+        # Linux/macOS: as a process with inherited DISPLAY). Former cause of
+        # "chat does not work" / "no permissions window": without a helper no
+        # window ever appeared.
         try:
             helper = _ensure_helper(_AGENT_LOOP)
         except Exception as e:
-            _print(f"[agent] Sitzungsfenster: Helfer-Start fehlgeschlagen: {e}")
+            _print(f"[agent] session window: helper start failed: {e}")
             helper = None
     if helper is None or not helper.alive:
-        _print("[agent] Hinweis: Chat-/Rechte-Fenster konnte nicht geöffnet werden "
-               "(kein Helfer/Desktop).")
+        _print("[agent] note: chat/permissions window could not be opened "
+               "(no helper/desktop).")
         return
     perms = dict(_session.get("perms") or {})
     perms["admin"] = bool(_session.get("granted"))
@@ -9167,7 +9165,7 @@ def _close_session_window() -> None:
 
 
 def _handle_session_reply(loop, obj: dict) -> None:
-    """Ereignis aus dem Fenster (Benutzersitzung) -> ans Dashboard melden."""
+    """Event from the window (user session) -> report to the dashboard."""
     kind = obj.get("session")
     if kind == "chat":
         text = (obj.get("text") or "")[:2000]
@@ -9176,19 +9174,19 @@ def _handle_session_reply(loop, obj: dict) -> None:
         _session["granted"] = bool(obj.get("granted"))
         _session_emit(loop, "screen-session-grant", {"granted": _session["granted"]})
         _session_emit(loop, "screen-session-perms", _session_perm_payload())
-        _print(f"[agent] Admin-Rechte vom Benutzer {'erteilt' if _session['granted'] else 'entzogen'}")
+        _print(f"[agent] admin rights {'granted' if _session['granted'] else 'revoked'} by the user")
     elif kind == "grant-denied":
         _session_emit(loop, "screen-session-grant", {"granted": False, "denied": True})
-        _print("[agent] Benutzer hat die Anfrage nach Admin-Rechten abgelehnt.")
+        _print("[agent] user denied the request for admin rights.")
     elif kind == "perm":
         name = obj.get("perm")
         if name in ("input", "clipboard", "files"):
             _session.setdefault("perms", {})[name] = bool(obj.get("value"))
             _session_emit(loop, "screen-session-perms", _session_perm_payload())
-            _print(f"[agent] Berechtigung '{name}' vom Benutzer {'erlaubt' if obj.get('value') else 'gesperrt'}")
+            _print(f"[agent] permission '{name}' {'allowed' if obj.get('value') else 'blocked'} by the user")
     elif kind == "clip":
-        # Zwischenablage der Benutzersitzung hat sich geaendert (Helfer-Watcher).
-        # Echo-Filter: Vom Dashboard gesetzte Inhalte nicht zurueckschicken.
+        # The user session's clipboard changed (helper watcher).
+        # Echo filter: do not send back content set by the dashboard.
         text = str(obj.get("text") or "")
         if (_session_perm("clipboard") and text
                 and text != _clip_watch.get("suppress") and len(text) <= _CLIP_MAX):
@@ -9203,7 +9201,7 @@ def _handle_session_reply(loop, obj: dict) -> None:
         _session_emit(loop, "screen-file-out", {k: obj.get(k) for k in
                                                 ("tid", "name", "size", "seq", "data", "last")})
     elif kind == "disconnect":
-        _print("[agent] Benutzer hat die Fernwartung getrennt.")
+        _print("[agent] user disconnected the remote session.")
         _session_emit(loop, "screen-session-disconnect", {})
         _screen_stream["active"] = False
         _screen_stream["epoch"] += 1
@@ -9215,18 +9213,18 @@ def _session_emit(loop, event: str, payload: dict) -> None:
         asyncio.run_coroutine_threadsafe(
             sio.emit(event, {"id": DEVICE_ID, **payload}, namespace="/agent"), loop)
     except Exception as e:      # noqa: BLE001
-        _print(f"[agent] Session-Event {event}: {e}")
+        _print(f"[agent] session event {event}: {e}")
 
 
 def session_grant_active() -> bool:
-    """Darf der Agent waehrend dieser Sitzung mit erhoehten Rechten arbeiten?
-    (Vom Dashboard genutzte Befehle duerfen das pruefen.)"""
+    """May the agent work with elevated rights during this session?
+    (Commands used by the dashboard may check this.)"""
     return bool(_session.get("active") and _session.get("granted"))
 
 
-# --- Datei-Uebertragung in der Sitzung (Admin -> Benutzer) --------------------
-# Ohne Helfer (Linux, Agent laeuft direkt in der Benutzersitzung) schreibt der
-# Agent selbst in den Downloads-Ordner seines Benutzers.
+# --- File transfer in the session (admin -> user) ----------------------------
+# Without a helper (Linux, agent runs directly in the user session) the agent
+# itself writes into its user's Downloads folder.
 _direct_files: dict = {}
 
 
@@ -9263,7 +9261,7 @@ async def on_screen_file_chunk(data):
         return
     helper = _screen_stream.get("helper")
     if helper is not None and helper.alive:
-        # Bestaetigung kommt vom Helfer (file-ack -> _handle_session_reply)
+        # The acknowledgement comes from the helper (file-ack -> _handle_session_reply)
         helper.send({"cmd": "file-chunk", **{k: d.get(k) for k in ("tid", "seq", "name", "size", "data", "last")}})
         return
     try:
@@ -9275,7 +9273,7 @@ async def on_screen_file_chunk(data):
 
 @sio.on("screen-audio", namespace="/agent")
 async def on_screen_audio_toggle(data):
-    """Ton des PCs mitschicken ein/aus (Aufnahme im Helfer, d.h. in der Benutzersitzung)."""
+    """Send the PC's sound along on/off (capture in the helper, i.e. in the user session)."""
     on = bool((data or {}).get("enabled"))
     _screen_stream["audio"] = on
     helper = _screen_stream.get("helper")
@@ -9288,11 +9286,11 @@ async def on_screen_audio_toggle(data):
 
 @sio.on("screen-session-request-grant", namespace="/agent")
 async def on_screen_session_request_grant(data):
-    """Administrator bittet um Administrator-Rechte -> Hinweis im Sitzungsfenster."""
+    """Administrator requests administrator rights -> note in the session window."""
     if not _session.get("active"):
         return
     if not _session.get("window"):
-        _open_session_window(_session.get("by") or "")   # Fenster (und Helfer) notfalls oeffnen
+        _open_session_window(_session.get("by") or "")   # open the window (and helper) if needed
     helper = _screen_stream.get("helper")
     if _session.get("window") and helper is not None and helper.alive:
         helper.send({"cmd": "session-request-grant"})
@@ -9300,11 +9298,11 @@ async def on_screen_session_request_grant(data):
 
 @sio.on("screen-session-chat", namespace="/agent")
 async def on_screen_session_chat(data):
-    """Chat-Nachricht vom Administrator -> im Fenster der Benutzersitzung zeigen."""
+    """Chat message from the administrator -> show in the user session window."""
     text = (data or {}).get("text") or ""
     helper = _screen_stream.get("helper")
     if (helper is None or not helper.alive) and _session.get("active"):
-        _open_session_window(_session.get("by") or "")   # Fenster (und Helfer) notfalls oeffnen
+        _open_session_window(_session.get("by") or "")   # open the window (and helper) if needed
         helper = _screen_stream.get("helper")
     if helper is not None and helper.alive:
         if not _session.get("window"):
@@ -9314,18 +9312,18 @@ async def on_screen_session_chat(data):
 
 @sio.on("screen-start", namespace="/agent")
 async def on_screen_start(data):
-    """Startet das Bildschirm-Streaming - oder signalisiert Shell-Modus bei headless."""
+    """Starts the screen streaming - or signals shell mode on headless."""
     loop = asyncio.get_event_loop()
 
-    # Aufnahme-Qualität/FPS vom Backend übernehmen (aus den Einstellungen).
+    # Take capture quality/FPS from the backend (from the settings).
     if isinstance(data, dict):
         if data.get("quality"):
             _screen_stream["quality"] = int(data["quality"])
         if data.get("fps"):
             _screen_stream["fps"] = int(data["fps"])
 
-    # Ohne Bildaufnahme-Pakete gibt es nichts zu streamen. Vorher aber EINMAL
-    # selbst reparieren - meist sind die Pakete nicht weg, sondern kaputt.
+    # Without screen-capture packages there is nothing to stream. But first try
+    # to repair them ONCE - usually the packages are not gone but broken.
     if not _SCREEN_AVAILABLE:
         await loop.run_in_executor(None, _repair_screen)
     if not _SCREEN_AVAILABLE:
@@ -9337,19 +9335,19 @@ async def on_screen_start(data):
                             params={"err": str(_SCREEN_ERROR), "python": sys.executable})
         return
 
-    # Ist überhaupt ein grafischer Bildschirm da? (setzt auf Linux ggf. DISPLAY)
+    # Is there a graphical screen at all? (sets DISPLAY on Linux if needed)
     available, reason, dcode, dparams = _detect_graphical_display()
     if not available:
         _notify_screen_mode(loop, "shell", reason, code=dcode, params=dparams)
         return
 
-    # Läuft bereits ein Stream? Früher wurde hier einfach zurückgekehrt -
-    # dadurch bekam eine NEU gestartete Sitzung KEINE erneute Zustimmungs-
-    # abfrage und hängte sich still an den laufenden Stream. Jetzt beenden wir
-    # den alten Stream und lassen den normalen Ablauf (inkl. Consent) neu
-    # durchlaufen, sodass jede neue Sitzung sauber bestätigt werden muss.
+    # Is a stream already running? Previously this simply returned here -
+    # so a NEWLY started session got NO fresh consent prompt and silently
+    # attached to the running stream. Now we end the old stream and let the
+    # normal flow (incl. consent) run again, so that every new session must be
+    # confirmed cleanly.
     if _screen_stream["active"]:
-        _print("[agent] screen-start bei bereits aktivem Stream -> alten Stream beenden, Consent neu einholen")
+        _print("[agent] screen-start while a stream is already active -> ending the old stream, obtaining consent again")
         _screen_stream["active"] = False
         old = _screen_stream.get("thread")
         if old and old.is_alive():
@@ -9358,27 +9356,27 @@ async def on_screen_start(data):
             except Exception:
                 pass
 
-    # Zustimmung am Gerät einholen (nur physische Geräte; das Backend schickt
-    # require_consent entsprechend - und als doppelte Absicherung fragen VMs
-    # und LXCs auch bei gesetztem Flag nie).
-    # Mehrbenutzer: Hat das Dashboard einen Benutzer (Windows-Sitzung) gewaehlt,
-    # trifft die Auswahl sowohl die Zustimmungsabfrage als auch die Aufnahme.
+    # Obtain consent at the device (physical devices only; the backend sends
+    # require_consent accordingly - and as a double safeguard, VMs and LXCs
+    # never ask even with the flag set).
+    # Multi-user: if the dashboard chose a user (Windows session), the choice
+    # applies to both the consent prompt and the capture.
     _set_preferred_session((data or {}).get("session") if isinstance(data, dict) else None)
     require_consent = bool(isinstance(data, dict) and data.get("require_consent"))
-    _print(f"[agent] screen-start empfangen (require_consent={require_consent}, "
+    _print(f"[agent] screen-start received (require_consent={require_consent}, "
            f"device_type={DETECTED_DEVICE_TYPE or 'physical'})")
-    # Nur LXC-Container fragen nie (dort meldet sich niemand grafisch an).
-    # VMs fragen sehr wohl - z.B. wenn jemand per RDP in der VM arbeitet.
+    # Only LXC containers never ask (nobody signs in graphically there).
+    # VMs do ask - e.g. when someone works in the VM via RDP.
     if DETECTED_DEVICE_TYPE == "lxc":
         require_consent = False
-    # Niemand angemeldet? Dann gibt es niemanden, der zustimmen könnte ->
-    # direkt verbinden (typisch: unbeaufsichtigter physischer Rechner).
+    # Nobody logged in? Then there is nobody who could consent ->
+    # connect directly (typical: unattended physical machine).
     if require_consent and not await loop.run_in_executor(None, _someone_logged_in):
         _print(f"[agent] {_at('log_nobody_home')}")
         require_consent = False
-    # Marke fuer DIESE Anfrage. Kommt waehrend der Abfrage ein "screen-stop"
-    # (Dashboard-Fenster zu), erhoeht on_screen_stop den Zaehler und wir
-    # brechen danach ab, statt ins Leere zu streamen.
+    # Marker for THIS request. If a "screen-stop" arrives during the prompt
+    # (dashboard window closed), on_screen_stop increments the counter and we
+    # abort afterwards instead of streaming into the void.
     _screen_stream["epoch"] += 1
     my_epoch = _screen_stream["epoch"]
 
@@ -9392,7 +9390,7 @@ async def on_screen_start(data):
                    "ended or been requested again. No stream is started.")
             return
         if _screen_stream["active"]:
-            return  # in der Zwischenzeit anderweitig gestartet
+            return  # started elsewhere in the meantime
         if not allowed:
             _print(f"[agent] {_at('log_screen_denied')}")
             try:
@@ -9409,16 +9407,17 @@ async def on_screen_start(data):
     _screen_stream["active"] = True
     _screen_stream["thread"] = threading.Thread(target=_screen_capture_loop, args=(loop,), daemon=True)
     _screen_stream["thread"].start()
-    # Zwischenablage-Sync (Geraet -> Dashboard) fuer die Dauer der Sitzung.
+    # Clipboard sync (device -> dashboard) for the duration of the session.
     _start_clipboard_watch(loop)
     _print(f"[agent] {_at('log_screen_started')}")
 
-    # Chat-/Steuerfenster in der Benutzersitzung - NUR wenn nicht Silent-Modus
-    # (bei Silent kommt require_consent=False vom Backend). Kurz warten, bis der
-    # Helfer verbunden ist, dann oeffnen.
-    # Silent-Modus (require_consent == False): kein Fenster beim Benutzer UND der
-    # Admin hat sofort erhoehte Rechte, ohne dass jemand am Geraet zustimmt.
-    # Mit Benutzerfreigabe (require_consent == True): Rechte erst nach Klick im Fenster.
+    # Chat/control window in the user session - ONLY when not in silent mode
+    # (in silent mode the backend sends require_consent=False). Wait briefly
+    # until the helper is connected, then open it.
+    # Silent mode (require_consent == False): no window for the user AND the
+    # admin has elevated rights immediately, without anyone at the device
+    # consenting.
+    # With user approval (require_consent == True): rights only after a click in the window.
     _session.update(active=True, by=(data or {}).get("requested_by") or "",
                     granted=not require_consent, perms={"input": True, "clipboard": True, "files": True})
     _session_emit(loop, "screen-session-perms", _session_perm_payload())
@@ -9431,9 +9430,9 @@ async def on_screen_start(data):
             _open_session_window(_session["by"])
         threading.Thread(target=_later, daemon=True).start()
     else:
-        # Dashboard informieren, dass im Silent-Modus bereits Admin-Rechte gelten.
+        # Inform the dashboard that admin rights already apply in silent mode.
         _session_emit(loop, "screen-session-grant", {"granted": True, "silent": True})
-        _print("[agent] Silent-Modus: Admin-Rechte ohne Benutzerfreigabe aktiv.")
+        _print("[agent] silent mode: admin rights active without user approval.")
 
 
 # ============================================================================
