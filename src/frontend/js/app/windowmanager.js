@@ -1,34 +1,34 @@
 // windowmanager.js
 // -----------------
-// Verwaltet alle offenen "Fenster" (Terminal, File-Explorer, Einstellungen, ...).
+// Manages all open "windows" (terminal, file explorer, settings, ...).
 //
-// WICHTIG (Architektur): Jedes Fenster wird GENAU EINMAL als DOM-Element
-// erstellt und dann behalten. Bewegen/Größe ändern/Fokus setzen aktualisiert
-// nur noch einzelne CSS-Eigenschaften des vorhandenen Elements - es wird NICHT
-// das ganze HTML neu gebaut. Dadurch bleiben Event-Handler, Eingabefokus und
-// laufende Inhalte (Terminal-Ausgabe, Live-Bild) erhalten.
+// IMPORTANT (architecture): every window is created as a DOM element EXACTLY
+// ONCE and then kept. Moving / resizing / focusing only updates individual CSS
+// properties of the existing element - it does NOT rebuild the whole HTML. That
+// way event handlers, input focus and running content (terminal output, live
+// image) stay intact.
 //
-// Ein Fenster-Objekt (in state.windows) sieht so aus:
+// A window object (in state.windows) looks like this:
 //   { key, appId, title, x, y, w, h, minimized, props, clientColor,
-//     _el (das DOM-Element), _rendered (ob der Inhalt schon gerendert wurde) }
+//     _el (the DOM element), _rendered (whether the content was rendered yet) }
 
 import { state } from "./state.js";
 import { esc } from "./utils.js";
-// t() wird fuer die Tooltips der Fensterknoepfe gebraucht ("Schliessen" usw.).
+// t() is needed for the tooltips of the window buttons ("Close" etc.).
 import { t } from "./i18n.js";
 import { bindContextMenu } from "./contextmenu.js";
 
-// Optionale Aufräum-Funktionen pro Fenster-Key (z.B. VNC: Stream stoppen,
-// Socket-Listener entfernen). Apps können hier eine Funktion hinterlegen.
+// Optional cleanup functions per window key (e.g. VNC: stop stream, remove
+// socket listeners). Apps can register a function here.
 const cleanupFns = {};
 export function registerCleanup(key, fn) { cleanupFns[key] = fn; }
 
-// appId der Fenster-Apps -> Geraete-Aktion im bytera://-Schema.
+// appId of the window apps -> device action in the bytera:// scheme.
 const _APP_TO_ACTION = {
   vnc: "remotescreen", explorer: "explorer", taskmanager: "tasks",
   terminal: "terminal", guacamole: "guacamole", "edit-client": "edit",
 };
-// Core-/Menue-Apps, die ohne Geraet geoeffnet werden.
+// Core / menu apps that open without a device.
 const _APP_FUNCTION = new Set(["settings", "audit", "permissions", "modules", "nodes", "manage", "profile"]);
 
 function _qs(obj) {
@@ -38,7 +38,7 @@ function _qs(obj) {
   return p.length ? "/" + p.join("&") : "";
 }
 
-// Standard-Link, wenn die App kein eigenes win.getLink() setzt.
+// Default link when the app does not set its own win.getLink().
 function defaultWindowLink(win) {
   const pr = win.props || {};
   const cid = pr.clientId;
@@ -47,7 +47,7 @@ function defaultWindowLink(win) {
   if (_APP_FUNCTION.has(win.appId)) return "bytera://function/" + win.appId;
   const action = _APP_TO_ACTION[win.appId];
   if (cid && action) {
-    // ausgewaehlte Zustands-Parameter je App mitnehmen
+    // carry along selected state parameters per app
     const params = {};
     if (win.appId === "vnc") {
       if (pr.screen != null) params.screen = pr.screen;
@@ -58,7 +58,7 @@ function defaultWindowLink(win) {
     return `bytera://agent/${encodeURIComponent(cid)}/${action}` + _qs(params);
   }
   if (cid) return `bytera://agent/${encodeURIComponent(cid)}`;
-  // Modul-App ohne Geraet
+  // module app without a device
   return "bytera://app/" + win.appId;
 }
 
@@ -68,7 +68,7 @@ export function windowLink(win) {
       const u = win.getLink();
       if (u) return u;
     }
-  } catch { /* egal */ }
+  } catch { /* ignore */ }
   return defaultWindowLink(win);
 }
 
@@ -78,21 +78,21 @@ function copyWindowLink(win) {
     const api = getModuleApi("url-scheme");
     if (api && api.copy) api.copy(url);
     else {
-      try { navigator.clipboard?.writeText(url); } catch { /* egal */ }
-      window.notify?.("Link kopiert: " + url, "success", 2500);
+      try { navigator.clipboard?.writeText(url); } catch { /* ignore */ }
+      window.notify?.("Link copied: " + url, "success", 2500);
     }
   }).catch(() => {
-    try { navigator.clipboard?.writeText(url); } catch { /* egal */ }
+    try { navigator.clipboard?.writeText(url); } catch { /* ignore */ }
     window.notify?.(url, "info", 4000);
   });
 }
 
-// Wird von app.js gesetzt: Funktion, die den Inhalt eines Fensters rendert.
+// Set by app.js: function that renders the content of a window.
 let contentRenderer = null;
 export function setContentRenderer(fn) { contentRenderer = fn; }
 
-// Wird von app.js gesetzt: Callback, wenn sich die Fensterliste ändert
-// (damit die Taskbar aktualisiert werden kann).
+// Set by app.js: callback when the window list changes
+// (so the taskbar can be updated).
 let onWindowsChanged = null;
 export function setOnWindowsChanged(fn) { onWindowsChanged = fn; }
 
@@ -100,37 +100,34 @@ function notifyChanged() {
   if (onWindowsChanged) onWindowsChanged();
 }
 
-let cascade = 0; // sorgt für leicht versetzte Positionierung neuer Fenster
+let cascade = 0; // gives new windows a slightly offset position
 
 // -----------------------------------------------------------------
-// Mehrfach-Instanzen: Standardmäßig holt ein erneutes Öffnen das bereits
-// vorhandene Fenster nach vorne. Wer wirklich eine ZWEITE Instanz will, hält
-// beim Klick die Umschalttaste (Shift) gedrückt ODER klickt mit der RECHTEN
-// Maustaste - beides bedeutet dasselbe und ist ohne Tastatur (Tablet, Maus in
-// der einen Hand) deutlich bequemer.
+// Multiple instances: by default, opening again brings the already existing
+// window to the front. Whoever really wants a SECOND instance holds Shift
+// while clicking OR clicks with the RIGHT mouse button - both mean the same
+// and are far handier without a keyboard (tablet, mouse in one hand).
 //
-// Warum ein globaler Merker statt eines Parameters: Die Apps öffnen Fenster an
-// dutzenden Stellen (Startmenü, Kacheln, Kontextmenüs, Tastenkürzel). Den
-// Modifier überall durchzureichen wäre fehleranfällig - hier wird er einmal
-// zentral mitgeschnitten.
+// Why a global flag instead of a parameter: the apps open windows in dozens of
+// places (start menu, tiles, context menus, shortcuts). Threading the modifier
+// through everywhere would be error-prone - here it is captured centrally once.
 // -----------------------------------------------------------------
 let _shiftDown = false;
-// Merker für die rechte Maustaste. Er wird beim nächsten openWindow()
-// VERBRAUCHT (siehe unten) und danach zurückgesetzt: Ein Rechtsklick erzeugt
-// kein "click"-Ereignis, das ihn sonst wieder löschen würde - er bliebe sonst
-// stehen und die übernächste normale Öffnung bekäme fälschlich ein zweites
-// Fenster.
+// Flag for the right mouse button. It is CONSUMED on the next openWindow()
+// (see below) and reset afterwards: a right-click does not produce a "click"
+// event that would otherwise clear it - it would stay set and the next normal
+// open would wrongly get a second window.
 let _rightClick = false;
 let _rightClickAt = 0;
 try {
   window.addEventListener("keydown", (e) => { if (e.key === "Shift") _shiftDown = true; }, true);
   window.addEventListener("keyup", (e) => { if (e.key === "Shift") _shiftDown = false; }, true);
-  // Maus-/Touch-Ereignisse tragen den echten Zustand - zuverlässiger als
-  // keydown/keyup, wenn zwischendurch der Fokus gewechselt hat.
+  // Mouse/touch events carry the real state - more reliable than keydown/keyup
+  // when focus changed in between.
   window.addEventListener("mousedown", (e) => {
     _shiftDown = !!e.shiftKey;
-    // button 2 = rechte Taste. Beim mousedown mitschneiden, weil manche
-    // Stellen das contextmenu-Ereignis abfangen und nicht weiterreichen.
+    // button 2 = right button. Captured on mousedown because some places
+    // intercept the contextmenu event and do not pass it on.
     if (e.button === 2) { _rightClick = true; _rightClickAt = Date.now(); }
   }, true);
   window.addEventListener("click", (e) => { _shiftDown = !!e.shiftKey; }, true);
@@ -138,10 +135,10 @@ try {
 } catch {}
 
 /**
- * Wurde die Öffnung durch einen Rechtsklick ausgelöst?
- * Der Merker gilt nur kurz (1,5 s). Ohne dieses Zeitfenster würde ein
- * Rechtsklick, der KEIN Fenster öffnet (z.B. auf ein Kontextmenü, das dann
- * weggeklickt wird), die nächste ganz normale Öffnung verfälschen.
+ * Was the open triggered by a right-click?
+ * The flag is only valid briefly (1.5 s). Without this time window a
+ * right-click that does NOT open a window (e.g. on a context menu that is then
+ * clicked away) would taint the next perfectly normal open.
  */
 function _consumeRightClick() {
   const hit = _rightClick && (Date.now() - _rightClickAt) < 1500;
@@ -149,14 +146,14 @@ function _consumeRightClick() {
   return hit;
 }
 
-// Für Apps, die selbst entscheiden wollen (z.B. „Neues Terminal"-Knopf).
+// For apps that want to decide themselves (e.g. the "New terminal" button).
 export function wantsNewInstance() { return _shiftDown || _rightClick; }
 
 const layer = () => document.getElementById("window-layer");
 
-// Bei Größenänderung des Browserfensters alle offenen Fenster wieder
-// vollständig in den sichtbaren Bereich klemmen (sonst können sie beim
-// Verkleinern hinter Topbar/Taskleiste rutschen und unerreichbar werden).
+// On browser-window resize, clamp all open windows fully back into the visible
+// area (otherwise, when shrinking, they can slip behind the topbar/taskbar and
+// become unreachable).
 let _resizeClampTimer = null;
 window.addEventListener("resize", () => {
   clearTimeout(_resizeClampTimer);
@@ -164,43 +161,44 @@ window.addEventListener("resize", () => {
     for (const win of state.windows) {
       if (!win.minimized && !win.maximized && !win.snap) clampWindowIntoView(win);
     }
-    relayoutSnapped(false);   // gesnappte Fenster an die neue Layer-Größe anpassen
+    relayoutSnapped(false);   // adapt snapped windows to the new layer size
     updateSnapDividers();
   }, 100);
 });
 
 // -----------------------------------------------------------------
-// Öffnen / Schließen / Fokus / Minimieren
+// Open / close / focus / minimize
 // -----------------------------------------------------------------
 
 export function openWindow({ key, appId, title, props = {}, clientColor = null, w = 640, h = 460,
                             x = null, y = null, minimized = false, maximized = false, focus = true,
                             singleton = false, pinned = false, newInstance = null }) {
-  // Alte, noch mit '#' persistierte Keys reparieren (CSS-Selektor-sicher).
+  // Repair old keys still persisted with '#' (CSS-selector safe).
   key = String(key).replace(/#/g, "--");
   const existing = state.windows.find((win) => win.key === key);
-  // Soll wirklich eine ZWEITE Instanz entstehen?
-  //   newInstance === true/false -> Aufrufer entscheidet hart
-  //   newInstance === null       -> Umschalttaste entscheidet
-  // Rechtsklick zählt wie Shift. _consumeRightClick() setzt den Merker dabei
-  // zurück, damit er nicht auf die nächste Öffnung durchschlägt.
+  // Should a SECOND instance really be created?
+  //   newInstance === true/false -> caller decides firmly
+  //   newInstance === null       -> the Shift key decides
+  // A right-click counts like Shift. _consumeRightClick() resets the flag in
+  // the process so it does not carry over to the next open.
   const rightNew = _consumeRightClick();
   const forceNew = newInstance === true
     || (newInstance !== false && (_shiftDown || rightNew));
   if (existing && !singleton && forceNew) {
-    // Mehrfach-Instanzen: für die neue Instanz einen eindeutigen Schlüssel
-    // ableiten (key--2, key--3, ...) und ein FRISCHES Fenster bauen.
-    // WICHTIG: KEIN '#' im Suffix! Die Apps bauen Element-IDs aus win.key
-    // (z.B. querySelector(`#term-text-${win.key}`)) - ein '#' im Key machte
-    // diese Selektoren ungültig, wodurch jede 2./3. Instanz "unfunktionell"
-    // war (v.a. mehrere Terminals desselben Clients). Suffix "--n".
+    // Multiple instances: derive a unique key for the new instance
+    // (key--2, key--3, ...) and build a FRESH window.
+    // IMPORTANT: NO '#' in the suffix! The apps build element IDs from win.key
+    // (e.g. querySelector(`#term-text-${win.key}`)) - a '#' in the key would
+    // make those selectors invalid, which made every 2nd/3rd instance
+    // "non-functional" (especially multiple terminals of the same client).
+    // Suffix "--n".
     let n = 2;
     while (state.windows.some((win) => win.key === `${key}--${n}`)) n++;
     key = `${key}--${n}`;
   } else if (existing) {
-    // Fenster existiert schon -> Inhalt/Props aktualisieren (wichtig, wenn
-    // dasselbe "Slot" mit anderem Inhalt herausgelöst wird), wiederherstellen
-    // und nach vorne holen.
+    // Window already exists -> update content/props (important when the same
+    // "slot" is detached with different content), restore it and bring it to
+    // the front.
     existing.props = props;
     existing.title = title;
     existing.clientColor = clientColor;
@@ -231,11 +229,11 @@ export function openWindow({ key, appId, title, props = {}, clientColor = null, 
   state.windows.push(win);
   state.focusOrder.push(key);
 
-  createWindowElement(win); // EINMALIG das DOM-Element bauen
+  createWindowElement(win); // build the DOM element ONCE
   if (win.maximized) {
-    // Maximiert wiederherstellen: gespeicherte Normalgeometrie merken, dann maximieren.
+    // Restore maximized: remember the saved normal geometry, then maximize.
     win._restore = { x: win.x, y: win.y, w: win.w, h: win.h };
-    win.maximized = false;      // toggleMaximize erwartet den Ausgangszustand
+    win.maximized = false;      // toggleMaximize expects the starting state
     toggleMaximize(key);
   } else {
     clampWindowIntoView(win);
@@ -246,7 +244,7 @@ export function openWindow({ key, appId, title, props = {}, clientColor = null, 
   notifyChanged();
 }
 
-// Klemmt ein Fenster vollständig in den sichtbaren Fensterbereich (layer).
+// Clamps a window fully into the visible window area (layer).
 export function clampWindowIntoView(win) {
   const lay = layer();
   if (!lay || !win._el) return;
@@ -259,9 +257,9 @@ export function clampWindowIntoView(win) {
 }
 
 export function closeWindow(key) {
-  // Falls die App eine Aufräum-Funktion registriert hat (z.B. VNC-Stream stoppen)
+  // If the app registered a cleanup function (e.g. stop the VNC stream)
   const win = state.windows.find((w) => w.key === key);
-  // Schließ-Animation abspielen, dann tatsächlich entfernen.
+  // Play the close animation, then actually remove it.
   if (win && win._el && !win._closing) {
     win._closing = true;
     win._el.classList.add("win-closing");
@@ -278,7 +276,7 @@ function _removeWindow(key) {
   }
 
   const win = state.windows.find((w) => w.key === key);
-  if (win && win._el) win._el.remove(); // DOM-Element wirklich entfernen
+  if (win && win._el) win._el.remove(); // actually remove the DOM element
 
   state.windows = state.windows.filter((w) => w.key !== key);
   state.focusOrder = state.focusOrder.filter((k) => k !== key);
@@ -301,7 +299,7 @@ export function toggleMinimize(key) {
   win.minimized = !win.minimized;
   if (win._el) {
     if (win.minimized) {
-      // Einklapp-Animation, dann ausblenden.
+      // Collapse animation, then hide.
       win._el.classList.add("win-minimizing");
       setTimeout(() => {
         win._el.style.display = "none";
@@ -323,16 +321,16 @@ export function toggleMaximize(key) {
   const win = state.windows.find((w) => w.key === key);
   if (!win || !win._el) return;
 
-  // Ein gesnapptes Fenster verlässt beim Maximieren das Snap-Layout.
+  // A snapped window leaves the snap layout when maximized.
   if (win.snap) { win.snap = null; updateSnapDividers(); }
   clearSnapAssist();
 
-  // Für die Dauer des Wechsels sanfte Geometrie-Transition aktivieren.
+  // Enable a smooth geometry transition for the duration of the switch.
   win._el.classList.add("win-animate-geo");
   setTimeout(() => { if (win._el) win._el.classList.remove("win-animate-geo"); }, 230);
 
   if (win.maximized) {
-    // Wiederherstellen: gemerkte Position/Größe zurücksetzen
+    // Restore: reset the remembered position/size
     win.maximized = false;
     win._el.style.left = `${win._restore.x}px`;
     win._el.style.top = `${win._restore.y}px`;
@@ -341,7 +339,7 @@ export function toggleMaximize(key) {
     win.x = win._restore.x; win.y = win._restore.y;
     win.w = win._restore.w; win.h = win._restore.h;
   } else {
-    // Maximieren: aktuelle Maße merken, dann auf den ganzen Fensterbereich strecken
+    // Maximize: remember current dimensions, then stretch over the whole window area
     win._restore = { x: win.x, y: win.y, w: win.w, h: win.h };
     win.maximized = true;
     win._el.style.left = "0px";
@@ -362,13 +360,13 @@ export function minimizeAll() {
 }
 
 // -----------------------------------------------------------------
-// z-Index (welches Fenster liegt oben) anhand der Fokus-Reihenfolge
+// z-index (which window is on top) based on the focus order
 // -----------------------------------------------------------------
 
 function applyFocusZIndex() {
-  // Angepinnte Fenster (📌) liegen IMMER über allen normalen Fenstern -
-  // untereinander gilt weiterhin die Fokus-Reihenfolge. Offset 2000 bleibt
-  // sicher unter Dialogen (9500), Pickern (8000) und Drag-Karten (9999).
+  // Pinned windows (📌) ALWAYS sit above all normal windows - among themselves
+  // the focus order still applies. Offset 2000 stays safely below dialogs
+  // (9500), pickers (8000) and drag cards (9999).
   state.windows.forEach((win) => {
     if (win._el) {
       win._el.style.zIndex = (win.pinned ? 2000 : 100) + state.focusOrder.indexOf(win.key);
@@ -382,13 +380,13 @@ export function togglePin(key) {
   win.pinned = !win.pinned;
   if (win._pinBtn) {
     win._pinBtn.classList.toggle("pinned", win.pinned);
-    win._pinBtn.title = win.pinned ? "Nicht mehr anheften" : "Anheften (immer im Vordergrund)";
+    win._pinBtn.title = win.pinned ? "Unpin" : "Pin (always on top)";
   }
-  focusWindow(key);   // wendet auch den neuen z-Index an
+  focusWindow(key);   // also applies the new z-index
 }
 
 // -----------------------------------------------------------------
-// DOM-Element eines Fensters EINMALIG erstellen
+// Create a window's DOM element ONCE
 // -----------------------------------------------------------------
 
 function createWindowElement(win) {
@@ -400,10 +398,10 @@ function createWindowElement(win) {
   el.style.height = `${win.h}px`;
   el.style.display = win.minimized ? "none" : "flex";
 
-  // Klick irgendwo aufs Fenster -> nach vorne holen
+  // Click anywhere on the window -> bring it to the front
   el.addEventListener("mousedown", () => focusWindow(win.key));
 
-  // --- Titelleiste ---
+  // --- Title bar ---
   const titlebar = document.createElement("div");
   titlebar.className = "rmm-window-titlebar";
   bindContextMenu(titlebar, (e) => (e.target.closest("button") ? null : windowMenu(win.key)));
@@ -415,37 +413,37 @@ function createWindowElement(win) {
   const controls = document.createElement("span");
   controls.className = "win-controls";
 
-  // 🔗 URL kopieren: baut einen bytera://-Link, der den aktuellen Zustand des
-  // Fensters (App, Gerät, Pfad, Einstellungen) abbildet. Die App kann dafuer
-  // win.getLink() setzen (liefert den vollen Link); sonst gibt es einen Standard.
+  // 🔗 Copy URL: builds a bytera:// link that reflects the current state of the
+  // window (app, device, path, settings). The app can set win.getLink() for
+  // this (returns the full link); otherwise there is a default.
   const linkBtn = document.createElement("button");
   linkBtn.className = "win-link-btn";
   linkBtn.textContent = "🔗";
-  linkBtn.title = "URL kopieren (Link zu dieser Ansicht)";
+  linkBtn.title = "Copy URL (link to this view)";
   linkBtn.addEventListener("click", (e) => { e.stopPropagation(); copyWindowLink(win); });
   linkBtn.addEventListener("mousedown", (e) => e.stopPropagation());
 
   const pinBtn = document.createElement("button");
-  // Nur das Icon (Glyph) wird schräg gestellt/gedreht, NICHT die Button-Box.
-  // Dadurch bleibt der Hover-/Angepinnt-Hintergrund immer gerade.
+  // Only the icon (glyph) is slanted/rotated, NOT the button box. That way the
+  // hover / pinned background always stays straight.
   pinBtn.innerHTML = '<span class="win-pin-glyph">📌</span>';
   pinBtn.className = "win-pin-btn" + (win.pinned ? " pinned" : "");
-  pinBtn.title = win.pinned ? "Nicht mehr anheften" : "Anheften (immer im Vordergrund)";
+  pinBtn.title = win.pinned ? "Unpin" : "Pin (always on top)";
   pinBtn.addEventListener("click", (e) => { e.stopPropagation(); togglePin(win.key); });
   pinBtn.addEventListener("mousedown", (e) => e.stopPropagation());
   win._pinBtn = pinBtn;
 
   const minBtn = document.createElement("button");
   minBtn.textContent = "–";
-  minBtn.title = "Minimieren";
-  // Wichtig: mousedown statt click verhindern, dass das Drag/Focus dazwischenfunkt
+  minBtn.title = "Minimize";
+  // Important: mousedown instead of click prevents drag/focus from interfering
   minBtn.addEventListener("click", (e) => { e.stopPropagation(); toggleMinimize(win.key); });
   minBtn.addEventListener("mousedown", (e) => e.stopPropagation());
 
   const maxBtn = document.createElement("button");
-  maxBtn.className = "win-max-btn";   // NUR am Handy per CSS versteckt (Fenster dort eh Vollbild)
+  maxBtn.className = "win-max-btn";   // only hidden via CSS on mobile (windows are fullscreen there anyway)
   maxBtn.textContent = "□";
-  maxBtn.title = "Vollbild / Wiederherstellen";
+  maxBtn.title = "Fullscreen / Restore";
   maxBtn.addEventListener("click", (e) => { e.stopPropagation(); toggleMaximize(win.key); });
   maxBtn.addEventListener("mousedown", (e) => e.stopPropagation());
 
@@ -463,19 +461,19 @@ function createWindowElement(win) {
   titlebar.appendChild(titleSpan);
   titlebar.appendChild(controls);
   makeDraggable(titlebar, el, win);
-  // Doppelklick auf die Titelleiste = maximieren/wiederherstellen (wie üblich)
+  // Double-click on the title bar = maximize/restore (as usual)
   titlebar.addEventListener("dblclick", (e) => {
     if (e.target.closest(".win-controls")) return;
     toggleMaximize(win.key);
   });
   el.appendChild(titlebar);
 
-  // --- Inhalt ---
+  // --- Content ---
   const body = document.createElement("div");
   body.className = "rmm-window-body";
   el.appendChild(body);
 
-  // --- Resize-Griffe: Ecke (beide Achsen) + Kanten (rechts, unten) ---
+  // --- Resize handles: corner (both axes) + edges (right, bottom) ---
   const resizeHandle = document.createElement("div");
   resizeHandle.className = "rmm-window-resize-handle";
   makeResizable(resizeHandle, el, win, "both");
@@ -494,7 +492,7 @@ function createWindowElement(win) {
   win._el = el;
   layer().appendChild(el);
 
-  // Inhalt EINMALIG rendern (danach lebt er eigenständig weiter)
+  // Render the content ONCE (after that it lives on independently)
   if (contentRenderer) {
     contentRenderer(body, win);
     win._rendered = true;
@@ -502,12 +500,12 @@ function createWindowElement(win) {
 }
 
 // -----------------------------------------------------------------
-// Verschieben (Drag) - aktualisiert live, ohne Neu-Rendern
+// Moving (drag) - updates live, without re-rendering
 // -----------------------------------------------------------------
 
 function makeDraggable(handle, windowEl, win) {
   handle.addEventListener("mousedown", (e) => {
-    // Klicks auf die Steuerungs-Buttons nicht als Drag interpretieren
+    // Do not treat clicks on the control buttons as a drag
     if (e.target.closest(".win-controls")) return;
     e.preventDefault();
     focusWindow(win.key);
@@ -517,17 +515,17 @@ function makeDraggable(handle, windowEl, win) {
     const startY = e.clientY;
     let startLeft = win.x;
     let startTop = win.y;
-    // Wo (relativ, 0..1) hat der Nutzer die Titelleiste gegriffen? Wird beim
-    // Loslösen aus Snap/Maximiert gebraucht, damit das Fenster unter dem
-    // Cursor "einrastet" statt wegzuspringen (Windows-Verhalten).
+    // Where (relative, 0..1) did the user grab the title bar? Needed when
+    // releasing from snap/maximized so the window "snaps" under the cursor
+    // instead of jumping away (Windows behaviour).
     const grabFrac = (e.clientX - windowEl.getBoundingClientRect().left) /
                      Math.max(1, windowEl.offsetWidth);
     let dragging = false;
-    let released = false;   // wurde ein gesnapptes/maximiertes Fenster schon gelöst?
+    let released = false;   // has a snapped/maximized window already been released?
 
     function releaseFromSnap(ev) {
-      // Fenster aus Snap/Maximiert lösen: alte Größe wiederherstellen und so
-      // positionieren, dass der Cursor proportional auf der Titelleiste bleibt.
+      // Release a window from snap/maximized: restore the old size and position
+      // it so the cursor stays proportionally on the title bar.
       const r = (win.maximized ? win._restore : win._snapRestore) || { w: 640, h: 460 };
       win.maximized = false;
       win.snap = null;
@@ -538,7 +536,7 @@ function makeDraggable(handle, windowEl, win) {
       win.y = Math.max(0, Math.round(ev.clientY - layRect.top - 14));
       windowEl.style.width = `${win.w}px`;
       windowEl.style.height = `${win.h}px`;
-      // Bezugspunkte neu setzen, damit die Drag-Formel nahtlos weiterläuft.
+      // Reset the reference points so the drag formula continues seamlessly.
       startLeft = win.x - (ev.clientX - startX);
       startTop = win.y - (ev.clientY - startY);
       updateSnapDividers();
@@ -551,9 +549,9 @@ function makeDraggable(handle, windowEl, win) {
 
       let nx = startLeft + (ev.clientX - startX);
       let ny = startTop + (ev.clientY - startY);
-      // In die Grenzen des Fensterbereichs (layer) klemmen, damit kein Rand
-      // je außerhalb landet. layer sitzt zwischen Topbar (oben) und Taskleiste
-      // (unten); Fenster-Koordinaten sind relativ dazu.
+      // Clamp into the bounds of the window area (layer) so no edge ever ends
+      // up outside. layer sits between the topbar (top) and taskbar (bottom);
+      // window coordinates are relative to it.
       const lay = layer();
       if (lay) {
         const maxX = Math.max(0, lay.clientWidth - windowEl.offsetWidth);
@@ -566,7 +564,7 @@ function makeDraggable(handle, windowEl, win) {
       windowEl.style.left = `${win.x}px`;
       windowEl.style.top = `${win.y}px`;
 
-      // Snap-Zone unter dem Cursor ermitteln + Vorschau anzeigen.
+      // Determine the snap zone under the cursor + show a preview.
       showSnapPreview(zoneForPointer(ev.clientX, ev.clientY));
     }
     function onUp(ev) {
@@ -575,7 +573,7 @@ function makeDraggable(handle, windowEl, win) {
       const zone = dragging ? zoneForPointer(ev.clientX, ev.clientY) : null;
       showSnapPreview(null);
       if (zone) snapWindowTo(win.key, zone);
-      notifyChanged();   // neue Position speichern
+      notifyChanged();   // save the new position
     }
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
@@ -583,37 +581,37 @@ function makeDraggable(handle, windowEl, win) {
 }
 
 // -----------------------------------------------------------------
-// Größe ändern (Resize) - ebenfalls live
+// Resizing - also live
 // -----------------------------------------------------------------
 
 function makeResizable(handle, windowEl, win, axis = "both") {
   handle.addEventListener("mousedown", (e) => {
     e.preventDefault();
     e.stopPropagation();
-    // Wenn maximiert, erst wiederherstellen (sonst ergibt Resizen keinen Sinn)
+    // If maximized, restore first (otherwise resizing makes no sense)
     if (win.maximized) return;
-    // Manuelles Resizen löst das Fenster aus dem Snap-Layout (aktuelle
-    // Geometrie bleibt als Ausgangspunkt erhalten).
+    // Resizing manually releases the window from the snap layout (the current
+    // geometry stays as the starting point).
     if (win.snap) { win.snap = null; updateSnapDividers(); }
 
     const startX = e.clientX;
     const startY = e.clientY;
     const startW = win.w;
     const startH = win.h;
-    // Während des Ziehens Textauswahl verhindern (sonst wird alles markiert)
+    // Prevent text selection while dragging (otherwise everything gets selected)
     document.body.style.userSelect = "none";
 
     function onMove(ev) {
       const lay = layer();
       if (axis === "x" || axis === "both") {
         let nw = Math.max(380, startW + (ev.clientX - startX));
-        if (lay) nw = Math.min(nw, lay.clientWidth - win.x);  // nicht über rechten Rand
+        if (lay) nw = Math.min(nw, lay.clientWidth - win.x);  // not past the right edge
         win.w = nw;
         windowEl.style.width = `${win.w}px`;
       }
       if (axis === "y" || axis === "both") {
         let nh = Math.max(260, startH + (ev.clientY - startY));
-        if (lay) nh = Math.min(nh, lay.clientHeight - win.y);  // nicht über unteren Rand
+        if (lay) nh = Math.min(nh, lay.clientHeight - win.y);  // not past the bottom edge
         win.h = nh;
         windowEl.style.height = `${win.h}px`;
       }
@@ -622,7 +620,7 @@ function makeResizable(handle, windowEl, win, axis = "both") {
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
       document.body.style.userSelect = "";
-      notifyChanged();   // neue Größe speichern
+      notifyChanged();   // save the new size
     }
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
@@ -630,26 +628,26 @@ function makeResizable(handle, windowEl, win, axis = "both") {
 }
 
 // =================================================================
-// SNAP-SYSTEM: Windows-artige Fensteranordnung
+// SNAP SYSTEM: Windows-like window arrangement
 // -----------------------------------------------------------------
-// - Fenster an eine Kante/Ecke ziehen -> rastet mit Animation ein:
-//     oben mittig            = Maximieren
-//     links/rechts           = halbe Breite (2 Fenster nebeneinander)
-//     oben/unten (seitlich)  = halbe Höhe   (2 Fenster übereinander)
-//     Ecken                  = Viertel (3er-/4er-Layouts)
-// - Die Trennlinien merken sich globale Teilungsverhältnisse (splits.v/h).
-//   Zieht man an einer Grenze, an der auf BEIDEN Seiten gesnappte Fenster
-//   liegen, werden ALLE angrenzenden Fenster gemeinsam resized (wie Windows).
-// - Snap-Assist: nach dem Einrasten zeigt jede noch freie Nachbar-Zone eine
-//   Auswahl der übrigen Fenster - Klick snappt das Fenster dorthin.
+// - Drag a window to an edge/corner -> it snaps in with animation:
+//     top center             = maximize
+//     left/right             = half width  (2 windows side by side)
+//     top/bottom (on a side) = half height (2 windows on top of each other)
+//     corners                = quarter (3-/4-window layouts)
+// - The dividers remember global split ratios (splits.v/h). When you drag a
+//   border that has snapped windows on BOTH sides, ALL adjacent windows are
+//   resized together (like Windows).
+// - Snap assist: after snapping, each still-free neighbour zone shows a choice
+//   of the remaining windows - a click snaps the window there.
 // =================================================================
 
-// Teilungen PRO SEGMENT (0..1): So kann z.B. bei 4 Fenstern die Grenze
-// zwischen den beiden UNTEREN unabhängig von den oberen verschoben werden.
-//   vt = vertikale Linie in der oberen Reihe    vb = in der unteren Reihe
-//   hl = horizontale Linie in der linken Spalte hr = in der rechten Spalte
-// Liegt ein Fenster über die volle Höhe/Breite an (left/right bzw. top/
-// bottom), werden die betroffenen Segmente automatisch gekoppelt.
+// Splits PER SEGMENT (0..1): so that with 4 windows, for example, the border
+// between the two LOWER ones can be moved independently of the upper ones.
+//   vt = vertical line in the top row     vb = in the bottom row
+//   hl = horizontal line in the left col  hr = in the right col
+// When a window spans the full height/width (left/right or top/bottom), the
+// affected segments are automatically coupled.
 const splits = { vt: 0.5, vb: 0.5, hl: 0.5, hr: 0.5 };
 let _snapPreviewEl = null;
 let _dividerEls = [];
@@ -659,7 +657,7 @@ function _activeZones() {
   return state.windows.filter((w) => w.snap && !w.minimized).map((w) => w.snap);
 }
 
-// Effektive Linien: Vollhöhen-/Vollbreiten-Fenster erzwingen EINE Linie.
+// Effective lines: full-height / full-width windows force ONE line.
 function _lines() {
   const zones = _activeZones();
   const fullH = zones.includes("left") || zones.includes("right");
@@ -672,13 +670,13 @@ function _lines() {
   };
 }
 
-// Zonen, die links/rechts bzw. oben/unten der Trennlinie liegen.
+// Zones that lie left/right or top/bottom of the divider.
 const _LEFT_ZONES = ["left", "tl", "bl"];
 const _RIGHT_ZONES = ["right", "tr", "br"];
 const _TOP_ZONES = ["top", "tl", "tr"];
 const _BOTTOM_ZONES = ["bottom", "bl", "br"];
 
-// Ziel-Rechteck (px) einer Zone, abhängig von den aktuellen Teilungen.
+// Target rectangle (px) of a zone, depending on the current splits.
 function snapRect(zone) {
   const lay = layer();
   if (!lay) return null;
@@ -700,21 +698,21 @@ function snapRect(zone) {
   return null;
 }
 
-// Welche Zone liegt unter dem Mauszeiger? (null = keine)
+// Which zone lies under the mouse pointer? (null = none)
 function zoneForPointer(cx, cy) {
   const lay = layer();
   if (!lay) return null;
   const r = lay.getBoundingClientRect();
   const x = cx - r.left, y = cy - r.top, W = r.width, H = r.height;
-  const T = 14;    // Kanten-Nähe in px
-  const C = 150;   // Ecken-Bereich entlang der Kante in px
+  const T = 14;    // edge proximity in px
+  const C = 150;   // corner area along the edge in px
   const nearL = x < T, nearR = x > W - T, nearT = y < T, nearB = y > H - T;
   if (!nearL && !nearR && !nearT && !nearB) return null;
   if (nearT) {
     if (x < C) return "tl";
     if (x > W - C) return "tr";
-    if (x > W / 3 && x < (2 * W) / 3) return "max";   // oben MITTIG = maximieren
-    return "top";                                       // oben seitlich = obere Hälfte
+    if (x > W / 3 && x < (2 * W) / 3) return "max";   // top CENTER = maximize
+    return "top";                                       // top on a side = top half
   }
   if (nearB) {
     if (x < C) return "bl";
@@ -725,7 +723,7 @@ function zoneForPointer(cx, cy) {
   return y < C ? "tr" : (y > H - C ? "br" : "right");
 }
 
-// Halbtransparente Vorschau der Ziel-Zone während des Ziehens.
+// Semi-transparent preview of the target zone while dragging.
 function showSnapPreview(zone) {
   const lay = layer();
   if (!lay) return;
@@ -747,7 +745,7 @@ function showSnapPreview(zone) {
   _snapPreviewEl.style.height = `${rect.h}px`;
 }
 
-// Geometrie anwenden (optional mit sanfter Animation über win-animate-geo).
+// Apply geometry (optionally with a smooth animation via win-animate-geo).
 function applySnapGeometry(win, rect, animate = true) {
   if (!win._el || !rect) return;
   if (animate) {
@@ -761,18 +759,18 @@ function applySnapGeometry(win, rect, animate = true) {
   win._el.style.height = `${rect.h}px`;
 }
 
-// Fenster in eine Zone snappen.
+// Snap a window into a zone.
 export function snapWindowTo(key, zone, { assist = true, animate = true } = {}) {
   const win = state.windows.find((w) => w.key === key);
   if (!win || !win._el) return;
   const rect = snapRect(zone);
   if (!rect) return;
-  // Sonderfall "max" (Fenster oben mittig hochgezogen): Das ist ein ECHTES
-  // Maximieren, kein Snap. Früher wurde hier win.snap="max" gesetzt und
-  // win.maximized blieb false - ein Klick auf den Maximize-Button hat das
-  // Fenster dann erneut "maximiert" (keine sichtbare Änderung) statt es
-  // wiederherzustellen. Jetzt läuft der Fall über toggleMaximize, damit
-  // der Button das Fenster korrekt auf die alte Größe zurückbringt.
+  // Special case "max" (window pulled up to the top center): that is a REAL
+  // maximize, not a snap. Previously win.snap="max" was set here and
+  // win.maximized stayed false - a click on the maximize button then
+  // "maximized" the window again (no visible change) instead of restoring it.
+  // Now the case goes through toggleMaximize so the button correctly brings
+  // the window back to its old size.
   if (zone === "max") {
     win.snap = null;
     win.minimized = false;
@@ -782,15 +780,15 @@ export function snapWindowTo(key, zone, { assist = true, animate = true } = {}) 
     updateSnapDividers();
     return;
   }
-  // Vor dem ERSTEN Snap die normale Geometrie merken (fürs Herausziehen).
+  // Before the FIRST snap, remember the normal geometry (for pulling out).
   if (!win.snap && !win.maximized) {
     win._snapRestore = { x: win.x, y: win.y, w: win.w, h: win.h };
   }
   win.maximized = false;
   win.snap = zone;
   win.minimized = false;
-  // Rastet ein Fenster über die volle Höhe/Breite ein, die getrennten
-  // Segmente wieder auf EINE Linie zusammenführen (sonst gäbe es Lücken).
+  // When a window snaps across the full height/width, merge the separated
+  // segments back onto ONE line (otherwise there would be gaps).
   if (zone === "left" || zone === "right") splits.vb = splits.vt;
   if (zone === "top" || zone === "bottom") splits.hr = splits.hl;
   win._el.style.display = "flex";
@@ -801,7 +799,7 @@ export function snapWindowTo(key, zone, { assist = true, animate = true } = {}) 
   if (assist) showSnapAssist(win, zone);
 }
 
-// Alle gesnappten Fenster an die aktuellen Teilungen/Layer-Größe anpassen.
+// Adapt all snapped windows to the current splits / layer size.
 function relayoutSnapped(animate = false) {
   for (const win of state.windows) {
     if (win.snap && !win.minimized) {
@@ -811,13 +809,13 @@ function relayoutSnapped(animate = false) {
 }
 
 // -----------------------------------------------------------------
-// Gemeinsame Grenzen: unsichtbare Griffe auf den Trennlinien. Ziehen
-// verschiebt die Teilung und resized ALLE angrenzenden Fenster live.
+// Shared borders: invisible handles on the dividers. Dragging moves the split
+// and resizes ALL adjacent windows live.
 // -----------------------------------------------------------------
 function updateSnapDividers() {
   const lay = layer();
   if (!lay) return;
-  // Alte Griffe entfernen und aus dem aktuellen Layout neu aufbauen.
+  // Remove old handles and rebuild from the current layout.
   _dividerEls.forEach((el) => { try { el.remove(); } catch {} });
   _dividerEls = [];
 
@@ -825,23 +823,23 @@ function updateSnapDividers() {
   const has = (z) => zones.includes(z);
   const W = lay.clientWidth, H = lay.clientHeight;
   const L = _lines();
-  const fullH = has("left") || has("right");   // Vollhöhen-Fenster vorhanden?
-  const fullW = has("top") || has("bottom");   // Vollbreiten-Fenster vorhanden?
+  const fullH = has("left") || has("right");   // is a full-height window present?
+  const fullW = has("top") || has("bottom");   // is a full-width window present?
 
-  // Wer grenzt wo an die vertikale Linie?
+  // Who borders the vertical line, and where?
   const leftTop = has("tl") || has("left"),  rightTop = has("tr") || has("right");
   const leftBot = has("bl") || has("left"),  rightBot = has("br") || has("right");
-  // ... und an die horizontale Linie?
+  // ... and the horizontal line?
   const topLeft = has("tl") || has("top"),   botLeft = has("bl") || has("bottom");
   const topRight = has("tr") || has("top"),  botRight = has("br") || has("bottom");
 
   const segs = [];
-  const hMid = H * ((L.hl + L.hr) / 2);   // Übergabepunkt zwischen oberem/unterem v-Segment
-  const vMid = W * ((L.vt + L.vb) / 2);   // ... zwischen linkem/rechtem h-Segment
+  const hMid = H * ((L.hl + L.hr) / 2);   // handover point between the upper/lower v-segment
+  const vMid = W * ((L.vt + L.vb) / 2);   // ... between the left/right h-segment
 
-  // Vertikale Segmente. keys = welche Teilungen dieses Segment steuert:
-  // grenzt ein Vollhöhen-Fenster an, bewegt der Griff BEIDE (vt+vb) -> ganze
-  // Linie; sonst nur das eigene Segment (z.B. nur die Grenze der unteren zwei).
+  // Vertical segments. keys = which splits this segment controls: if a
+  // full-height window borders it, the handle moves BOTH (vt+vb) -> the whole
+  // line; otherwise only its own segment (e.g. just the border of the lower two).
   const vBoth = leftTop && rightTop && leftBot && rightBot;
   if (leftTop && rightTop) {
     segs.push({ axis: "v", keys: fullH ? ["vt", "vb"] : ["vt"],
@@ -851,7 +849,7 @@ function updateSnapDividers() {
     segs.push({ axis: "v", keys: fullH ? ["vt", "vb"] : ["vb"],
                 x: W * L.vb, y0: vBoth ? hMid : 0, y1: H });
   }
-  // Horizontale Segmente (analog, gekoppelt bei Vollbreiten-Fenstern).
+  // Horizontal segments (analogous, coupled for full-width windows).
   const hBoth = topLeft && botLeft && topRight && botRight;
   if (topLeft && botLeft) {
     segs.push({ axis: "h", keys: fullW ? ["hl", "hr"] : ["hl"],
@@ -887,9 +885,9 @@ function _makeDividerDraggable(el, axis, keys) {
   el.addEventListener("mousedown", (e) => {
     e.preventDefault();
     e.stopPropagation();
-    // LINKSKLICK: die ganze Trennlinie verschieben -> ALLE angrenzenden Fenster
-    //   werden gemeinsam angepasst (Windows-Standard).
-    // RECHTSKLICK: nur dieses Segment -> NUR die beiden Fenster an dieser Grenze.
+    // LEFT-CLICK: move the whole divider -> ALL adjacent windows are adjusted
+    //   together (Windows default).
+    // RIGHT-CLICK: only this segment -> ONLY the two windows at this border.
     const rightClick = e.button === 2;
     const affected = rightClick ? keys
       : (axis === "v" ? ["vt", "vb"] : ["hl", "hr"]);
@@ -905,9 +903,9 @@ function _makeDividerDraggable(el, axis, keys) {
         ? Math.min(0.85, Math.max(0.15, (ev.clientX - r.left) / r.width))
         : Math.min(0.85, Math.max(0.15, (ev.clientY - r.top) / r.height));
       for (const k of affected) splits[k] = frac;
-      relayoutSnapped(false);   // live, ohne Animation (folgt dem Cursor)
-      // Griffe NICHT neu aufbauen (das würde diesen Drag abbrechen), nur
-      // den aktiven Griff mitführen.
+      relayoutSnapped(false);   // live, without animation (follows the cursor)
+      // Do NOT rebuild the handles (that would abort this drag), only move the
+      // active handle along.
       if (axis === "v") el.style.left = `${Math.round(r.width * frac) - 4}px`;
       else el.style.top = `${Math.round(r.height * frac) - 4}px`;
     }
@@ -917,7 +915,7 @@ function _makeDividerDraggable(el, axis, keys) {
       el.classList.remove("dragging");
       document.body.style.userSelect = "";
       document.body.style.cursor = "";
-      updateSnapDividers();   // Segmente/Längen jetzt sauber neu berechnen
+      updateSnapDividers();   // recompute segments/lengths cleanly now
       notifyChanged();
     }
     document.addEventListener("mousemove", onMove);
@@ -926,8 +924,8 @@ function _makeDividerDraggable(el, axis, keys) {
 }
 
 // -----------------------------------------------------------------
-// Snap-Assist: freie Nachbar-Zonen zeigen eine Auswahl der übrigen
-// Fenster (wie Windows) - Klick snappt das gewählte Fenster dorthin.
+// Snap assist: free neighbour zones show a choice of the remaining windows
+// (like Windows) - a click snaps the chosen window there.
 // -----------------------------------------------------------------
 const _COMPLEMENTS = {
   left: ["right"], right: ["left"], top: ["bottom"], bottom: ["top"],
@@ -944,14 +942,14 @@ export function clearSnapAssist() {
 }
 function _assistEsc(e) { if (e.key === "Escape") clearSnapAssist(); }
 
-// Klick IRGENDWO außerhalb der Vorschlags-Flächen schließt ALLE Vorschläge.
-// Vorher blieben sie stehen, wenn man z.B. in ein Fenster, auf den Desktop
-// oder in die Taskleiste geklickt hat. Capture-Phase, damit es auch greift,
-// wenn das Ziel den Klick selbst stoppt.
+// A click ANYWHERE outside the suggestion areas closes ALL suggestions.
+// Previously they stayed up when you clicked e.g. into a window, onto the
+// desktop or into the taskbar. Capture phase, so it also fires when the target
+// stops the click itself.
 function _assistOutside(e) {
   if (!_assistEls.length) return;
-  // Klicks INNERHALB einer Vorschlagsfläche behandelt showSnapAssist selbst
-  // (Kachel = Fenster einrasten, freie Fläche = nur diese Zone schließen).
+  // Clicks INSIDE a suggestion area are handled by showSnapAssist itself
+  // (tile = snap the window, free area = close only that zone).
   for (const el of _assistEls) {
     if (el === e.target || el.contains(e.target)) return;
   }
@@ -966,7 +964,7 @@ function showSnapAssist(sourceWin, zone) {
     state.windows.filter((w) => w.snap && w.key !== sourceWin.key).map((w) => w.snap)
   );
   const empty = (_COMPLEMENTS[zone] || []).filter((z) => !occupied.has(z));
-  // Kandidaten: alle anderen, noch nicht gesnappten Fenster.
+  // Candidates: all other windows that are not snapped yet.
   let candidates = state.windows.filter((w) => w.key !== sourceWin.key && !w.snap);
   if (!empty.length || !candidates.length) return;
 
@@ -1004,7 +1002,7 @@ function showSnapAssist(sourceWin, zone) {
         });
         overlay.appendChild(tile);
       }
-      // Klick auf die freie Fläche = Auswahl abbrechen (nur diese Zone).
+      // Click on the free area = cancel the choice (only this zone).
       overlay.addEventListener("mousedown", (e) => {
         if (e.target === overlay) {
           overlay.remove();
@@ -1017,13 +1015,13 @@ function showSnapAssist(sourceWin, zone) {
   renderTiles();
   document.addEventListener("keydown", _assistEsc, true);
   document.addEventListener("mousedown", _assistOutside, true);
-  // Verlässt der Fokus das Fenster (Tab-Wechsel), ebenfalls aufräumen.
+  // If focus leaves the window (tab switch), clean up as well.
   window.addEventListener("blur", clearSnapAssist);
 }
 
 // ------------------------------------------------------------------
-// Fenster-Menü (Rechtsklick auf die Titelleiste). Gleiche Aktionen wie die
-// Taskleiste; hier inline, um Import-Zyklen mit taskbar.js zu vermeiden.
+// Window menu (right-click on the title bar). Same actions as the taskbar;
+// inline here to avoid import cycles with taskbar.js.
 // ------------------------------------------------------------------
 export function windowMenu(key) {
   const win = state.windows.find((w) => w.key === key);
@@ -1032,23 +1030,23 @@ export function windowMenu(key) {
   return [
     { header: win.title },
     { separator: true },
-    { label: win.maximized ? "Wiederherstellen" : "Maximieren", icon: win.maximized ? "🗗" : "🗖",
+    { label: win.maximized ? "Restore" : "Maximize", icon: win.maximized ? "🗗" : "🗖",
       onClick: () => { toggleMaximize(key); } },
-    { label: "Minimieren", icon: "🔽", onClick: () => { toggleMinimize(key); } },
-    { label: "Andocken", icon: "▦", submenu: [
-      { label: "Linke Hälfte", icon: "◧", onClick: snap("left") },
-      { label: "Rechte Hälfte", icon: "◨", onClick: snap("right") },
-      { label: "Obere Hälfte", icon: "▀", onClick: snap("top") },
-      { label: "Untere Hälfte", icon: "▄", onClick: snap("bottom") },
+    { label: "Minimize", icon: "🔽", onClick: () => { toggleMinimize(key); } },
+    { label: "Dock", icon: "▦", submenu: [
+      { label: "Left half", icon: "◧", onClick: snap("left") },
+      { label: "Right half", icon: "◨", onClick: snap("right") },
+      { label: "Top half", icon: "▀", onClick: snap("top") },
+      { label: "Bottom half", icon: "▄", onClick: snap("bottom") },
     ] },
-    { label: win.pinned ? "Lösen (nicht mehr anheften)" : "Immer im Vordergrund", icon: "📌",
+    { label: win.pinned ? "Unpin (no longer on top)" : "Always on top", icon: "📌",
       onClick: () => { togglePin(key); } },
     { separator: true },
-    { label: "In neuem Fenster öffnen", icon: "🗔", onClick: () => {
+    { label: "Open in new window", icon: "🗔", onClick: () => {
       openWindow({ key: win.appId + "-" + Math.random().toString(36).slice(2, 7), appId: win.appId,
                    title: win.title, props: { ...(win.props || {}) }, clientColor: win.clientColor, w: win.w, h: win.h });
     } },
     { separator: true },
-    { label: "Schließen", icon: "✖️", danger: true, onClick: () => { closeWindow(key); } },
+    { label: "Close", icon: "✖️", danger: true, onClick: () => { closeWindow(key); } },
   ];
 }
