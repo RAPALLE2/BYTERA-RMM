@@ -1,14 +1,14 @@
 // apps/vnc.js
 // -----------
-// Vollwertiger Remote Screen: empfängt Live-Bildschirm-Frames vom Agenten
-// (als JPEG-Base64 über Socket.IO) und zeigt sie an. Maus- und Tastatur-
-// Eingaben werden zurück an den Agenten geschickt, der sie lokal ausführt.
+// Full remote screen: receives live screen frames from the agent
+// (as JPEG base64 over Socket.IO) and displays them. Mouse and keyboard
+// input is sent back to the agent, which executes it locally.
 //
-// Ablauf:
-//   1. Fenster öffnet -> "screen-start" ans Backend -> Agent beginnt zu streamen
-//   2. Eingehende "screen-frame" Events -> Bild ins <img> setzen
-//   3. Maus/Tastatur im Bild -> Koordinaten umrechnen -> "screen-input" senden
-//   4. Fenster schließt -> "screen-stop" senden (siehe cleanup in app.js)
+// Flow:
+//   1. Window opens -> "screen-start" to the backend -> agent starts streaming
+//   2. Incoming "screen-frame" events -> set the image into <img>
+//   3. Mouse/keyboard on the image -> convert coordinates -> send "screen-input"
+//   4. Window closes -> send "screen-stop" (see cleanup in app.js)
 
 import { dashboardSocket } from "../app/socket.js";
 import { attachPinchZoom } from "../app/touchgestures.js";
@@ -21,7 +21,7 @@ import { t } from "../app/i18n.js";
 
 export function renderVnc(body, win) {
   const { clientId, clientName } = win.props;
-  // URL kopieren: Fernwartung dieses Geräts (aktuell gezeigter Monitor + Parameter).
+  // Copy URL: remote support of this device (currently shown monitor + parameters).
   win.getLink = () => {
     const p = [];
     const m = (typeof monitorIndex === "number" && monitorIndex > 0) ? monitorIndex
@@ -31,24 +31,24 @@ export function renderVnc(body, win) {
     if (win.props?.resolution) p.push("resolution=" + win.props.resolution);
     return `bytera://agent/${encodeURIComponent(clientId)}/remotescreen` + (p.length ? "/" + p.join("&") : "");
   };
-  // Alle Steuer-Events an das Geraet tragen den Benutzernamen - das Backend
-  // prueft damit das Recht use_screen (frueher war screen-input ungeprueft).
+  // All control events to the device carry the username - the backend
+  // uses it to check the use_screen permission (screen-input was unchecked before).
   const _me = () => state.user?.username || "";
   const sendInput = (d) => dashboardSocket.emit("screen-input", { clientId, username: _me(), ...d });
   const getClip = () => dashboardSocket.emit("screen-clipboard-get", { clientId, username: _me() });
   const setMonitor = (monitor) => dashboardSocket.emit("screen-set-monitor", { clientId, username: _me(), monitor });
   const stopScreen = () => dashboardSocket.emit("screen-stop", { clientId, username: _me() });
 
-  // WICHTIG zum Layout: Der Fenster-Body (.rmm-window-body) ist ein Flex-Item
-  // mit "flex:1" und "overflow:auto", hat also KEINE feste Hoehe. Ein
-  // "height:100%" darauf laeuft ins Leere (die Hoehe haengt am Inhalt, der
-  // Inhalt an der Hoehe). Genau daran lag das nicht zentrierte Bild: Der
-  // Bildbereich wuchs auf die volle Bildhoehe, "max-height:100%" griff nie,
-  // das Bild wurde auf die volle Fensterbreite gestreckt und unten
-  // abgeschnitten - man sah nur noch den mittleren Ausschnitt (die untere
-  // Leiste "Text senden" war deshalb ebenfalls aus dem Fenster geschoben).
-  // Loesung: absolut im Body verankern (der ist position:relative) - damit
-  // hat der Rahmen IMMER die echte Fenstergroesse als Bezug.
+  // IMPORTANT about layout: the window body (.rmm-window-body) is a flex item
+  // with "flex:1" and "overflow:auto", so it has NO fixed height. A
+  // "height:100%" on it goes nowhere (the height depends on the content, the
+  // content on the height). That was exactly the cause of the off-center image: the
+  // image area grew to the full image height, "max-height:100%" never took effect,
+  // the image was stretched to the full window width and cut off at the
+  // bottom - only the middle part was visible (the lower
+  // "send text" bar was therefore pushed out of the window too).
+  // Solution: anchor absolutely in the body (which is position:relative) - so
+  // the frame ALWAYS uses the real window size as its reference.
   body.style.overflow = "hidden";
   body.innerHTML = `
     <div style="position:absolute;inset:0;display:flex;flex-direction:column;background:#000">
@@ -64,12 +64,12 @@ export function renderVnc(body, win) {
         <select id="vnc-monitor-${win.key}" style="display:none"
           title="${t("u_bildschirm_des_remote_pcs_auswahle")}"></select>
         <span style="width:1px;height:16px;background:var(--border)"></span>
-        <button class="btn" id="vnc-mod-ctrl-${win.key}" title="${t("u_strg_gedruckt_halten_toggle_wirkt_")}">Strg</button>
+        <button class="btn" id="vnc-mod-ctrl-${win.key}" title="${t("u_strg_gedruckt_halten_toggle_wirkt_")}">Ctrl</button>
         <button class="btn" id="vnc-mod-alt-${win.key}" title="${t("u_alt_gedruckt_halten_toggle_wirkt_a")}">Alt</button>
         <button class="btn" id="vnc-mod-win-${win.key}" title="${t("u_windows_taste_gedruckt_halten_togg")}">Win</button>
-        <button class="btn" id="vnc-key-tab-${win.key}" title="Tab senden">Tab</button>
-        <button class="btn" id="vnc-key-esc-${win.key}" title="Esc senden">Esc</button>
-        <button class="btn" id="vnc-ctrlaltdel-${win.key}">Strg+Alt+Entf</button>
+        <button class="btn" id="vnc-key-tab-${win.key}" title="Send Tab">Tab</button>
+        <button class="btn" id="vnc-key-esc-${win.key}" title="Send Esc">Esc</button>
+        <button class="btn" id="vnc-ctrlaltdel-${win.key}">Ctrl+Alt+Del</button>
         <span style="width:1px;height:16px;background:var(--border)"></span>
         <button class="btn" id="vnc-clip-send-${win.key}" title="${t("vnc_clip_send_title")}">📋→</button>
         <button class="btn" id="vnc-clip-get-${win.key}" title="${t("vnc_clip_get_title")}">→📋</button>
@@ -128,24 +128,24 @@ export function renderVnc(body, win) {
   const textInput = body.querySelector(`#vnc-text-${win.key}`);
   const sendBtn = body.querySelector(`#vnc-send-${win.key}`);
 
-  // Echte Bildschirmauflösung des Clients (kommt mit jedem Frame mit),
-  // um Klick-Koordinaten korrekt umzurechnen. Muss VOR layoutImage() stehen.
+  // The client's real screen resolution (sent with every frame),
+  // to convert click coordinates correctly. Must come BEFORE layoutImage().
   let remoteWidth = 1920;
   let remoteHeight = 1080;
   const img = body.querySelector(`#vnc-img-${win.key}`);
   const imgArea = body.querySelector(`#vnc-area-${win.key}`);
 
-  // ---- Bild einpassen: Groesse UND Position werden hier gerechnet ----------
-  // Warum nicht per CSS (max-width/max-height + object-fit:contain + flex-
-  // Zentrierung)? Weil dann DREI Dinge zusammenpassen muessen: die
-  // Elementgroesse, der von object-fit gewaehlte Ausschnitt und die
-  // Ruecktransformation der Mauskoordinaten. Sobald eines davon abweicht
-  // (Vollbild, Fenster-Resize, ein Frame mit anderer Groesse), sitzt das Bild
-  // schief UND die Klicks landen daneben - genau das Fehlerbild.
-  // Jetzt gilt: Das <img>-Element ist IMMER exakt so gross wie das
-  // dargestellte Bild und wird selbst mittig gesetzt. Damit ist
-  // getBoundingClientRect() gleichbedeutend mit der Bildflaeche und die
-  // Umrechnung der Klicks ist eine einfache Division.
+  // ---- Fit the image: size AND position are computed here ----------
+  // Why not via CSS (max-width/max-height + object-fit:contain + flex
+  // centering)? Because then THREE things must match: the
+  // element size, the crop chosen by object-fit and the
+  // back-transform of the mouse coordinates. As soon as one of them deviates
+  // (fullscreen, window resize, a frame with a different size), the image sits
+  // crooked AND clicks land off - exactly the failure pattern.
+  // Now: the <img> element is ALWAYS exactly as big as the
+  // displayed image and is centered itself. That makes
+  // getBoundingClientRect() equivalent to the image area and the
+  // conversion of clicks a simple division.
   function layoutImage() {
     if (!imgArea || !remoteWidth || !remoteHeight) return;
     const bw = imgArea.clientWidth;
@@ -161,9 +161,9 @@ export function renderVnc(body, win) {
     img.style.cursor = "crosshair";
   }
 
-  // Neu einpassen, wenn sich die Flaeche aendert: Fenster ziehen, maximieren,
-  // Vollbild, Seitenleiste ein-/ausklappen. ResizeObserver deckt all das ab,
-  // ohne dass jede Stelle im Fenstermanager davon wissen muss.
+  // Re-fit when the area changes: drag the window, maximize,
+  // fullscreen, expand/collapse the sidebar. ResizeObserver covers all of that,
+  // without every place in the window manager having to know about it.
   let areaObserver = null;
   try {
     areaObserver = new ResizeObserver(() => layoutImage());
@@ -172,7 +172,7 @@ export function renderVnc(body, win) {
     window.addEventListener("resize", layoutImage);
   }
 
-  // ---- Browser-Vollbild (Desktop + Handy): Button toggelt, Esc beendet ----
+  // ---- Browser fullscreen (desktop + mobile): button toggles, Esc exits ----
   const fsBtnV = body.querySelector(`#vnc-fs-${win.key}`);
   if (fsBtnV) {
     const fsRoot = () => body.closest(".rmm-window") || body;
@@ -194,16 +194,16 @@ export function renderVnc(body, win) {
   const ctrlAltDelBtn = body.querySelector(`#vnc-ctrlaltdel-${win.key}`);
   const monitorSel = body.querySelector(`#vnc-monitor-${win.key}`);
 
-  // Bildschirm wechseln (Multi-Monitor): direkte Auswahl per Dropdown.
+  // Switch screen (multi-monitor): direct selection via dropdown.
   monitorSel.addEventListener("change", () => {
-    const next = parseInt(monitorSel.value, 10);   // 0 = Alle Bildschirme
+    const next = parseInt(monitorSel.value, 10);   // 0 = all screens
     if (!isNaN(next) && next !== monitorIndex) {
       setMonitor(next);
     }
   });
 
-  // --- Sticky-Modifier (wie in Proxmox): Strg/Alt/Win als Toggle. Aktive
-  //     Modifier werden auf alle folgenden Tastatureingaben angewendet. ---
+  // --- Sticky modifiers (like in Proxmox): Ctrl/Alt/Win as a toggle. Active
+  //     modifiers are applied to all following keyboard input. ---
   const modState = { Control: false, Alt: false, Meta: false };
   const modBtns = {
     Control: body.querySelector(`#vnc-mod-ctrl-${win.key}`),
@@ -222,9 +222,9 @@ export function renderVnc(body, win) {
       updateModBtn(name);
       img.focus({ preventScroll: true });
     });
-    // Doppelklick: Taste SOFORT einmal drücken+loslassen (z.B. Win öffnet das
-    // Startmenü). Die zwei Einzelklicks davor haben den Toggle an+aus
-    // geschaltet - hier sicherheitshalber auf "aus" setzen.
+    // Double-click: press+release the key ONCE immediately (e.g. Win opens the
+    // start menu). The two single clicks before toggled it on+off,
+    // so set it to "off" here to be safe.
     modBtns[name].addEventListener("dblclick", (e) => {
       e.preventDefault();
       modState[name] = false;
@@ -236,8 +236,8 @@ export function renderVnc(body, win) {
   function activeMods() {
     return Object.keys(modState).filter((k) => modState[k]);
   }
-  // Schickt eine Taste unter Berücksichtigung der aktiven Toggles. Nach einer
-  // Kombination werden die Toggles automatisch gelöst (wie in Proxmox).
+  // Sends a key taking the active toggles into account. After a
+  // combination the toggles are released automatically (like in Proxmox).
   function sendKeyWithMods(key) {
     const mods = activeMods();
     if (mods.length) {
@@ -255,8 +255,8 @@ export function renderVnc(body, win) {
   body.querySelector(`#vnc-key-tab-${win.key}`).addEventListener("click", () => { sendKeyWithMods("Tab"); img.focus({ preventScroll: true }); });
   body.querySelector(`#vnc-key-esc-${win.key}`).addEventListener("click", () => { sendKeyWithMods("Escape"); img.focus({ preventScroll: true }); });
 
-  // --- Zwischenablage synchronisieren ---
-  // Senden: lokale Zwischenablage lesen -> Agent setzt sie am Remote-PC.
+  // --- Synchronize the clipboard ---
+  // Send: read the local clipboard -> agent sets it on the remote PC.
   body.querySelector(`#vnc-clip-send-${win.key}`).addEventListener("click", async () => {
     let text = "";
     try { text = await navigator.clipboard.readText(); } catch {}
@@ -267,37 +267,37 @@ export function renderVnc(body, win) {
     sendInput({ type: "clipboard-set", text });
     window.notify?.(t("vnc_clip_sent"), "success");
   });
-  // Holen: Agent liest die Remote-Zwischenablage -> hier in die lokale schreiben.
+  // Get: agent reads the remote clipboard -> write it into the local one here.
   body.querySelector(`#vnc-clip-get-${win.key}`).addEventListener("click", () => {
     getClip();
   });
-  // Automatischer Sync in BEIDE Richtungen (wie AnyDesk):
-  //  * Geraet -> hier: Der Agent pusht Aenderungen von selbst (push=true) -
-  //    die landen still in der lokalen Zwischenablage.
-  //  * hier -> Geraet: Beim (Wieder-)Fokussieren des Fensters wird die lokale
-  //    Zwischenablage gelesen und bei Aenderung ans Geraet geschickt.
-  // _clipLast verhindert Ping-Pong (zuletzt gesyncter Text in beide Richtungen).
+  // Automatic sync in BOTH directions (like AnyDesk):
+  //  * device -> here: the agent pushes changes on its own (push=true) -
+  //    they land silently in the local clipboard.
+  //  * here -> device: when the window is (re)focused, the local
+  //    clipboard is read and, if changed, sent to the device.
+  // _clipLast prevents ping-pong (last synced text in both directions).
   let _clipLast = null;
   async function onClipboard(data) {
     if (data.id !== clientId) return;
     if (data.error) { window.notify?.(t("vnc_clip_remote") + ": " + (data.code ? t(data.code) : data.error), "error"); return; }
     const text = data.text || "";
     if (data.push) {
-      // Automatischer Push vom Geraet: still uebernehmen, kein Dialog-Spam.
+      // Automatic push from the device: apply silently, no dialog spam.
       if (!text || text === _clipLast) return;
       _clipLast = text;
       try {
         await navigator.clipboard.writeText(text);
-        window.notify?.("📋 " + t("u_remote_zwischenablage_ubernommen") + text.length + " Zeichen)", "info", 2500);
-      } catch { /* Fenster nicht fokussiert / HTTP: naechster Push versucht es erneut */ }
+        window.notify?.("📋 " + t("u_remote_zwischenablage_ubernommen") + text.length + " chars)", "info", 2500);
+      } catch { /* window not focused / HTTP: the next push tries again */ }
       return;
     }
     _clipLast = text;
     try {
       await navigator.clipboard.writeText(text);
-      window.notify?.(t("u_remote_zwischenablage_ubernommen") + text.length + " Zeichen)", "success");
+      window.notify?.(t("u_remote_zwischenablage_ubernommen") + text.length + " chars)", "success");
     } catch {
-      // Clipboard-API blockiert (z.B. HTTP): Text zum manuellen Kopieren zeigen.
+      // Clipboard API blocked (e.g. HTTP): show the text for manual copying.
       uiPrompt(t("vnc_clip_remote"), {
         description: t("guac_copy_manual"),
         value: text, okText: t("close") });
@@ -305,7 +305,7 @@ export function renderVnc(body, win) {
   }
   dashboardSocket.on("screen-clipboard", onClipboard);
 
-  // Lokale Aenderungen beim Fokussieren des Fensters ans Geraet schicken.
+  // Send local changes to the device when the window is focused.
   async function _clipSyncLocal() {
     let text = "";
     try { text = await navigator.clipboard.readText(); } catch { return; }
@@ -316,13 +316,13 @@ export function renderVnc(body, win) {
   const _onClipFocus = () => { _clipSyncLocal(); };
   window.addEventListener("focus", _onClipFocus);
   body.addEventListener("focusin", _onClipFocus);
-  // Entfernt wird der Listener im zentralen Cleanup-Block weiter unten
-  // (registerCleanup ueberschreibt pro Fenster - deshalb nicht hier anmelden).
+  // The listener is removed in the central cleanup block further below
+  // (registerCleanup overwrites per window - so do not register it here).
 
-  // --- Chat-/Steuerfenster der Fernwartung (Benutzer <-> Admin) ---
-  // Die Person vor dem PC bekommt ein Fenster (nur wenn NICHT Silent-Modus);
-  // hier ist die Admin-Seite: Chat, Anzeige der erteilten Admin-Rechte und ein
-  // Hinweis, wenn der Benutzer die Verbindung trennt.
+  // --- Chat/control window of the remote session (user <-> admin) ---
+  // The person at the PC gets a window (only when NOT in silent mode);
+  // this is the admin side: chat, display of the granted admin rights and a
+  // notice when the user disconnects.
   const chatPanel = body.querySelector(`#vnc-chatpanel-${win.key}`);
   const chatLog = body.querySelector(`#vnc-chatlog-${win.key}`);
   const chatInput = body.querySelector(`#vnc-chatinput-${win.key}`);
@@ -362,8 +362,8 @@ export function renderVnc(body, win) {
   body.querySelector(`#vnc-chatsend-${win.key}`).addEventListener("click", sendChat);
   chatInput.addEventListener("keydown", (e) => { if (e.key === "Enter") sendChat(); });
 
-  // Berechtigungen, die die Person vor dem PC im Sitzungsfenster schaltet (wie AnyDesk):
-  // Steuerung (Maus/Tastatur), Zwischenablage, Administrator-Rechte.
+  // Permissions the person at the PC toggles in the session window (like AnyDesk):
+  // control (mouse/keyboard), clipboard, administrator rights.
   const permsEl = body.querySelector(`#vnc-perms-${win.key}`);
   const reqBtn = body.querySelector(`#vnc-reqgrant-${win.key}`);
   let perms = { input: true, clipboard: true, files: true, admin: false };
@@ -384,7 +384,7 @@ export function renderVnc(body, win) {
     addChat(null, t("vnc_chat_requested"), true);
   });
   body.querySelector(`#vnc-endsess-${win.key}`).addEventListener("click", () => {
-    // Fenster schliessen -> Aufraeumen sendet screen-stop -> Agent beendet die Sitzung
+    // Close the window -> cleanup sends screen-stop -> agent ends the session
     import("../app/windowmanager.js").then(({ closeWindow }) => closeWindow(win.key));
   });
 
@@ -414,12 +414,12 @@ export function renderVnc(body, win) {
     if (before.files !== perms.files) addChat(null, t(perms.files !== false ? "vnc_perm_files_on" : "vnc_perm_files_off"), true);
   }
 
-  // --- Datei-Uebertragung (wie AnyDesk) ---
-  // Admin -> Benutzer: Datei waehlen oder auf das Bild ziehen. Gesendet wird in
-  // Stuecken zu 256 KB; jedes Stueck wird vom Geraet bestaetigt, erst dann geht
-  // das naechste raus. Die Datei landet im Ordner "Downloads" des Benutzers.
-  // Benutzer -> Admin: "📎" im Sitzungsfenster -> Datei kommt hier stueckweise an
-  // und wird als Download angeboten.
+  // --- File transfer (like AnyDesk) ---
+  // Admin -> user: choose a file or drag it onto the image. It is sent in
+  // chunks of 256 KB; each chunk is acknowledged by the device, only then does
+  // the next one go out. The file ends up in the user's "Downloads" folder.
+  // User -> admin: "📎" in the session window -> the file arrives here in chunks
+  // and is offered as a download.
   const FILE_CHUNK = 256 * 1024;
   const FILE_MAX = 1024 * 1024 * 1024;
   const fileInput = body.querySelector(`#vnc-fileinput-${win.key}`);
@@ -492,12 +492,12 @@ export function renderVnc(body, win) {
     sendFiles(e.dataTransfer.files);
   });
 
-  // --- Ton (wie AnyDesk "Ton uebertragen") ---
-  // Das Geraet schickt 100-ms-Stuecke (16 kHz mono, 8-Bit-mu-law). Hier werden
-  // sie dekodiert und lueckenlos hintereinander abgespielt (Web Audio). Laeuft
-  // die Wiedergabe mehr als 0,6 s hinterher, wird neu angesetzt (keine Verzoegerung
-  // aufbauen). Standard: AUS - der Admin schaltet ihn bewusst ein, der Benutzer
-  // sieht es im Sitzungsfenster.
+  // --- Audio (like AnyDesk "transmit sound") ---
+  // The device sends 100 ms chunks (16 kHz mono, 8-bit mu-law). Here they are
+  // decoded and played back seamlessly one after another (Web Audio). If
+  // playback lags more than 0.6 s behind, it restarts (do not build up
+  // delay). Default: OFF - the admin turns it on deliberately, the user
+  // sees it in the session window.
   const audioBtn = body.querySelector(`#vnc-audio-${win.key}`);
   let audioOn = false, audioCtx = null, audioNext = 0;
   const MU_TABLE = new Float32Array(256);
@@ -517,7 +517,7 @@ export function renderVnc(body, win) {
   }
   audioBtn.addEventListener("click", () => {
     const on = !audioOn;
-    setAudio(on);                         // im Klick erzeugen: Browser erlauben Ton nur nach Benutzeraktion
+    setAudio(on);                         // create inside the click: browsers allow audio only after a user action
     dashboardSocket.emit("screen-audio", { clientId, username: state.user?.username || "", enabled: on });
   });
   function onAudio(d) {
@@ -543,7 +543,7 @@ export function renderVnc(body, win) {
     audioNext += buf.duration;
   }
 
-  // --- Sitzungsverlauf ---
+  // --- Session history ---
   const histPanel = body.querySelector(`#vnc-histpanel-${win.key}`);
   const histList = body.querySelector(`#vnc-histlist-${win.key}`);
   const EVENT_LABEL = {
@@ -589,7 +589,7 @@ export function renderVnc(body, win) {
     let st = incoming.get(d.tid);
     if (!st) {
       if (!chatOpen) { unread++; chatBadge.textContent = unread; chatBadge.style.display = "inline-block"; }
-      st = { name: d.name || "datei", size: d.size || 0, parts: [], got: 0, row: fileSysRow(`📥 ${d.name} – 0 %`) };
+      st = { name: d.name || "file", size: d.size || 0, parts: [], got: 0, row: fileSysRow(`📥 ${d.name} – 0 %`) };
       incoming.set(d.tid, st);
     }
     let bin;
@@ -621,21 +621,21 @@ export function renderVnc(body, win) {
   dashboardSocket.on("screen-file-out", onFileOut);
   dashboardSocket.on("screen-audio", onAudio);
 
-  // --- Strg+C / Strg+V automatisch: echte Zwischenablage mitsynchronisieren ---
-  // Strg+V: lokale Zwischenablage lesen -> Remote setzen -> dann Strg+V am Remote.
-  // Strg+C: Strg+C am Remote -> kurz warten -> Remote-Zwischenablage hierher holen.
+  // --- Ctrl+C / Ctrl+V automatic: synchronize the real clipboard too ---
+  // Ctrl+V: read the local clipboard -> set it on the remote -> then Ctrl+V on the remote.
+  // Ctrl+C: Ctrl+C on the remote -> wait briefly -> fetch the remote clipboard here.
   let _autoClipWorking = false;
   async function pasteToRemote() {
     let text = "";
-    try { text = await navigator.clipboard.readText(); } catch { /* Browser blockt evtl. */ }
+    try { text = await navigator.clipboard.readText(); } catch { /* browser may block */ }
     if (text) sendInput({ type: "clipboard-set", text });
-    // Kurze Pause, damit der Agent die Zwischenablage gesetzt hat, dann einfügen.
+    // Short pause so the agent has set the clipboard, then paste.
     await new Promise((r) => setTimeout(r, text ? 60 : 0));
     sendInput({ type: "combo", keys: ["Control", "v"] });
   }
   function copyFromRemote() {
     sendInput({ type: "combo", keys: ["Control", "c"] });
-    // Dem Remote-PC Zeit geben, die Auswahl zu kopieren, dann abholen.
+    // Give the remote PC time to copy the selection, then fetch it.
     setTimeout(() => getClip(), 140);
   }
 
@@ -643,11 +643,11 @@ export function renderVnc(body, win) {
   let framesReceived = 0;
   let monitorCount = 1;
   let monitorIndex = 1;
-  let rdpActive = false;  // true, wenn gerade das experimentelle RDP-Streaming läuft
-  let shellActive = false; // true, sobald auf Shell-Modus umgeschaltet wurde
+  let rdpActive = false;  // true while the experimental RDP streaming is running
+  let shellActive = false; // true once switched to shell mode
 
-  // Öffnet den Guacamole-Client (RDP/VNC/SSH über extern gehostetes guacd)
-  // für diesen Client in einem eigenen Fenster.
+  // Opens the Guacamole client (RDP/VNC/SSH via externally hosted guacd)
+  // for this client in its own window.
   function openGuacWindow() {
     import("../app/windowmanager.js").then(({ openWindow }) => {
       const c = state.clients?.find((x) => x.id === clientId);
@@ -660,12 +660,12 @@ export function renderVnc(body, win) {
     });
   }
 
-  // Schaltet das Fenster auf eine eingebettete Shell um (headless/Shell-only).
-  // Wird automatisch ausgelöst, wenn der Agent 'screen-mode: shell' meldet.
+  // Switches the window to an embedded shell (headless/shell-only).
+  // Triggered automatically when the agent reports 'screen-mode: shell'.
   function switchToShell(reason) {
     if (shellActive) return;
     shellActive = true;
-    // Screen-Streaming beenden und alle Screen-Listener abmelden
+    // Stop screen streaming and unregister all screen listeners
     try { stopScreen(); } catch {}
     dashboardSocket.off("screen-frame", onFrame);
     dashboardSocket.off("screen-error", onError);
@@ -690,9 +690,9 @@ export function renderVnc(body, win) {
     for (const p of pendingAcks.values()) { try { clearTimeout(p.timer); } catch {} }
     pendingAcks.clear();
 
-    // Fenster leeren, Hinweis-Banner (inkl. Guacamole-Option) + Terminal einsetzen
-    // Gleiche Falle wie oben: height:100% auf dem Fenster-Body wirkt nicht.
-    // Absolut verankern, damit das Terminal die echte Fensterhoehe bekommt.
+    // Clear the window, insert the notice banner (incl. Guacamole option) + terminal
+    // Same trap as above: height:100% on the window body has no effect.
+    // Anchor absolutely so the terminal gets the real window height.
     body.innerHTML = "";
     body.style.display = "block";
     body.style.overflow = "hidden";
@@ -714,15 +714,15 @@ export function renderVnc(body, win) {
     const termHost = document.createElement("div");
     termHost.style.cssText = "flex:1;min-height:0";
     shellRoot.appendChild(termHost);
-    // Bestehendes Terminal-Programm im selben Fenster rendern (eigene Session,
-    // persistentes Arbeitsverzeichnis usw. - läuft über denselben Agent-Kanal).
+    // Render the existing terminal program in the same window (own session,
+    // persistent working directory etc. - runs over the same agent channel).
     renderTerminal(termHost, win);
   }
 
-  // --- Eingehende Frames verarbeiten ---
+  // --- Process incoming frames ---
   function onFrame(data) {
-    if (data.id !== clientId) return; // nur Frames für diesen Client
-    // Falls das RDP-/Fehler-Overlay noch offen ist und jetzt ein Bild kommt: weg damit
+    if (data.id !== clientId) return; // only frames for this client
+    // If the RDP/error overlay is still open and an image now arrives: remove it
     const overlay = body.querySelector(`#rdp-offer-${win.key}`);
     if (overlay) overlay.remove();
     // Ignore malformed frames (no image payload) instead of setting a broken
@@ -732,17 +732,17 @@ export function renderVnc(body, win) {
     const sizeChanged = (remoteWidth !== data.width || remoteHeight !== data.height);
     remoteWidth = data.width;
     remoteHeight = data.height;
-    // Beim ersten Bild und bei jedem Auflösungswechsel (Monitorwechsel,
-    // Aufloesungsaenderung am Client) neu einpassen.
+    // On the first image and on every resolution change (monitor switch,
+    // resolution change on the client) re-fit.
     if (sizeChanged || !img.style.width) layoutImage();
-    // Multi-Monitor: Button anzeigen/aktualisieren, wenn mehr als ein Bildschirm da ist.
+    // Multi-monitor: show/update the button when more than one screen is present.
     if (typeof data.monitor_count === "number") {
       monitorCount = data.monitor_count;
       monitorIndex = (typeof data.monitor_index === "number") ? data.monitor_index : 1;
       if (monitorSel) {
         monitorSel.style.display = monitorCount > 1 ? "" : "none";
-        // Optionen nur bei Änderung neu aufbauen (nicht bei jedem Frame).
-        // Index 0 = Gesamtfläche ALLER Bildschirme nebeneinander.
+        // Rebuild the options only on change (not on every frame).
+        // Index 0 = the combined area of ALL screens side by side.
         if (monitorSel.options.length !== monitorCount + 1) {
           monitorSel.innerHTML = `<option value="0">🖥️ ${t("vnc_all_monitors")}</option>` +
             Array.from({ length: monitorCount }, (_, i) =>
@@ -757,11 +757,11 @@ export function renderVnc(body, win) {
     statusEl.style.color = "var(--accent)";
   }
 
-  // Der Agent schickt seit dem Sprachumbau nicht mehr nur fertigen Text,
-  // sondern zusätzlich `code` (Übersetzungsschlüssel) und `params`. Übersetzt
-  // wird hier, weil nur der Browser die Sprache des Benutzers kennt - mehrere
-  // Personen mit verschiedenen Spracheinstellungen können dasselbe Gerät
-  // ansehen. Fehlt `code` (älterer Agent), bleibt der mitgelieferte Text.
+  // Since the language rework the agent no longer sends just finished text,
+  // but additionally `code` (translation key) and `params`. Translation
+  // happens here because only the browser knows the user's language - several
+  // people with different language settings can view the same device
+  // at once. If `code` is missing (older agent), the delivered text stays.
   function agentText(data, fallbackKey) {
     if (data && data.code) return t(data.code, data.params || {});
     if (data && (data.error || data.reason)) return data.error || data.reason;
@@ -770,11 +770,11 @@ export function renderVnc(body, win) {
 
   function onError(data) {
     if (data.id !== clientId) return;
-    // Rohen Fehlertext nur in die Konsole - die Oberfläche bleibt freundlich.
+    // Raw error text only to the console - the UI stays friendly.
     console.warn("[screen] error from agent:", data.error);
     if (data.consent_denied) {
-      // Der Benutzer am Gerät hat nicht zugestimmt - das ist KEIN technischer
-      // Fehler, deshalb ohne Alternativen-Angebot anzeigen.
+      // The user at the device did not consent - this is NOT a technical
+      // error, so show it without offering alternatives.
       statusEl.textContent = t("u_am_gerat_abgelehnt_keine_bestatigu");
       statusEl.style.color = "var(--danger)";
       return;
@@ -784,23 +784,23 @@ export function renderVnc(body, win) {
     showRdpOffer(agentText(data));
   }
 
-  // Agent meldet den möglichen Zugriffsmodus. mode='shell' -> direkt Shell öffnen.
+  // Agent reports the possible access mode. mode='shell' -> open the shell directly.
   function onMode(data) {
     if (data.id !== clientId) return;
     if (data.mode === "shell") switchToShell(agentText(data));
     if (data.mode === "consent") {
-      // Am Gerät wird gerade um Zustimmung gebeten.
+      // Consent is currently being requested at the device.
       statusEl.textContent = t("u_warte_auf_bestatigung_am_gerat");
       statusEl.style.color = "var(--subtext)";
     }
   }
 
-  // Zeigt bei einem Bildschirm-Fehler (typisch: headless VM) eine freundliche
-  // Auswahl an Alternativen. Bewusst OHNE die rohe Fehlermeldung (die steht
-  // klein in der Statusleiste und im agent.log) und OHNE RDP-Datei-Download /
-  // experimentelles Browser-RDP - beides wurde entfernt.
+  // On a screen error (typically: headless VM) shows a friendly
+  // choice of alternatives. Deliberately WITHOUT the raw error message (it is
+  // shown small in the status bar and in agent.log) and WITHOUT RDP file download /
+  // experimental browser RDP - both were removed.
   function showRdpOffer(errorText) {
-    // Nur einmal anzeigen
+    // Show only once
     if (body.querySelector(`#rdp-offer-${win.key}`)) return;
     const imgArea = img.parentElement;
     const overlay = document.createElement("div");
@@ -831,15 +831,15 @@ export function renderVnc(body, win) {
     `;
     imgArea.appendChild(overlay);
 
-    // Shell im selben Fenster öffnen (funktioniert immer, auch headless)
+    // Open the shell in the same window (always works, even headless)
     overlay.querySelector(`#rdp-shell-${win.key}`).addEventListener("click", () => {
       switchToShell(t("u_shell_geoffnet"));
     });
 
-    // Über Guacamole verbinden (RDP/VNC/SSH über guacd) - eigenes Fenster
+    // Connect via Guacamole (RDP/VNC/SSH over guacd) - its own window
     overlay.querySelector(`#rdp-guac-${win.key}`).addEventListener("click", openGuacWindow);
 
-    // Erneut unser eigenes Streaming versuchen
+    // Try our own streaming again
     overlay.querySelector(`#rdp-retry-${win.key}`).addEventListener("click", () => {
       overlay.remove();
       statusEl.textContent = t("vnc_connecting");
@@ -848,9 +848,9 @@ export function renderVnc(body, win) {
     });
   }
 
-  // Lokales Signal "Remote-Session gestartet": Das Profil (falls offen) schaltet
-  // den einmaligen Silent-Modus-Toggle damit SOFORT wieder aus - unabhängig
-  // davon, ob das Backend-Event ankommt.
+  // Local signal "remote session started": the profile (if open) turns
+  // the one-time silent-mode toggle off IMMEDIATELY with it - regardless
+  // of whether the backend event arrives.
   function _announceSessionStart(cid) {
     try {
       window.dispatchEvent(new CustomEvent("screen-session-started", { detail: { clientId: cid } }));
@@ -861,20 +861,20 @@ export function renderVnc(body, win) {
   dashboardSocket.on("screen-error", onError);
   dashboardSocket.on("screen-mode", onMode);
 
-  // --- Mehrbenutzer (Windows): "erst einen Benutzer waehlen" ---
-  // Sind mehrere Benutzer angemeldet, wird zuerst gefragt, WESSEN Bildschirm
-  // gesehen/gesteuert werden soll. Dieser Benutzer bekommt dann am Geraet die
-  // Freigabe-Abfrage. Bei 0/1 Benutzer startet es direkt (wie bisher).
+  // --- Multi-user (Windows): "choose a user first" ---
+  // If several users are logged in, it first asks WHOSE screen
+  // should be viewed/controlled. That user then gets the
+  // consent prompt at the device. With 0/1 user it starts directly (as before).
   let chosenSession = null;
 
   function startScreen(session) {
     chosenSession = session ?? null;
-    const payload = { clientId, username: state.user?.username || "unbekannt" };
+    const payload = { clientId, username: state.user?.username || "unknown" };
     if (chosenSession !== null && chosenSession !== undefined) payload.session = chosenSession;
     dashboardSocket.emit("screen-start", payload);
     _announceSessionStart(clientId);
-    // bytera://agent/<id>/remotescreen/screen=2&fps=10 -> Bildschirm/FPS/Qualitaet
-    // anwenden, sobald der Stream laeuft.
+    // bytera://agent/<id>/remotescreen/screen=2&fps=10 -> screen/FPS/quality
+    // apply once the stream is running.
     const wantScreen = parseInt(win.props?.screen, 10);
     if (!isNaN(wantScreen)) setTimeout(() => { try { setMonitor(wantScreen); } catch { /* egal */ } }, 1500);
     const cfg = {};
@@ -882,7 +882,7 @@ export function renderVnc(body, win) {
     const wantQ = parseInt(win.props?.quality, 10);
     if (!isNaN(wantFps)) cfg.fps = wantFps;
     if (!isNaN(wantQ)) cfg.quality = wantQ;
-    // resolution=BREITExHOEHE (z.B. 1024x512) -> Zielbreite an den Agenten.
+    // resolution=WIDTHxHEIGHT (e.g. 1024x512) -> target width to the agent.
     const res = String(win.props?.resolution || "").match(/^(\d{3,4})\s*[x\u00d7]/);
     if (res) cfg.width = parseInt(res[1], 10);
     if (Object.keys(cfg).length) {
@@ -905,14 +905,14 @@ export function renderVnc(body, win) {
       showUserPicker(users);
     };
     dashboardSocket.on("screen-users", onUsers);
-    // Fallback: antwortet der Agent nicht (aelter/kein Windows), normal starten.
+    // Fallback: if the agent does not answer (older/not Windows), start normally.
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
       dashboardSocket.off("screen-users", onUsers);
       startScreen(null);
     }, 3500);
-    dashboardSocket.emit("screen-users", { clientId, username: state.user?.username || "unbekannt" });
+    dashboardSocket.emit("screen-users", { clientId, username: state.user?.username || "unknown" });
   }
 
   function showUserPicker(users) {
@@ -934,7 +934,7 @@ export function renderVnc(body, win) {
       const tags = [u.console ? t("vnc_user_console") : "", u.active ? t("vnc_user_active") : t("vnc_user_disconnected")]
         .filter(Boolean).join(" · ");
       b.innerHTML = `<span>${dot}</span><span style="flex:1"><b>${esc(u.user)}</b>`
-        + `<div style="font-size:11px;color:var(--subtext)">${esc(tags)} \u00b7 Sitzung ${u.session}</div></span>`;
+        + `<div style="font-size:11px;color:var(--subtext)">${esc(tags)} \u00b7 Session ${u.session}</div></span>`;
       b.addEventListener("click", () => {
         ov.remove();
         statusEl.textContent = t("vnc_connecting");
@@ -947,19 +947,19 @@ export function renderVnc(body, win) {
 
   pickUserThenStart();
 
-  // --- Koordinaten vom angezeigten Bild auf die echte Auflösung umrechnen ---
+  // --- Convert coordinates from the shown image to the real resolution ---
   function mapCoords(clientX, clientY) {
-    // Seit layoutImage() ist das <img>-Element GENAU die dargestellte
-    // Bildfläche - keine Balken durch object-fit, keine Offsets. Deshalb
-    // reicht eine Division. Vorher wurde der Offset ein zweites Mal
-    // herausgerechnet, obwohl das Element schon versetzt war: Klicks landeten
-    // umso weiter daneben, je stärker das Fenster von der Bildform abwich.
+    // Since layoutImage() the <img> element is EXACTLY the displayed
+    // image area - no bars from object-fit, no offsets. Therefore
+    // a division is enough. Previously the offset was subtracted a second
+    // time even though the element was already offset: clicks landed
+    // further off the more the window deviated from the image shape.
     const rect = img.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return { x: 0, y: 0 };
     const x = Math.round(((clientX - rect.left) / rect.width) * remoteWidth);
     const y = Math.round(((clientY - rect.top) / rect.height) * remoteHeight);
-    // Auf den Bildschirm begrenzen - ein Klick 2 px neben dem Rand soll den
-    // Rand treffen und nicht auf einem Nachbarmonitor landen.
+    // Clamp to the screen - a click 2 px past the edge should hit the
+    // edge and not land on a neighbouring monitor.
     return {
       x: Math.max(0, Math.min(x, remoteWidth - 1)),
       y: Math.max(0, Math.min(y, remoteHeight - 1)),
@@ -970,23 +970,23 @@ export function renderVnc(body, win) {
     return controlToggle.checked;
   }
 
-  // --- Maus mit echtem Drag&Drop ---
-  // Wir merken uns, ob gerade eine Taste gedrückt ist, damit "move" auch
-  // während des Ziehens korrekt gesendet wird (Betriebssystem am Client zieht dann).
+  // --- Mouse with real drag & drop ---
+  // We remember whether a button is currently pressed so "move" is also
+  // sent correctly while dragging (the OS on the client then drags).
   let mouseDown = false;
 
   img.addEventListener("mousemove", (e) => {
     if (!controlEnabled()) return;
     const { x, y } = mapCoords(e.clientX, e.clientY);
-    // Beim Ziehen ebenfalls "move" senden - der Client hält ja die Taste gedrückt
+    // Send "move" while dragging too - the client is holding the button down
     sendInput({ type: "move", x, y });
   });
 
-  // ---- Touch: Zoomen/Schieben und Halten = Rechtsklick -------------------
-  // Auf dem Handy gibt es keine rechte Maustaste, und die Gegenstelle ist ohne
-  // Zoom kaum bedienbar. mapCoords() rechnet weiterhin richtig, weil der Zoom
-  // nur die Darstellung veraendert - die getBoundingClientRect() des Bildes
-  // waechst mit.
+  // ---- Touch: zoom/pan and hold = right-click -------------------
+  // On mobile there is no right mouse button, and the remote end is barely
+  // usable without zoom. mapCoords() still computes correctly because the zoom
+  // only changes the display - the image's getBoundingClientRect()
+  // grows with it.
   // NOTE: do NOT call registerCleanup() here. registerCleanup stores exactly
   // one function per window key (it overwrites), and the main cleanup block at
   // the end of this function registers the real teardown. Registering here as
@@ -995,19 +995,19 @@ export function renderVnc(body, win) {
   // of the single cleanup below.
   const zoom = attachPinchZoom(img.parentElement, img, { min: 1, max: 6 });
 
-  // ---- Touch-Bedienung -----------------------------------------------
-  // Ein Finger gehört der Gegenstelle, damit sich dort Fenster ziehen und
-  // Symbole verschieben lassen. Unterschieden wird nach Bewegung und Zeit:
+  // ---- Touch operation -----------------------------------------------
+  // One finger belongs to the remote end so that windows can be dragged and
+  // icons moved there. It is distinguished by movement and time:
   //
-  //   kurz tippen           -> Linksklick
-  //   bewegen               -> ziehen mit gedrückter linker Taste
-  //   halten ohne Bewegung  -> Rechtsklick
+  //   short tap             -> left click
+  //   move                  -> drag with the left button held
+  //   hold without moving   -> right click
   //
-  // Die Entscheidung fällt erst NACH dem Aufsetzen: Würde beim Aufsetzen
-  // sofort "gedrückt" gesendet, käme beim Halten zusätzlich ein Linksklick an
-  // und aus einem Rechtsklick würde ein versehentliches Ziehen.
-  const TOUCH_HOLD_MS = 500;     // ab hier gilt es als Halten
-  const TOUCH_MOVE_PX = 10;      // ab hier gilt es als Ziehen
+  // The decision is made only AFTER touchdown: if on touchdown a
+  // "pressed" were sent immediately, holding would also produce a left click
+  // and a right click would turn into an accidental drag.
+  const TOUCH_HOLD_MS = 500;     // from here it counts as a hold
+  const TOUCH_MOVE_PX = 10;      // from here it counts as a drag
   let touchStart = null;
   let touchDragging = false;
   let touchHoldTimer = null;
@@ -1024,7 +1024,7 @@ export function renderVnc(body, win) {
     touchDragging = false;
     clearTimeout(touchHoldTimer);
     touchHoldTimer = setTimeout(() => {
-      // Gehalten ohne Bewegung -> Rechtsklick.
+      // Held without moving -> right click.
       if (!touchStart || touchDragging) return;
       try { navigator.vibrate?.(18); } catch {}
       const { cx, cy } = touchStart;
@@ -1038,8 +1038,8 @@ export function renderVnc(body, win) {
     if (e.pointerType === "mouse" || !touchStart || !controlEnabled()) return;
     const moved = Math.abs(e.clientX - touchStart.cx) + Math.abs(e.clientY - touchStart.cy);
     if (!touchDragging && moved > TOUCH_MOVE_PX) {
-      // Erst jetzt die Taste drücken - und zwar am AUFSETZPUNKT. Nur so
-      // greift die Gegenstelle den Fenstertitel dort, wo der Finger startete.
+      // Only now press the button - and at the TOUCHDOWN point. Only then
+      // does the remote end grab the window title where the finger started.
       clearTimeout(touchHoldTimer);
       touchDragging = true;
       touchSend("down", touchStart.cx, touchStart.cy, "left");
@@ -1056,7 +1056,7 @@ export function renderVnc(body, win) {
     if (touchDragging) {
       touchSend("up", e.clientX, e.clientY, "left");
     } else if (controlEnabled()) {
-      // Kurzes Tippen -> vollständiger Linksklick an derselben Stelle.
+      // Short tap -> full left click at the same spot.
       const { cx, cy } = touchStart;
       touchSend("down", cx, cy, "left");
       setTimeout(() => touchSend("up", cx, cy, "left"), 40);
@@ -1072,7 +1072,7 @@ export function renderVnc(body, win) {
     touchDragging = false;
   }, { passive: true });
 
-  // Das Auswahl-/Lupenmenü des Browsers stört beim Ziehen.
+  // The browser's selection/magnifier menu gets in the way while dragging.
   img.addEventListener("contextmenu", (e) => {
     if (e.pointerType !== "mouse") e.preventDefault();
   });
@@ -1080,15 +1080,15 @@ export function renderVnc(body, win) {
   img.addEventListener("mousedown", (e) => {
     if (!controlEnabled()) return;
     e.preventDefault();
-    img.focus({ preventScroll: true }); // damit Tastatureingaben ankommen
+    img.focus({ preventScroll: true }); // so keyboard input arrives
     mouseDown = true;
     const { x, y } = mapCoords(e.clientX, e.clientY);
     const button = e.button === 2 ? "right" : "left";
-    // Taste DRÜCKEN (nicht sofort klicken) -> ermöglicht Halten + Ziehen
+    // PRESS the button (not an immediate click) -> enables hold + drag
     sendInput({ type: "down", x, y, button });
   });
 
-  // mouseup auf dem gesamten Fenster abfangen (falls man außerhalb des Bildes loslässt)
+  // Catch mouseup on the whole window (in case you release outside the image)
   function onMouseUp(e) {
     if (!mouseDown || !controlEnabled()) return;
     mouseDown = false;
@@ -1106,7 +1106,7 @@ export function renderVnc(body, win) {
     sendInput({ type: "double", x, y });
   });
 
-  // Rechtsklick-Menü des Browsers im Bild unterdrücken (wir leiten Rechtsklick weiter)
+  // Suppress the browser's right-click menu on the image (we forward right-click)
   img.addEventListener("contextmenu", (e) => e.preventDefault());
 
   img.addEventListener("wheel", (e) => {
@@ -1115,14 +1115,14 @@ export function renderVnc(body, win) {
     sendInput({ type: "scroll", dy: e.deltaY > 0 ? -1 : 1 });
   });
 
-  // --- Tastatur ---
-  // Wir hören auf keydown, während das Bild fokussiert ist.
+  // --- Keyboard ---
+  // We listen for keydown while the image is focused.
   img.addEventListener("keydown", (e) => {
     if (!controlEnabled()) return;
     e.preventDefault();
 
-    // Strg+C / Strg+V: echte Zwischenablage automatisch mitnehmen (ohne die
-    // Knöpfe in der Leiste). Nur bei reinem Strg (nicht mit Alt/Meta/Shift).
+    // Ctrl+C / Ctrl+V: carry the real clipboard automatically (without the
+    // buttons in the bar). Only on plain Ctrl (not with Alt/Meta/Shift).
     if (e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && (e.key === "v" || e.key === "V")) {
       if (!_autoClipWorking) { _autoClipWorking = true; pasteToRemote().finally(() => { _autoClipWorking = false; }); }
       return;
@@ -1132,20 +1132,20 @@ export function renderVnc(body, win) {
       return;
     }
     if (e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && (e.key === "x" || e.key === "X")) {
-      // Ausschneiden = kopieren + Agent führt Strg+X ohnehin aus; danach abholen.
+      // Cut = copy + the agent runs Ctrl+X anyway; fetch afterwards.
       sendInput({ type: "combo", keys: ["Control", "x"] });
       setTimeout(() => getClip(), 140);
       return;
     }
 
-    // Tastenkombination mit Modifiern (Strg/Alt) -> als "combo" senden
+    // Key combination with modifiers (Ctrl/Alt) -> send as "combo"
     if (e.ctrlKey || e.altKey || e.metaKey) {
       const keys = [];
       if (e.ctrlKey) keys.push("Control");
       if (e.altKey) keys.push("Alt");
       if (e.metaKey) keys.push("Meta");
       if (e.shiftKey) keys.push("Shift");
-      // Die eigentliche Taste (nicht die Modifier selbst)
+      // The actual key (not the modifiers themselves)
       if (!["Control", "Alt", "Meta", "Shift"].includes(e.key)) {
         keys.push(e.key.length === 1 ? e.key.toLowerCase() : e.key);
       }
@@ -1153,34 +1153,34 @@ export function renderVnc(body, win) {
       return;
     }
 
-    // Sticky-Modifier (Toolbar-Toggles) auf die Taste anwenden.
+    // Apply sticky modifiers (toolbar toggles) to the key.
     if (activeMods().length) {
       sendKeyWithMods(e.key.length === 1 ? e.key.toLowerCase() : e.key);
       return;
     }
 
-    // Normales druckbares Zeichen -> als Text tippen
+    // Normal printable character -> type as text
     if (e.key.length === 1) {
       sendInput({ type: "text", text: e.key });
     } else {
-      // Sondertaste (Enter, Backspace, Pfeile, ...)
+      // Special key (Enter, Backspace, arrows, ...)
       sendInput({ type: "key", key: e.key });
     }
   });
 
-  // Strg+Alt+Entf Button (lässt sich aus dem Browser nicht als echte Taste abfangen)
+  // Ctrl+Alt+Del button (cannot be intercepted from the browser as a real key)
   ctrlAltDelBtn.addEventListener("click", () => {
     sendInput({ type: "combo", keys: ["Control", "Alt", "Delete"] });
   });
 
-  // --- Text senden (kompletten Text auf einmal an den Cursor des Clients tippen) ---
+  // --- Send text (type the whole text at once at the client's cursor) ---
   function sendText() {
     const text = textInput.value;
     if (!text) return;
     const layout = layoutSel.value;
-    // Layout-Kompensation (andersrum, auf Nutzerwunsch): bei Auswahl "us"
-    // werden die Zeichen vor dem Senden ueber die Positions-Tabelle ersetzt
-    // (Reverse-Effekt); "de"/"raw" = 1:1 senden.
+    // Layout compensation (reversed, by user request): with "us" selected
+    // the characters are replaced via the position table before sending
+    // (reverse effect); "de"/"raw" = send 1:1.
     const mapped = mapKeyboardText(text, layout);
     sendInput({ type: "text", text: mapped, layout });
     textInput.value = "";
@@ -1188,11 +1188,11 @@ export function renderVnc(body, win) {
   }
   sendBtn.addEventListener("click", sendText);
   textInput.addEventListener("keydown", (e) => {
-    // Enter sendet; Strg+V (Einfügen) im Feld normal zulassen
+    // Enter sends; allow Ctrl+V (paste) in the field normally
     if (e.key === "Enter") { e.preventDefault(); sendText(); }
   });
 
-  // --- Aufräumen, wenn das Fenster geschlossen wird ---
+  // --- Cleanup when the window is closed ---
   registerCleanup(win.key, () => {
     dashboardSocket.off("screen-frame", onFrame);
     dashboardSocket.off("screen-error", onError);
