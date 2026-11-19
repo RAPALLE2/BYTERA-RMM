@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="de"><head><meta charset="utf-8">
+<html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>BYTERA RMM</title>
 <style>
@@ -23,15 +23,15 @@
 </style></head>
 <body><main>
   <h1>BYTERA <span>RMM</span></h1>
-  <p class="sub">Einmal anmelden – danach bleibt die Anmeldung auf diesem Gerät gespeichert.</p>
-  <label>Server-Adresse</label><input id="server" placeholder="https://rmm.firma.de" inputmode="url" autocapitalize="off">
-  <label>Benutzername</label><input id="user" autocapitalize="off" autocomplete="username">
-  <label>Passwort</label><input id="pass" type="password" autocomplete="current-password">
-  <label>Anmelden über</label><select id="realm"><option value="local">Lokales Konto</option></select>
-  <div id="codeRow"><label>Einmalcode (2FA)</label><input id="code" inputmode="numeric" autocomplete="one-time-code"></div>
-  <label>Name dieses Geräts</label><input id="name">
-  <div class="chk"><input type="checkbox" id="insecure"><span>Zertifikat nicht prüfen (selbst signiert)</span></div>
-  <button id="go">Anmelden</button>
+  <p class="sub">Sign in once - the sign-in is then kept on this device.</p>
+  <label>Server address</label><input id="server" placeholder="https://rmm.company.com" inputmode="url" autocapitalize="off">
+  <label>Username</label><input id="user" autocapitalize="off" autocomplete="username">
+  <label>Password</label><input id="pass" type="password" autocomplete="current-password">
+  <label>Sign in via</label><select id="realm"><option value="local">Local account</option></select>
+  <div id="codeRow"><label>One-time code (2FA)</label><input id="code" inputmode="numeric" autocomplete="one-time-code"></div>
+  <label>Name of this device</label><input id="name">
+  <div class="chk"><input type="checkbox" id="insecure"><span>Do not verify certificate (self-signed)</span></div>
+  <button id="go">Sign in</button>
   <div id="msg"></div>
 </main>
 <script>
@@ -43,22 +43,22 @@
   function loadRealms() {
     const s = $("server").value.trim(); if (!s) return;
     const list = JSON.parse(RMM.realms(s, $("insecure").checked) || "[]");
-    $("realm").innerHTML = '<option value="local">Lokales Konto</option>' +
+    $("realm").innerHTML = '<option value="local">Local account</option>' +
       list.map((r) => `<option value="${r.id}">${r.name.replace(/</g, "&lt;")}</option>`).join("");
   }
   $("server").addEventListener("change", loadRealms);
   if (pre.server) loadRealms();
   $("go").addEventListener("click", () => {
-    $("go").disabled = true; $("msg").className = "hint"; $("msg").textContent = "Melde an …";
+    $("go").disabled = true; $("msg").className = "hint"; $("msg").textContent = "Signing in …";
     setTimeout(() => {
       const r = JSON.parse(RMM.login($("server").value.trim(), $("user").value.trim(), $("pass").value,
         $("realm").value, $("code").value.trim(), $("name").value.trim(), $("insecure").checked));
       $("go").disabled = false;
-      if (r.ok) return;                       // die App lädt jetzt das Dashboard
+      if (r.ok) return;                       // the app now loads the dashboard
       if (r.error === "2fa_required") {
         $("codeRow").style.display = "block"; $("code").focus();
-        $("msg").className = "hint"; $("msg").textContent = "Bitte den Einmalcode aus der Authenticator-App eingeben.";
-      } else { $("msg").className = "err"; $("msg").textContent = "❌ " + r.error; }
+        $("msg").className = "hint"; $("msg").textContent = "Please enter the one-time code from the authenticator app.";
+      } else { $("msg").className = "err"; $("msg").textContent = r.error; }
     }, 30);
   });
   $("pass").addEventListener("keydown", (e) => { if (e.key === "Enter") $("go").click(); });

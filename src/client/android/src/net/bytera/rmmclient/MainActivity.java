@@ -1,18 +1,18 @@
-// MainActivity.java - BYTERA RMM Client fuer Android (ohne Fremdbibliotheken)
+// MainActivity.java - BYTERA RMM Client for Android (no third-party libraries)
 // ------------------------------------------------------------------------------
-// Ablauf wie bei der Desktop-App:
-//   gespeicherter Geraetetoken? -> POST /api/client/session -> Dashboard (WebView)
-//   sonst                       -> assets/login.html (Anmeldung inkl. SSO + 2FA)
-// Die Sitzung geht per "#client-token=..." ans Dashboard (dort sofort aus der
-// Adresse entfernt). Gespeichert wird nur der Geraetetoken - im privaten
-// App-Speicher, auf den keine andere App zugreifen kann. Kein Passwort.
+// Flow as in the desktop app:
+//   stored device token? -> POST /api/client/session -> dashboard (WebView)
+//   otherwise             -> assets/login.html (sign-in incl. SSO + 2FA)
+// The session goes to the dashboard via "#client-token=..." (removed from the
+// address there immediately). Only the device token is stored - in the private
+// app storage, which no other app can access. No password.
 //
-// Menue (oben rechts): Dashboard, Remote-Shell, Fernbild (Remotedesktop / VNC),
-// Relay-Zugang, Abmelden. Fernbild startet per Intent die App
-// "Remote Desktop" (Microsoft) bzw. einen VNC-Viewer (z.B. bVNC) mit einer
-// Weiterleitung, die nur von diesem Geraet aus erreichbar ist.
+// Menu (top right): dashboard, remote shell, remote screen (Remote Desktop / VNC),
+// relay access, sign out. Remote screen starts, via an intent, the app
+// "Remote Desktop" (Microsoft) or a VNC viewer (e.g. bVNC) with a
+// forward that is reachable only from this device.
 //
-// Gebaut wird mit src/client/build_installers.py (aapt, javac, dx, apksigner).
+// Built with src/client/build_installers.py (aapt, javac, dx, apksigner).
 
 package net.bytera.rmmclient;
 
@@ -77,15 +77,15 @@ public class MainActivity extends Activity {
     WebView web;
     SharedPreferences prefs;
     final Handler ui = new Handler(Looper.getMainLooper());
-    String session = "";              // aktuelles JWT (nur im Speicher)
+    String session = "";              // current JWT (in memory only)
     long sessionAt = 0;
     String loginMessage = "";
     ValueCallback<Uri[]> fileCallback;
 
-    // ================================================================ Umbenennung
-    // Bis Version 1.7 hiess die App "RAPALLE.net RMM" (Paket net.rapalle.rmmclient). Android
-    // behandelt den neuen Paketnamen als eigene App - die alte bleibt daneben installiert.
-    // Beim Start einmal anbieten, sie zu entfernen (die Anmeldung erfolgt hier einmal neu).
+    // ================================================================ Rename
+    // Until version 1.7 the app was called "RAPALLE.net RMM" (package net.rapalle.rmmclient). Android
+    // treats the new package name as a separate app - the old one stays installed alongside.
+    // Offer once at startup to remove it (the sign-in happens here once again).
     static final String LEGACY_PACKAGE = "net.rapalle.rmmclient";
 
     void offerLegacyRemoval() {
@@ -96,10 +96,10 @@ public class MainActivity extends Activity {
         }
         if (prefs.getBoolean("legacy_dismissed", false)) return;
         new AlertDialog.Builder(this)
-            .setTitle("Alte App entfernen?")
-            .setMessage("Die App heißt jetzt BYTERA RMM. Die alte App „RAPALLE.net RMM“ ist noch installiert "
-                    + "und wird nicht mehr benötigt. Jetzt deinstallieren?")
-            .setPositiveButton("Deinstallieren", new DialogInterface.OnClickListener() {
+            .setTitle("Remove old app?")
+            .setMessage("The app is now called BYTERA RMM. The old app \"RAPALLE.net RMM\" is still installed "
+                    + "and is no longer needed. Uninstall it now?")
+            .setPositiveButton("Uninstall", new DialogInterface.OnClickListener() {
                 @Override
                 public void onClick(DialogInterface d, int w) {
                     try {
@@ -107,8 +107,8 @@ public class MainActivity extends Activity {
                     } catch (Exception ignored) { }
                 }
             })
-            .setNegativeButton("Später", null)
-            .setNeutralButton("Nicht mehr fragen", new DialogInterface.OnClickListener() {
+            .setNegativeButton("Later", null)
+            .setNeutralButton("Do not ask again", new DialogInterface.OnClickListener() {
                 @Override
                 public void onClick(DialogInterface d, int w) {
                     prefs.edit().putBoolean("legacy_dismissed", true).apply();
@@ -135,16 +135,16 @@ public class MainActivity extends Activity {
         s.setUserAgentString(s.getUserAgentString() + " ByteraClient/" + VERSION);
         web.addJavascriptInterface(new Bridge(), "RMM");
         web.setWebViewClient(new WebViewClient() {
-            // (String-Variante: laeuft auf allen Android-Versionen, auch den neuesten)
+            // (String variant: runs on all Android versions, including the newest)
             @Override
             public boolean shouldOverrideUrlLoading(WebView v, String url) {
                 Uri u = Uri.parse(url);
                 String server = prefs.getString("server", "");
                 if (url.startsWith("file:") || url.startsWith("blob:") || (!server.isEmpty() && url.startsWith(server))) {
-                    return false;                       // eigene Seiten in der App
+                    return false;                       // own pages in the app
                 }
                 try { startActivity(new Intent(Intent.ACTION_VIEW, u)); } catch (Exception ignored) { }
-                return true;                            // fremde Links im Browser
+                return true;                            // foreign links in the browser
             }
 
             @Override
@@ -218,14 +218,14 @@ public class MainActivity extends Activity {
         String server = prefs.getString("server", "");
         String q = "";
         try {
-            if ("console".equals(solo)) q = "?solo=console&via=client";      // RMM-Konsole, ohne Geraet
+            if ("console".equals(solo)) q = "?solo=console&via=client";      // RMM console, without a device
             else if (solo != null) q = "?solo=" + URLEncoder.encode(solo, "UTF-8") + "&client=" + URLEncoder.encode(clientId, "UTF-8");
         } catch (Exception ignored) { }
         web.loadUrl(server + "/" + q + "#client-token=" + session);
         invalidateOptionsMenu();
     }
 
-    /** Geraetetoken gegen eine frische Sitzung tauschen. */
+    /** Exchange the device token for a fresh session. */
     void refreshSession(final boolean thenShowDashboard) {
         new Thread(new Runnable() {
             public void run() {
@@ -246,20 +246,20 @@ public class MainActivity extends Activity {
                     ui.post(new Runnable() { public void run() {
                         if (e.status == 401) {
                             prefs.edit().remove("device_token").remove("device_id").apply();
-                            showLogin("Bitte neu anmelden: " + e.getMessage());
-                        } else showLogin("Server nicht erreichbar: " + e.getMessage());
+                            showLogin("Please sign in again: " + e.getMessage());
+                        } else showLogin("Server not reachable: " + e.getMessage());
                     }});
                 } catch (final Exception e) {
-                    ui.post(new Runnable() { public void run() { showLogin("Server nicht erreichbar: " + e.getMessage()); }});
+                    ui.post(new Runnable() { public void run() { showLogin("Server not reachable: " + e.getMessage()); }});
                 }
             }
         }).start();
     }
 
-    // ================================================================ JavaScript-Bruecke (Anmeldeseite)
+    // ================================================================ JavaScript bridge (login page)
     class Bridge {
-        /** Dashboard (Modul "client"): Startschein einloesen und RDP/VNC/SSH extern oeffnen
-         *  bzw. das RMM-Terminal anzeigen. Der Schein gehoert zum angemeldeten Benutzer. */
+        /** Dashboard (module "client"): redeem the launch ticket and open RDP/VNC/SSH externally
+         *  or show the RMM terminal. The ticket belongs to the signed-in user. */
         @JavascriptInterface
         public void launch(final String ticket) {
             new Thread(new Runnable() { public void run() {
@@ -271,8 +271,8 @@ public class MainActivity extends Activity {
                         return;
                     }
                     if (p.optString("host_mode").equals("tunnel")) {
-                        ui.post(new Runnable() { public void run() { message("Fernzugriff",
-                            "„Über RMM (Tunnel)“ geht nur in der Desktop-App (Windows/Linux). Bitte lokale IP, eigene Adresse oder das RMM-Gateway wählen."); }});
+                        ui.post(new Runnable() { public void run() { message("Remote access",
+                            "\"Via RMM (tunnel)\" only works in the desktop app (Windows/Linux). Please choose the local IP, a custom address or the RMM gateway."); }});
                         return;
                     }
                     final JSONObject fw = new JSONObject(http("POST", "/api/client/connect", p.toString(), true));
@@ -280,14 +280,14 @@ public class MainActivity extends Activity {
                         openRemote(proto, fw.optString("host"), fw.optInt("port"), fw.optString("user", p.optString("user")));
                     }});
                 } catch (final Exception e) {
-                    ui.post(new Runnable() { public void run() { message("Fernzugriff", e.getMessage()); }});
+                    ui.post(new Runnable() { public void run() { message("Remote access", e.getMessage()); }});
                 }
             }}).start();
         }
 
-        /** VPN (Modul "vpn"): eigenen Tunnel an die WireGuard-App uebergeben.
-         *  Die Datei kommt ueber einen eigenen ContentProvider (Name = Tunnelname.conf);
-         *  Android zeigt die Auswahl "Oeffnen mit" -> WireGuard -> "Importieren". */
+        /** VPN (module "vpn"): hand your own tunnel to the WireGuard app.
+         *  The file comes via a dedicated ContentProvider (name = tunnelname.conf);
+         *  Android shows the "Open with" chooser -> WireGuard -> "Import". */
         @JavascriptInterface
         public void wgImport(final String tunnelId) {
             new Thread(new Runnable() { public void run() {
@@ -298,7 +298,7 @@ public class MainActivity extends Activity {
                     for (int i = 0; arr != null && i < arr.length(); i++) {
                         if (arr.getJSONObject(i).optString("tunnel").equals(tunnelId)) { t = arr.getJSONObject(i); break; }
                     }
-                    if (t == null) throw new Exception("Der VPN-Tunnel wurde nicht gefunden oder ist abgelaufen.");
+                    if (t == null) throw new Exception("The VPN tunnel was not found or has expired.");
                     final String name = t.optString("iface");
                     java.io.File dir = new java.io.File(getCacheDir(), "wg");
                     dir.mkdirs();
@@ -313,8 +313,8 @@ public class MainActivity extends Activity {
             }}).start();
         }
 
-        /** Tunnel in der WireGuard-App ein-/ausschalten (WireGuard-Einstellung
-         *  "Fernsteuerung durch Apps erlauben" muss einmal aktiviert sein). */
+        /** Switch the tunnel on/off in the WireGuard app (the WireGuard setting
+         *  "Allow remote control from apps" must be enabled once). */
         @JavascriptInterface
         public void wgSet(final String name, final boolean up) {
             ui.post(new Runnable() { public void run() {
@@ -322,8 +322,8 @@ public class MainActivity extends Activity {
                 i.setPackage("com.wireguard.android");
                 i.putExtra("tunnel", name);
                 sendBroadcast(i);
-                android.widget.Toast.makeText(MainActivity.this, up ? "WireGuard: " + name + " wird verbunden …"
-                    : "WireGuard: " + name + " wird getrennt …", android.widget.Toast.LENGTH_LONG).show();
+                android.widget.Toast.makeText(MainActivity.this, up ? "WireGuard: connecting " + name + " …"
+                    : "WireGuard: disconnecting " + name + " …", android.widget.Toast.LENGTH_LONG).show();
             }});
         }
 
@@ -380,13 +380,13 @@ public class MainActivity extends Activity {
             } catch (HttpError e) {
                 try { out.put("ok", false); out.put("error", e.getMessage()); } catch (Exception ignored) { }
             } catch (Exception e) {
-                try { out.put("ok", false); out.put("error", "Server nicht erreichbar: " + e.getMessage()); } catch (Exception ignored) { }
+                try { out.put("ok", false); out.put("error", "Server not reachable: " + e.getMessage()); } catch (Exception ignored) { }
             }
             return out.toString();
         }
     }
 
-    // ================================================================ Menue
+    // ================================================================ Menu
     static final int M_HOME = 1, M_SHELL = 2, M_RDP = 3, M_VNC = 4, M_RELAY = 5, M_LOGOUT = 6, M_UPDATE = 7, M_AUTOUPD = 8, M_CONSOLE = 9;
 
     @Override
@@ -394,15 +394,15 @@ public class MainActivity extends Activity {
         m.clear();
         if (session.isEmpty()) return true;
         m.add(0, M_HOME, 0, "Dashboard");
-        m.add(0, M_SHELL, 1, "Remote-Shell …");
-        m.add(0, M_CONSOLE, 1, "RMM-Konsole");
-        m.add(0, M_RDP, 2, "Fernbild (Remotedesktop) …");
-        m.add(0, M_VNC, 3, "Fernbild (VNC) …");
-        m.add(0, M_RELAY, 4, "Relay-Zugang");
-        m.add(0, M_UPDATE, 5, "Nach Updates suchen (" + VERSION + ")");
-        m.add(0, M_AUTOUPD, 6, "Automatisch nach Updates suchen").setCheckable(true)
+        m.add(0, M_SHELL, 1, "Remote shell …");
+        m.add(0, M_CONSOLE, 1, "RMM console");
+        m.add(0, M_RDP, 2, "Remote screen (Remote Desktop) …");
+        m.add(0, M_VNC, 3, "Remote screen (VNC) …");
+        m.add(0, M_RELAY, 4, "Relay access");
+        m.add(0, M_UPDATE, 5, "Check for updates (" + VERSION + ")");
+        m.add(0, M_AUTOUPD, 6, "Check for updates automatically").setCheckable(true)
                 .setChecked(prefs.getBoolean("auto_update", true));
-        m.add(0, M_LOGOUT, 7, "Dieses Gerät abmelden");
+        m.add(0, M_LOGOUT, 7, "Sign out this device");
         return true;
     }
 
@@ -414,12 +414,12 @@ public class MainActivity extends Activity {
         switch (item.getItemId()) {
             case M_HOME: showDashboard(null, null); return true;
             case M_CONSOLE: showDashboard("console", ""); return true;
-            case M_SHELL: chooseClient("Remote-Shell", true, new OnClient() { public void chosen(JSONObject c) {
+            case M_SHELL: chooseClient("Remote shell", true, new OnClient() { public void chosen(JSONObject c) {
                 showDashboard("terminal", c.optString("id")); }}); return true;
-            // Fernbild: auch Offline-Agenten - direkte Verbindung (lokale IP / VPN) braucht keinen Agenten
-            case M_RDP: chooseClient("Fernbild per Remotedesktop", false, new OnClient() { public void chosen(JSONObject c) {
+            // Remote screen: also offline agents - a direct connection (local IP / VPN) needs no agent
+            case M_RDP: chooseClient("Remote screen via Remote Desktop", false, new OnClient() { public void chosen(JSONObject c) {
                 screen(c, "rdp"); }}); return true;
-            case M_VNC: chooseClient("Fernbild per VNC", false, new OnClient() { public void chosen(JSONObject c) {
+            case M_VNC: chooseClient("Remote screen via VNC", false, new OnClient() { public void chosen(JSONObject c) {
                 screen(c, "vnc"); }}); return true;
             case M_RELAY: relayInfo(); return true;
             case M_LOGOUT: logout(); return true;
@@ -447,16 +447,16 @@ public class MainActivity extends Activity {
                     if (oa != ob) return oa ? -1 : 1;
                     return a.optString("hostname").compareToIgnoreCase(b.optString("hostname")); }});
                 ui.post(new Runnable() { public void run() {
-                    if (online.isEmpty()) { message(title, onlineOnly ? "Kein Gerät online." : "Keine Geräte sichtbar."); return; }
+                    if (online.isEmpty()) { message(title, onlineOnly ? "No device online." : "No devices visible."); return; }
                     String[] labels = new String[online.size()];
                     for (int i = 0; i < labels.length; i++)
                         labels[i] = (online.get(i).optBoolean("online") ? "● " : "○ ") + online.get(i).optString("hostname")
                                 + "  (" + online.get(i).optString("platform", "?") + ")"
-                                + (online.get(i).optBoolean("online") ? "" : " – offline");
-                    new AlertDialog.Builder(MainActivity.this).setTitle(title + " – Gerät wählen")
+                                + (online.get(i).optBoolean("online") ? "" : " - offline");
+                    new AlertDialog.Builder(MainActivity.this).setTitle(title + " - choose a device")
                             .setItems(labels, new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) {
                                 cb.chosen(online.get(w)); }})
-                            .setNegativeButton("Abbrechen", null).show();
+                            .setNegativeButton("Cancel", null).show();
                 }});
             } catch (final Exception e) {
                 ui.post(new Runnable() { public void run() { message(title, e.getMessage()); }});
@@ -464,7 +464,7 @@ public class MainActivity extends Activity {
         }}).start();
     }
 
-    // Fernbild: Ziel + Port waehlen (RMM-Gateway, lokale IP, letzte, eigene), Voreinstellung pro Benutzer+Geraet
+    // Remote screen: choose target + port (RMM gateway, local IP, last, custom), default per user+device
     void screen(final JSONObject client, final String protocol) {
         new Thread(new Runnable() { public void run() {
             try {
@@ -472,7 +472,7 @@ public class MainActivity extends Activity {
                         + URLEncoder.encode(client.optString("id"), "UTF-8") + "?protocol=" + protocol, null, true));
                 ui.post(new Runnable() { public void run() { connectDialog(client, protocol, info); }});
             } catch (final Exception e) {
-                ui.post(new Runnable() { public void run() { message("Fernbild", e.getMessage()); }});
+                ui.post(new Runnable() { public void run() { message("Remote screen", e.getMessage()); }});
             }
         }}).start();
     }
@@ -489,20 +489,20 @@ public class MainActivity extends Activity {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(20), dp(8), dp(20), 0);
-        TextView h1 = new TextView(this); h1.setText("Ziel"); box.addView(h1);
+        TextView h1 = new TextView(this); h1.setText("Target"); box.addView(h1);
         final RadioGroup hosts = new RadioGroup(this);
-        final RadioButton rGw = new RadioButton(this); rGw.setText("RMM-Gateway (nur von diesem Gerät erreichbar)"); rGw.setEnabled(gw);
-        final RadioButton rLocal = new RadioButton(this); rLocal.setText("Lokale IP: " + (localIp.isEmpty() ? "nicht bekannt" : localIp));
+        final RadioButton rGw = new RadioButton(this); rGw.setText("RMM gateway (reachable only from this device)"); rGw.setEnabled(gw);
+        final RadioButton rLocal = new RadioButton(this); rLocal.setText("Local IP: " + (localIp.isEmpty() ? "unknown" : localIp));
         rLocal.setEnabled(!localIp.isEmpty());
         final RadioButton rLast = new RadioButton(this);
-        final RadioButton rCustom = new RadioButton(this); rCustom.setText("Eigene Adresse");
+        final RadioButton rCustom = new RadioButton(this); rCustom.setText("Custom address");
         rGw.setId(1); rLocal.setId(2); rLast.setId(3); rCustom.setId(4);
         hosts.addView(rGw); hosts.addView(rLocal);
-        if (last != null) { rLast.setText("Letzte Verbindung: " + last.optString("display")); hosts.addView(rLast); }
+        if (last != null) { rLast.setText("Last connection: " + last.optString("display")); hosts.addView(rLast); }
         hosts.addView(rCustom);
         box.addView(hosts);
         final EditText eHost = new EditText(this);
-        eHost.setHint("z. B. 10.8.0.25 oder pc.firma.lan");
+        eHost.setHint("e.g. 10.8.0.25 or pc.company.lan");
         eHost.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         eHost.setText(def.optString("host", ""));
         box.addView(eHost);
@@ -512,17 +512,17 @@ public class MainActivity extends Activity {
         ports.setOrientation(RadioGroup.HORIZONTAL);
         final RadioButton pStd = new RadioButton(this); pStd.setText("Standard (" + std + ")"); pStd.setId(11);
         final RadioButton pGw = new RadioButton(this); pGw.setText("Gateway"); pGw.setId(12); pGw.setEnabled(false);
-        final RadioButton pCu = new RadioButton(this); pCu.setText("Eigener"); pCu.setId(13);
+        final RadioButton pCu = new RadioButton(this); pCu.setText("Custom"); pCu.setId(13);
         ports.addView(pStd); ports.addView(pGw); ports.addView(pCu);
         box.addView(ports);
         final EditText ePort = new EditText(this);
         ePort.setHint("Port"); ePort.setInputType(InputType.TYPE_CLASS_NUMBER);
         if (def.optInt("port", 0) > 0) ePort.setText(String.valueOf(def.optInt("port")));
         box.addView(ePort);
-        final CheckBox remember = new CheckBox(this); remember.setText("Als Standard für dieses Gerät merken");
+        final CheckBox remember = new CheckBox(this); remember.setText("Remember as default for this device");
         box.addView(remember);
 
-        // Vorbelegung: gespeicherte Voreinstellung, sonst lokale IP (bzw. Gateway, wenn keine IP bekannt)
+        // preselection: stored default, otherwise local IP (or gateway if no IP is known)
         String hm = def.optString("host_mode", localIp.isEmpty() ? "gateway" : "local");
         if (hm.equals("gateway") && !gw) hm = localIp.isEmpty() ? "custom" : "local";
         if (hm.equals("local") && localIp.isEmpty()) hm = gw ? "gateway" : "custom";
@@ -542,10 +542,10 @@ public class MainActivity extends Activity {
         ScrollView sv = new ScrollView(this);
         sv.addView(box);
         new AlertDialog.Builder(this)
-                .setTitle((protocol.equals("rdp") ? "Remotedesktop: " : "VNC: ") + client.optString("hostname"))
+                .setTitle((protocol.equals("rdp") ? "Remote Desktop: " : "VNC: ") + client.optString("hostname"))
                 .setView(sv)
-                .setNegativeButton("Abbrechen", null)
-                .setPositiveButton("Verbinden", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) {
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Connect", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) {
                     int h = hosts.getCheckedRadioButtonId();
                     String hostMode = h == 1 ? "gateway" : h == 3 ? "last" : h == 4 ? "custom" : "local";
                     String portMode = ports.getCheckedRadioButtonId() == 13 ? "custom" : "standard";
@@ -555,7 +555,7 @@ public class MainActivity extends Activity {
                 .show();
     }
 
-    /** RDP / VNC / SSH in der passenden App oeffnen (Intent mit URI). */
+    /** Open RDP / VNC / SSH in the matching app (intent with a URI). */
     void openRemote(String protocol, String h, int port, String user) {
         String uri = protocol.equals("rdp") ? "rdp://full%20address=s:" + h + ":" + port
                 : protocol.equals("ssh") ? "ssh://" + (user == null || user.isEmpty() ? "" : Uri.encode(user) + "@") + h + ":" + port
@@ -565,10 +565,10 @@ public class MainActivity extends Activity {
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(i);
         } catch (ActivityNotFoundException e) {
-            String app = protocol.equals("rdp") ? "„Remote Desktop“ (Microsoft) bzw. „Windows App“"
-                    : protocol.equals("ssh") ? "einen SSH-Client (z. B. „Termius“ oder „JuiceSSH“)" : "„bVNC“";
-            message("Fernzugriff", "Keine passende App gefunden. Bitte " + app + " aus dem Play Store installieren.\n\n"
-                    + "Verbindung: " + h + ":" + port);
+            String app = protocol.equals("rdp") ? "\"Remote Desktop\" (Microsoft) or \"Windows App\""
+                    : protocol.equals("ssh") ? "an SSH client (e.g. \"Termius\" or \"JuiceSSH\")" : "\"bVNC\"";
+            message("Remote access", "No matching app found. Please install " + app + " from the Play Store.\n\n"
+                    + "Connection: " + h + ":" + port);
         }
     }
 
@@ -588,7 +588,7 @@ public class MainActivity extends Activity {
                     openRemote(protocol, fw.optString("host"), fw.optInt("port"), "");
                 }});
             } catch (final Exception e) {
-                ui.post(new Runnable() { public void run() { message("Fernbild", e.getMessage()); }});
+                ui.post(new Runnable() { public void run() { message("Remote screen", e.getMessage()); }});
             }
         }}).start();
     }
@@ -607,7 +607,7 @@ public class MainActivity extends Activity {
         return false;
     }
 
-    /** Neueste APK auf dem Server pruefen; bei neuerer Version anbieten (Download ueber den Browser). */
+    /** Check the newest APK on the server; offer it if newer (download via the browser). */
     void checkUpdate(final boolean manual) {
         new Thread(new Runnable() { public void run() {
             try {
@@ -623,38 +623,38 @@ public class MainActivity extends Activity {
                 final JSONObject apk = best;
                 ui.post(new Runnable() { public void run() {
                     if (apk == null || !newer(apk.optString("version"), VERSION)) {
-                        if (manual) message("Update", apk == null ? "Auf dem Server liegt keine Android-App."
-                                : "Die App ist aktuell (Version " + VERSION + ").");
+                        if (manual) message("Update", apk == null ? "No Android app is available on the server."
+                                : "The app is up to date (version " + VERSION + ").");
                         return;
                     }
                     final String url = prefs.getString("server", "") + apk.optString("url");
-                    new AlertDialog.Builder(MainActivity.this).setTitle("Update verfügbar")
-                            .setMessage("Version " + apk.optString("version") + " ist verfügbar (installiert: " + VERSION + ").\n\n"
-                                    + "Die neue App wird heruntergeladen; danach die Datei öffnen und „Aktualisieren“ wählen.")
-                            .setPositiveButton("Herunterladen", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) {
+                    new AlertDialog.Builder(MainActivity.this).setTitle("Update available")
+                            .setMessage("Version " + apk.optString("version") + " is available (installed: " + VERSION + ").\n\n"
+                                    + "The new app is downloaded; then open the file and choose \"Update\".")
+                            .setPositiveButton("Download", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) {
                                 try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); }
-                                catch (Exception e) { message("Update", "Download konnte nicht gestartet werden: " + url); }
+                                catch (Exception e) { message("Update", "Download could not be started: " + url); }
                             }})
-                            .setNegativeButton("Später", null).show();
+                            .setNegativeButton("Later", null).show();
                 }});
             } catch (final Exception e) {
-                if (manual) ui.post(new Runnable() { public void run() { message("Update", "Suche fehlgeschlagen: " + e.getMessage()); }});
+                if (manual) ui.post(new Runnable() { public void run() { message("Update", "Search failed: " + e.getMessage()); }});
             }
         }}).start();
     }
 
     void relayInfo() {
-        message("Relay-Zugang",
-                "Android erlaubt Apps keine Netzlaufwerke. Nutze den Explorer im Dashboard (Relay bzw. ☁️ Spaces) "
-                + "oder eine Datei-App mit WebDAV (z. B. „Material Files“):\n\n"
-                + prefs.getString("server", "") + "/dav/\nBenutzer: " + prefs.getString("username", "")
-                + "\nPasswort: dein normales Passwort");
+        message("Relay access",
+                "Android does not allow apps to mount network drives. Use the explorer in the dashboard (relay or Spaces) "
+                + "or a file app with WebDAV (e.g. \"Material Files\"):\n\n"
+                + prefs.getString("server", "") + "/dav/\nUser: " + prefs.getString("username", "")
+                + "\nPassword: your normal password");
     }
 
     void logout() {
-        new AlertDialog.Builder(this).setTitle("Abmelden")
-                .setMessage("Dieses Gerät abmelden? Die gespeicherte Anmeldung wird gelöscht.")
-                .setPositiveButton("Abmelden", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) {
+        new AlertDialog.Builder(this).setTitle("Sign out")
+                .setMessage("Sign out this device? The stored sign-in will be deleted.")
+                .setPositiveButton("Sign out", new DialogInterface.OnClickListener() { public void onClick(DialogInterface d, int w) {
                     final String id = prefs.getString("device_id", "");
                     new Thread(new Runnable() { public void run() {
                         try { if (!id.isEmpty()) http("DELETE", "/api/client/devices/" + URLEncoder.encode(id, "UTF-8"), null, true); }
@@ -662,11 +662,11 @@ public class MainActivity extends Activity {
                         ui.post(new Runnable() { public void run() {
                             prefs.edit().remove("device_token").remove("device_id").apply();
                             web.evaluateJavascript("localStorage.removeItem('rmm_token')", null);
-                            showLogin("Abgemeldet.");
+                            showLogin("Signed out.");
                         }});
                     }}).start();
                 }})
-                .setNegativeButton("Abbrechen", null).show();
+                .setNegativeButton("Cancel", null).show();
     }
 
     void message(String title, String msg) {
@@ -688,7 +688,7 @@ public class MainActivity extends Activity {
 
     String deviceName() {
         String m = (Build.MANUFACTURER + " " + Build.MODEL).trim();
-        return m.isEmpty() ? "Android-Gerät" : Character.toUpperCase(m.charAt(0)) + m.substring(1);
+        return m.isEmpty() ? "Android device" : Character.toUpperCase(m.charAt(0)) + m.substring(1);
     }
 
     // ---------------------------------------------------------------- encryption (E2E.java)
@@ -783,10 +783,10 @@ public class MainActivity extends Activity {
         os.write(env.request(req.toString().getBytes("UTF-8")));
         os.close();
         int code = c.getResponseCode();
-        if (code == 409) throw new HttpError("Der Server zeigt einen ANDEREN Schlüssel als gespeichert - möglicher Angriff. "
-                + "Wurde der Server neu installiert: Server in der App entfernen und neu hinzufügen.", 409);
-        if (code == 404) throw new HttpError("Der Server nimmt keine verschlüsselten Anfragen mehr an - möglicher Angriff.", 404);
-        if (code >= 400) throw new HttpError("Verschlüsselte Anfrage fehlgeschlagen (HTTP " + code + ")", code);
+        if (code == 409) throw new HttpError("The server presents a DIFFERENT key than the one stored - possible attack. "
+                + "If the server was reinstalled: remove the server in the app and add it again.", 409);
+        if (code == 404) throw new HttpError("The server no longer accepts encrypted requests - possible attack.", 404);
+        if (code >= 400) throw new HttpError("Encrypted request failed (HTTP " + code + ")", code);
         JSONObject out = new JSONObject(new String(env.response(readAll(c.getInputStream())), "UTF-8"));
         int status = out.optInt("s", 0);
         String text = new String(android.util.Base64.decode(out.optString("b", ""), android.util.Base64.DEFAULT), "UTF-8");
@@ -800,7 +800,7 @@ public class MainActivity extends Activity {
 
     String http(String method, String path, String body, boolean auth) throws Exception {
         String server = prefs.getString("server", "");
-        if (server.isEmpty()) throw new HttpError("Bitte die Server-Adresse eingeben", 0);
+        if (server.isEmpty()) throw new HttpError("Please enter the server address", 0);
         learnSecurity(server);
         String key = secKey();
         if (!key.isEmpty()) return httpE2E(server, key, method, path, body, auth);
@@ -850,15 +850,15 @@ public class MainActivity extends Activity {
         c.setHostnameVerifier(new HostnameVerifier() { public boolean verify(String h, SSLSession s) { return true; } });
     }
 
-    /** Konfiguration an WireGuard geben: zuerst "Oeffnen mit" (WireGuard importiert .conf-Dateien),
-     *  sonst "Teilen". Fehlt WireGuard, in den Play Store. */
+    /** Hand the configuration to WireGuard: first "Open with" (WireGuard imports .conf files),
+     *  otherwise "Share". If WireGuard is missing, go to the Play Store. */
     void openWireGuard(String name) {
         boolean wg = false;
-        try { getPackageManager().getPackageInfo("com.wireguard.android", 0); wg = true; } catch (Exception e) { /* fehlt */ }
+        try { getPackageManager().getPackageInfo("com.wireguard.android", 0); wg = true; } catch (Exception e) { /* missing */ }
         if (!wg) {
-            message("VPN", "Bitte zuerst die App „WireGuard“ installieren, dann erneut tippen.");
+            message("VPN", "Please install the \"WireGuard\" app first, then tap again.");
             try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=com.wireguard.android"))); }
-            catch (Exception e) { /* kein Store */ }
+            catch (Exception e) { /* no store */ }
             return;
         }
         Uri uri = Uri.parse("content://net.bytera.rmmclient.conf/" + name + ".conf");
@@ -869,21 +869,21 @@ public class MainActivity extends Activity {
         try {
             startActivity(view);
             return;
-        } catch (ActivityNotFoundException e) { /* naechster Weg */ }
+        } catch (ActivityNotFoundException e) { /* next way */ }
         Intent send = new Intent(Intent.ACTION_SEND);
         send.setType("application/octet-stream");
         send.putExtra(Intent.EXTRA_STREAM, uri);
         send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         try {
-            startActivity(Intent.createChooser(send, "Tunnel „" + name + "“ an WireGuard übergeben"));
-            android.widget.Toast.makeText(this, "In WireGuard „Importieren“ wählen; danach im RMM „Verbinden“.",
+            startActivity(Intent.createChooser(send, "Hand tunnel \"" + name + "\" to WireGuard"));
+            android.widget.Toast.makeText(this, "In WireGuard choose \"Import\"; then \"Connect\" in the RMM.",
                 android.widget.Toast.LENGTH_LONG).show();
         } catch (Exception e) {
-            message("VPN", "WireGuard konnte die Datei nicht übernehmen. Alternativ im Dashboard den QR-Code mit WireGuard scannen.");
+            message("VPN", "WireGuard could not accept the file. Alternatively scan the QR code in the dashboard with WireGuard.");
         }
     }
 
-    /** Liefert die Tunnel-Dateien aus dem Cache an WireGuard (nur lesend, nur per Freigabe). */
+    /** Serves the tunnel files from the cache to WireGuard (read-only, only via sharing). */
     public static class ConfProvider extends android.content.ContentProvider {
         @Override public boolean onCreate() { return true; }
         private java.io.File file(Uri uri) {
