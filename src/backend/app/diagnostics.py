@@ -1,35 +1,32 @@
 """
 diagnostics.py
 --------------
-Wartungsmodus: alles mitschreiben, damit ein Absturz danach erklärbar ist.
+Maintenance mode: record everything, so a crash can be explained afterwards.
 
-Warum dieses Modul überhaupt
-----------------------------
-Ein Absturz, der nur "irgendwann nach kurzer Zeit" passiert, ist fast nie
-an der Stelle zu finden, an der er auffällt. Die üblichen Ursachen sind
-schleichend: Speicher, der nicht mehr freigegeben wird; Dateideskriptoren,
-die offen bleiben; Hintergrundaufgaben, die still sterben; Ausnahmen in
-Threads, die niemand sieht. Nichts davon steht in einer gewöhnlichen
-Fehlermeldung.
+Why this module exists at all
+-----------------------------
+A crash that only happens "at some point after a while" is almost never found
+at the spot where it surfaces. The usual causes are gradual: memory that is no
+longer freed; file descriptors that stay open; background tasks that die
+silently; exceptions in threads that nobody sees. None of that is in an
+ordinary error message.
 
-Deshalb schreibt der Wartungsmodus drei Dinge mit:
+Therefore the maintenance mode records three things:
 
-  1. ALLES an Ausgabe - stdout, stderr, das logging-Modul, Ausnahmen aus
-     Threads und aus asyncio-Aufgaben. Auch das, was sonst still
-     verschluckt wird.
-  2. Regelmässige Messwerte: Speicher, offene Dateideskriptoren, Threads,
-     laufende asyncio-Aufgaben, Socket.IO-Verbindungen. Eine Kurve, die
-     stetig steigt, zeigt das Leck deutlicher als jeder Stacktrace.
-  3. Die Berichte der Agenten, damit beide Seiten in EINER Zeitachse
-     liegen.
+  1. EVERYTHING in output - stdout, stderr, the logging module, exceptions from
+     threads and from asyncio tasks. Also what is otherwise silently swallowed.
+  2. Regular measurements: memory, open file descriptors, threads, running
+     asyncio tasks, Socket.IO connections. A curve that steadily rises shows
+     the leak more clearly than any stack trace.
+  3. The reports of the agents, so both sides lie on ONE timeline.
 
-Dazu kommt faulthandler: Stirbt der Prozess hart (Speicherzugriffsfehler,
-vom Kernel beendet), schreibt er noch die Stacktraces aller Threads weg.
-Genau diese Fälle hinterlassen sonst gar nichts.
+In addition faulthandler: if the process dies hard (segmentation fault, killed
+by the kernel), it still writes out the stack traces of all threads. Exactly
+these cases otherwise leave nothing at all.
 
-Der Modus ist bewusst NICHT dauerhaft an: Er kostet Platz und etwas
-Rechenzeit. Er läuft, bis er abgeschaltet wird oder die eingestellte Zeit
-abgelaufen ist - so bleibt eine vergessene Sitzung nicht ewig aktiv.
+The mode is deliberately NOT permanently on: it costs space and some compute
+time. It runs until it is switched off or the configured time has elapsed - so
+a forgotten session does not stay active forever.
 """
 
 from __future__ import annotations
@@ -54,21 +51,20 @@ FAULT_LOG = "backend-fault.log"
 AGENT_LOG = "agents.log"
 BLOCK_LOG = "backend-blockaden.log"
 
-# Wie viele Zeilen im Arbeitsspeicher für die Live-Ansicht vorgehalten werden.
+# How many lines are kept in memory for the live view.
 RING_SIZE = 4000
-# Grösse, ab der eine Logdatei umgebrochen wird, und wie viele Altstände
-# aufgehoben werden. 20 MB reichen für viele Stunden, ohne die Platte zu
-# füllen.
+# Size at which a log file is rotated, and how many old versions are kept.
+# 20 MB is enough for many hours without filling the disk.
 MAX_BYTES = 20 * 1024 * 1024
 BACKUPS = 3
-# Abstand der Messpunkte.
+# Interval of the data points.
 SAMPLE_SECONDS = 15
 
 
 class _State:
     def __init__(self):
         self.active = False
-        self.until = 0.0            # 0 = ohne Ende
+        self.until = 0.0            # 0 = no end
         self.started = 0.0
         self.ring: deque = deque(maxlen=RING_SIZE)
         self.lock = threading.Lock()
@@ -82,12 +78,12 @@ class _State:
 
 st = _State()
 
-# Wiederverwendete psutil-Instanz (siehe sample()).
+# Reused psutil instance (see sample()).
 _proc = None
 
 
 # ----------------------------------------------------------------------
-# Schreiben
+# Writing
 # ----------------------------------------------------------------------
 
 def _ensure_dir() -> None:
@@ -95,8 +91,8 @@ def _ensure_dir() -> None:
 
 
 def _rotate(path: Path) -> None:
-    """Einfacher Umbruch - kein logging.handlers, weil hier auch roher
-    stdout-Text ankommt, der nie durch das logging-Modul läuft."""
+    """Simple rotation - no logging.handlers, because raw stdout text also
+    arrives here that never goes through the logging module."""
     try:
         if path.exists() and path.stat().st_size > MAX_BYTES:
             for i in range(BACKUPS - 1, 0, -1):
@@ -111,20 +107,20 @@ def _rotate(path: Path) -> None:
 def write(line: str, target: str = MAIN_LOG, level: str = "INFO",
           to_console: bool = False, from_stream: bool = False) -> None:
     """
-    Eine Zeile in Ring und Datei. Darf NIEMALS werfen.
+    One line into the ring and the file. Must NEVER throw.
 
-    Das ist keine Übervorsicht: Diese Funktion hängt an stdout. Wirft sie,
-    reisst sie jeden print()-Aufruf im ganzen Programm mit - also genau
-    dann, wenn man die Ausgabe am dringendsten braucht.
+    This is not over-caution: this function hangs on stdout. If it throws, it
+    tears down every print() call in the whole program - exactly when the
+    output is needed most.
 
-    'to_console' schreibt zusätzlich in die echte Container-Ausgabe.
+    'to_console' additionally writes into the real container output.
 
-    Warum das nötig wurde: Bis eben landete ALLES nur im Ringpuffer und in
-    der Logdatei. Im 'docker logs' stand deshalb keine einzige Zeile der
-    Diagnose - weder dass sie überhaupt eingehängt ist, noch eine gemeldete
-    Blockade. Bei einem Container, an dessen Logdateien man gerade nicht
-    herankommt, ist das die eine Ausgabe, die man wirklich braucht. Wichtige
-    Meldungen gehen deshalb zusätzlich nach stdout.
+    Why this became necessary: until just now EVERYTHING landed only in the
+    ring buffer and the log file. The 'docker logs' therefore held not a single
+    line of the diagnostics - neither that it is installed at all, nor a
+    reported block. For a container whose log files one cannot currently reach,
+    that is the one output one really needs. Important messages therefore also
+    go to stdout.
     """
     try:
         stamp = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -135,12 +131,11 @@ def write(line: str, target: str = MAIN_LOG, level: str = "INFO",
                 st.counters["errors"] += 1
             elif level in ("WARN", "WARNING"):
                 st.counters["warnings"] += 1
-        # Direkt auf das ORIGINAL schreiben, nicht über sys.stdout: Letzteres
-        # ist unser eigener Mitschnitt und würde die Zeile ein zweites Mal
-        # durch write() schicken.
-        # 'from_stream' bedeutet: Die Zeile kam gerade AUS stdout/stderr und
-        # steht dort bereits. Sie ein zweites Mal auszugeben würde jede
-        # Container-Ausgabe verdoppeln.
+        # Write directly to the ORIGINAL, not via sys.stdout: the latter is our
+        # own capture and would send the line through write() a second time.
+        # 'from_stream' means: the line just came FROM stdout/stderr and is
+        # already there. Printing it a second time would duplicate every
+        # container output.
         if not from_stream and (to_console or level in ("ERROR", "WARN", "WARNING")):
             try:
                 target_stream = st.orig_stdout or sys.__stdout__
@@ -160,17 +155,16 @@ def write(line: str, target: str = MAIN_LOG, level: str = "INFO",
 
 
 # ----------------------------------------------------------------------
-# Umleitung von stdout/stderr
+# Redirection of stdout/stderr
 # ----------------------------------------------------------------------
 
 class _Tee(io.TextIOBase):
     """
-    Schreibt in das Original UND ins Log.
+    Writes to the original AND into the log.
 
-    Bewusst ein Tee und keine Umleitung: Die Container-Ausgabe
-    ('docker logs') soll unverändert weiterlaufen. Ein Diagnosewerkzeug,
-    das die gewohnte Ausgabe wegnimmt, macht die Fehlersuche schwerer statt
-    leichter.
+    Deliberately a tee and not a redirection: the container output
+    ('docker logs') should keep running unchanged. A diagnostic tool that takes
+    away the usual output makes troubleshooting harder, not easier.
     """
 
     def __init__(self, original, level: str):
@@ -192,12 +186,13 @@ class _Tee(io.TextIOBase):
 
     def _level_for(self, line: str) -> str:
         """
-        Stufe anhand des Inhalts bestimmen.
+        Determine the level from the content.
 
-        Frueher galt ALLES auf stderr pauschal als Fehler. uvicorn schreibt
-        dorthin aber auch gewoehnliche Zugriffszeilen - im letzten Log stand
-        deshalb eine harmlose JWT-Warnung als [ERROR], und der Fehlerzaehler
-        im Dashboard war entsprechend nutzlos. Jetzt entscheidet der Text.
+        Previously EVERYTHING on stderr counted as an error across the board.
+        But uvicorn also writes ordinary access lines there - in the last log a
+        harmless JWT warning therefore appeared as [ERROR], and the error
+        counter in the dashboard was correspondingly useless. Now the text
+        decides.
         """
         if self.level != "ERROR":
             return "INFO"
@@ -222,7 +217,7 @@ class _Tee(io.TextIOBase):
 
 
 class _LogHandler(logging.Handler):
-    """Bringt auch das logging-Modul (uvicorn, FastAPI) in dieselbe Datei."""
+    """Brings the logging module (uvicorn, FastAPI) into the same file too."""
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -236,18 +231,18 @@ class _LogHandler(logging.Handler):
 
 
 # ----------------------------------------------------------------------
-# Ausnahmen einsammeln, die sonst niemand sieht
+# Collect exceptions that nobody else sees
 # ----------------------------------------------------------------------
 
 def _thread_hook(args) -> None:
-    write(f"Unbehandelte Ausnahme im Thread {args.thread.name if args.thread else '?'}:\n"
+    write(f"Unhandled exception in thread {args.thread.name if args.thread else '?'}:\n"
           + "".join(traceback.format_exception(args.exc_type, args.exc_value,
                                                args.exc_traceback)),
           level="ERROR")
 
 
 def _sys_hook(exc_type, exc_value, tb) -> None:
-    write("Unbehandelte Ausnahme im Hauptthread:\n"
+    write("Unhandled exception in the main thread:\n"
           + "".join(traceback.format_exception(exc_type, exc_value, tb)),
           level="ERROR")
     try:
@@ -258,14 +253,14 @@ def _sys_hook(exc_type, exc_value, tb) -> None:
 
 def _loop_handler(loop, context: dict) -> None:
     """
-    Ausnahmen aus asyncio-Aufgaben.
+    Exceptions from asyncio tasks.
 
-    Ohne diesen Haken meldet Python nur "Task exception was never
-    retrieved" - und zwar irgendwann später, wenn der Müllsammler
-    vorbeikommt. Der Zeitpunkt hat dann nichts mehr mit der Ursache zu tun.
+    Without this hook Python only reports "Task exception was never retrieved" -
+    and that at some later point, when the garbage collector comes by. The
+    timing then has nothing to do with the cause anymore.
     """
     exc = context.get("exception")
-    message = context.get("message") or "asyncio-Fehler"
+    message = context.get("message") or "asyncio error"
     detail = ("".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
               if exc else json.dumps({k: str(v) for k, v in context.items()},
                                      ensure_ascii=False))
@@ -274,9 +269,9 @@ def _loop_handler(loop, context: dict) -> None:
 
 def install() -> None:
     """
-    Hängt sich überall ein. Läuft EINMAL beim Start, unabhängig davon, ob
-    der Wartungsmodus gerade an ist - der Ring puffert dann trotzdem, und
-    beim Einschalten sind die letzten Minuten sofort mit dabei.
+    Hooks into everything. Runs ONCE at start, regardless of whether the
+    maintenance mode is on right now - the ring buffers anyway, and when
+    switched on the last minutes are immediately included.
     """
     if st.installed:
         return
@@ -296,52 +291,48 @@ def install() -> None:
         asyncio.get_event_loop().set_exception_handler(_loop_handler)
     except RuntimeError:
         pass
-    write("Diagnose eingehängt (stdout, stderr, logging, Threads, asyncio)", to_console=True)
+    write("Diagnostics installed (stdout, stderr, logging, threads, asyncio)", to_console=True)
 
 
 # ----------------------------------------------------------------------
-# Wächter für Blockaden des Event-Loops
+# Watchdog for event-loop blocks
 # ----------------------------------------------------------------------
-# Das ist das Werkzeug für den Fehler vom 22.08.: Der Prozess lebte, hatte
-# stabilen Speicher und keine Ausnahme - antwortete aber nicht mehr. Alle
-# Agenten flogen gleichzeitig raus, der Docker-Healthcheck lief in sein
-# 5-Sekunden-Limit, Cloudflare meldete 524.
+# This is the tool for the error on 22.08.: the process was alive, had stable
+# memory and no exception - but no longer responded. All agents dropped at
+# once, the Docker health check ran into its 5-second limit, Cloudflare
+# reported 524.
 #
-# So etwas erzeugt KEINEN Stacktrace, weil nichts abstürzt. Es ist eine
-# blockierende Operation im Event-Loop-Thread - typischerweise ein fsync
-# auf ein langsames Dateisystem, ein Netzaufruf ohne Zeitlimit oder eine
-# lange Schleife.
+# Something like that produces NO stack trace, because nothing crashes. It is a
+# blocking operation in the event-loop thread - typically an fsync on a slow
+# file system, a network call without a time limit or a long loop.
 #
-# Der Wächter läuft in einem EIGENEN Thread (nicht im Loop - der ist ja
-# gerade blockiert) und misst, wie pünktlich der Loop einen Zeitstempel
-# aktualisiert. Bleibt der Stempel stehen, schreibt er die Stacktraces
-# ALLER Threads weg. Damit steht beim nächsten Mal schwarz auf weiß, in
-# welcher Zeile das Backend hängt.
+# The watchdog runs in its OWN thread (not in the loop - that is blocked right
+# now) and measures how punctually the loop updates a timestamp. If the stamp
+# stops, it writes out the stack traces of ALL threads. This way, next time, it
+# is in black and white which line the backend is stuck on.
 
-# Ab welcher Verzögerung protokolliert wird.
+# From which delay on it is logged.
 LOOP_LAG_WARN = 2.0
-# Ab wann zusätzlich alle Stacktraces gesichert werden.
+# From when all stack traces are additionally saved.
 LOOP_LAG_DUMP = 5.0
-# NOTBREMSE: Ab dieser Verzögerung gilt das Backend als hängend und beendet
-# sich selbst, damit die Neustartkette greift. 0 schaltet das ab.
+# EMERGENCY STOP: from this delay on, the backend counts as stuck and ends
+# itself, so the restart chain takes effect. 0 disables this.
 #
-# Warum Selbstbeendigung die richtige Antwort ist: Ein Prozess, dessen
-# Ereignisschleife minutenlang steht, ist für jeden Benutzer nicht von einem
-# abgestürzten zu unterscheiden - nur dass niemand ihn neu startet. Docker
-# reagiert auf einen fehlgeschlagenen Healthcheck NICHT mit einem Neustart,
-# sondern markiert den Container lediglich als krank. Ein hängendes Backend
-# bleibt so beliebig lange hängen. Beendet es sich dagegen selbst, fangen
-# run.py bzw. die Neustart-Regel von Docker es auf und es ist nach Sekunden
-# wieder da. Kontrolliertes Beenden ist besser als ein Untoter.
+# Why self-termination is the right answer: a process whose event loop is stuck
+# for minutes is, for any user, indistinguishable from a crashed one - except
+# that nobody restarts it. Docker does NOT react to a failed health check with
+# a restart, but merely marks the container as unhealthy. A stuck backend thus
+# stays stuck arbitrarily long. If it ends itself, however, run.py or Docker's
+# restart rule catch it and it is back after seconds. A controlled exit is
+# better than an undead process.
 LOOP_LAG_KILL = float(os.getenv("RMM_LOOP_KILL_S", "90") or 90)
 
 _loop_beat = {"t": 0.0, "worst": 0.0, "dumps": 0}
 
 
 async def loop_heartbeat() -> None:
-    """Setzt zweimal pro Sekunde einen Zeitstempel. Mehr nicht - genau das
-    macht sie zum verlässlichen Massstab: Kommt sie nicht durch, steht der
-    Loop."""
+    """Sets a timestamp twice per second. Nothing more - exactly that makes it
+    a reliable yardstick: if it does not get through, the loop is stuck."""
     while True:
         _loop_beat["t"] = time.monotonic()
         await asyncio.sleep(0.5)
@@ -349,21 +340,20 @@ async def loop_heartbeat() -> None:
 
 def _watchdog_thread() -> None:
     """
-    Misst von aussen, wie lange der Herzschlag ausbleibt.
+    Measures from the outside how long the heartbeat is missing.
 
-    Zwei Zeitsperren, und sie sind ABSICHTLICH getrennt:
+    Two time locks, and they are DELIBERATELY separate:
 
-      'reported' bremst die Textmeldung, damit eine lange Blockade nicht
-      im Sekundentakt dieselbe Zeile schreibt.
+      'reported' throttles the text message, so a long block does not write the
+      same line every second.
 
-      'dumped' bremst den Stack-Abzug - aber pro BLOCKADE, nicht pro Zeit.
+      'dumped' throttles the stack dump - but per BLOCK, not per time.
 
-    Warum getrennt: Mit einer gemeinsamen Sperre passierte Folgendes. Nach
-    zwei Sekunden Verzoegerung wurde gewarnt und die Sperre gesetzt. Als
-    die Verzoegerung dann auf sechs Sekunden anwuchs - also genau in dem
-    Moment, in dem der Stack-Abzug den Verursacher gezeigt haette -, griff
-    die Sperre und der Abzug unterblieb. Gemeldet wurde die Blockade,
-    aufgeklaert nie. Genau dieser Fall ist im Test aufgefallen.
+    Why separate: with a shared lock the following happened. After two seconds
+    of delay it warned and set the lock. When the delay then grew to six
+    seconds - exactly the moment the stack dump would have shown the culprit -
+    the lock took effect and the dump was skipped. The block was reported, but
+    never explained. Exactly this case showed up in testing.
     """
     reported = 0.0
     dumped_this_stall = False
@@ -377,105 +367,104 @@ def _watchdog_thread() -> None:
             _loop_beat["worst"] = lag
 
         if lag < LOOP_LAG_WARN:
-            # Die Blockade ist vorbei - fuer die naechste wieder scharf.
+            # The block is over - armed again for the next one.
             dumped_this_stall = False
             continue
 
         if time.monotonic() - reported >= 20:
             reported = time.monotonic()
-            write(f"EVENT-LOOP BLOCKIERT seit {lag:.1f}s - das Backend "
-                  f"antwortet gerade nicht (Healthcheck und Agenten fliegen "
-                  f"dabei raus)", level="ERROR")
+            write(f"EVENT LOOP BLOCKED for {lag:.1f}s - the backend is not "
+                  f"responding right now (health check and agents drop in "
+                  f"the process)", level="ERROR")
 
-        # Der Abzug haengt NUR an der Schwere, nicht an der Meldesperre.
+        # The dump depends ONLY on the severity, not on the report lock.
         if lag >= LOOP_LAG_DUMP and not dumped_this_stall:
             dumped_this_stall = True
             _dump_all_stacks(lag)
 
-        # Notbremse: So lange steht keine gesunde Schleife jemals still.
+        # Emergency stop: no healthy loop ever stands still that long.
         if LOOP_LAG_KILL > 0 and lag >= LOOP_LAG_KILL:
             _emergency_exit(lag)
 
 
 def _dump_all_stacks(lag: float) -> None:
-    """Stacktraces aller Threads - das zeigt die blockierende Zeile."""
+    """Stack traces of all threads - this shows the blocking line."""
     _loop_beat["dumps"] += 1
     try:
-        lines = [f"===== STACK-ABZUG (Loop steht {lag:.1f}s) ====="]
-        # Zuerst: Welche Anfragen sind GERADE in Bearbeitung? Das ist meist
-        # schon die Antwort - blockiert der Server, steht hier die Aktion,
-        # die ihn blockiert. Ohne diese Liste muss man sie aus den
-        # Stacktraces heraussuchen.
+        lines = [f"===== STACK DUMP (loop stuck {lag:.1f}s) ====="]
+        # First: which requests are being processed RIGHT NOW? That is usually
+        # already the answer - if the server is blocked, the action blocking it
+        # is here. Without this list one has to dig it out of the stack traces.
         try:
             from app.main import INFLIGHT
             if INFLIGHT:
-                lines.append("--- laufende Anfragen ---")
+                lines.append("--- running requests ---")
                 now = time.monotonic()
                 for path, started in sorted(INFLIGHT.values(),
                                             key=lambda x: x[1]):
-                    lines.append(f"  seit {now - started:5.1f}s  {path}")
+                    lines.append(f"  for {now - started:5.1f}s  {path}")
             else:
-                lines.append("--- keine Anfrage in Bearbeitung "
-                             "(die Blockade kommt aus einer Hintergrundaufgabe) ---")
+                lines.append("--- no request in processing "
+                             "(the block comes from a background task) ---")
         except Exception:
             pass
         frames = sys._current_frames()
         names = {t.ident: t.name for t in threading.enumerate()}
         for tid, frame in frames.items():
-            lines.append(f"--- Thread {names.get(tid, '?')} ({tid}) ---")
+            lines.append(f"--- thread {names.get(tid, '?')} ({tid}) ---")
             lines.extend(l.rstrip() for l in traceback.format_stack(frame))
         text = "\n".join(lines)
         write(text, level="ERROR")
-        # Zusätzlich in eine eigene Datei: Diese Abzüge sind das Wertvollste
-        # im ganzen Paket und sollen nicht im übrigen Log untergehen.
-        # Bewusst UNABHÄNGIG vom Wartungsmodus: Eine Blockade ist so selten
-        # und so aussagekräftig, dass sie auch dann festgehalten gehört,
-        # wenn gerade niemand mitschreiben lässt. Sonst steht man nach dem
-        # Vorfall wieder mit leeren Händen da.
+        # Additionally into its own file: these dumps are the most valuable
+        # thing in the whole package and should not drown in the rest of the
+        # log. Deliberately INDEPENDENT of the maintenance mode: a block is so
+        # rare and so telling that it belongs recorded even when nobody is
+        # currently having things logged. Otherwise one stands empty-handed
+        # again after the incident.
         if True:
             _ensure_dir()
             with open(LOG_DIR / BLOCK_LOG, "a", encoding="utf-8",
                       errors="replace") as f:
                 f.write(f"\n{time.strftime('%Y-%m-%d %H:%M:%S')}\n{text}\n")
     except Exception as e:
-        write(f"Stack-Abzug fehlgeschlagen: {e}", level="WARN")
+        write(f"stack dump failed: {e}", level="WARN")
 
 
 def start_watchdog() -> None:
-    """Startet den Wächter-Thread. Läuft dauerhaft, nicht nur im Wartungsmodus."""
+    """Starts the watchdog thread. Runs permanently, not only in maintenance mode."""
     t = threading.Thread(target=_watchdog_thread, name="loop-watchdog",
                          daemon=True)
     t.start()
-    write(f"Loop-Wächter aktiv (Warnung ab {LOOP_LAG_WARN}s, "
-          f"Stack-Abzug ab {LOOP_LAG_DUMP}s)", to_console=True)
+    write(f"Loop watchdog active (warning from {LOOP_LAG_WARN}s, "
+          f"stack dump from {LOOP_LAG_DUMP}s)", to_console=True)
 
 
 # ----------------------------------------------------------------------
-# Ein- und Ausschalten
+# Switching on and off
 # ----------------------------------------------------------------------
 
 def enable(minutes: int = 0, reason: str = "") -> dict:
-    """Schaltet den Wartungsmodus ein. minutes=0 bedeutet ohne Ende."""
+    """Switches on the maintenance mode. minutes=0 means no end."""
     _ensure_dir()
     st.active = True
     st.started = time.time()
     st.until = time.time() + minutes * 60 if minutes and minutes > 0 else 0.0
 
-    # faulthandler schreibt bei einem harten Abbruch die Stacktraces aller
-    # Threads. Die Datei bleibt offen - genau deshalb funktioniert es auch
-    # dann noch, wenn nichts mehr geordnet abläuft.
+    # faulthandler writes the stack traces of all threads on a hard abort. The
+    # file stays open - exactly why it still works even when nothing runs in an
+    # orderly way anymore.
     try:
         st.fault_file = open(LOG_DIR / FAULT_LOG, "a", buffering=1,
                              encoding="utf-8", errors="replace")
         faulthandler.enable(file=st.fault_file, all_threads=True)
     except Exception as e:
-        write(f"faulthandler nicht aktivierbar: {e}", level="WARN")
+        write(f"faulthandler could not be enabled: {e}", level="WARN")
 
     write("=" * 70)
-    write(f"WARTUNGSMODUS EIN - Grund: {reason or 'nicht angegeben'}",
+    write(f"MAINTENANCE MODE ON - reason: {reason or 'not specified'}",
           to_console=True)
     write(f"Python {sys.version.split()[0]}, PID {os.getpid()}, "
-          f"Verzeichnis {LOG_DIR}")
+          f"directory {LOG_DIR}")
     write("=" * 70)
     _dump_environment()
 
@@ -486,7 +475,7 @@ def enable(minutes: int = 0, reason: str = "") -> dict:
 
 
 def disable() -> dict:
-    write("WARTUNGSMODUS AUS", to_console=True)
+    write("MAINTENANCE MODE OFF", to_console=True)
     st.active = False
     st.until = 0.0
     try:
@@ -517,12 +506,12 @@ def status() -> dict:
         "dir": str(LOG_DIR),
         "files": files,
         "counters": dict(st.counters),
-        # Fehler nach Kenncode - damit man in der Oberflaeche sofort sieht,
-        # WELCHE Art Fehler auftritt, ohne das Protokoll zu lesen.
+        # Errors by code - so one sees in the UI immediately WHICH kind of
+        # error occurs, without reading the log.
         "error_codes": _error_summary(),
-        # Wie oft die Ereignisschleife stand und wie lange sie im
-        # schlimmsten Fall blockiert war. Steht hier etwas > 0, ist das die
-        # Spur, der man nachgehen muss.
+        # How often the event loop was stuck and how long it was blocked in
+        # the worst case. If something > 0 is here, that is the trail to
+        # follow.
         "loop_worst_s": round(_loop_beat["worst"], 2),
         "loop_dumps": _loop_beat["dumps"],
         "samples": list(st.samples)[-240:],
@@ -544,11 +533,11 @@ def tail(lines: int = 300) -> list[str]:
 
 
 # ----------------------------------------------------------------------
-# Messwerte
+# Measurements
 # ----------------------------------------------------------------------
 
 def _dump_environment() -> None:
-    """Einmalige Momentaufnahme beim Einschalten - Kontext für später."""
+    """One-off snapshot at switch-on - context for later."""
     try:
         import platform
         write(f"System: {platform.platform()}")
@@ -556,28 +545,28 @@ def _dump_environment() -> None:
         try:
             import resource
             soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-            write(f"Dateideskriptor-Grenze: weich {soft}, hart {hard}")
+            write(f"file descriptor limit: soft {soft}, hard {hard}")
         except Exception:
             pass
-        # Speichergrenze des Containers - der häufigste Grund für ein
-        # plötzliches Verschwinden ohne jede Fehlermeldung.
+        # Memory limit of the container - the most common reason for a sudden
+        # disappearance without any error message.
         for path in ("/sys/fs/cgroup/memory.max",
                      "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
             try:
                 with open(path) as f:
-                    write(f"Speichergrenze ({path}): {f.read().strip()}")
+                    write(f"memory limit ({path}): {f.read().strip()}")
                 break
             except OSError:
                 continue
     except Exception as e:
-        write(f"Umgebungsangaben unvollständig: {e}", level="WARN")
+        write(f"environment info incomplete: {e}", level="WARN")
 
 
 def sample() -> dict:
-    """Ein Messpunkt. Bewusst billig - er läuft alle paar Sekunden."""
+    """One data point. Deliberately cheap - it runs every few seconds."""
     data = {"t": int(time.time() * 1000)}
-    # Verzögerung des Event-Loops - der wichtigste Wert überhaupt. Steht er
-    # über einer Sekunde, antwortet das Backend gerade nicht.
+    # Delay of the event loop - the most important value of all. If it is over
+    # a second, the backend is not responding right now.
     try:
         if _loop_beat["t"]:
             data["lag"] = round(time.monotonic() - _loop_beat["t"], 2)
@@ -586,15 +575,15 @@ def sample() -> dict:
         pass
     try:
         import psutil
-        # WICHTIG: dieselbe Process-Instanz wiederverwenden. cpu_percent()
-        # misst den Verbrauch SEIT DEM LETZTEN AUFRUF auf demselben Objekt -
-        # bei einer frisch erzeugten Instanz kommt darum immer 0.0 heraus.
-        # Genau deshalb stand im Log vom 22.08. durchgehend "cpu": 0.0, und
-        # eine hohe CPU-Last wäre unsichtbar geblieben.
+        # IMPORTANT: reuse the same Process instance. cpu_percent() measures
+        # the usage SINCE THE LAST CALL on the same object - with a freshly
+        # created instance it therefore always returns 0.0. Exactly why the log
+        # on 22.08. showed "cpu": 0.0 throughout, and a high CPU load would
+        # have stayed invisible.
         global _proc
         if _proc is None:
             _proc = psutil.Process()
-            _proc.cpu_percent(interval=None)   # Nullpunkt setzen
+            _proc.cpu_percent(interval=None)   # set the zero point
         proc = _proc
         with proc.oneshot():
             data["rss_mb"] = round(proc.memory_info().rss / 1048576, 1)
@@ -612,10 +601,10 @@ def sample() -> dict:
         data["tasks"] = len(asyncio.all_tasks())
     except Exception:
         pass
-    # Wie viele Anfragen sind gerade in Bearbeitung? Seit die meisten
-    # Endpunkte in Arbeits-Threads laufen, ist das die aussagekräftigste
-    # Auslastungszahl: Steht sie dauerhaft am Anschlag des Threadpools
-    # (Vorgabe 40), warten Anfragen auf einen freien Thread.
+    # How many requests are being processed right now? Since most endpoints
+    # run in worker threads, this is the most telling load figure: if it is
+    # permanently at the thread pool's limit (default 40), requests are waiting
+    # for a free thread.
     try:
         from app.main import INFLIGHT
         data["inflight"] = len(INFLIGHT)
@@ -633,32 +622,31 @@ def sample() -> dict:
     return data
 
 
-# Abstand der Zustandszeilen in der Container-Ausgabe. Eine Minute ist oft
-# genug, um einen Verlauf zu erkennen, und selten genug, um das Protokoll
-# nicht zuzumuellen.
+# Interval of the status lines in the container output. One minute is often
+# enough to see a trend, and rare enough not to clutter the log.
 BEAT_INTERVAL = float(os.getenv("RMM_BEAT_INTERVAL_S", "60") or 60)
 _last_beat = [0.0]
 
 
 def _console_beat(point: dict) -> None:
-    """Eine kompakte Zustandszeile direkt an Docker."""
+    """A compact status line directly to Docker."""
     try:
         parts = []
-        for key, label in (("rss_mb", "Speicher"), ("cpu", "CPU%"),
-                           ("threads", "Threads"), ("fds", "Dateien"),
-                           ("tasks", "Aufgaben"), ("inflight", "Anfragen"),
-                           ("agents", "Agenten"), ("lag", "Verzoegerung"),
-                           ("lag_max", "max.Verz")):
+        for key, label in (("rss_mb", "memory"), ("cpu", "CPU%"),
+                           ("threads", "threads"), ("fds", "files"),
+                           ("tasks", "tasks"), ("inflight", "requests"),
+                           ("agents", "agents"), ("lag", "lag"),
+                           ("lag_max", "max.lag")):
             if point.get(key) is not None:
                 parts.append(f"{label}={point[key]}")
         try:
             from app.errors import counters as _ec
             if _ec:
-                parts.append("Fehler=" + ",".join(f"{k}:{v}" for k, v in
+                parts.append("errors=" + ",".join(f"{k}:{v}" for k, v in
                                                   sorted(_ec.items())))
         except Exception:
             pass
-        line = "[zustand] " + "  ".join(parts)
+        line = "[status] " + "  ".join(parts)
         stream = st.orig_stdout or sys.__stdout__
         stream.write(line + "\n")
         stream.flush()
@@ -668,17 +656,16 @@ def _console_beat(point: dict) -> None:
 
 def _estimate_rows(table: str) -> int:
     """
-    Schaetzt die Zeilenzahl, ohne die Datenbank zu blockieren.
+    Estimates the row count without blocking the database.
 
-    COUNT(*) liest die GANZE Tabelle. Bei 600.000 Zeilen dauerte das 9
-    Sekunden - und weil alle Abfragen durch dieselbe Sperre gehen, hat
-    ausgerechnet die Ueberwachung den Server neun Sekunden angehalten. Eine
-    Pruefung, die selbst das Problem verursacht, das sie melden soll, ist
-    schlimmer als keine.
-    
-    Deshalb wird die hoechste rowid genommen: ein einziger Zugriff auf das
-    Tabellenende, unabhaengig von der Groesse. Nach vielen Loeschungen
-    ueberschaetzt das - fuer eine Warnschwelle ist das genau richtig herum.
+    COUNT(*) reads the WHOLE table. With 600,000 rows that took 9 seconds - and
+    because all queries go through the same lock, of all things the monitoring
+    stalled the server for nine seconds. A check that itself causes the problem
+    it is meant to report is worse than none.
+
+    Therefore the highest rowid is taken: a single access to the end of the
+    table, independent of the size. After many deletions this overestimates -
+    for a warning threshold that is exactly the right way round.
     """
     try:
         from app import db
@@ -690,22 +677,21 @@ def _estimate_rows(table: str) -> int:
 
 async def table_size_watch() -> None:
     """
-    Warnt, BEVOR eine Tabelle zum Problem wird.
+    Warns BEFORE a table becomes a problem.
 
-    Der Absturz vom 23.08. entstand nicht durch einen Programmfehler,
-    sondern durch Wachstum: metrics_history war ueber Wochen unbegrenzt
-    gewachsen, bis eine Abfrage darauf 125 Sekunden brauchte. Nichts im
-    System hat davor gewarnt - man sah es erst, als es zu spaet war.
-    Diese Schleife sieht stuendlich nach.
+    The crash on 23.08. was not caused by a program bug, but by growth:
+    metrics_history had grown unbounded over weeks, until a query on it took
+    125 seconds. Nothing in the system warned about it - one saw it only when
+    it was too late. This loop checks hourly.
     """
     await asyncio.sleep(120)
     while True:
         try:
             from app import db
-            # Erst nachsehen, welche Tabellen es ueberhaupt gibt. Beim
-            # ersten Lauf hat die Pruefung nach 'notifications' gefragt, die
-            # es in dieser Installation nicht gibt - und dabei eine
-            # Fehlermeldung erzeugt, die wie ein echtes Problem aussah.
+            # First check which tables exist at all. On the first run the
+            # check asked for 'notifications', which does not exist in this
+            # installation - and produced an error that looked like a real
+            # problem.
             existing = {r["name"] for r in await db.call(
                 lambda: db._conn.execute(
                     "SELECT name FROM sqlite_master WHERE type='table'").fetchall())}
@@ -721,22 +707,22 @@ async def table_size_watch() -> None:
                 if count > limit:
                     from app.errors import report, Codes
                     report(Codes.DB_HUGE, None,
-                           f"Tabelle '{table}' hat {count:,} Zeilen "
-                           f"(Warnschwelle {limit:,})".replace(",", "."),
-                           empfehlung="Aufbewahrungsdauer in den "
-                                      "Datenschutz-Einstellungen setzen")
+                           f"table '{table}' has {count:,} rows "
+                           f"(warning threshold {limit:,})".replace(",", "."),
+                           recommendation="set a retention period in the "
+                                          "privacy settings")
         except Exception as e:
-            write(f"Tabellenpruefung: {e}", level="WARN")
+            write(f"table check: {e}", level="WARN")
         await asyncio.sleep(3600)
 
 
 async def sampler_loop() -> None:
     """
-    Schreibt regelmässig einen Messpunkt.
+    Writes a data point regularly.
 
-    Läuft IMMER, nicht nur im Wartungsmodus - allerdings nur in den
-    Ringpuffer. Dadurch liegen nach einem Absturz auch die Minuten davor
-    vor, in denen noch niemand an Diagnose gedacht hatte.
+    Runs ALWAYS, not only in maintenance mode - but only into the ring buffer.
+    This way, after a crash, the minutes before it are also available, when
+    nobody had yet thought of diagnostics.
     """
     last_warn = 0.0
     while True:
@@ -744,63 +730,62 @@ async def sampler_loop() -> None:
             point = sample()
             st.samples.append(point)
             if st.active:
-                write("MESSWERT " + json.dumps(point, ensure_ascii=False),
+                write("METRIC " + json.dumps(point, ensure_ascii=False),
                       level="DEBUG")
-            # HERZSCHLAG IN DIE CONTAINER-AUSGABE.
+            # HEARTBEAT INTO THE CONTAINER OUTPUT.
             #
-            # Der Grund ist der wunde Punkt jeder Diagnose: Wenn das Backend
-            # zusammenbricht, kann es die Ursache nicht mehr aufschreiben -
-            # und die Ansicht in den Einstellungen ist dann ohnehin nicht
-            # erreichbar. Was BLEIBT, ist 'docker logs'; die Zeilen dort
-            # sind schon bei Docker, bevor etwas passiert.
+            # The reason is the sore point of every diagnostic: when the
+            # backend collapses, it can no longer write down the cause - and
+            # the view in the settings is unreachable then anyway. What REMAINS
+            # is 'docker logs'; the lines there are already at Docker before
+            # anything happens.
             #
-            # Deshalb geht regelmaessig eine kurze Zustandszeile dorthin.
-            # Nach einem Absturz sieht man daran, wie es dem Backend in den
-            # Minuten davor ging - Speicher, Verzoegerung, Anfragen - ohne
-            # dass irgendetwas ueberlebt haben muss.
+            # Therefore a short status line regularly goes there. After a crash
+            # one sees from it how the backend was doing in the minutes before
+            # - memory, lag, requests - without anything having had to survive.
             now_t = time.time()
             if now_t - _last_beat[0] >= BEAT_INTERVAL:
                 _last_beat[0] = now_t
                 _console_beat(point)
-            # Frühwarnung: Diese beiden Werte sind die üblichen Verdächtigen,
-            # wenn ein Prozess "einfach weg" ist.
+            # Early warning: these two values are the usual suspects when a
+            # process is "simply gone".
             now = time.time()
             if now - last_warn > 120:
                 if point.get("fds", 0) > 900:
-                    write(f"Viele offene Dateideskriptoren: {point['fds']}",
+                    write(f"Many open file descriptors: {point['fds']}",
                           level="WARN")
                     last_warn = now
                 if point.get("lag", 0) > 1.0:
-                    write(f"Event-Loop hinkt {point['lag']}s hinterher - "
-                          f"etwas blockiert den Hauptthread", level="WARN")
+                    write(f"Event loop lagging {point['lag']}s behind - "
+                          f"something is blocking the main thread", level="WARN")
                     last_warn = now
                 if point.get("inflight", 0) >= 35:
-                    write(f"Fast alle Arbeits-Threads belegt "
-                          f"({point['inflight']} Anfragen gleichzeitig) - "
-                          f"weitere Anfragen warten.", level="WARN")
+                    write(f"Almost all worker threads busy "
+                          f"({point['inflight']} requests at once) - "
+                          f"further requests are waiting.", level="WARN")
                     last_warn = now
                 if point.get("sys_mem", 0) > 92:
-                    write(f"Arbeitsspeicher fast voll: {point['sys_mem']} %",
+                    write(f"Memory almost full: {point['sys_mem']} %",
                           level="WARN")
                     last_warn = now
-            # Zeitablauf des Wartungsmodus
+            # Expiry of the maintenance mode
             if st.active and st.until and time.time() > st.until:
-                write("Wartungsmodus abgelaufen - schalte ab")
+                write("Maintenance mode expired - switching off")
                 disable()
         except Exception as e:
             try:
-                write(f"Messschleife: {e}", level="WARN")
+                write(f"sampler loop: {e}", level="WARN")
             except Exception:
                 pass
         await asyncio.sleep(SAMPLE_SECONDS)
 
 
 # ----------------------------------------------------------------------
-# Agenten-Berichte
+# Agent reports
 # ----------------------------------------------------------------------
 
 def agent_log(client_id: str, hostname: str, lines: list) -> None:
-    """Nimmt Logzeilen eines Agenten entgegen und legt sie dazu."""
+    """Takes log lines of an agent and files them alongside."""
     if not lines:
         return
     for line in lines:
@@ -813,11 +798,10 @@ def agent_log(client_id: str, hostname: str, lines: list) -> None:
 
 def bundle() -> bytes:
     """
-    Packt alle Logdateien in ein ZIP - das ist die Datei, die man weiterreicht.
+    Packs all log files into a ZIP - that is the file one passes on.
 
-    Der Ringpuffer kommt mit hinein, auch wenn der Wartungsmodus erst
-    gerade eingeschaltet wurde: Dann steht wenigstens die Vorgeschichte
-    drin.
+    The ring buffer is included too, even if the maintenance mode was only just
+    switched on: then at least the prior history is in it.
     """
     import zipfile
     buf = io.BytesIO()
@@ -828,8 +812,8 @@ def bundle() -> bytes:
                     z.write(p, p.name)
         except OSError:
             pass
-        z.writestr("ringpuffer.txt", "\n".join(tail(RING_SIZE)))
-        z.writestr("messwerte.json",
+        z.writestr("ringbuffer.txt", "\n".join(tail(RING_SIZE)))
+        z.writestr("metrics.json",
                    json.dumps(list(st.samples), indent=1, ensure_ascii=False))
         z.writestr("status.json", json.dumps(status(), indent=1,
                                              ensure_ascii=False, default=str))
@@ -847,16 +831,16 @@ def clear() -> None:
         st.ring.clear()
     st.samples.clear()
     st.counters = {"errors": 0, "warnings": 0, "agent_errors": 0}
-    write("Logs geleert")
+    write("logs cleared")
 
 
 def report_previous_shutdown() -> None:
     """
-    Sagt beim Start, WARUM der letzte Lauf endete.
+    Says at start WHY the last run ended.
 
-    Ohne diese Meldung sieht jeder Neustart gleich aus - ein geplanter wie
-    ein Absturz. Genau daran scheiterte bisher die Einordnung: Im Protokoll
-    stand nur "Backend startet", nie warum es vorher aufgehört hatte.
+    Without this message every restart looks the same - a planned one like a
+    crash. Exactly this is where the classification failed so far: the log only
+    said "backend starting", never why it had stopped before.
     """
     try:
         from app import db
@@ -865,22 +849,22 @@ def report_previous_shutdown() -> None:
             ts, _, lag = mark.partition("|")
             when = time.strftime("%Y-%m-%d %H:%M:%S",
                                  time.localtime(int(ts) / 1000))
-            write(f"VORHERIGER LAUF: Der Wächter hat das Backend am {when} "
-                  f"beendet, weil die Ereignisschleife {lag}s stand. Die "
-                  f"Ursache steht in backend-blockaden.log.",
+            write(f"PREVIOUS RUN: the watchdog ended the backend at {when} "
+                  f"because the event loop was stuck for {lag}s. The cause "
+                  f"is in backend-blockaden.log.",
                   level="WARN", to_console=True)
             db.set_setting("last_watchdog_kill", "")
         if db.get_setting("backend_crash_pending", "0") == "1":
-            write("VORHERIGER LAUF: Das Backend ist abgestürzt. Der Bericht "
-                  "steht im Audit-Log unter 'backend.crash'.",
+            write("PREVIOUS RUN: the backend crashed. The report is in the "
+                  "audit log under 'backend.crash'.",
                   level="WARN", to_console=True)
             db.set_setting("backend_crash_pending", "0")
     except Exception as e:
-        print(f"[diag] Grund des letzten Endes nicht lesbar: {e}")
+        print(f"[diag] reason for the last ending not readable: {e}")
 
 
 def restore_from_settings() -> None:
-    """Wartungsmodus nach einem Neustart wieder aufnehmen."""
+    """Resume the maintenance mode after a restart."""
     try:
         from app import db
         if db.get_setting("maintenance_mode", "0") != "1":
@@ -890,28 +874,29 @@ def restore_from_settings() -> None:
             db.set_setting("maintenance_mode", "0")
             return
         minutes = int((until / 1000 - time.time()) / 60) if until else 0
-        enable(max(minutes, 0), reason="nach Neustart fortgesetzt")
-        write("Der Prozess wurde neu gestartet - das kann ein Absturz "
-              "gewesen sein. Bitte backend-fault.log prüfen.", level="WARN")
+        enable(max(minutes, 0), reason="resumed after restart")
+        write("The process was restarted - this may have been a crash. "
+              "Please check backend-fault.log.", level="WARN")
     except Exception as e:
-        print(f"[diag] Wartungsmodus nicht fortgesetzt: {e}")
+        print(f"[diag] maintenance mode not resumed: {e}")
 
 
 def _emergency_exit(lag: float) -> None:
     """
-    Beendet den Prozess hart, damit er neu gestartet wird.
+    Ends the process hard so it is restarted.
 
-    Ablauf, bewusst in dieser Reihenfolge:
-      1. Stacktraces sichern - sonst ist die Ursache nach dem Neustart weg.
-      2. Vermerk in die Einstellungen, damit nach dem Neustart im Dashboard
-         steht, WARUM neu gestartet wurde.
-      3. os._exit() statt sys.exit(): Ein sauberes Beenden müsste durch
-         dieselbe Ereignisschleife, die ja gerade steht - es käme nie an.
+    Flow, deliberately in this order:
+      1. Save stack traces - otherwise the cause is gone after the restart.
+      2. A note in the settings, so after the restart the dashboard shows WHY
+         it was restarted.
+      3. os._exit() instead of sys.exit(): a clean exit would have to go
+         through the same event loop that is stuck right now - it would never
+         arrive.
     """
     try:
-        write(f"NOTBREMSE: Die Ereignisschleife steht seit {lag:.0f}s. "
-              f"Das Backend beendet sich jetzt selbst, damit es neu "
-              f"gestartet wird.", level="ERROR", to_console=True)
+        write(f"EMERGENCY STOP: the event loop has been stuck for {lag:.0f}s. "
+              f"The backend is now ending itself so it gets "
+              f"restarted.", level="ERROR", to_console=True)
         _dump_all_stacks(lag)
     except Exception:
         pass
@@ -928,4 +913,4 @@ def _emergency_exit(lag: float) -> None:
         sys.__stderr__.flush()
     except Exception:
         pass
-    os._exit(75)     # 75 = EX_TEMPFAIL: "nochmal versuchen"
+    os._exit(75)     # 75 = EX_TEMPFAIL: "try again"

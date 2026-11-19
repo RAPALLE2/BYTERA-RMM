@@ -1,17 +1,17 @@
 """
 routers/source_routes.py
 ------------------------
-Admin-"Source"-Werkzeuge (nur für Super-Admins):
-  - Datei-Explorer über das Projekt (backend / frontend / agent / …) inkl.
-    Lesen und Speichern von Dateien.
-  - Direkter Datenbank-Zugriff: Tabellen auflisten, Inhalte ansehen, beliebiges
-    SQL ausführen (inkl. der Key/Value-"settings" mit JSON-Arrays).
+Admin "Source" tools (super admins only):
+  - File explorer over the project (backend / frontend / agent / …) incl.
+    reading and saving files.
+  - Direct database access: list tables, view contents, run arbitrary SQL
+    (incl. the key/value "settings" with JSON arrays).
 
-Die zugehörige Live-Shell zum Backend-Host läuft über Socket.IO (siehe
-sockets.py, host-term-*), da sie interaktiv/streamend ist.
+The associated live shell to the backend host runs via Socket.IO (see
+sockets.py, host-term-*), since it is interactive/streaming.
 
-ACHTUNG: Diese Endpunkte geben einem Admin vollen Zugriff auf Dateien und
-Datenbank des Backend-Hosts. Sie sind bewusst NUR für Super-Admins freigegeben.
+CAUTION: these endpoints give an admin full access to the files and database of
+the backend host. They are deliberately released ONLY for super admins.
 """
 
 import io
@@ -31,12 +31,11 @@ router = APIRouter(prefix="/api/source", tags=["source"])
 
 def _user_from_token_query(request: Request, token: str | None) -> dict:
     """
-    Benutzer aus dem Token bestimmen - notfalls aus der Adresszeile.
+    Determine the user from the token - from the address line if need be.
 
-    Downloads laufen ueber einen normalen Link; der Browser kann dabei keinen
-    Authorization-Header mitschicken. Deshalb wird das Token bei solchen Routen
-    auch als Query-Parameter akzeptiert (gleiches Vorgehen wie bei den
-    Mediendateien).
+    Downloads run via a normal link; the browser cannot send an Authorization
+    header along with it. Therefore the token is also accepted as a query
+    parameter on such routes (same approach as with the media files).
     """
     raw = token
     if not raw:
@@ -44,58 +43,58 @@ def _user_from_token_query(request: Request, token: str | None) -> dict:
         if auth.startswith("Bearer "):
             raw = auth.removeprefix("Bearer ").strip()
     if not raw:
-        raise HTTPException(401, "Nicht angemeldet")
+        raise HTTPException(401, "Not signed in")
     payload = decode_access_token(raw)
     user = db.get_user_by_id(payload["sub"])
     if not user:
-        raise HTTPException(401, "Benutzer existiert nicht mehr")
+        raise HTTPException(401, "User no longer exists")
     return user
 
-# Projekt-Wurzel = Ordner, der backend/ frontend/ agent/ enthält.
-# source_routes.py liegt in backend/app/routers/ -> drei Ebenen hoch.
+# Project root = folder containing backend/ frontend/ agent/.
+# source_routes.py is in backend/app/routers/ -> three levels up.
 from app.paths import PROJECT_ROOT, DB_FILE as _DB_FILE, DB_BACKUP_FILE as _DB_BACKUP_FILE, DIST_DIR as _DIST_DIR
 
-# Maximale Dateigröße, die im Editor geladen wird (größere nur als Hinweis).
+# Maximum file size loaded in the editor (larger ones only as a hint).
 _MAX_READ_BYTES = 2 * 1024 * 1024
 
 
 def _safe_path(rel: str) -> Path:
     """
-    Löst einen (relativen) Pfad gegen die Projekt-Wurzel auf und stellt sicher,
-    dass er die Wurzel NICHT verlässt (kein '..'-Ausbruch).
+    Resolves a (relative) path against the project root and ensures it does NOT
+    leave the root (no '..' escape).
     """
     rel = (rel or "").lstrip("/")
     p = (PROJECT_ROOT / rel).resolve()
     if p != PROJECT_ROOT and PROJECT_ROOT not in p.parents:
-        raise HTTPException(400, "Pfad außerhalb des Projekts ist nicht erlaubt")
+        raise HTTPException(400, "A path outside the project is not allowed")
     return p
 
 
 # ------------------------------------------------------------------
-# Datei-Explorer
+# File explorer
 # ------------------------------------------------------------------
 
 @router.get("/roots")
 def get_roots(user: dict = Depends(get_current_user)):
-    """Schnellzugriff-Ordner + Projekt-Wurzel."""
+    """Quick-access folders + project root."""
     require_perm(user, "see_source")
     roots = []
     for name in ["src/backend", "src/frontend", "src/agent"]:
         if (PROJECT_ROOT / name).is_dir():
             roots.append({"name": name, "path": name})
-    roots.append({"name": "(Projekt-Wurzel)", "path": ""})
+    roots.append({"name": "(project root)", "path": ""})
     return {"project_root": str(PROJECT_ROOT), "roots": roots}
 
 
 @router.get("/list")
 def list_dir(path: str = "", user: dict = Depends(get_current_user)):
-    """Listet den Inhalt eines Ordners (Ordner zuerst, dann Dateien, alphabetisch)."""
+    """Lists the contents of a folder (folders first, then files, alphabetically)."""
     require_perm(user, "see_source")
     p = _safe_path(path)
     if not p.exists():
-        raise HTTPException(404, "Pfad nicht gefunden")
+        raise HTTPException(404, "Path not found")
     if not p.is_dir():
-        raise HTTPException(400, "Kein Ordner")
+        raise HTTPException(400, "Not a folder")
     entries = []
     for child in p.iterdir():
         try:
@@ -116,11 +115,11 @@ def list_dir(path: str = "", user: dict = Depends(get_current_user)):
 
 @router.get("/read")
 def read_file(path: str, user: dict = Depends(get_current_user)):
-    """Liest eine Textdatei (bis 2 MB). Binärdateien werden als solche markiert."""
+    """Reads a text file (up to 2 MB). Binary files are marked as such."""
     require_perm(user, "see_source")
     p = _safe_path(path)
     if not p.is_file():
-        raise HTTPException(404, "Datei nicht gefunden")
+        raise HTTPException(404, "File not found")
     size = p.stat().st_size
     if size > _MAX_READ_BYTES:
         return {"path": path, "too_large": True, "size": size, "content": ""}
@@ -139,18 +138,18 @@ class WriteBody(BaseModel):
 
 @router.put("/write")
 def write_file(body: WriteBody, user: dict = Depends(get_current_user)):
-    """Speichert Textinhalt in eine Datei (überschreibt)."""
+    """Saves text content into a file (overwrites)."""
     require_perm(user, "edit_source")
     p = _safe_path(body.path)
     if p.is_dir():
-        raise HTTPException(400, "Ist ein Ordner")
+        raise HTTPException(400, "Is a folder")
     p.write_text(body.content, encoding="utf-8")
     db.add_audit_entry(user["username"], "source.file_saved", target=body.path)
     return {"ok": True, "size": len(body.content.encode("utf-8"))}
 
 
 # ------------------------------------------------------------------
-# Explorer: Ordner anlegen, Datei anlegen, löschen, umbenennen
+# Explorer: create folder, create file, delete, rename
 # ------------------------------------------------------------------
 
 class PathBody(BaseModel):
@@ -164,11 +163,11 @@ class RenameBody(BaseModel):
 
 @router.post("/mkdir")
 def make_dir(body: PathBody, user: dict = Depends(get_current_user)):
-    """Legt einen (verschachtelten) Ordner an."""
+    """Creates a (nested) folder."""
     require_perm(user, "edit_source")
     p = _safe_path(body.path)
     if p.exists():
-        raise HTTPException(400, "Pfad existiert bereits")
+        raise HTTPException(400, "Path already exists")
     p.mkdir(parents=True, exist_ok=False)
     db.add_audit_entry(user["username"], "source.mkdir", target=body.path)
     return {"ok": True}
@@ -176,11 +175,11 @@ def make_dir(body: PathBody, user: dict = Depends(get_current_user)):
 
 @router.post("/newfile")
 def new_file(body: PathBody, user: dict = Depends(get_current_user)):
-    """Legt eine leere Datei an."""
+    """Creates an empty file."""
     require_perm(user, "edit_source")
     p = _safe_path(body.path)
     if p.exists():
-        raise HTTPException(400, "Datei existiert bereits")
+        raise HTTPException(400, "File already exists")
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("", encoding="utf-8")
     db.add_audit_entry(user["username"], "source.newfile", target=body.path)
@@ -189,13 +188,13 @@ def new_file(body: PathBody, user: dict = Depends(get_current_user)):
 
 @router.post("/delete")
 def delete_path(body: PathBody, user: dict = Depends(get_current_user)):
-    """Löscht eine Datei oder einen Ordner (rekursiv). Projekt-Wurzel ist tabu."""
+    """Deletes a file or a folder (recursively). The project root is off-limits."""
     require_perm(user, "delete_source")
     p = _safe_path(body.path)
     if p == PROJECT_ROOT:
-        raise HTTPException(400, "Projekt-Wurzel kann nicht gelöscht werden")
+        raise HTTPException(400, "The project root cannot be deleted")
     if not p.exists():
-        raise HTTPException(404, "Pfad nicht gefunden")
+        raise HTTPException(404, "Path not found")
     if p.is_dir():
         shutil.rmtree(p)
     else:
@@ -206,14 +205,14 @@ def delete_path(body: PathBody, user: dict = Depends(get_current_user)):
 
 @router.post("/rename")
 def rename_path(body: RenameBody, user: dict = Depends(get_current_user)):
-    """Benennt eine Datei/einen Ordner um bzw. verschiebt sie/ihn."""
+    """Renames a file/folder or moves it."""
     require_perm(user, "edit_source")
     src = _safe_path(body.src)
     dst = _safe_path(body.dst)
     if not src.exists():
-        raise HTTPException(404, "Quelle nicht gefunden")
+        raise HTTPException(404, "Source not found")
     if dst.exists():
-        raise HTTPException(400, "Ziel existiert bereits")
+        raise HTTPException(400, "Target already exists")
     dst.parent.mkdir(parents=True, exist_ok=True)
     src.rename(dst)
     db.add_audit_entry(user["username"], "source.renamed",
@@ -222,18 +221,18 @@ def rename_path(body: RenameBody, user: dict = Depends(get_current_user)):
 
 
 # ------------------------------------------------------------------
-# Datenbank
+# Database
 # ------------------------------------------------------------------
 
 def _cursor_columns(cur, rows: list | None = None) -> list[str]:
     """
-    Liefert die Spaltennamen eines Abfrage-Ergebnisses.
+    Returns the column names of a query result.
 
-    Die App nutzt einen thread-sicheren Wrapper um SQLite (db._SafeConn), der
-    ein _CursorResult zurückgibt. Je nach Backend/Version hat das Objekt
-    entweder .description (wie sqlite3), .keys() (wie SQLAlchemy) - oder gar
-    nichts. Dann holen wir die Namen aus der ersten Zeile (sqlite3.Row.keys()).
-    Ohne diesen Fallback endete die Tabellenansicht in einem 500er
+    The app uses a thread-safe wrapper around SQLite (db._SafeConn) that
+    returns a _CursorResult. Depending on the backend/version the object has
+    either .description (like sqlite3), .keys() (like SQLAlchemy) - or nothing
+    at all. Then we get the names from the first row (sqlite3.Row.keys()).
+    Without this fallback the table view ended in a 500
     ("'_CursorResult' object has no attribute 'description'").
     """
     desc = getattr(cur, "description", None)
@@ -259,13 +258,13 @@ def _cursor_columns(cur, rows: list | None = None) -> list[str]:
 
 
 def _has_result_set(cur, rows: list | None = None) -> bool:
-    """True, wenn die Abfrage eine Ergebnismenge geliefert hat (SELECT/PRAGMA)."""
+    """True if the query returned a result set (SELECT/PRAGMA)."""
     return bool(_cursor_columns(cur, rows)) or bool(rows)
 
 
 @router.get("/db/tables")
 def db_tables(user: dict = Depends(get_current_user)):
-    """Alle Tabellen mit Zeilenanzahl."""
+    """All tables with row count."""
     require_perm(user, "see_source")
     rows = db._conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
@@ -284,16 +283,17 @@ def db_tables(user: dict = Depends(get_current_user)):
 @router.get("/db/table")
 def db_table(name: str, limit: int = 200, offset: int = 0,
                    user: dict = Depends(get_current_user)):
-    """Inhalt einer Tabelle (Spalten + Zeilen, paginiert)."""
+    """Contents of a table (columns + rows, paginated)."""
     require_perm(user, "see_source")
-    # Tabellenname validieren (nur bekannte Tabellen).
+    # Validate the table name (only known tables).
     valid = {r["name"] for r in db._conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
     if name not in valid:
-        raise HTTPException(404, "Tabelle nicht gefunden")
+        raise HTTPException(404, "Table not found")
     limit = max(1, min(1000, limit))
-    # rowid mitliefern, damit Zellen/Zeilen im Frontend eindeutig editier-/löschbar
-    # sind. Tabellen ohne rowid (WITHOUT ROWID) fallen auf die reine Ansicht zurück.
+    # Also deliver the rowid, so cells/rows are uniquely editable/deletable in
+    # the frontend. Tables without a rowid (WITHOUT ROWID) fall back to the
+    # view-only mode.
     try:
         cur = db._conn.execute(f'SELECT rowid AS __rowid__, * FROM "{name}" LIMIT ? OFFSET ?',
                                (limit, offset))
@@ -302,7 +302,7 @@ def db_table(name: str, limit: int = 200, offset: int = 0,
         rowids = [r[0] for r in raw]
         rows = [list(r)[1:] for r in raw]
         if not cols:
-            raise ValueError("keine Spalten ermittelbar")
+            raise ValueError("no columns determinable")
     except Exception:
         cur = db._conn.execute(f'SELECT * FROM "{name}" LIMIT ? OFFSET ?', (limit, offset))
         raw = cur.fetchall()
@@ -310,7 +310,7 @@ def db_table(name: str, limit: int = 200, offset: int = 0,
         rows = [list(r) for r in raw]
         rowids = [None] * len(rows)
     if not cols:
-        # Letzte Rettung: Spalten direkt aus dem Tabellen-Schema lesen.
+        # Last resort: read the columns directly from the table schema.
         cols = [r[1] for r in db._conn.execute(f'PRAGMA table_info("{name}")').fetchall()]
     total = db._conn.execute(f'SELECT COUNT(*) AS c FROM "{name}"').fetchone()["c"]
     return {"name": name, "columns": cols, "rows": rows, "rowids": rowids,
@@ -318,19 +318,19 @@ def db_table(name: str, limit: int = 200, offset: int = 0,
 
 
 # ------------------------------------------------------------------
-# ZIP-Upload + intelligente Extraktion
+# ZIP upload + intelligent extraction
 # ------------------------------------------------------------------
 PROJECT_MARKERS = {"src"}
 
 
 def _extract_target_and_root(names: list[str], current_path: str):
     """
-    Bestimmt (Ziel-Ordner, Content-Root im ZIP) anhand des ZIP-Inhalts:
+    Determines (target folder, content root in the ZIP) from the ZIP content:
 
-    - frontend/backend/agent direkt im ZIP-Root -> Ziel = PROJECT_ROOT, Root = "".
-    - EIN Wrapper-Ordner (z.B. "BYTERA-RMM/"), darin frontend/backend/agent
-      -> Ziel = PROJECT_ROOT, Root = "<wrapper>/" (Wrapper wird abgestreift).
-    - sonst -> Ziel = aktuell geöffneter Explorer-Ordner, Root = "".
+    - frontend/backend/agent directly in the ZIP root -> target = PROJECT_ROOT, root = "".
+    - ONE wrapper folder (e.g. "BYTERA-RMM/") containing frontend/backend/agent
+      -> target = PROJECT_ROOT, root = "<wrapper>/" (the wrapper is stripped).
+    - otherwise -> target = currently opened explorer folder, root = "".
     """
     def top(n: str) -> str:
         return n.split("/", 1)[0]
@@ -357,16 +357,16 @@ def _extract_target_and_root(names: list[str], current_path: str):
 async def upload_zip(path: str = Form(""), file: UploadFile = File(...),
                      user: dict = Depends(get_current_user)):
     """
-    Lädt ein ZIP hoch und extrahiert es (bestehende Dateien werden ÜBERSCHRIEBEN).
-    Projekt-ZIPs (mit frontend/backend/agent - auch in einem Wrapper-Ordner)
-    landen im Projekt-Root; sonstige ZIPs im aktuell geöffneten Explorer-Ordner.
+    Uploads a ZIP and extracts it (existing files are OVERWRITTEN). Project ZIPs
+    (with frontend/backend/agent - also in a wrapper folder) land in the project
+    root; other ZIPs in the currently opened explorer folder.
     """
     require_perm(user, "edit_source")
     raw = await file.read()
     try:
         zf = zipfile.ZipFile(io.BytesIO(raw))
     except zipfile.BadZipFile:
-        raise HTTPException(400, "Keine gültige ZIP-Datei")
+        raise HTTPException(400, "Not a valid ZIP file")
 
     names = zf.namelist()
     dest, content_root = _extract_target_and_root(names, path)
@@ -381,16 +381,16 @@ async def upload_zip(path: str = Form(""), file: UploadFile = File(...),
         else:
             rel = name
         if not rel or rel.endswith("/"):
-            continue  # Ordner-Einträge werden implizit angelegt
+            continue  # folder entries are created implicitly
 
         target = (dest / rel).resolve()
-        # Zip-Slip-Schutz: Ziel muss innerhalb des Projekts liegen.
+        # Zip-slip protection: the target must lie within the project.
         if target != PROJECT_ROOT and PROJECT_ROOT not in target.parents:
             skipped.append(rel)
             continue
 
         target.parent.mkdir(parents=True, exist_ok=True)
-        with zf.open(info) as src, open(target, "wb") as out:  # wb = überschreiben
+        with zf.open(info) as src, open(target, "wb") as out:  # wb = overwrite
             shutil.copyfileobj(src, out)
         try:
             extracted.append(str(target.relative_to(PROJECT_ROOT)))
@@ -400,7 +400,7 @@ async def upload_zip(path: str = Form(""), file: UploadFile = File(...),
     code = await _activate_code_changes(extracted)
     db.add_audit_entry(user["username"], "source.zip_extracted",
                        target=("(root)" if dest == PROJECT_ROOT else str(dest.relative_to(PROJECT_ROOT))),
-                       details=f"{len(extracted)} Dateien aus {file.filename}")
+                       details=f"{len(extracted)} files from {file.filename}")
     return {
         "ok": True,
         "dest": "" if dest == PROJECT_ROOT else str(dest.relative_to(PROJECT_ROOT)),
@@ -457,17 +457,17 @@ class SqlBody(BaseModel):
 @router.post("/db/query")
 def db_query(body: SqlBody, user: dict = Depends(get_current_user)):
     """
-    Führt beliebiges SQL aus. Bei SELECT werden Spalten + Zeilen zurückgegeben,
-    sonst die betroffene Zeilenanzahl. (Nur Super-Admin.)
+    Runs arbitrary SQL. For SELECT, columns + rows are returned, otherwise the
+    affected row count. (Super admin only.)
     """
     require_perm(user, "edit_source")
     sql = (body.sql or "").strip()
     if not sql:
-        raise HTTPException(400, "Leeres SQL")
+        raise HTTPException(400, "Empty SQL")
     try:
         cur = db._conn.execute(sql)
         raw = cur.fetchall()
-        if _has_result_set(cur, raw):  # SELECT / PRAGMA mit Ergebnismenge
+        if _has_result_set(cur, raw):  # SELECT / PRAGMA with a result set
             cols = _cursor_columns(cur, raw)
             rows = [list(r) for r in raw]
             db._conn.commit()
@@ -478,25 +478,25 @@ def db_query(body: SqlBody, user: dict = Depends(get_current_user)):
                                details=sql[:200])
             return {"kind": "exec", "rowcount": cur.rowcount}
     except Exception as e:
-        raise HTTPException(400, f"SQL-Fehler: {e}")
+        raise HTTPException(400, f"SQL error: {e}")
 
 
 # ------------------------------------------------------------------
-# Datenbank: Editieren / Löschen / Anlegen / Backup (nur Super-Admin)
+# Database: edit / delete / create / backup (super admin only)
 # ------------------------------------------------------------------
 
 def _valid_table(name: str) -> str:
     valid = {r["name"] for r in db._conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
     if name not in valid:
-        raise HTTPException(404, "Tabelle nicht gefunden")
+        raise HTTPException(404, "Table not found")
     return name
 
 
 def _valid_column(table: str, col: str) -> str:
     cols = {r["name"] for r in db._conn.execute(f'PRAGMA table_info("{table}")').fetchall()}
     if col not in cols:
-        raise HTTPException(404, "Spalte nicht gefunden")
+        raise HTTPException(404, "Column not found")
     return col
 
 
@@ -504,12 +504,12 @@ class CellBody(BaseModel):
     table: str
     rowid: int
     column: str
-    value: str | None = None   # None = Zelle leeren (NULL)
+    value: str | None = None   # None = clear the cell (NULL)
 
 
 @router.put("/db/cell")
 def db_update_cell(body: CellBody, user: dict = Depends(get_current_user)):
-    """Setzt den Wert einer einzelnen Zelle (value=None -> NULL)."""
+    """Sets the value of a single cell (value=None -> NULL)."""
     require_perm(user, "edit_source")
     t = _valid_table(body.table)
     c = _valid_column(t, body.column)
@@ -528,7 +528,7 @@ class RowBody(BaseModel):
 
 @router.post("/db/delete-row")
 def db_delete_row(body: RowBody, user: dict = Depends(get_current_user)):
-    """Löscht eine Zeile anhand ihrer rowid."""
+    """Deletes a row by its rowid."""
     require_perm(user, "delete_source")
     t = _valid_table(body.table)
     cur = db._conn.execute(f'DELETE FROM "{t}" WHERE rowid = ?', (body.rowid,))
@@ -540,12 +540,12 @@ def db_delete_row(body: RowBody, user: dict = Depends(get_current_user)):
 
 class InsertRowBody(BaseModel):
     table: str
-    values: dict = {}   # {spalte: wert} - fehlende Spalten = Default/NULL
+    values: dict = {}   # {column: value} - missing columns = default/NULL
 
 
 @router.post("/db/insert-row")
 def db_insert_row(body: InsertRowBody, user: dict = Depends(get_current_user)):
-    """Fügt eine neue Zeile ein (nur angegebene Spalten, Rest = Default)."""
+    """Inserts a new row (only given columns, rest = default)."""
     require_perm(user, "edit_source")
     t = _valid_table(body.table)
     if body.values:
@@ -567,7 +567,7 @@ class TableBody(BaseModel):
 
 @router.post("/db/drop-table")
 def db_drop_table(body: TableBody, user: dict = Depends(get_current_user)):
-    """Löscht eine komplette Tabelle. (Die doppelte Nachfrage macht das Frontend.)"""
+    """Deletes an entire table. (The double confirmation is done by the frontend.)"""
     require_perm(user, "delete_source")
     t = _valid_table(body.table)
     db._conn.execute(f'DROP TABLE "{t}"')
@@ -578,39 +578,39 @@ def db_drop_table(body: TableBody, user: dict = Depends(get_current_user)):
 
 class CreateTableBody(BaseModel):
     name: str
-    columns: str   # z.B. "id INTEGER PRIMARY KEY, name TEXT"
+    columns: str   # e.g. "id INTEGER PRIMARY KEY, name TEXT"
 
 
 @router.post("/db/create-table")
 def db_create_table(body: CreateTableBody, user: dict = Depends(get_current_user)):
-    """Legt eine neue Tabelle mit der angegebenen Spalten-Definition an."""
+    """Creates a new table with the given column definition."""
     require_perm(user, "edit_source")
     name = (body.name or "").strip()
     if not name or not name.replace("_", "").isalnum():
-        raise HTTPException(400, "Ungültiger Tabellenname (nur Buchstaben/Zahlen/_)")
+        raise HTTPException(400, "Invalid table name (only letters/numbers/_)")
     cols = (body.columns or "").strip()
     if not cols:
-        raise HTTPException(400, "Spalten-Definition fehlt")
+        raise HTTPException(400, "Column definition missing")
     try:
         db._conn.execute(f'CREATE TABLE "{name}" ({cols})')
         db._conn.commit()
     except Exception as e:
-        raise HTTPException(400, f"SQL-Fehler: {e}")
+        raise HTTPException(400, f"SQL error: {e}")
     db.add_audit_entry(user["username"], "source.db_table_created", target=name)
     return {"ok": True}
 
 
 @router.post("/db/backup")
 async def db_backup(background: bool = False, user: dict = Depends(get_current_user)):
-    """Erstellt eine konsistente Kopie der Datenbank als data/backup/data.sqlite
-    (als BACKEND-JOB, siehe app/bgjobs.py)."""
+    """Creates a consistent copy of the database as data/backup/data.sqlite
+    (as a BACKEND JOB, see app/bgjobs.py)."""
     require_perm(user, "see_source")
     import asyncio
 
     async def work(job):
-        job.update(phase="backup", detail="Datenbank wird gesichert")
+        job.update(phase="backup", detail="Database is being backed up")
         return await asyncio.to_thread(_db_backup_sync, user)
-    return await bgjobs.run("db.backup", "db", title="Datenbank-Sicherung", user=user, work=work,
+    return await bgjobs.run("db.backup", "db", title="Database backup", user=user, work=work,
                             background=background, perm="see_source")
 
 
@@ -622,30 +622,31 @@ def _db_backup_sync(user: dict) -> dict:
     try:
         dest = sqlite3.connect(str(bak_path))
         with dest:
-            db._conn.backup(dest)   # konsistentes Online-Backup
+            db._conn.backup(dest)   # consistent online backup
         dest.close()
     except Exception as e:
-        raise HTTPException(500, f"Backup fehlgeschlagen: {e}")
+        raise HTTPException(500, f"Backup failed: {e}")
     size = bak_path.stat().st_size
     db.add_audit_entry(user["username"], "source.db_backup",
                        target=str(bak_path.name), details=f"{size} bytes")
     return {"ok": True, "path": "src/backend/data/backup/data.sqlite", "size": size}
 
 # ------------------------------------------------------------------
-# Installationsart (Docker-Container oder natives Programm)
+# Installation kind (Docker container or native program)
 # ------------------------------------------------------------------
 
 @router.get("/runtime")
 def get_runtime(user: dict = Depends(get_current_user)):
     """
-    Sagt der Oberfläche, WIE dieses Backend installiert ist:
+    Tells the UI HOW this backend is installed:
 
-      install_kind = "docker"  -> läuft als Container. Port/Host hängen am
-                                  Container und sind zur Laufzeit gesperrt.
-      install_kind = "native"  -> normal per "python run.py" installiert,
-                                  alles frei über src/backend/data/.env änderbar.
+      install_kind = "docker"  -> runs as a container. Port/host are tied to
+                                  the container and locked at runtime.
+      install_kind = "native"  -> installed normally via "python run.py",
+                                  everything freely changeable via
+                                  src/backend/data/.env.
 
-    Wird im Source-Tab als Hinweisleiste angezeigt.
+    Shown as a hint bar in the Source tab.
     """
     require_perm(user, "see_source")
     from app import runtime_env
@@ -653,24 +654,24 @@ def get_runtime(user: dict = Depends(get_current_user)):
 
 
 # ------------------------------------------------------------------
-# dist-Ordner leeren (gebaute Agent-Installationspakete)
+# Clear the dist folder (built agent installation packages)
 # ------------------------------------------------------------------
 
 @router.post("/dist/clear")
 def clear_dist(user: dict = Depends(get_current_user)):
     """
-    Löscht alle Dateien im Ordner dist/ - dort liegen die mit
-    app/build_installers.py gebauten Installationspakete (.exe/.msi/.bat/
-    .ps1/.sh/.tar.gz/.deb/.rpm/.pkg.tar.xz).
+    Deletes all files in the dist/ folder - that is where the installation
+    packages built with app/build_installers.py are (.exe/.msi/.bat/.ps1/.sh/
+    .tar.gz/.deb/.rpm/.pkg.tar.xz).
 
-    Nützlich, weil jeder Build alte Stände liegen lässt: andere Versionen,
-    andere Backend-Adressen. Der Ordner selbst bleibt bestehen, Unterordner
-    werden mit entfernt.
+    Useful because every build leaves old versions behind: other versions,
+    other backend addresses. The folder itself stays, subfolders are removed
+    with it.
     """
     require_perm(user, "edit_source")
     dist = _DIST_DIR
     if not dist.is_dir():
-        return {"ok": True, "removed": 0, "freed": 0, "note": "dist-Ordner existiert nicht"}
+        return {"ok": True, "removed": 0, "freed": 0, "note": "dist folder does not exist"}
 
     removed, freed, errors = 0, 0, []
     for entry in list(dist.iterdir()):
@@ -686,23 +687,23 @@ def clear_dist(user: dict = Depends(get_current_user)):
             errors.append(f"{entry.name}: {e}")
 
     db.add_audit_entry(user["username"], "source.dist_clear",
-                       details=f"{removed} Einträge, {freed // 1024} KB")
+                       details=f"{removed} entries, {freed // 1024} KB")
     return {"ok": not errors, "removed": removed, "freed": freed, "errors": errors}
 
 
 # ==================================================================
-# MIGRATION - komplette Instanz auf einen anderen Server umziehen
+# MIGRATION - move the entire instance to another server
 # ------------------------------------------------------------------
-# Nimmt die GESAMTE Datenbank mit (Clients, Benutzer, Rechte, Einstellungen,
-# Dashboard-Widgets, Tickets, Skripte, Audit-Log …) plus Aufzeichnungen,
-# Medien-Bibliothek und Branding. Siehe app/migrate.py für die Technik.
+# Takes the ENTIRE database (clients, users, rights, settings, dashboard
+# widgets, tickets, scripts, audit log …) plus recordings, media library and
+# branding. See app/migrate.py for the technique.
 #
-#   GET  /api/source/migrate/info    -> Vorschau: was steckt drin, wie groß
-#   GET  /api/source/migrate/export  -> Archiv herunterladen
-#   POST /api/source/migrate/import  -> Archiv einspielen (Backend startet neu)
+#   GET  /api/source/migrate/info    -> preview: what is in it, how large
+#   GET  /api/source/migrate/export  -> download the archive
+#   POST /api/source/migrate/import  -> apply the archive (backend restarts)
 #
-# Nur Administratoren: Das Archiv enthält alle Daten der Installation, und das
-# Einspielen überschreibt den kompletten Bestand des Zielsystems.
+# Administrators only: the archive contains all data of the installation, and
+# applying it overwrites the entire content of the target system.
 # ==================================================================
 
 @router.get("/migrate/info")
@@ -722,11 +723,10 @@ def migrate_export(request: Request,
                          storage: bool = True,
                          token: str | None = None):
     """
-    Baut das Archiv und liefert es aus.
+    Builds the archive and delivers it.
 
-    Das Token darf auch als Query-Parameter kommen: Der Download läuft über
-    einen normalen Link/`window.open`, und der kann keinen Authorization-Header
-    setzen.
+    The token may also come as a query parameter: the download runs via a
+    normal link/`window.open`, which cannot set an Authorization header.
     """
     user = _user_from_token_query(request, token)
     require_admin(user)
@@ -747,14 +747,14 @@ def migrate_export(request: Request,
             include_modules=modules, include_storage=storage)
     except Exception as e:
         shutil.rmtree(tmp_dir, ignore_errors=True)
-        raise HTTPException(500, f"Export fehlgeschlagen: {e}")
+        raise HTTPException(500, f"Export failed: {e}")
 
     db.add_audit_entry(user["username"], "source.migrate_export",
                        details=f"{manifest.get('archive_size', 0) // 1024} KB, "
-                               f"Aufzeichnungen={recordings}, Medien={media}, "
-                               f"Geheimnisse={secrets}")
-    # Aufräumen erst NACH dem Senden - sonst zieht man die Datei unter dem
-    # laufenden Download weg.
+                               f"recordings={recordings}, media={media}, "
+                               f"secrets={secrets}")
+    # Clean up only AFTER sending - otherwise one pulls the file out from under
+    # the running download.
     return FileResponse(
         archive, filename=archive.name, media_type="application/zip",
         background=BackgroundTask(shutil.rmtree, tmp_dir, ignore_errors=True))
@@ -765,23 +765,23 @@ async def migrate_import(request: Request, secrets: bool = False,
                          backup: bool = True, background: bool = False,
                          user: dict = Depends(get_current_user)):
     """
-    Spielt ein Umzugs-Archiv ein (roher Body, wie beim ZIP-Upload).
+    Applies a migration archive (raw body, as with the ZIP upload).
 
-    Der bisherige Stand wird vorher zur Seite gelegt
-    (backend/backup-vor-migration-<Zeitstempel>/), damit ein Fehlgriff nicht
-    endgültig ist. Danach startet das Backend neu - die alte Datenbankdatei
-    ist ja ersetzt worden.
+    The existing state is set aside beforehand
+    (backend/backup-vor-migration-<timestamp>/), so a mistake is not final.
+    Afterwards the backend restarts - the old database file has, after all,
+    been replaced.
     """
     require_admin(user)
 
     import tempfile
     from app import migrate
 
-    # Der Upload selbst kommt zwangslaeufig aus dem Browser; das EINSPIELEN
-    # laeuft danach als BACKEND-JOB (app/bgjobs.py) und wird nicht abgebrochen.
+    # The upload itself necessarily comes from the browser; the APPLYING then
+    # runs as a BACKEND JOB (app/bgjobs.py) and is not aborted.
     data = await request.body()
     if not data:
-        raise HTTPException(400, "Leeres Archiv")
+        raise HTTPException(400, "Empty archive")
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="rmm-migrate-in-"))
     archive = tmp_dir / "migration.zip"
@@ -790,45 +790,45 @@ async def migrate_import(request: Request, secrets: bool = False,
     import asyncio
 
     async def work(job):
-        job.update(phase="import", detail="Archiv wird eingespielt (vorheriger Stand wird gesichert)")
+        job.update(phase="import", detail="Archive is being applied (previous state is backed up)")
         try:
             report = await asyncio.to_thread(migrate.apply_import, archive,
                                              restore_secrets=secrets, keep_backup=backup)
         except ValueError as e:
             raise HTTPException(400, str(e))
         except Exception as e:
-            raise HTTPException(500, f"Einspielen fehlgeschlagen: {e}")
+            raise HTTPException(500, f"Applying failed: {e}")
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
         try:
             db.add_audit_entry(user["username"], "source.migrate_import",
-                               details=f"Quelle: {report['manifest'].get('created_iso')}, "
-                                       f"Version {report['manifest'].get('version')}")
+                               details=f"source: {report['manifest'].get('created_iso')}, "
+                                       f"version {report['manifest'].get('version')}")
         except Exception:
-            pass   # Die Datenbank ist gerade ausgetauscht worden - kein Beinbruch.
-        job.update(phase="restart", detail="Eingespielt - Backend startet neu")
+            pass   # The database was just swapped out - no big deal.
+        job.update(phase="restart", detail="Applied - backend restarts")
         _schedule_restart_after_migration(delay=4.0)
         report["restart"] = True
         return report
 
-    return await bgjobs.run("migrate.import", "import", title="Umzugs-Archiv einspielen", user=user,
+    return await bgjobs.run("migrate.import", "import", title="Apply migration archive", user=user,
                             work=work, background=background, perm="admin")
 
 
 def _schedule_restart_after_migration(delay: float = 2.0) -> None:
     """
-    Backend nach dem Einspielen neu starten.
+    Restart the backend after applying.
 
-    Nötig, weil die geöffnete SQLite-Verbindung noch auf die ersetzte Datei
-    zeigt. Der Neustart passiert verzögert, damit die Antwort den Browser
-    noch erreicht.
+    Needed because the open SQLite connection still points to the replaced
+    file. The restart happens delayed, so the response still reaches the
+    browser.
     """
     import asyncio
     import os
     import sys
 
     def _restart():
-        print("[migrate] Starte Backend nach der Migration neu…")
+        print("[migrate] Restarting backend after the migration…")
         try:
             sys.stdout.flush()
             sys.stderr.flush()
@@ -843,21 +843,22 @@ def _schedule_restart_after_migration(delay: float = 2.0) -> None:
 
 
 # ==========================================================================
-# Server-Umzug: Agenten zum NEUEN Backend schicken
+# Server move: send agents to the NEW backend
 # ==========================================================================
-# Ablauf: 1. Auf dem alten Server exportieren, auf dem neuen einspielen (mit
-# Geheimnissen -> gleicher AGENT_TOKEN). 2. Auf dem ALTEN Server hier die
-# Adresse des neuen eintragen und "Alle Agenten umziehen".
-# Technik (ohne Agent-Update vorab): Jeder Agent bekommt "update-agent". Er holt
-# sein Update-Skript vom alten Server; das Skript schreibt waehrend des Umzugs
-# die NEUE Adresse (und optional den neuen AGENT_TOKEN) in seine .env und startet
-# den Agenten neu -> er meldet sich beim neuen Server, mit gleicher Geraete-ID.
-# Offline-Agenten folgen automatisch, sobald sie sich (beim alten Server) melden.
+# Flow: 1. Export on the old server, apply on the new one (with secrets ->
+# same AGENT_TOKEN). 2. On the OLD server, enter the new one's address here and
+# "move all agents".
+# Technique (without an agent update beforehand): every agent gets
+# "update-agent". It fetches its update script from the old server; during the
+# move the script writes the NEW address (and optionally the new AGENT_TOKEN)
+# into its .env and restarts the agent -> it reports to the new server, with
+# the same device ID. Offline agents follow automatically as soon as they
+# report (to the old server).
 #
-#   GET    /api/source/migrate/redirect          Stand (Ziel, Agenten online/gesamt)
-#   POST   /api/source/migrate/redirect/test     {url} Neuen Server pruefen
-#   POST   /api/source/migrate/redirect          {url, agent_token?} Umzug starten
-#   DELETE /api/source/migrate/redirect          Umzug beenden (Agenten bleiben hier)
+#   GET    /api/source/migrate/redirect          state (target, agents online/total)
+#   POST   /api/source/migrate/redirect/test     {url} check the new server
+#   POST   /api/source/migrate/redirect          {url, agent_token?} start the move
+#   DELETE /api/source/migrate/redirect          end the move (agents stay here)
 
 class RedirectBody(BaseModel):
     url: str
@@ -870,25 +871,25 @@ def _norm_target(url: str) -> str:
     u = _ensure_scheme((url or "").strip()).rstrip("/")
     p = urlsplit(u)
     if p.scheme not in ("http", "https") or not p.hostname:
-        raise HTTPException(400, "Bitte die vollständige Adresse des neuen Servers angeben, z. B. https://rmm-neu.firma.de")
+        raise HTTPException(400, "Please enter the full address of the new server, e.g. https://rmm-new.company.com")
     return u
 
 
 def _probe(url: str) -> dict:
-    """Ist das ein erreichbares BYTERA RMM? (vom ALTEN Server aus gesehen)"""
+    """Is this a reachable BYTERA RMM? (seen from the OLD server)"""
     import ssl
     import urllib.request
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE           # nur Erreichbarkeit pruefen (selbst signiert erlaubt)
+    ctx.verify_mode = ssl.CERT_NONE           # only check reachability (self-signed allowed)
     try:
         with urllib.request.urlopen(urllib.request.Request(url + "/agent-dist/update.sh"), timeout=10, context=ctx) as r:
             body = r.read(4000).decode("utf-8", "replace")
-        ok = "BYTERA RMM" in body or "RAPALLE.net RMM" in body   # auch Server vor der Umbenennung
-        return {"ok": ok, "detail": "Neuer Server erreichbar." if ok else
-                "Erreichbar, aber das ist offenbar kein BYTERA RMM (Agent-Update-Skript fehlt)."}
+        ok = "BYTERA RMM" in body or "RAPALLE.net RMM" in body   # also servers before the rename
+        return {"ok": ok, "detail": "New server reachable." if ok else
+                "Reachable, but this is apparently not a BYTERA RMM (agent update script missing)."}
     except Exception as e:      # noqa: BLE001
-        return {"ok": False, "detail": f"Nicht erreichbar: {getattr(e, 'reason', e)}"}
+        return {"ok": False, "detail": f"Not reachable: {getattr(e, 'reason', e)}"}
 
 
 @router.get("/migrate/redirect")
@@ -916,14 +917,14 @@ async def redirect_start(body: RedirectBody, background: bool = False, user: dic
     url = _norm_target(body.url)
     tok = body.agent_token.strip()
     if tok and not all(c.isalnum() or c in "-_.~" for c in tok):
-        raise HTTPException(400, "Der Agent-Token enthält ungültige Zeichen")
+        raise HTTPException(400, "The agent token contains invalid characters")
     probe = await asyncio.get_running_loop().run_in_executor(None, _probe, url)
     if not probe["ok"]:
-        raise HTTPException(409, f"Umzug nicht gestartet – {probe['detail']}")
+        raise HTTPException(409, f"Move not started - {probe['detail']}")
     db.set_setting("migration_target_url", url)
     db.set_setting("migration_agent_token", tok)
     db.add_audit_entry(user["username"], "migration.redirect_started", details=f"-> {url}"
-                       + (" (mit neuem Agent-Token)" if tok else ""))
+                       + (" (with a new agent token)" if tok else ""))
 
     from app.sockets import _migration_last, send_to_agent, state
     online = [c for c in db.list_clients() if state.is_online(c["id"])]
@@ -932,21 +933,21 @@ async def redirect_start(body: RedirectBody, background: bool = False, user: dic
         n = len(online)
         for i, c in enumerate(online):
             if job.cancelled:
-                job.log("Abgebrochen - restliche Agenten werden nicht mehr umgezogen")
+                job.log("Cancelled - remaining agents are no longer moved")
                 break
             _migration_last[c["id"]] = __import__("time").time()
             try:
                 await send_to_agent(c["id"], "update-agent", {})
-                job.log(f"{c.get('hostname') or c['id']}: Umzug angestoßen")
+                job.log(f"{c.get('hostname') or c['id']}: move triggered")
             except Exception as e:
-                job.log(f"{c.get('hostname') or c['id']}: nicht erreicht ({e})")
-            job.update(phase="rollout", pct=(i + 1) / max(1, n) * 100, detail=f"{i + 1}/{n} Agenten angestoßen")
+                job.log(f"{c.get('hostname') or c['id']}: not reached ({e})")
+            job.update(phase="rollout", pct=(i + 1) / max(1, n) * 100, detail=f"{i + 1}/{n} agents triggered")
             if i % 10 == 9:
-                await asyncio.sleep(2)          # gestaffelt, damit nicht alle gleichzeitig laden
+                await asyncio.sleep(2)          # staggered, so not all download at once
         return {"target": url, "triggered": n}
     out = {"ok": True, "target": url, "triggered": len(online),
            "offline": len(db.list_clients()) - len(online)}
-    job, _ = bgjobs.start("migrate.redirect", "redirect", title=f"Agenten zum neuen Server umziehen ({len(online)})",
+    job, _ = bgjobs.start("migrate.redirect", "redirect", title=f"Move agents to the new server ({len(online)})",
                           user=user, runner=rollout, perm="admin", meta={"target": url})
     out["job_id"] = job.id
     if background:
