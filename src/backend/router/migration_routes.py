@@ -1,32 +1,32 @@
 """
 routers/migration_routes.py
 ---------------------------
-AUTO-MIGRATION zwischen zwei BYTERA-Backends (Settings -> Migration).
+AUTO-MIGRATION between two BYTERA backends (Settings -> Migration).
 
-Ablauf: Auf dem NEUEN Backend meldet man sich über das Migrations-Fenster mit
-einem Admin-Account des ALTEN RMM an. Die Backends verbinden sich, das neue
-Backend lädt ALLES herunter und übernimmt es beim nächsten Start:
+Flow: on the NEW backend you log in through the migration window with an admin
+account of the OLD RMM. The backends connect, the new backend downloads
+EVERYTHING and adopts it on the next start:
 
-  * Datenbank            (konsistenter SQLite-Snapshot: Clients, Benutzer,
-                          Settings, Modul-Einstellungen, Aktivierungscodes,
-                          Tickets, Audit, ... einfach alles)
-  * data/                (.env mit Agent-/E2E-/TLS-Schlüsseln -> Agents bleiben
-                          authentifiziert; modules.json, Modul-Datenordner)
-  * storage/             (kompletter /storage: dist, web, spaces, docker,
+  * Database             (consistent SQLite snapshot: clients, users, settings,
+                          module settings, activation codes, tickets, audit,
+                          ... simply everything)
+  * data/                (.env with agent/E2E/TLS keys -> agents stay
+                          authenticated; modules.json, module data folders)
+  * storage/             (complete /storage: dist, web, spaces, docker,
                           recordings, tickets, audio, temp-usb, ...)
-  * Branding-Bilder      (frontend/image)
-  * Eigene Module        (modules/<id>, die es auf dem neuen Backend nicht gibt)
+  * branding images      (frontend/image)
+  * custom modules       (modules/<id> that do not exist on the new backend)
 
-Adresse der Agents (wählbar im Fenster):
-  * "same": Das neue Backend wird unter der BISHERIGEN Adresse erreichbar sein
-            (IP/DNS wird umgezogen) -> an den Agents ist nichts zu tun.
-  * "new":  Die Adresse ändert sich -> das ALTE Backend schickt allen online
-            verbundenen Agents per "migrate-server" die neue Adresse; Agents,
-            die gerade offline sind, bekommen sie beim nächsten Verbinden
-            nachgereicht (Setting migration_handoff_url, siehe sockets.py).
+Address of the agents (selectable in the window):
+  * "same": the new backend will be reachable at the PREVIOUS address (IP/DNS is
+            moved) -> nothing to do on the agents.
+  * "new":  the address changes -> the OLD backend sends the new address to all
+            online-connected agents via "migrate-server"; agents that are
+            currently offline get it on their next connect (setting
+            migration_handoff_url, see sockets.py).
 
-Beide Backends müssen auf einem Code-Stand mit diesem Router laufen.
-Der eigentliche Umbau passiert beim Neustart in db._apply_pending_migration().
+Both backends must run on a code revision that includes this router.
+The actual rebuild happens on restart in db._apply_pending_migration().
 """
 
 from __future__ import annotations
@@ -58,13 +58,13 @@ from app.paths import (BACKEND_DIR, BRANDING_DIR, DATA_DIR,
 router = APIRouter(tags=["migration"])
 
 STAGING_DIR = BACKEND_DIR / "migration_incoming"
-MAX_ARCHIVE_BYTES = 20 * 1024 * 1024 * 1024    # 20 GB Sicherheitsobergrenze
+MAX_ARCHIVE_BYTES = 20 * 1024 * 1024 * 1024    # 20 GB safety upper bound
 HTTP_TIMEOUT = 30
 
 
 def _admin(user: dict) -> None:
     if (user or {}).get("role") != "admin":
-        raise HTTPException(403, "Migration erfordert einen Admin-Account")
+        raise HTTPException(403, "Migration requires an admin account")
 
 
 def _dir_size(p: Path) -> int:
@@ -93,7 +93,7 @@ def _local_info() -> dict:
     except Exception:
         pass
     return {
-        "migration": True,                       # "dieses Backend kann Migration"
+        "migration": True,                       # "this backend supports migration"
         "version": version,
         "counts": counts,
         "sizes": {
@@ -110,7 +110,7 @@ def _sql_count(sql: str) -> int:
 
 
 # ==================================================================
-# EXPORT-SEITE (läuft auf dem ALTEN Backend)
+# EXPORT SIDE (runs on the OLD backend)
 # ==================================================================
 
 @router.get("/api/migration/info")
@@ -120,9 +120,9 @@ def migration_info(user: dict = Depends(get_current_user)):
 
 
 def _build_export_zip(dest: Path) -> None:
-    """Packt data/ (mit DB-Snapshot), storage/, Branding und alle Module."""
+    """Packs data/ (with DB snapshot), storage/, branding and all modules."""
     with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
-        # --- Konsistenter DB-Snapshot (Online-Backup-API) ---
+        # --- Consistent DB snapshot (online backup API) ---
         with tempfile.TemporaryDirectory(prefix="mig-db-") as td:
             snap = Path(td) / "data.sqlite"
             target = sqlite3.connect(snap)
@@ -144,10 +144,10 @@ def _build_export_zip(dest: Path) -> None:
                 try:
                     zf.write(f, f"{arc_prefix}/{rel.as_posix()}")
                 except OSError:
-                    pass  # gerade geschriebene/gesperrte Datei: überspringen
+                    pass  # file being written/locked right now: skip
 
-        # data/ ohne die Live-DB (Snapshot liegt schon drin), ohne Backups
-        # und ohne version.txt/requirements.txt (gehören zum Code-Stand).
+        # data/ without the live DB (snapshot is already included), without
+        # backups and without version.txt/requirements.txt (part of the code).
         add_tree(DATA_DIR, "data",
                  skip_names={"data.sqlite", "data.sqlite-wal", "data.sqlite-shm",
                              "backup", "version.txt", "requirements.txt"})
@@ -170,11 +170,11 @@ def migration_archive(user: dict = Depends(get_current_user)):
         _build_export_zip(tmp)
     except Exception as exc:
         shutil.rmtree(tmp.parent, ignore_errors=True)
-        raise HTTPException(500, f"Export fehlgeschlagen: {exc}")
+        raise HTTPException(500, f"Export failed: {exc}")
     db.add_audit_entry(user.get("username"), "migration.export", None,
-                       f"Migrations-Archiv exportiert ({tmp.stat().st_size} Bytes)")
+                       f"migration archive exported ({tmp.stat().st_size} bytes)")
 
-    # Temp-Ordner nach dem Streamen aufräumen.
+    # Clean up the temp folder after streaming.
     class _CleanupFileResponse(FileResponse):
         async def __call__(self, scope, receive, send):
             try:
@@ -192,14 +192,14 @@ class HandoffBody(BaseModel):
 
 @router.post("/api/migration/handoff")
 async def migration_handoff(body: HandoffBody, user: dict = Depends(get_current_user)):
-    """Alle Agents auf die NEUE Backend-Adresse umziehen (jetzt + beim
-    nächsten Verbinden, falls ein Agent gerade offline ist)."""
+    """Move all agents to the NEW backend address (now + on the next connect
+    if an agent is currently offline)."""
     _admin(user)
     url = (body.url or "").strip().rstrip("/")
     from urllib.parse import urlparse
     p = urlparse(url)
     if p.scheme not in ("http", "https") or not p.netloc:
-        raise HTTPException(400, "Neue Adresse muss mit http:// oder https:// beginnen")
+        raise HTTPException(400, "New address must start with http:// or https://")
     await db.call(db.set_setting, "migration_handoff_url", url)
 
     from app.sockets import send_to_agent
@@ -211,31 +211,31 @@ async def migration_handoff(body: HandoffBody, user: dict = Depends(get_current_
         except Exception:
             pass
     db.add_audit_entry(user.get("username"), "migration.handoff", None,
-                       f"Agents auf {url} umgezogen ({notified} online erreicht)")
+                       f"agents moved to {url} ({notified} reached online)")
     return {"ok": True, "notified": notified}
 
 
 # ==================================================================
-# IMPORT-SEITE (läuft auf dem NEUEN Backend)
+# IMPORT SIDE (runs on the NEW backend)
 # ==================================================================
 
 class RemoteBody(BaseModel):
     url: str
     username: str
     password: str
-    code: str = ""          # 2FA-Einmalcode, falls der Account einen hat
+    code: str = ""          # 2FA one-time code, if the account has one
 
 
 class ImportBody(RemoteBody):
-    mode: str = "same"      # "same" = Adresse bleibt | "new" = neue Adresse
-    new_url: str = ""       # bei mode="new": Adresse DIESES neuen Backends
+    mode: str = "same"      # "same" = address stays | "new" = new address
+    new_url: str = ""       # for mode="new": address of THIS new backend
 
 
 def _remote_request(base: str, path: str, token: str | None = None,
                     payload: dict | None = None, out_file: Path | None = None,
                     progress=None) -> dict | None:
-    """HTTP(S)-Aufruf zum alten Backend (synchron; via asyncio.to_thread nutzen).
-    Bei selbstsignierten Zertifikaten wird einmal unverifiziert nachversucht."""
+    """HTTP(S) call to the old backend (synchronous; use via asyncio.to_thread).
+    For self-signed certificates it retries once unverified."""
     url = base.rstrip("/") + path
     headers = {"User-Agent": "BYTERA-RMM Migration"}
     if token:
@@ -257,7 +257,7 @@ def _remote_request(base: str, path: str, token: str | None = None,
                             break
                         done += len(chunk)
                         if done > MAX_ARCHIVE_BYTES:
-                            raise RuntimeError("Archiv überschreitet die 20-GB-Grenze")
+                            raise RuntimeError("Archive exceeds the 20 GB limit")
                         f.write(chunk)
                         if progress:
                             progress(done)
@@ -288,17 +288,17 @@ def _remote_login(base: str, username: str, password: str, code: str) -> str:
     })
     token = (res or {}).get("token")
     if not token:
-        raise RuntimeError("Anmeldung am alten RMM fehlgeschlagen (kein Token)")
+        raise RuntimeError("Login to the old RMM failed (no token)")
     return token
 
 
 @router.post("/api/migration/check")
 async def migration_check(body: RemoteBody, user: dict = Depends(get_current_user)):
-    """Verbindung zum alten RMM testen: Login + Info abrufen (noch ohne Transfer)."""
+    """Test the connection to the old RMM: login + fetch info (no transfer yet)."""
     _admin(user)
     base = (body.url or "").strip()
     if not base.lower().startswith(("http://", "https://")):
-        raise HTTPException(400, "Adresse muss mit http:// oder https:// beginnen")
+        raise HTTPException(400, "Address must start with http:// or https://")
     try:
         token = await asyncio.to_thread(_remote_login, base, body.username,
                                         body.password, body.code)
@@ -307,15 +307,15 @@ async def migration_check(body: RemoteBody, user: dict = Depends(get_current_use
     except RuntimeError as exc:
         raise HTTPException(502, str(exc))
     if not (info or {}).get("migration"):
-        raise HTTPException(502, "Das alte Backend kennt die Migration noch nicht - "
-                                 "bitte dort zuerst auf den aktuellen Stand updaten")
+        raise HTTPException(502, "The old backend does not know migration yet - "
+                                 "please update it to the current revision first")
     return {"remote": info, "local": _local_info()}
 
 
 def _schedule_restart(delay: float = 2.0) -> None:
     def _restart():
         time.sleep(delay)
-        print("[migration] Neustart - migrierte Daten werden beim Start übernommen …")
+        print("[migration] restart - migrated data will be adopted on start ...")
         os.execv(sys.executable, [sys.executable] + sys.argv)
     threading.Thread(target=_restart, daemon=True).start()
 
@@ -323,70 +323,70 @@ def _schedule_restart(delay: float = 2.0) -> None:
 @router.post("/api/migration/import")
 async def migration_import(body: ImportBody, background: bool = False,
                            user: dict = Depends(get_current_user)):
-    """Die eigentliche Migration (Hintergrund-Job mit Live-Log)."""
+    """The actual migration (background job with live log)."""
     _admin(user)
     base = (body.url or "").strip()
     if not base.lower().startswith(("http://", "https://")):
-        raise HTTPException(400, "Adresse muss mit http:// oder https:// beginnen")
+        raise HTTPException(400, "Address must start with http:// or https://")
     mode = "new" if body.mode == "new" else "same"
     new_url = (body.new_url or "").strip().rstrip("/")
     if mode == "new" and not new_url.lower().startswith(("http://", "https://")):
-        raise HTTPException(400, "Bitte die neue Backend-Adresse für die Agents angeben")
+        raise HTTPException(400, "Please provide the new backend address for the agents")
 
     async def work(job):
         def step(txt):
             job.log(txt)
             job.detail = txt
-        step(f"Verbinde mit {base} …")
+        step(f"Connecting to {base} ...")
         token = await asyncio.to_thread(_remote_login, base, body.username,
                                         body.password, body.code)
         info = await asyncio.to_thread(_remote_request, base,
                                        "/api/migration/info", token)
         if not (info or {}).get("migration"):
-            raise RuntimeError("Das alte Backend kennt die Migration noch nicht - "
-                               "bitte dort zuerst updaten")
+            raise RuntimeError("The old backend does not know migration yet - "
+                               "please update it there first")
         total = sum((info.get("sizes") or {}).values())
-        step(f"Altes RMM: Version {info.get('version')}, "
-                f"{(info.get('counts') or {}).get('clients', '?')} Clients, "
-                f"~{total // 1048576} MB Daten")
+        step(f"Old RMM: version {info.get('version')}, "
+                f"{(info.get('counts') or {}).get('clients', '?')} clients, "
+                f"~{total // 1048576} MB data")
 
         shutil.rmtree(STAGING_DIR, ignore_errors=True)
         STAGING_DIR.mkdir(parents=True, exist_ok=True)
         archive = STAGING_DIR / "migration.zip"
 
-        step("Lade Migrations-Archiv herunter (das alte Backend packt gerade) …")
+        step("Downloading migration archive (the old backend is packing it) ...")
         last = {"mb": -50}
 
         def prog(done):
             mb = done // 1048576
             if mb >= last["mb"] + 50:
                 last["mb"] = mb
-                step(f"  … {mb} MB übertragen")
+                step(f"  ... {mb} MB transferred")
 
         await asyncio.to_thread(_remote_request, base, "/api/migration/archive",
                                 token, None, archive, prog)
-        step(f"Download fertig ({archive.stat().st_size // 1048576} MB) - entpacke …")
+        step(f"Download complete ({archive.stat().st_size // 1048576} MB) - extracting ...")
 
         with zipfile.ZipFile(archive) as zf:
             for i in zf.infolist():                      # Zip-Slip-Schutz
                 dest = (STAGING_DIR / i.filename).resolve()
                 if not str(dest).startswith(str(STAGING_DIR.resolve())):
-                    raise RuntimeError("Archiv enthält unzulässige Pfade")
+                    raise RuntimeError("Archive contains disallowed paths")
             zf.extractall(STAGING_DIR)
         archive.unlink(missing_ok=True)
         if not (STAGING_DIR / "data" / "data.sqlite").exists():
-            raise RuntimeError("Archiv unvollständig (keine Datenbank enthalten)")
+            raise RuntimeError("Archive incomplete (no database included)")
 
         if mode == "new":
-            step(f"Ziehe Agents auf die neue Adresse um: {new_url} …")
+            step(f"Moving agents to the new address: {new_url} ...")
             res = await asyncio.to_thread(_remote_request, base,
                                           "/api/migration/handoff", token,
                                           {"url": new_url})
-            job.log(f"  … {(res or {}).get('notified', 0)} Agents direkt erreicht; "
-                    "Offline-Agents folgen beim nächsten Verbinden mit dem alten Backend")
+            job.log(f"  ... {(res or {}).get('notified', 0)} agents reached directly; "
+                    "offline agents follow on their next connect to the old backend")
         else:
-            job.log("Adresse bleibt gleich - an den Agents ist nichts zu tun "
-                    "(IP/DNS auf diesen Server umziehen)")
+            job.log("Address stays the same - nothing to do on the agents "
+                    "(move IP/DNS to this server)")
 
         (STAGING_DIR / "apply.json").write_text(json.dumps({
             "from": base, "mode": mode, "new_url": new_url,
@@ -394,8 +394,8 @@ async def migration_import(body: ImportBody, background: bool = False,
         }), encoding="utf-8")
         db.add_audit_entry(user.get("username"), "migration.import", None,
                            f"Migration von {base} ({mode})")
-        step("Alles übertragen. Backend startet neu und übernimmt die Daten - "
-                "danach bitte neu anmelden (Benutzer kommen aus dem alten RMM).")
+        step("Everything transferred. The backend restarts and adopts the data - "
+                "then please log in again (users come from the old RMM).")
         _schedule_restart()
         return {"ok": True, "restarting": True}
 

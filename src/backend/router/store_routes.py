@@ -1,27 +1,27 @@
 """
 routers/store_routes.py
 -----------------------
-Aktivierung + Modul-Store (beides unter Einstellungen).
+Activation + module store (both under Settings).
 
-AKTIVIERUNG (/api/activation):
-  Eingabefeld für einen Aktivierungscode. Der Code hat noch KEINE Funktion -
-  er wird nur mit Einlösedatum in der Datenbank gespeichert. Später fragt das
-  RMM damit den Lizenzserver ab und schaltet ggf. Premium-Features frei oder
-  lädt Zusatz-Module.
+ACTIVATION (/api/activation):
+  Input field for an activation code. The code has NO function yet - it is only
+  stored in the database with its redemption date. Later the RMM uses it to
+  query the license server and may unlock premium features or load add-on
+  modules.
 
-MODUL-STORE (/api/modstore/...):
-  Eigene Paketquellen wie beim Community-Store von Synology DSM: Der Admin
-  hinterlegt eine Server-Adresse (HTTP-Verzeichnis-Listing ODER JSON-Manifest).
-  Alle dort auffindbaren .zip-Dateien werden angezeigt und können direkt als
-  Modul installiert werden (Download -> sicheres Entpacken -> modules/<id>/ ->
-  Rescan). Aktiviert wird das Modul danach wie gewohnt in der Modul-Verwaltung.
+MODULE STORE (/api/modstore/...):
+  Custom package sources like the community store of Synology DSM: the admin
+  configures a server address (HTTP directory listing OR JSON manifest). All
+  .zip files found there are shown and can be installed directly as a module
+  (download -> safe extraction -> modules/<id>/ -> rescan). The module is then
+  enabled as usual in the module management.
 
-  Unterstützte Quellen-Formate:
-    * HTML-Verzeichnis-Listing (nginx/Apache/`python -m http.server`):
-      alle href="...zip"-Links werden eingesammelt.
-    * JSON: entweder ["a.zip", "b.zip"], oder [{"name": "...", "url": "...",
-      "size": 123, "description": "..."}], oder {"packages": [...]} - so kann
-      man später einen "richtigen" Store-Server mit Metadaten betreiben.
+  Supported source formats:
+    * HTML directory listing (nginx/Apache/`python -m http.server`): all
+      href="...zip" links are collected.
+    * JSON: either ["a.zip", "b.zip"], or [{"name": "...", "url": "...",
+      "size": 123, "description": "..."}], or {"packages": [...]} - so you can
+      later run a "real" store server with metadata.
 """
 
 from __future__ import annotations
@@ -46,18 +46,18 @@ from app.paths import MODULES_DIR
 
 router = APIRouter(tags=["store"])
 
-# Download-Obergrenze für Modul-ZIPs (Schutz vor Speicher-/Plattenfressern).
+# Download upper limit for module ZIPs (protection against memory/disk hogs).
 MAX_ZIP_BYTES = 300 * 1024 * 1024
 HTTP_TIMEOUT = 20
 
 
 def _admin(user: dict) -> None:
-    # Gleiche Berechtigung wie die Modul-Verwaltung.
+    # Same permission as the module management.
     require_perm(user, "manage_modules")
 
 
 # ==================================================================
-# AKTIVIERUNG
+# ACTIVATION
 # ==================================================================
 
 class ActivationBody(BaseModel):
@@ -79,18 +79,18 @@ def redeem_activation(body: ActivationBody, user: dict = Depends(get_current_use
     _admin(user)
     key = (body.key or "").strip()
     if len(key) < 4:
-        raise HTTPException(400, "Aktivierungscode ist zu kurz")
+        raise HTTPException(400, "Activation code is too short")
     if len(key) > 200:
-        raise HTTPException(400, "Aktivierungscode ist zu lang")
+        raise HTTPException(400, "Activation code is too long")
     row = db.redeem_activation_key(key, user.get("username"))
     db.add_audit_entry(user.get("username"), "activation.redeem", None,
-                       f"Aktivierungscode eingelöst ({key[:4]}…)")
+                       f"activation code redeemed ({key[:4]}...)")
     return {"key": row["key"], "redeemed_at": row["redeemed_at"],
             "redeemed_by": row.get("redeemed_by")}
 
 
 # ==================================================================
-# MODUL-STORE: Paketquellen
+# MODULE STORE: package sources
 # ==================================================================
 
 class SourceBody(BaseModel):
@@ -102,7 +102,7 @@ def _check_source_url(url: str) -> str:
     url = (url or "").strip()
     p = urllib.parse.urlparse(url)
     if p.scheme not in ("http", "https") or not p.netloc:
-        raise HTTPException(400, "Adresse muss mit http:// oder https:// beginnen")
+        raise HTTPException(400, "Address must start with http:// or https://")
     return url
 
 
@@ -130,21 +130,21 @@ def delete_source(source_id: str, user: dict = Depends(get_current_user)):
 
 
 # ==================================================================
-# MODUL-STORE: Quelle durchsuchen + installieren
+# MODULE STORE: browse source + install
 # ==================================================================
 
 def _http_get(url: str, limit: int) -> bytes:
-    """GET mit Timeout und Größenlimit (liest höchstens limit+1 Bytes)."""
+    """GET with timeout and size limit (reads at most limit+1 bytes)."""
     req = urllib.request.Request(url, headers={"User-Agent": "BYTERA-RMM ModStore"})
     with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
         data = r.read(limit + 1)
     if len(data) > limit:
-        raise HTTPException(400, "Datei ist zu groß")
+        raise HTTPException(400, "File is too large")
     return data
 
 
 def _parse_listing(base_url: str, raw: bytes) -> list[dict]:
-    """Zieht alle .zip-Einträge aus einem Verzeichnis-Listing oder JSON-Manifest."""
+    """Extracts all .zip entries from a directory listing or JSON manifest."""
     text = raw.decode("utf-8", "replace")
     entries: dict[str, dict] = {}
 
@@ -158,7 +158,7 @@ def _parse_listing(base_url: str, raw: bytes) -> list[dict]:
 
     stripped = text.lstrip()
     if stripped.startswith("[") or stripped.startswith("{"):
-        # JSON-Manifest
+        # JSON manifest
         try:
             data = json.loads(stripped)
             if isinstance(data, dict):
@@ -174,13 +174,13 @@ def _parse_listing(base_url: str, raw: bytes) -> list[dict]:
                     add(n or u, u, item.get("size"), str(item.get("description") or ""))
             return list(entries.values())
         except (json.JSONDecodeError, TypeError):
-            pass  # dann wie HTML/Text behandeln
+            pass  # then treat it as HTML/text
 
-    # HTML-Listing: alle Links auf .zip
+    # HTML listing: all links to .zip
     for m in re.finditer(r'href=["\']([^"\']+?\.zip)["\']', text, re.I):
         u = m.group(1)
         add(u.rsplit("/", 1)[-1], u)
-    # Plain-Text-Listing: eine Datei pro Zeile
+    # Plain-text listing: one file per line
     if not entries:
         for line in text.splitlines():
             line = line.strip()
@@ -194,16 +194,16 @@ def browse_source(source_id: str, user: dict = Depends(get_current_user)):
     _admin(user)
     src = db.get_module_source(source_id)
     if not src:
-        raise HTTPException(404, "Paketquelle nicht gefunden")
+        raise HTTPException(404, "Package source not found")
     try:
         raw = _http_get(src["url"], 5 * 1024 * 1024)
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(502, f"Quelle nicht erreichbar: {exc}")
+        raise HTTPException(502, f"Source not reachable: {exc}")
     pkgs = _parse_listing(src["url"], raw)
     pkgs.sort(key=lambda p: p["name"].lower())
-    # Welche Module sind schon installiert? (Abgleich über die Modul-IDs)
+    # Which modules are already installed? (matched by module IDs)
     installed = {m.get("id"): m.get("version") for m in modules.list_all()}
     return {"source": src, "packages": pkgs, "installed": installed}
 
@@ -219,7 +219,7 @@ def _same_origin(a: str, b: str) -> bool:
 
 
 def _find_module_root(tmp: Path) -> Path | None:
-    """module.json direkt im ZIP-Wurzelordner oder eine Ebene tiefer."""
+    """module.json directly in the ZIP root folder or one level deeper."""
     if (tmp / "module.json").exists():
         return tmp
     candidates = [d for d in tmp.iterdir() if d.is_dir() and (d / "module.json").exists()]
@@ -231,9 +231,9 @@ def install_package(body: InstallBody, user: dict = Depends(get_current_user)):
     _admin(user)
     src = db.get_module_source(body.source_id)
     if not src:
-        raise HTTPException(404, "Paketquelle nicht gefunden")
+        raise HTTPException(404, "Package source not found")
     if not _same_origin(src["url"], body.url):
-        raise HTTPException(400, "Download-Adresse gehört nicht zu dieser Paketquelle")
+        raise HTTPException(400, "Download address does not belong to this package source")
 
     data = None
     try:
@@ -241,43 +241,43 @@ def install_package(body: InstallBody, user: dict = Depends(get_current_user)):
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(502, f"Download fehlgeschlagen: {exc}")
+        raise HTTPException(502, f"Download failed: {exc}")
 
     with tempfile.TemporaryDirectory(prefix="modstore-") as tdir:
         tmp = Path(tdir)
         try:
             zf = zipfile.ZipFile(io.BytesIO(data))
         except zipfile.BadZipFile:
-            raise HTTPException(400, "Die Datei ist kein gültiges ZIP-Archiv")
-        # Sicheres Entpacken (kein Zip-Slip: keine Pfade außerhalb des Zielordners).
+            raise HTTPException(400, "The file is not a valid ZIP archive")
+        # Safe extraction (no zip-slip: no paths outside the target folder).
         for info in zf.infolist():
             dest = (tmp / info.filename).resolve()
             if not str(dest).startswith(str(tmp.resolve())):
-                raise HTTPException(400, "ZIP enthält unzulässige Pfade")
+                raise HTTPException(400, "ZIP contains disallowed paths")
         zf.extractall(tmp)
 
         root = _find_module_root(tmp)
         if root is None:
-            raise HTTPException(400, "Im ZIP wurde keine module.json gefunden - "
-                                     "das ist kein BYTERA-Modul-Paket")
+            raise HTTPException(400, "No module.json found in the ZIP - "
+                                     "this is not a BYTERA module package")
         try:
             meta = json.loads((root / "module.json").read_text(encoding="utf-8"))
         except Exception:
-            raise HTTPException(400, "module.json im Paket ist nicht lesbar")
+            raise HTTPException(400, "module.json in the package is not readable")
         mid = str(meta.get("id") or "").strip()
         if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{1,63}", mid):
-            raise HTTPException(400, f"Ungültige Modul-ID in module.json: {mid!r}")
+            raise HTTPException(400, f"Invalid module ID in module.json: {mid!r}")
 
         target = Path(MODULES_DIR) / mid
-        # Update erlaubt: vorhandenen Ordner ersetzen (wie "Installieren" im
-        # DSM-Store). Deaktivieren/Aktivieren übernimmt die Modul-Verwaltung.
+        # Update allowed: replace the existing folder (like "install" in the
+        # DSM store). Disabling/enabling is handled by the module management.
         if target.exists():
             shutil.rmtree(target)
         shutil.copytree(root, target)
 
     modules.discover()
     db.add_audit_entry(user.get("username"), "modstore.install", mid,
-                       f"{meta.get('name') or mid} v{meta.get('version') or '?'} von {body.url}")
+                       f"{meta.get('name') or mid} v{meta.get('version') or '?'} from {body.url}")
     return {"installed": mid, "name": meta.get("name") or mid,
             "version": meta.get("version") or "?",
-            "hint": "Modul installiert - zum Verwenden in der Modul-Verwaltung aktivieren."}
+            "hint": "Module installed - enable it in the module management to use it."}

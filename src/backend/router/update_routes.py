@@ -1,30 +1,29 @@
 """
 routers/update_routes.py
 -------------------------
-Server-Selbst-Update aus dem GitHub-Repo (Settings -> Update).
+Server self-update from the GitHub repo (Settings -> Update).
 
-Die Repo-URL liegt in backend/repo.txt (z.B.
-https://github.com/RAPALLE2/BYTERA-RMM.git) und kann über die API geändert
-werden.
+The repo URL lives in backend/repo.txt (e.g.
+https://github.com/RAPALLE2/BYTERA-RMM.git) and can be changed via the API.
 
-Endpunkte (nur Admin):
-  GET  /api/admin/update/info   -> aktuelle Version, Repo, neuester Commit,
-                                   alle Releases (Alpha + Full), Vorschläge
-  PUT  /api/admin/update/repo   -> Repo-URL in repo.txt speichern
-  POST /api/admin/update/run    -> Update ausführen
+Endpoints (admin only):
+  GET  /api/admin/update/info   -> current version, repo, latest commit,
+                                   all releases (alpha + full), suggestions
+  PUT  /api/admin/update/repo   -> save the repo URL in repo.txt
+  POST /api/admin/update/run    -> run the update
         body: { "target": "commit" | "full" | "any" | "custom", "tag": "..."? }
 
-Ablauf eines Updates:
-  1. Ziel-Ref bestimmen (Commit-SHA des Default-Branches oder Release-Tag)
-  2. ZIP von codeload.github.com laden und nach /tmp entpacken
-  3. Dateien über das Projektverzeichnis kopieren - AUSGENOMMEN lokale Daten
+Flow of an update:
+  1. Determine the target ref (commit SHA of the default branch or release tag)
+  2. Load the ZIP from codeload.github.com and extract it to /tmp
+  3. Copy files over the project directory - EXCEPT local data
      (data.sqlite, .env, repo.txt, recordings/, branding/)
-  4. Backend startet sich selbst neu (os.execv) -> läuft mit neuem Code weiter
+  4. The backend restarts itself (os.execv) -> continues with the new code
 
-Auto-Update: main.py ruft periodisch auto_update_tick() auf. Je nach Kanal
-("commit" | "full" | "any") wird geprüft, ob es etwas Neueres gibt, und das
-Update automatisch ausgeführt. Ein "zuletzt versuchtes Ziel" (Settings)
-verhindert Endlos-Schleifen, falls ein Update nicht greift.
+Auto-update: main.py calls auto_update_tick() periodically. Depending on the
+channel ("commit" | "full" | "any") it checks whether something newer exists and
+runs the update automatically. A "last attempted target" (settings) prevents
+endless loops if an update does not take effect.
 """
 
 import asyncio
@@ -49,14 +48,14 @@ from router.admin_routes import require_admin
 
 router = APIRouter(prefix="/api/admin/update", tags=["update"])
 
-# …/backend/app/routers/update_routes.py -> Projekt-Root (…/rmm)
+# .../backend/app/routers/update_routes.py -> project root (.../rmm)
 from app.paths import PROJECT_ROOT as _PROJECT_ROOT, REPO_FILE as _REPO_FILE, BACKEND_VERSION_FILE as _VERSION_FILE
 _DEFAULT_REPO = "https://github.com/RAPALLE2/BYTERA-RMM.git"
-# Neuer Repo-Name -> alter Name (Rueckfall, solange GitHub noch den alten fuehrt)
+# New repo name -> old name (fallback while GitHub still carries the old one)
 _LEGACY_REPOS = {"bytera-rmm": "Rapalle.net-RMM"}
 
-# Diese Pfade (relativ zum Projekt-Root) werden beim Update NIE überschrieben
-# bzw. gelöscht - hier stecken lokale Daten und Konfiguration drin.
+# These paths (relative to the project root) are NEVER overwritten or deleted
+# during an update - local data and configuration live here.
 _PRESERVE = (
     "src/backend/data",
     "src/backend/media",
@@ -74,7 +73,7 @@ def _read_repo_url() -> str:
             return url
     except OSError:
         pass
-    # repo.txt fehlt -> mit Default anlegen
+    # repo.txt missing -> create it with the default
     try:
         _REPO_FILE.write_text(_DEFAULT_REPO + "\n", encoding="utf-8")
     except OSError:
@@ -86,7 +85,7 @@ def _parse_owner_repo(url: str) -> tuple[str, str]:
     """'https://github.com/OWNER/REPO(.git)' -> ('OWNER', 'REPO')"""
     m = re.search(r"github\.com[:/]+([^/]+)/([^/]+?)(?:\.git)?/?$", url.strip())
     if not m:
-        raise HTTPException(400, f"Repo-URL nicht verstanden: {url}")
+        raise HTTPException(400, f"Repo URL not understood: {url}")
     return m.group(1), m.group(2)
 
 
@@ -94,11 +93,11 @@ def _current_version() -> str:
     try:
         return _VERSION_FILE.read_text(encoding="utf-8").strip()
     except OSError:
-        return "unbekannt"
+        return "unknown"
 
 
 def _http_json(url: str):
-    """GitHub-API-Aufruf (synchron; wird im Executor ausgeführt)."""
+    """GitHub API call (synchronous; runs in the executor)."""
     req = urllib.request.Request(url, headers={
         "User-Agent": "bytera-rmm-updater",
         "Accept": "application/vnd.github+json",
@@ -119,14 +118,14 @@ def _is_alpha(release: dict) -> bool:
 
 
 def _fetch_github_state() -> dict:
-    """Holt Default-Branch, neuesten Commit und alle Releases vom Repo."""
+    """Fetches the default branch, latest commit and all releases from the repo."""
     owner, repo = _parse_owner_repo(_read_repo_url())
     base = f"https://api.github.com/repos/{owner}/{repo}"
     try:
         info = _http_json(base)
     except urllib.error.HTTPError as e:
-        # Umbenennung RAPALLE.net RMM -> BYTERA RMM: Ist das Repo auf GitHub noch
-        # nicht umbenannt, gibt es den neuen Namen nicht - dann den alten nehmen.
+        # Rename RAPALLE.net RMM -> BYTERA RMM: if the repo on GitHub has not
+        # been renamed yet, the new name does not exist - then use the old one.
         legacy = _LEGACY_REPOS.get(repo.lower())
         if e.code != 404 or not legacy:
             raise
@@ -158,11 +157,11 @@ def _fetch_github_state() -> dict:
 
 
 # ------------------------------------------------------------------
-# Update ausführen
+# Run the update
 # ------------------------------------------------------------------
 
 def _apply_zip(ref: str, owner: str, repo: str) -> None:
-    """Lädt das ZIP des Refs und kopiert es über das Projektverzeichnis."""
+    """Loads the ZIP of the ref and copies it over the project directory."""
     data = _http_bytes(f"https://codeload.github.com/{owner}/{repo}/zip/{ref}")
     tmpdir = Path(tempfile.mkdtemp(prefix="rmm_update_"))
     try:
@@ -170,7 +169,7 @@ def _apply_zip(ref: str, owner: str, repo: str) -> None:
             z.extractall(tmpdir)
         roots = [p for p in tmpdir.iterdir() if p.is_dir()]
         if not roots:
-            raise RuntimeError("Update-ZIP war leer")
+            raise RuntimeError("Update ZIP was empty")
         src_root = roots[0]
 
         preserve_abs = [(_PROJECT_ROOT / p).resolve() for p in _PRESERVE]
@@ -180,7 +179,7 @@ def _apply_zip(ref: str, owner: str, repo: str) -> None:
             for p in preserve_abs:
                 if d == p or str(d).startswith(str(p) + os.sep):
                     return True
-            # .env-Dateien generell nie überschreiben (Konfiguration/Token)
+            # Never overwrite .env files in general (configuration/token)
             return dst.name == ".env"
 
         for src in src_root.rglob("*"):
@@ -198,9 +197,9 @@ def _apply_zip(ref: str, owner: str, repo: str) -> None:
 
 
 def _schedule_restart(delay: float = 1.5) -> None:
-    """Startet den Backend-Prozess neu (ersetzt sich selbst -> neuer Code)."""
+    """Restarts the backend process (replaces itself -> new code)."""
     def _restart():
-        print("[update] Starte Backend mit neuem Code neu (os.execv)...")
+        print("[update] Restarting backend with new code (os.execv)...")
         try:
             sys.stdout.flush(); sys.stderr.flush()
         except Exception:
@@ -211,54 +210,54 @@ def _schedule_restart(delay: float = 1.5) -> None:
 
 
 def _resolve_target(gh: dict, target: str, tag: str | None) -> tuple[str, str]:
-    """Gibt (ref, beschreibung) für das gewünschte Ziel zurück."""
+    """Returns (ref, description) for the desired target."""
     if target == "commit":
         sha = (gh.get("latest_commit") or {}).get("sha")
         if not sha:
-            raise HTTPException(502, "Konnte neuesten Commit nicht ermitteln")
+            raise HTTPException(502, "Could not determine the latest commit")
         return sha, f"Commit {sha[:10]}"
     if target == "full":
         t = gh.get("latest_full_tag")
         if not t:
-            raise HTTPException(404, "Kein Full-Release im Repo gefunden")
+            raise HTTPException(404, "No full release found in the repo")
         return t, f"Release {t}"
     if target == "any":
         t = gh.get("latest_any_tag")
         if not t:
-            raise HTTPException(404, "Kein Release im Repo gefunden")
+            raise HTTPException(404, "No release found in the repo")
         return t, f"Release {t}"
     if target == "custom":
         if not tag or not any(r["tag"] == tag for r in gh.get("releases", [])):
-            raise HTTPException(400, "Unbekanntes Release-Tag")
+            raise HTTPException(400, "Unknown release tag")
         return tag, f"Release {tag}"
-    raise HTTPException(400, "Ungültiges Ziel (commit|full|any|custom)")
+    raise HTTPException(400, "Invalid target (commit|full|any|custom)")
 
 
 async def _run_update(target: str, tag: str | None, username: str | None, job=None) -> dict:
     loop = asyncio.get_event_loop()
     if job:
-        job.update(phase="check", pct=5, detail="GitHub-Stand wird abgefragt")
+        job.update(phase="check", pct=5, detail="Querying the GitHub revision")
     gh = await loop.run_in_executor(None, _fetch_github_state)
     ref, desc = _resolve_target(gh, target, tag)
     if job:
-        job.log(f"Ziel: {desc} ({ref})")
-        job.update(phase="download", pct=20, detail=f"{desc} wird geladen und eingespielt")
+        job.log(f"Target: {desc} ({ref})")
+        job.update(phase="download", pct=20, detail=f"{desc} is being loaded and applied")
 
     await loop.run_in_executor(None, _apply_zip, ref, gh["owner"], gh["repo"])
 
-    # Angewendeten Stand merken (Basis für den Commit-Kanal und gegen Schleifen).
+    # Remember the applied revision (basis for the commit channel and against loops).
     db.set_setting("server_current_commit", ref)
     db.set_setting("server_last_update_target", ref)
     db.add_audit_entry(username, "server.update_applied", details=desc)
-    print(f"[update] {desc} eingespielt - Neustart folgt.")
+    print(f"[update] {desc} applied - restart follows.")
     if job:
-        job.log(f"{desc} eingespielt - Backend startet neu")
-        # Phase "restart": Der Neustart beendet diesen Job; nach dem Start wird
-        # er im Verlauf als erfolgreich abgeschlossen gefuehrt (bgjobs.startup_recover).
-        job.update(phase="restart", pct=95, detail=f"{desc} eingespielt - Backend startet neu")
+        job.log(f"{desc} applied - backend is restarting")
+        # Phase "restart": the restart ends this job; after the start it is marked
+        # as successfully completed in the history (bgjobs.startup_recover).
+        job.update(phase="restart", pct=95, detail=f"{desc} applied - backend is restarting")
     _schedule_restart()
     return {"ok": True, "applied": desc, "ref": ref,
-            "restart": "Backend startet in wenigen Sekunden neu"}
+            "restart": "Backend restarts in a few seconds"}
 
 
 # ------------------------------------------------------------------
@@ -283,7 +282,7 @@ async def update_info(user: dict = Depends(get_current_user)):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(502, f"GitHub nicht erreichbar: {e}")
+        raise HTTPException(502, f"GitHub not reachable: {e}")
     return {
         "current_version": _current_version(),
         "current_commit": db.get_setting("server_current_commit", "") or "",
@@ -296,7 +295,7 @@ async def update_info(user: dict = Depends(get_current_user)):
 def set_repo(body: RepoBody, user: dict = Depends(get_current_user)):
     require_perm(user, "admin_settings")
     url = body.url.strip()
-    _parse_owner_repo(url)   # validiert das Format
+    _parse_owner_repo(url)   # validates the format
     _REPO_FILE.write_text(url + "\n", encoding="utf-8")
     db.add_audit_entry(user["username"], "server.update_repo_set", details=url)
     return {"ok": True, "repo_url": url}
@@ -304,9 +303,9 @@ def set_repo(body: RepoBody, user: dict = Depends(get_current_user)):
 
 @router.post("/run")
 async def run_update(body: RunBody, background: bool = False, user: dict = Depends(get_current_user)):
-    """Server-Update als BACKEND-JOB (app/bgjobs.py): Laden + Einspielen laufen im
-    Backend; jeder Admin sieht den Fortschritt in der Aufgaben-Anzeige, auch nach
-    dem Neuladen. Nach dem Neustart steht das Ergebnis im Aufgaben-Verlauf."""
+    """Server update as a BACKEND JOB (app/bgjobs.py): loading + applying run in
+    the backend; every admin sees the progress in the task view, even after
+    reloading. After the restart the result is in the task history."""
     require_perm(user, "admin_settings")
     from app import bgjobs
 
@@ -316,23 +315,24 @@ async def run_update(body: RunBody, background: bool = False, user: dict = Depen
         except HTTPException:
             raise
         except Exception as e:
-            raise HTTPException(500, f"Update fehlgeschlagen: {e}")
+            raise HTTPException(500, f"Update failed: {e}")
     return await bgjobs.run("server.update", "server", title=f"Server-Update ({body.target}{' ' + body.tag if body.tag else ''})",
                             user=user, work=work, background=background, perm="admin_settings",
                             meta={"target": body.target, "tag": body.tag})
 
 
 # ------------------------------------------------------------------
-# Auto-Update (wird periodisch von main.py aufgerufen)
+# Auto-update (called periodically by main.py)
 # ------------------------------------------------------------------
 
 async def auto_update_tick() -> None:
     """
-    Prüft, ob laut Kanal etwas Neueres verfügbar ist, und spielt es ein.
-    Kanäle (Setting 'server_auto_update_channel'):
-      commit -> neuester Commit des Default-Branches
-      full   -> neuestes Full-Release (keine Alpha/Beta/RC)
-      any    -> neuestes Release (Alpha UND Full)
+    Checks whether, according to the channel, something newer is available and
+    applies it.
+    Channels (setting 'server_auto_update_channel'):
+      commit -> latest commit of the default branch
+      full   -> latest full release (no alpha/beta/RC)
+      any    -> latest release (alpha AND full)
     """
     if db.get_setting("server_auto_update", "0") != "1":
         return
@@ -344,7 +344,7 @@ async def auto_update_tick() -> None:
     try:
         gh = await loop.run_in_executor(None, _fetch_github_state)
     except Exception as e:
-        print(f"[auto-update] GitHub nicht erreichbar: {e}")
+        print(f"[auto-update] GitHub not reachable: {e}")
         return
 
     if channel == "commit":
@@ -353,7 +353,7 @@ async def auto_update_tick() -> None:
         if not ref:
             return
         if not known:
-            # Erster Lauf: aktuellen Stand nur als Basis merken, nicht updaten.
+            # First run: only remember the current revision as a basis, do not update.
             db.set_setting("server_current_commit", ref)
             return
         if ref == known:
@@ -366,14 +366,14 @@ async def auto_update_tick() -> None:
         if ref.lstrip("vV") == cur:
             return
 
-    # Schleifenschutz: dasselbe Ziel nicht mehrfach hintereinander versuchen
-    # (z.B. wenn ein Release die Version nicht ändert).
+    # Loop guard: do not try the same target several times in a row
+    # (e.g. when a release does not change the version).
     if (db.get_setting("server_last_update_target", "") or "") == ref:
         return
 
-    print(f"[auto-update] Neues Ziel gefunden ({channel}): {ref} - Update startet.")
+    print(f"[auto-update] New target found ({channel}): {ref} - update starting.")
     try:
-        # Auch das automatische Update laeuft als sichtbarer Job (Aufgaben-Anzeige)
+        # The automatic update also runs as a visible job (task view)
         from app import bgjobs
         tgt = "commit" if channel == "commit" else ("full" if channel == "full" else "any")
         job, _ = bgjobs.start("server.update", "server", title=f"Automatisches Server-Update ({ref})",
@@ -383,6 +383,6 @@ async def auto_update_tick() -> None:
         if job.status == "error":
             raise RuntimeError(job.error)
     except Exception as e:
-        # Ziel trotzdem als "versucht" markieren, damit keine Endlosschleife entsteht.
+        # Mark the target as "attempted" anyway so no endless loop occurs.
         db.set_setting("server_last_update_target", ref)
-        print(f"[auto-update] Update fehlgeschlagen: {e}")
+        print(f"[auto-update] Update failed: {e}")
