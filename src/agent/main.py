@@ -9436,15 +9436,15 @@ async def on_screen_start(data):
 
 
 # ============================================================================
-# Digitaler USB-Stick (temp-usb): Ordner-Sync zwischen /storage/temp-usb/<id>
-# und einem lokalen Ordner (Standard C:\bytera bzw. /mnt/bytera). Der Benutzer
-# kann Dateien dort ablegen/ausfuehren; was er ablegt, kommt in den Bereich
-# zurueck und ist im Relay sichtbar. "usb"-Modus (virtueller Stick per Treiber)
-# faellt auf Ordner-Sync zurueck, wenn kein Treiber hinterlegt/installiert ist.
+# Digital USB stick (temp-usb): folder sync between /storage/temp-usb/<id>
+# and a local folder (default C:\bytera or /mnt/bytera). The user can place/run
+# files there; what they place comes back into the area and is visible in the
+# relay. "usb" mode (virtual stick via driver) falls back to folder sync when
+# no driver is stored/installed.
 # ============================================================================
-_tempusb = {}          # id -> {"path": Ordner, "mode", "known": {relpfad: mtime}, "stop": Event}
+_tempusb = {}          # id -> {"path": folder, "mode", "known": {relpath: mtime}, "stop": Event}
 _tempusb_lock = threading.Lock()
-_TEMPUSB_PUT = {}      # (id,name) -> bytes (laufender Empfang vom Server)
+_TEMPUSB_PUT = {}      # (id,name) -> bytes (ongoing receive from the server)
 
 
 def _tempusb_default_dir() -> str:
@@ -9475,8 +9475,8 @@ def _tempusb_upload_file(area_id: str, root: str, rel: str) -> None:
 
 
 def _tempusb_watch(area_id: str) -> None:
-    # Pollt den Ordner; neue/geaenderte Dateien (die NICHT gerade vom Server
-    # kamen) werden hochgeladen. Kein Zusatzpaket noetig.
+    # Polls the folder; new/changed files (that did NOT just come from the
+    # server) are uploaded. No extra package needed.
     import time as _t
     while True:
         with _tempusb_lock:
@@ -9511,8 +9511,8 @@ async def on_tempusb_attach(data):
     mode = d.get("mode") or "folder"
     note = ""
     if mode == "usb" and not (d.get("driver") or "").strip():
-        mode = "folder"                       # kein Treiber hinterlegt -> Ordner-Sync
-        note = "kein USB-Treiber hinterlegt - nutze Ordner-Sync"
+        mode = "folder"                       # no driver stored -> folder sync
+        note = "no USB driver stored - using folder sync"
     try:
         os.makedirs(path, exist_ok=True)
     except OSError as e:
@@ -9522,11 +9522,11 @@ async def on_tempusb_attach(data):
         old = _tempusb.get(area_id)
         if old:
             old["stop"].set()
-        # "known" wird durch temp-usb-put (Server-Dateien) gefuellt; alles andere
-        # im Ordner gilt als lokal und wird hochgeladen.
+        # "known" is filled by temp-usb-put (server files); everything else in
+        # the folder counts as local and is uploaded.
         _tempusb[area_id] = {"path": path, "mode": mode, "known": {}, "stop": threading.Event()}
     threading.Thread(target=_tempusb_watch, args=(area_id,), name=f"tempusb-{area_id}", daemon=True).start()
-    _print(f"[agent] temp-usb angehängt: {area_id} -> {path} ({mode})")
+    _print(f"[agent] temp-usb attached: {area_id} -> {path} ({mode})")
     _tempusb_emit("temp-usb-status", {"id": area_id, "state": "attached", "path": path, "mode": mode, "note": note})
 
 
@@ -9553,7 +9553,7 @@ async def on_tempusb_put(data):
         with open(full, "wb") as f:
             f.write(buf)
         with _tempusb_lock:
-            st["known"][name] = os.path.getmtime(full)      # nicht zurueckspiegeln
+            st["known"][name] = os.path.getmtime(full)      # do not mirror back
     except OSError as e:
         _print(f"[temp-usb] put {name}: {e}")
 
@@ -9565,21 +9565,21 @@ async def on_tempusb_detach(data):
         st = _tempusb.pop(area_id, None)
     if st:
         st["stop"].set()
-        _print(f"[agent] temp-usb gelöst: {area_id}")
+        _print(f"[agent] temp-usb detached: {area_id}")
     _tempusb_emit("temp-usb-status", {"id": area_id, "state": "detached"})
 
 
 @sio.on("screen-stop", namespace="/agent")
 async def on_screen_stop(data):
-    """Stoppt das Bildschirm-Streaming."""
-    _screen_stream["audio"] = False                       # Ton immer mit ausschalten
+    """Stops the screen streaming."""
+    _screen_stream["audio"] = False                       # always turn off the sound too
     _h = _screen_stream.get("helper")
     if _h is not None and _h.alive:
         _h.send({"cmd": "audio", "enabled": False})
     _screen_stream["active"] = False
-    # Auch eine noch offene Zustimmungsabfrage entwerten (siehe "epoch"):
-    # sonst startete eine verspaetete Zustimmung einen Stream, den niemand
-    # mehr sieht - und blockierte die naechste Sitzung.
+    # Also invalidate any still-open consent prompt (see "epoch"): otherwise a
+    # late consent would start a stream nobody sees anymore - and would block
+    # the next session.
     _screen_stream["epoch"] += 1
     _close_session_window()
     _session.update(active=False, granted=False)
@@ -9588,8 +9588,8 @@ async def on_screen_stop(data):
 
 @sio.on("screen-config", namespace="/agent")
 async def on_screen_config(data):
-    """Qualitaet/FPS waehrend der Sitzung aendern. Der Capture-Loop (bzw. der
-    Helfer ueber _screen_helper_loop) uebernimmt die Werte automatisch."""
+    """Change quality/FPS during the session. The capture loop (or the helper
+    via _screen_helper_loop) picks up the values automatically."""
     if not isinstance(data, dict):
         return
     try:
@@ -9599,17 +9599,17 @@ async def on_screen_config(data):
             _screen_stream["quality"] = max(10, min(95, int(data["quality"])))
         if data.get("width") is not None:
             w = int(data["width"])
-            _screen_stream["width"] = 0 if w <= 0 else max(320, min(3840, w))   # 0 = automatisch
+            _screen_stream["width"] = 0 if w <= 0 else max(320, min(3840, w))   # 0 = automatic
     except Exception:
         pass
 
 
 @sio.on("screen-refresh", namespace="/agent")
 async def on_screen_refresh(data=None):
-    """Dashboard (neu verbunden / Wachhund) will sofort ein aktuelles Bild -
-    auch wenn sich am Bildschirm nichts geaendert hat."""
+    """Dashboard (reconnected / watchdog) wants a current frame immediately -
+    even if nothing changed on the screen."""
     _screen_stream["force"] = True
-    _FLOW.reset()                     # evtl. verlorene Rueckmeldungen verwerfen
+    _FLOW.reset()                     # discard possibly lost acknowledgements
     h = _screen_stream.get("helper")
     if h is not None and h.alive and _screen_stream.get("active"):
         h.send({"cmd": "refresh"})
@@ -9617,11 +9617,11 @@ async def on_screen_refresh(data=None):
 
 @sio.on("screen-set-monitor", namespace="/agent")
 async def on_screen_set_monitor(data):
-    """Wechselt den gestreamten Bildschirm (Multi-Monitor). Der Capture-Loop
-    übernimmt die Auswahl beim nächsten Frame automatisch."""
+    """Switches the streamed screen (multi-monitor). The capture loop picks up
+    the choice automatically on the next frame."""
     if isinstance(data, dict) and data.get("monitor") is not None:
         try:
-            # 0 = "Alle Bildschirme" (mss.monitors[0] = Gesamtfläche aller Monitore)
+            # 0 = "all screens" (mss.monitors[0] = whole area of all monitors)
             _screen_stream["monitor"] = max(0, int(data["monitor"]))
             _print(f"[agent] {_at('log_monitor_switched', n=_screen_stream['monitor'])}")
         except Exception:
@@ -9630,8 +9630,8 @@ async def on_screen_set_monitor(data):
 
 @sio.on("screen-users", namespace="/agent")
 async def on_screen_users(data):
-    """Dashboard fragt: welche Benutzer sind angemeldet? (Mehrbenutzer-Auswahl,
-    nur Windows). Antwort ueber 'screen-users' zurueck."""
+    """Dashboard asks: which users are logged in? (multi-user selection,
+    Windows only). Reply back via 'screen-users'."""
     loop = asyncio.get_event_loop()
     users = []
     multi = False
@@ -9649,7 +9649,7 @@ async def on_screen_users(data):
 
 @sio.on("vdisplay-status", namespace="/agent")
 async def on_vdisplay_status(data):
-    """Zustand des virtuellen Bildschirmtreibers (headless) melden."""
+    """Report the state of the virtual display driver (headless)."""
     loop = asyncio.get_event_loop()
     st = await loop.run_in_executor(None, _vdisplay_status)
     try:
@@ -9660,7 +9660,7 @@ async def on_vdisplay_status(data):
 
 @sio.on("vdisplay-install", namespace="/agent")
 async def on_vdisplay_install(data):
-    """Virtuellen Bildschirmtreiber installieren (nur Windows, als SYSTEM)."""
+    """Install the virtual display driver (Windows only, as SYSTEM)."""
     loop = asyncio.get_event_loop()
     url = (data or {}).get("url") or ""
     sha = (data or {}).get("sha256") or ""
@@ -9676,7 +9676,7 @@ async def on_vdisplay_install(data):
 
 @sio.on("registry", namespace="/agent")
 async def on_registry(data):
-    """Registry-Aktion (list/get/set/delete). Antwort ueber 'registry-result'."""
+    """Registry action (list/get/set/delete). Reply via 'registry-result'."""
     loop = asyncio.get_event_loop()
     op = (data or {}).get("op") or "list"
     rid = (data or {}).get("rid") or ""
@@ -9689,7 +9689,7 @@ async def on_registry(data):
 
 @sio.on("wu-auto", namespace="/agent")
 async def on_wu_auto(data):
-    """Automatische Windows-Updates aus/ein (oder nur Status, wenn 'set' fehlt)."""
+    """Automatic Windows updates off/on (or status only when 'set' is missing)."""
     loop = asyncio.get_event_loop()
     if isinstance(data, dict) and "disabled" in data:
         res = await loop.run_in_executor(None, wu_set_auto, bool(data.get("disabled")))
@@ -9703,7 +9703,7 @@ async def on_wu_auto(data):
 
 @sio.on("vdisplay-remove", namespace="/agent")
 async def on_vdisplay_remove(data):
-    """Virtuellen Bildschirmtreiber wieder entfernen."""
+    """Remove the virtual display driver again."""
     loop = asyncio.get_event_loop()
     res = await loop.run_in_executor(None, _vdisplay_remove)
     try:
@@ -9715,7 +9715,7 @@ async def on_vdisplay_remove(data):
     await sio.emit("vdisplay-status", {"id": DEVICE_ID, **st}, namespace="/agent")
 
 
-# Umrechnungstabelle für Sondertasten vom Browser zu pynput
+# Conversion table for special keys from the browser to pynput
 _SPECIAL_KEYS = {}
 if _INPUT_AVAILABLE:
     _SPECIAL_KEYS = {
@@ -9733,13 +9733,13 @@ if _INPUT_AVAILABLE:
 @sio.on("update-agent", namespace="/agent")
 async def on_update_agent(data):
     """
-    Aktualisiert den Agenten, indem der Client-Install-/Update-Befehl in einer
-    eigenen Shell-Session ausgeführt wird (genau wie bei der Erstinstallation).
-    Das Update-Skript stoppt den laufenden Agenten, ersetzt agent.py und startet
-    den Dienst neu - deshalb läuft der Befehl LOSGELÖST vom Agent-Prozess.
+    Updates the agent by running the client install/update command in its own
+    shell session (exactly as on the first install). The update script stops
+    the running agent, replaces agent.py and restarts the service - so the
+    command runs DETACHED from the agent process.
     """
-    _print("[agent] Update angefordert - starte Update-Befehl in eigener Shell...")
-    await _emit_action_log("update", "received", "Update-Befehl empfangen")
+    _print("[agent] update requested - starting the update command in its own shell...")
+    await _emit_action_log("update", "received", "update command received")
     loop = asyncio.get_event_loop()
     detail = await loop.run_in_executor(None, _run_dist_command, "update")
     await _emit_action_log("update", detail.get("stage", "launched"), detail.get("detail", ""))
@@ -9752,25 +9752,25 @@ async def on_update_agent(data):
 @sio.on("uninstall-agent", namespace="/agent")
 async def on_uninstall_agent(data):
     """
-    Deinstalliert den Agenten: führt das Uninstall-Skript in einer eigenen Shell
-    aus (Dienst/Task entfernen, Programmordner löschen). Läuft losgelöst, da es
-    den eigenen Prozess beendet.
+    Uninstalls the agent: runs the uninstall script in its own shell (remove
+    service/task, delete the program folder). Runs detached, since it ends its
+    own process.
     """
-    try:                       # Eine Node ohne Agent waere verwaist
+    try:                       # a node without an agent would be orphaned
         _node_service_remove(); shutil.rmtree(NODE_DIR, ignore_errors=True)
     except Exception:
         pass
-    _print("[agent] Deinstallation angefordert - starte Uninstall-Befehl in eigener Shell...")
-    await _emit_action_log("uninstall", "received", "Uninstall-Befehl empfangen")
+    _print("[agent] uninstall requested - starting the uninstall command in its own shell...")
+    await _emit_action_log("uninstall", "received", "uninstall command received")
     loop = asyncio.get_event_loop()
     detail = await loop.run_in_executor(None, _run_dist_command, "uninstall")
     await _emit_action_log("uninstall", detail.get("stage", "launched"), detail.get("detail", ""))
 
 
 async def _report_update_failure() -> bool:
-    """Hat das Update-Skript einen Fehlschlag hinterlegt (.update_failed)?
-    Dann ans Dashboard melden: Das Update wurde abgebrochen bzw. zurueckgerollt,
-    der Agent laeuft mit der bisherigen Version weiter."""
+    """Did the update script leave a failure (.update_failed)?
+    Then report to the dashboard: the update was aborted or rolled back, the
+    agent keeps running with the previous version."""
     f = Path(__file__).resolve().parent / ".update_failed"
     try:
         if not f.exists():
@@ -9779,15 +9779,15 @@ async def _report_update_failure() -> bool:
         f.unlink()
     except Exception:
         return False
-    _print(f"[agent] UPDATE FEHLGESCHLAGEN - laufe mit bisheriger Version weiter: {reason}")
+    _print(f"[agent] UPDATE FAILED - continuing with the previous version: {reason}")
     await _emit_action_log("update", "error",
-                           f"Update fehlgeschlagen, Agent laeuft mit Version {AGENT_VERSION} weiter: {reason}")
+                           f"Update failed, agent continues with version {AGENT_VERSION}: {reason}")
     return True
 
 
 async def _watch_update_result(minutes: int = 20):
-    """Nach dem Start eines Updates: Bricht das Skript VOR dem Tausch ab, wird
-    dieser Agent nie neu gestartet - dann hier den Grund abholen und melden."""
+    """After starting an update: if the script aborts BEFORE the swap, this
+    agent is never restarted - then fetch the reason here and report it."""
     for _ in range(minutes * 6):
         await asyncio.sleep(10)
         try:
@@ -9798,7 +9798,7 @@ async def _watch_update_result(minutes: int = 20):
 
 
 async def _emit_action_log(kind: str, stage: str, detail: str = ""):
-    """Meldet dem Backend (und damit dem Dashboard), was bei Update/Uninstall passiert."""
+    """Reports to the backend (and thus the dashboard) what happens during update/uninstall."""
     try:
         await sio.emit("agent-action-log", {
             "id": DEVICE_ID, "kind": kind, "stage": stage, "detail": detail,
@@ -9810,20 +9810,20 @@ async def _emit_action_log(kind: str, stage: str, detail: str = ""):
 
 def _run_dist_command(kind: str):
     """
-    Startet den Update- bzw. Uninstall-Befehl als EIGENSTÄNDIGEN Prozess, der den
-    Tod des Agent-Prozesses überlebt (das Skript stoppt den Agenten selbst).
+    Starts the update or uninstall command as a STANDALONE process that
+    survives the death of the agent process (the script stops the agent itself).
 
-    Linux: Wir starten den Befehl als TRANSIENTEN systemd-Dienst
-    (`systemd-run --collect`). Ein solcher Dienst läuft in einem EIGENEN cgroup,
-    unabhängig vom Dienst des Agenten. Dadurch überlebt er zuverlässig das
-    `systemctl stop bytera-agent` (dessen KillMode=control-group sonst alle
-    Kindprozesse mitreißt - das war der Grund, warum der Uninstall zuvor
-    scheinbar nichts tat).
+    Linux: we start the command as a TRANSIENT systemd service
+    (`systemd-run --collect`). Such a service runs in its OWN cgroup,
+    independent of the agent's service. This way it reliably survives the
+    `systemctl stop bytera-agent` (whose KillMode=control-group would otherwise
+    drag along all child processes - that was the reason the uninstall
+    previously appeared to do nothing).
 
     kind: 'update' | 'uninstall'
 
-    Der exakte Befehl wird ins Agent-Log geschrieben, damit man ihn zum Testen
-    auch von Hand auf dem Client ausführen kann.
+    The exact command is written to the agent log, so it can be run by hand on
+    the client for testing.
     """
     import shutil
 
@@ -9838,13 +9838,13 @@ def _run_dist_command(kind: str):
             event_id = "812" if kind == "update" else "811"
             tr = f"powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand {enc}"
 
-            _print(f"[agent] {kind}: exakter Befehl (Windows, ELEVATED PowerShell):")
+            _print(f"[agent] {kind}: exact command (Windows, ELEVATED PowerShell):")
             _print(f'         powershell -NoProfile -ExecutionPolicy Bypass -Command "{inner_ps}"')
 
-            # (A) Bevorzugt: vorautorisierten SYSTEM-Task per EVENT auslösen. Das
-            #     braucht KEINE Admin-Rechte im Agenten - die Aufgabenplanung führt
-            #     das Skript als SYSTEM aus. Voraussetzung: elevate.ps1 wurde einmal
-            #     ausgeführt (bzw. der Installer hat die Tasks eingerichtet).
+            # (A) Preferred: trigger a pre-authorized SYSTEM task via an EVENT.
+            #     This needs NO admin rights in the agent - the task scheduler
+            #     runs the script as SYSTEM. Prerequisite: elevate.ps1 was run
+            #     once (or the installer set up the tasks).
             try:
                 q = _run(["schtasks", "/query", "/tn", taskname],
                                    capture_output=True, text=True)
@@ -9854,8 +9854,8 @@ def _run_dist_command(kind: str):
             if task_exists:
                 triggered = False
                 trig_err = ""
-                # Primär: Write-EventLog -> Provider ist garantiert 'ByteraRMM'
-                # (matcht die Event-Subscription des SYSTEM-Tasks sicher).
+                # Primary: Write-EventLog -> the provider is guaranteed 'ByteraRMM'
+                # (reliably matches the SYSTEM task's event subscription).
                 try:
                     w = _run(
                         ["powershell", "-NoProfile", "-Command",
@@ -9868,7 +9868,7 @@ def _run_dist_command(kind: str):
                         trig_err = (w.stderr or w.stdout or "").strip()
                 except Exception as e:
                     trig_err = str(e)
-                # Fallback: eventcreate (falls Write-EventLog nicht verfügbar/fehlerhaft)
+                # Fallback: eventcreate (if Write-EventLog is unavailable/faulty)
                 if not triggered:
                     try:
                         ev = _run(
@@ -9882,13 +9882,13 @@ def _run_dist_command(kind: str):
                     except Exception as e:
                         trig_err = str(e)
                 if triggered:
-                    _print(f"[agent] {kind}: SYSTEM-Task '{taskname}' per Event {event_id} ausgelöst (elevated).")
+                    _print(f"[agent] {kind}: SYSTEM task '{taskname}' triggered via event {event_id} (elevated).")
                     return {"stage": "launched",
                             "detail": f"SYSTEM task '{taskname}' triggered via event (elevated)."}
                 else:
                     _print(f"[agent] event trigger failed: {trig_err}")
 
-            # (B) Sonst: SYSTEM-Task direkt anlegen (klappt nur, wenn Agent elevated).
+            # (B) Otherwise: create the SYSTEM task directly (only works if the agent is elevated).
             created = False
             schtasks_err = ""
             try:
@@ -9901,36 +9901,36 @@ def _run_dist_command(kind: str):
                     _run(["schtasks", "/run", "/tn", taskname],
                                    capture_output=True, text=True)
                     created = True
-                    _print(f"[agent] {kind}-Befehl als SYSTEM-Task '{taskname}' gestartet.")
+                    _print(f"[agent] {kind} command started as SYSTEM task '{taskname}'.")
                 else:
                     schtasks_err = (r.stderr or r.stdout or "").strip()
-                    _print(f"[agent] schtasks (SYSTEM) fehlgeschlagen: {schtasks_err} - Fallback.")
+                    _print(f"[agent] schtasks (SYSTEM) failed: {schtasks_err} - fallback.")
             except Exception as e:
                 schtasks_err = str(e)
-                _print(f"[agent] schtasks-Aufruf fehlgeschlagen ({e}) - Fallback.")
+                _print(f"[agent] schtasks call failed ({e}) - fallback.")
             if created:
-                return {"stage": "launched", "detail": f"SYSTEM-Task '{taskname}' gestartet."}
+                return {"stage": "launched", "detail": f"SYSTEM task '{taskname}' started."}
 
-            # (C) Fallback: losgelöste PowerShell mit Agent-Rechten (reicht nur, wenn
-            #     der Agent schon elevated läuft).
+            # (C) Fallback: detached PowerShell with the agent's rights (only
+            #     enough if the agent already runs elevated).
             flags = 0x00000008 | 0x00000200  # DETACHED_PROCESS | NEW_PROCESS_GROUP
             subprocess.Popen(
                 ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
                  "-Command", inner_ps],
                 creationflags=flags, close_fds=True,
             )
-            _print(f"[agent] {kind}-Befehl (Windows Fallback, losgelöst) gestartet.")
+            _print(f"[agent] {kind} command (Windows fallback, detached) started.")
             return {"stage": "launched-fallback",
                     "detail": ("No elevated path available (agent not running as admin and "
-                               "no maintenance tasks installed). Run ONCE as administrator "
-                               f"ausführen: powershell -NoProfile -ExecutionPolicy Bypass -Command "
+                               "no maintenance tasks installed). Run ONCE as administrator: "
+                               f"powershell -NoProfile -ExecutionPolicy Bypass -Command "
                                f"\"iwr '{BACKEND_URL}/agent-dist/elevate.ps1' -UseBasicParsing | iex\"")}
         else:
             fname = "update.sh" if kind == "update" else "uninstall.sh"
             url = f"{BACKEND_URL}/agent-dist/{fname}"
             inner = f"curl -fsSL '{url}' | bash"
             logf = f"/tmp/bytera-agent-{kind}.log"
-            _print(f"[agent] {kind}: exakter Befehl (Linux, als root):")
+            _print(f"[agent] {kind}: exact command (Linux, as root):")
             _print(f"         {inner}   (Log: {logf})")
 
             systemd_run = shutil.which("systemd-run") or (
@@ -9939,41 +9939,41 @@ def _run_dist_command(kind: str):
             launched = False
             if systemd_run:
                 try:
-                    # Transienter, unabhängiger Dienst (eigener cgroup) -> überlebt
-                    # das Stoppen des Agent-Dienstes. --collect räumt ihn nach Ende auf.
+                    # Transient, independent service (own cgroup) -> survives
+                    # stopping the agent service. --collect cleans it up at the end.
                     subprocess.Popen(
                         [systemd_run, "--collect", "--quiet",
                          "bash", "-c", f"{inner} >{logf} 2>&1"],
                         start_new_session=True, close_fds=True,
                     )
                     launched = True
-                    _print(f"[agent] {kind}-Befehl über systemd-run (transienter Dienst) gestartet.")
+                    _print(f"[agent] {kind} command started via systemd-run (transient service).")
                 except Exception as e:
-                    _print(f"[agent] systemd-run fehlgeschlagen ({e}) - nutze Fallback.")
+                    _print(f"[agent] systemd-run failed ({e}) - using fallback.")
             if not launched:
-                # Fallback ohne systemd: vollständig losgelöste Shell (setsid+nohup+&).
+                # Fallback without systemd: fully detached shell (setsid+nohup+&).
                 subprocess.Popen(
                     ["setsid", "bash", "-c", f"nohup {inner} >{logf} 2>&1 &"],
                     start_new_session=True, close_fds=True,
                 )
-                _print(f"[agent] {kind}-Befehl über setsid/nohup (Fallback) gestartet.")
+                _print(f"[agent] {kind} command started via setsid/nohup (fallback).")
                 return {"stage": "launched-fallback",
                         "detail": f"started without systemd (log: {logf})"}
-            return {"stage": "launched", "detail": f"systemd-run gestartet (Log: {logf})"}
+            return {"stage": "launched", "detail": f"systemd-run started (log: {logf})"}
     except Exception as e:
-        _print(f"[agent] {kind}-Befehl fehlgeschlagen: {e}")
+        _print(f"[agent] {kind} command failed: {e}")
         return {"stage": "error", "detail": str(e)}
     return {"stage": "launched", "detail": ""}
 
 
 # --------------------------------------------------------------
-# Zwischenablage-Synchronisierung (Remote Screen)
+# Clipboard synchronization (Remote Screen)
 # --------------------------------------------------------------
-# Das Dashboard kann die lokale Zwischenablage an diesen PC senden
-# (screen-input type="clipboard-set") oder die hiesige Zwischenablage
-# abfragen (screen-clipboard-get -> Antwort-Event "screen-clipboard").
-# Genutzt wird pyperclip (wird per Bootstrap automatisch nachinstalliert);
-# schlaegt das fehl, wird ein klarer Fehler zurueckgemeldet.
+# The dashboard can send the local clipboard to this PC
+# (screen-input type="clipboard-set") or query this PC's clipboard
+# (screen-clipboard-get -> reply event "screen-clipboard").
+# pyperclip is used (installed automatically via bootstrap); if that fails,
+# a clear error is reported back.
 
 def _clipboard_get() -> str:
     import pyperclip
@@ -9985,15 +9985,15 @@ def _clipboard_set(text: str) -> None:
     pyperclip.copy(text or "")
 
 
-# --- Automatischer Zwischenablage-Sync (wie AnyDesk) -------------------------
-# Waehrend einer aktiven Screen-Sitzung beobachtet ein Thread die hiesige
-# Zwischenablage und PUSHT Aenderungen von selbst ans Dashboard (Event
-# "screen-clipboard" mit push=True). Die Gegenrichtung (Dashboard -> Geraet)
-# laeuft weiter ueber screen-input type="clipboard-set".
-# "suppress" merkt sich den zuletzt VOM DASHBOARD gesetzten Text, damit der
-# Watcher ihn nicht als "neue Aenderung" wieder zurueckschickt (Ping-Pong).
+# --- Automatic clipboard sync (like AnyDesk) ---------------------------------
+# During an active screen session a thread watches this PC's clipboard and
+# PUSHES changes to the dashboard on its own (event "screen-clipboard" with
+# push=True). The reverse direction (dashboard -> device) still goes via
+# screen-input type="clipboard-set".
+# "suppress" remembers the text last set BY THE DASHBOARD, so the watcher does
+# not send it back as a "new change" (ping-pong).
 _clip_watch = {"thread": None, "suppress": ""}
-_CLIP_MAX = 512 * 1024          # sehr grosse Inhalte nicht automatisch uebertragen
+_CLIP_MAX = 512 * 1024          # do not auto-transfer very large contents
 
 
 def _clipboard_watch_loop(loop):
@@ -10004,7 +10004,7 @@ def _clipboard_watch_loop(loop):
             if sio.connected and _session_perm("clipboard"):
                 text = _clipboard_get()
                 if first:
-                    last = text          # Bestand beim Start nicht pushen
+                    last = text          # do not push existing content at startup
                     first = False
                 elif text and text != last:
                     last = text
@@ -10012,15 +10012,15 @@ def _clipboard_watch_loop(loop):
                         _session_emit(loop, "screen-clipboard",
                                       {"text": text, "push": True})
         except Exception:
-            pass                        # kein Clipboard-Zugriff: still weiterprobieren
+            pass                        # no clipboard access: quietly keep trying
         time.sleep(1.2)
     _clip_watch["thread"] = None
 
 
 def _start_clipboard_watch(loop) -> None:
-    # Windows-Dienst (Sitzung 0): Die Zwischenablage des Benutzers ist von hier
-    # aus nicht sichtbar - dort beobachtet sie der HELFER in der Benutzersitzung
-    # (Reply "clip" -> _handle_session_reply).
+    # Windows service (session 0): the user's clipboard is not visible from
+    # here - there the HELPER in the user session watches it
+    # (reply "clip" -> _handle_session_reply).
     if _needs_session_helper():
         return
     t = _clip_watch.get("thread")
@@ -10033,7 +10033,7 @@ def _start_clipboard_watch(loop) -> None:
 
 @sio.on("screen-clipboard-get", namespace="/agent")
 async def on_screen_clipboard_get(data):
-    """Liest die lokale Zwischenablage und schickt sie ans Dashboard zurueck."""
+    """Reads the local clipboard and sends it back to the dashboard."""
     if not _session_perm("clipboard"):
         await sio.emit("screen-clipboard", {"id": DEVICE_ID, "error": "Clipboard blocked by the user.",
                                             "code": "agent_clip_blocked"}, namespace="/agent")
@@ -10051,21 +10051,21 @@ async def on_screen_clipboard_get(data):
 @sio.on("screen-input", namespace="/agent")
 async def on_screen_input(data):
     """
-    Simuliert eine Maus-/Tastatureingabe, die vom Dashboard kommt.
-    data.type ist einer von: "move", "click", "scroll", "key", "text", "combo"
+    Simulates a mouse/keyboard input coming from the dashboard.
+    data.type is one of: "move", "click", "scroll", "key", "text", "combo"
     """
-    # Berechtigungen aus dem Sitzungsfenster (vom Benutzer geschaltet).
+    # Permissions from the session window (toggled by the user).
     kind = (data or {}).get("type")
     if kind == "clipboard-set":
         if not _session_perm("clipboard"):
             return
-        # Vom Dashboard gesetzten Text merken, damit der Clipboard-Watcher ihn
-        # nicht gleich wieder als "Aenderung am Geraet" zurueckschickt.
+        # Remember the text set by the dashboard, so the clipboard watcher does
+        # not send it right back as a "change at the device".
         _clip_watch["suppress"] = str((data or {}).get("text") or "")
     elif not _session_perm("input"):
         return
-    # Laeuft ein Helfer in der Benutzersitzung? Dann MUSS die Eingabe dort
-    # ausgefuehrt werden - aus Sitzung 0 erreicht kein Klick den Desktop.
+    # Is a helper running in the user session? Then the input MUST be performed
+    # there - from session 0 no click reaches the desktop.
     helper = _screen_stream.get("helper")
     if helper is not None and helper.alive:
         helper.send({"cmd": "input", "data": data})
@@ -10075,18 +10075,18 @@ async def on_screen_input(data):
         return
 
     loop = asyncio.get_event_loop()
-    # Input-Simulation ist blockierend -> in einen Thread auslagern
+    # Input simulation is blocking -> offload to a thread
     await loop.run_in_executor(None, _apply_input, data)
 
 
 def _apply_input(data):
-    """Führt die eigentliche Eingabe-Simulation aus (läuft im Thread-Pool)."""
+    """Performs the actual input simulation (runs in the thread pool)."""
     try:
         kind = data.get("type")
-        # Der gestreamte Monitor kann einen Offset zur Gesamtfläche haben
-        # (z.B. zweiter Monitor rechts). Browser-Koordinaten sind relativ zum
-        # gestreamten Bild -> Offset addieren, damit der Klick auf dem richtigen
-        # Monitor landet.
+        # The streamed monitor can have an offset from the whole area (e.g. a
+        # second monitor on the right). Browser coordinates are relative to the
+        # streamed image -> add the offset so the click lands on the right
+        # monitor.
         ox = int(_screen_stream.get("mon_left", 0) or 0)
         oy = int(_screen_stream.get("mon_top", 0) or 0)
 
@@ -10102,19 +10102,19 @@ def _apply_input(data):
             _mouse.click(button, 1)
 
         elif kind == "down":
-            # Maustaste DRÜCKEN und gedrückt halten (Beginn eines Drag)
+            # PRESS the mouse button and hold it (start of a drag)
             _mouse.position = _pos(data)
             button = MouseButton.right if data.get("button") == "right" else MouseButton.left
             _mouse.press(button)
 
         elif kind == "up":
-            # Maustaste LOSLASSEN (Ende eines Drag)
+            # RELEASE the mouse button (end of a drag)
             _mouse.position = _pos(data)
             button = MouseButton.right if data.get("button") == "right" else MouseButton.left
             _mouse.release(button)
 
         elif kind == "double":
-            # Doppelklick
+            # double click
             _mouse.position = _pos(data)
             _mouse.click(MouseButton.left, 2)
 
@@ -10122,22 +10122,22 @@ def _apply_input(data):
             _mouse.scroll(0, int(data.get("dy", 0)))
 
         elif kind == "text":
-            # einzelnes Zeichen/kurzer Text tippen
+            # type a single character / short text
             _keyboard.type(data.get("text", ""))
 
         elif kind == "key":
-            # eine Sondertaste (Enter, Backspace, Pfeile, ...)
+            # a special key (Enter, Backspace, arrows, ...)
             key = _SPECIAL_KEYS.get(data.get("key"))
             if key:
                 _keyboard.press(key)
                 _keyboard.release(key)
 
         elif kind == "clipboard-set":
-            # Zwischenablage des Dashboards auf diesem PC setzen (Clipboard-Sync)
+            # set the dashboard clipboard on this PC (clipboard sync)
             _clipboard_set(data.get("text", ""))
 
         elif kind == "combo":
-            # Tastenkombination, z.B. Strg+C: data.keys = ["Control", "c"]
+            # key combination, e.g. Ctrl+C: data.keys = ["Control", "c"]
             keys = data.get("keys", [])
             resolved = [_SPECIAL_KEYS.get(k, k) for k in keys]
             for k in resolved:
@@ -10153,10 +10153,10 @@ def _apply_input(data):
 # --------------------------------------------------------------
 
 def _install_exception_logging():
-    """Sorgt dafuer, dass NICHTS mehr stumm stirbt: unbehandelte Fehler aus
-    Threads und asyncio-Tasks landen im agent.log statt im Nirwana."""
+    """Ensures NOTHING dies silently anymore: unhandled errors from threads
+    and asyncio tasks land in agent.log instead of in the void."""
     def _thread_hook(args):
-        log.error("[agent] Unbehandelter Fehler in Thread %s: %r",
+        log.error("[agent] Unhandled error in thread %s: %r",
                   getattr(args.thread, "name", "?"), args.exc_value,
                   exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
     try:
@@ -10165,7 +10165,7 @@ def _install_exception_logging():
         pass
     def _loop_handler(loop, context):
         exc = context.get("exception")
-        log.error("[agent] Unbehandelter Fehler im Event-Loop: %s%s",
+        log.error("[agent] Unhandled error in the event loop: %s%s",
                   context.get("message", ""), f" ({exc!r})" if exc else "")
     try:
         _AGENT_LOOP.set_exception_handler(_loop_handler)
@@ -10174,14 +10174,14 @@ def _install_exception_logging():
 
 
 # ====================================================================
-# Umbenennung RAPALLE.net RMM -> BYTERA RMM: Reste der Altinstallation
+# Rename RAPALLE.net RMM -> BYTERA RMM: leftovers of the old installation
 # --------------------------------------------------------------------
-# Das Update-Skript zieht den Agenten bereits in den neuen Ordner um
-# (/opt/bytera-rmm-agent bzw. C:\Program Files\ByteraRmmAgent) und
-# entfernt die alten Dienste. Laeuft dabei etwas nicht durch (z.B. weil das
-# alte Wartungs-Task das Skript gestartet hat und Windows es beim Loeschen
-# beendet), raeumt der NEUE Agent beim Start selbst auf. Alles ist
-# idempotent und fasst nur die alten Namen an - nie den eigenen Ordner.
+# The update script already moves the agent into the new folder
+# (/opt/bytera-rmm-agent or C:\Program Files\ByteraRmmAgent) and removes
+# the old services. If something does not go through (e.g. because the old
+# maintenance task started the script and Windows ends it on deletion), the
+# NEW agent cleans up itself at startup. Everything is idempotent and only
+# touches the old names - never its own folder.
 # ====================================================================
 _LEGACY_LINUX_DIR = "/opt/rapalle-rmm-agent"
 _LEGACY_WIN_DIR = r"C:\Program Files\RapalleRmmAgent"
@@ -10199,12 +10199,12 @@ def _legacy_rebrand_cleanup() -> None:
         if IS_WINDOWS:
             legacy = os.path.normcase(_LEGACY_WIN_DIR)
             if me == legacy:
-                return                       # wir SIND noch die Altinstallation -> nichts anfassen
+                return                       # we ARE still the old installation -> touch nothing
             for t in _LEGACY_WIN_TASKS:
                 if _run(["schtasks", "/query", "/tn", t], capture_output=True, text=True).returncode == 0:
                     _run(["schtasks", "/end", "/tn", t], capture_output=True, text=True)
                     _run(["schtasks", "/delete", "/tn", t, "/f"], capture_output=True, text=True)
-                    _print(f"[agent] Umbenennung: alte Aufgabe '{t}' entfernt")
+                    _print(f"[agent] rename: removed old task '{t}'")
             try:
                 _run(["powershell", "-NoProfile", "-Command",
                       "if ([System.Diagnostics.EventLog]::SourceExists('RapalleRMM')) "
@@ -10212,9 +10212,9 @@ def _legacy_rebrand_cleanup() -> None:
             except Exception:
                 pass
             pd = os.environ.get("ProgramData") or r"C:\ProgramData"
-            # Treiber-Cache des virtuellen Bildschirms in den neuen Ordner holen
-            # (Die alten WireGuard-Dateien unter ProgramData\\Rapalle bleiben liegen, solange ein
-            #  Tunneldienst sie noch benutzen koennte - _wg_down raeumt sie beim Abbau mit weg.)
+            # Move the virtual display's driver cache into the new folder
+            # (The old WireGuard files under ProgramData\\Rapalle stay while a
+            #  tunnel service might still use them - _wg_down removes them on teardown.)
             for old, new in ((os.path.join(pd, "RapalleRMM", "vdisplay"), os.path.join(pd, "ByteraRMM", "vdisplay")),):
                 if os.path.isdir(old):
                     os.makedirs(new, exist_ok=True)
@@ -10231,7 +10231,7 @@ def _legacy_rebrand_cleanup() -> None:
                         pass
             if os.path.isdir(_LEGACY_WIN_DIR):
                 shutil.rmtree(_LEGACY_WIN_DIR, ignore_errors=True)
-                _print("[agent] Umbenennung: alter Programmordner entfernt")
+                _print("[agent] rename: removed old program folder")
         else:
             if me == os.path.normcase(_LEGACY_LINUX_DIR):
                 return
@@ -10247,7 +10247,7 @@ def _legacy_rebrand_cleanup() -> None:
                         pass
                     _run(["systemctl", "daemon-reload"], capture_output=True, text=True)
                     _run(["systemctl", "reset-failed", unit], capture_output=True, text=True)
-                    _print(f"[agent] Umbenennung: alter Dienst '{unit}' entfernt")
+                    _print(f"[agent] rename: removed old service '{unit}'")
             if sys.platform == "darwin" and os.path.exists(_LEGACY_NODE_PLIST):
                 _run(["launchctl", "unload", "-w", _LEGACY_NODE_PLIST], capture_output=True, text=True)
                 try:
@@ -10256,9 +10256,9 @@ def _legacy_rebrand_cleanup() -> None:
                     pass
             if os.path.isdir(_LEGACY_LINUX_DIR):
                 shutil.rmtree(_LEGACY_LINUX_DIR, ignore_errors=True)
-                _print("[agent] Umbenennung: alter Programmordner entfernt")
+                _print("[agent] rename: removed old program folder")
     except Exception as e:
-        _print(f"[agent] Umbenennung: Aufraeumen der Altinstallation fehlgeschlagen: {e}")
+        _print(f"[agent] rename: cleanup of the old installation failed: {e}")
 
 
 async def main():
@@ -10267,68 +10267,66 @@ async def main():
     _print(f"[agent] {_at('log_device_id', id=DEVICE_ID)}")
     _print(f"[agent] {_at('log_backend', url=BACKEND_URL)}")
     _print(f"[agent] Remote Screen: "
-           + ("verfügbar" if _SCREEN_AVAILABLE
-              else f"deaktiviert - mss/Pillow nicht ladbar ({_SCREEN_ERROR})"))
+           + ("available" if _SCREEN_AVAILABLE
+              else f"disabled - mss/Pillow not loadable ({_SCREEN_ERROR})"))
     if not _INPUT_AVAILABLE:
         _print(f"[agent] {_at('log_remote_ctl', state=_at('log_disabled'))} - pynput ({_INPUT_ERROR})")
     _print(f"[agent] {_at('log_remote_ctl', state=_at('log_available') if _INPUT_AVAILABLE else _at('log_disabled'))}")
-    # Beweis-Zeile: Steht sie NICHT im Log, laeuft auf dem Client eine aeltere
-    # agent.py - egal was die Versionsnummer behauptet.
+    # Proof line: if it is NOT in the log, the client is running an older
+    # agent.py - no matter what the version number claims.
     if IS_WINDOWS:
         _print("[agent] " + _at("log_session",
                sid=_win_session_id(), csid=_win_console_session_id(),
                helper=_at("log_helper_used") if _needs_session_helper()
                       else _at("log_helper_unused")))
 
-    # Heartbeat läuft als eigene Hintergrund-Aufgabe, unabhängig von der Verbindung
-    # Diagnose einhaengen, BEVOR irgendetwas anderes startet - alles was
-    # danach schiefgeht, soll bereits im Puffer landen.
+    # The heartbeat runs as its own background task, independent of the connection.
+    # Install diagnostics BEFORE anything else starts - everything that goes
+    # wrong afterwards should already land in the buffer.
     _diag_install()
     _e2e_ensure_lib()                       # encryption library (older installations)
     _node_cfg_sync()                        # installed node: same pinned key
-    # Temp-Benutzer-Verfall weiter ueberwachen (uebersteht Agent-Neustarts).
+    # Keep monitoring temp-user expiry (survives agent restarts).
     if _tempusers_load():
         t = threading.Thread(target=_tempuser_watch_loop, daemon=True)
         _tempuser_thread["t"] = t
         t.start()
-    # Reste der Installation unter altem Namen (RAPALLE.net RMM) wegraeumen
+    # Clean up leftovers of the installation under the old name (RAPALLE.net RMM)
     threading.Thread(target=_legacy_rebrand_cleanup, name="legacy-cleanup", daemon=True).start()
 
-    # Alle Dauerschleifen laufen unter dem Aufseher. Stirbt eine an einer
-    # Ausnahme, wird sie neu gestartet statt lautlos zu verschwinden.
-    _agent_supervise("loop-herzschlag", loop_heartbeat_agent)
+    # All long-running loops run under the supervisor. If one dies from an
+    # exception, it is restarted instead of vanishing silently.
+    _agent_supervise("loop-heartbeat", loop_heartbeat_agent)
     _agent_supervise("heartbeat", heartbeat_loop)
     _agent_supervise("diag-upload", diag_upload_loop)
     _agent_supervise("node-watchdog", node_watchdog_loop)
 
-    # Verbindungsschleife: WIR steuern das Wiederverbinden selbst. Vor jedem
-    # Versuch sauber trennen, damit die interne Client-Zustand nicht auf
-    # "Already connected" hängen bleibt.
+    # Connection loop: WE control reconnecting ourselves. Disconnect cleanly
+    # before each attempt, so the internal client state does not get stuck on
+    # "Already connected".
     if any(x in BACKEND_URL for x in ("localhost", "127.0.0.1")):
-        _print(f"[agent] WARNUNG: BACKEND_URL zeigt auf {BACKEND_URL} - ein entfernter/"
-               f"public client can NOT reach that. Set the public "
-               f"Adresse eintragen (z.B. https://domain) bzw. im Dashboard unter "
-               f"Einstellungen -> Allgemein -> 'Server-URL' setzen.")
-    # --- Gestaffelter Erststart -------------------------------------
-    # Aus der Geräte-ID wird eine feste Wartezeit innerhalb von
-    # CONNECT_SPREAD_S abgeleitet. Damit klopfen nach einem Server-Neustart
-    # nicht alle Agenten in derselben Sekunde an, sondern verteilt über das
-    # Fenster - und der Server nimmt sie der Reihe nach auf.
+        _print(f"[agent] WARNING: BACKEND_URL points to {BACKEND_URL} - a remote/"
+               f"public client can NOT reach that. Set the public address "
+               f"(e.g. https://domain), or set it in the dashboard under "
+               f"Settings -> General -> 'Server URL'.")
+    # --- Staggered first start --------------------------------------
+    # A fixed wait within CONNECT_SPREAD_S is derived from the device ID. This
+    # way, after a server restart, not all agents knock in the same second but
+    # spread across the window - and the server onboards them in turn.
     if CONNECT_SPREAD_S > 0:
         import hashlib as _hl
         _fingerprint = int(_hl.sha256(str(DEVICE_ID).encode("utf-8")).hexdigest()[:8], 16)
         offset = (_fingerprint % (CONNECT_SPREAD_S * 1000)) / 1000.0
-        _print(f"[agent] Gestaffelter Start: warte {offset:.1f}s vor dem ersten Verbindungsversuch")
+        _print(f"[agent] staggered start: waiting {offset:.1f}s before the first connection attempt")
         await asyncio.sleep(offset)
 
-    backoff = 3.0            # aktuelle Wartezeit zwischen zwei Versuchen
-    attempts = 0             # Fehlversuche in Folge
-    # Obergrenze der Wartezeit. Nach einigen Fehlversuchen geht der Agent in
-    # einen ruhigen 10-Minuten-Takt ueber. Er gibt dabei NIE auf: Ist das
-    # Backend tagelang weg, klopft er weiterhin alle zehn Minuten an und ist
-    # binnen zehn Minuten wieder da, sobald es zurueckkommt. Ein Agent, der
-    # aufgibt, muesste von Hand angefasst werden - genau das soll ein RMM
-    # ersparen.
+    backoff = 3.0            # current wait between two attempts
+    attempts = 0             # failed attempts in a row
+    # Upper bound of the wait. After a few failed attempts the agent settles
+    # into a calm 10-minute cadence. It NEVER gives up: if the backend is gone
+    # for days, it keeps knocking every ten minutes and is back within ten
+    # minutes once it returns. An agent that gives up would have to be touched
+    # by hand - exactly what an RMM should spare you.
     BACKOFF_MAX = 600.0
 
     while True:
@@ -10341,88 +10339,86 @@ async def main():
                 except Exception:
                     pass
             await _sio_connect_secure()
-            backoff = 3.0    # Verbindung stand -> Backoff zurücksetzen
+            backoff = 3.0    # connection was up -> reset the backoff
             attempts = 0
-            # Blockiert, solange die Verbindung steht - mit Wachhund: Steht die
-            # Leitung zwar, aber der Server bestaetigt die Anmeldung 5 Minuten
-            # lang nicht (haengende/halb offene Verbindung, Server-Stoerung),
-            # blieb der Agent frueher "verbunden" und im Dashboard offline.
-            # Jetzt wird neu verbunden.
+            # Blocks while the connection is up - with a watchdog: if the line
+            # is up but the server does not confirm registration for 5 minutes
+            # (hanging/half-open connection, server fault), the agent used to
+            # stay "connected" and offline in the dashboard. Now it reconnects.
             _wait_task = asyncio.ensure_future(sio.wait())
             _t_conn = time.time()
             while not _wait_task.done():
                 await asyncio.wait({_wait_task}, timeout=20)
                 if (not _wait_task.done() and not _REGISTERED.is_set()
                         and time.time() - _t_conn > 300):
-                    _print("[agent] Verbunden, aber seit 5 Minuten keine Anmelde-"
-                           "Bestaetigung vom Server - verbinde neu")
+                    _print("[agent] connected, but no registration confirmation "
+                           "from the server for 5 minutes - reconnecting")
                     break
             if not _wait_task.done():
                 _wait_task.cancel()
             _print(f"[agent] {_at('log_disconnected')}")
         except Exception as e:
-            # Der Server weist uns ab, weil er gerade andere Agenten aufnimmt.
-            # Das ist KEIN Fehler, sondern die Warteschlange bei der Arbeit -
-            # entsprechend ruhig protokollieren und in Ruhe erneut versuchen.
+            # The server rejects us because it is currently onboarding other
+            # agents. This is NOT an error but the queue at work - log it calmly
+            # and retry at leisure.
             refused_busy = "busy" in repr(e).lower()
             if refused_busy:
-                _print("[agent] Server nimmt gerade andere Agenten auf - warte und versuche es erneut")
+                _print("[agent] server is currently onboarding other agents - waiting and retrying")
             else:
                 _print(f"[agent] {_at('log_conn_failed', url=BACKEND_URL, err=repr(e))}")
         finally:
             _REGISTERED.clear()
             _E2E["ch"] = None
 
-        # Immer sauber trennen, bevor der nächste Versuch startet.
+        # Always disconnect cleanly before the next attempt starts.
         try:
             await sio.disconnect()
         except Exception:
             pass
 
-        # Wartezeit vor dem nächsten Versuch: schrittweise länger, plus ein
-        # Zufallsanteil. Ohne den Zufallsanteil laufen abgewiesene Agenten
-        # synchron und stürmen den Server im Gleichtakt erneut ("Thundering
-        # Herd") - genau das Verhalten, das den Container umgebracht hat.
+        # Wait before the next attempt: gradually longer, plus a random
+        # component. Without it, rejected agents run in sync and storm the
+        # server in lockstep again ("thundering herd") - exactly the behavior
+        # that killed the container.
         attempts += 1
         wait_s = min(BACKOFF_MAX, backoff) + random.uniform(0, min(30.0, backoff))
         if attempts in (5, 20) or attempts % 50 == 0:
-            # Nicht jede Runde protokollieren - sonst laeuft bei einem
-            # laengeren Ausfall das Log voll und verdeckt das Wesentliche.
-            _print(f"[agent] {attempts} Verbindungsversuche erfolglos, "
-                   f"naechster in {wait_s / 60:.1f} min - der Agent gibt nicht auf")
+            # Do not log every round - otherwise a longer outage fills the log
+            # and hides the essentials.
+            _print(f"[agent] {attempts} connection attempts unsuccessful, "
+                   f"next in {wait_s / 60:.1f} min - the agent does not give up")
         await asyncio.sleep(wait_s)
         backoff = min(BACKOFF_MAX, backoff * 2 if refused_busy else backoff * 1.5)
 
 
 # ==========================================================================
-# SOFTWARE-PATCHING  (Protokoll 2)
+# SOFTWARE PATCHING  (protocol 2)
 # --------------------------------------------------------------------------
-# Leitgedanke dieser Fassung: Der Agent sagt von sich aus, was er kann und
-# was er tut. Die vorige Fassung schwieg im Fehlerfall - jede Quelle, die
-# nicht ansprang, lieferte einfach eine leere Liste zurück. Ob "keine
-# Updates vorhanden" oder "winget gar nicht erst gestartet" gemeint war,
-# liess sich von aussen nicht unterscheiden. Deshalb jetzt:
+# Guiding idea of this version: the agent says of its own accord what it can
+# do and what it is doing. The previous version stayed silent on errors -
+# every source that did not start simply returned an empty list. Whether
+# "no updates available" or "winget never even started" was meant could not
+# be told from the outside. Therefore now:
 #
-#   * Jede Quelle liefert ein Ergebnis MIT Zustand (ok / Fehlertext), nie
-#     nur eine leere Liste.
-#   * Der Agent meldet seine Fähigkeiten schon beim Anmelden mit
-#     (PATCH_PROTOCOL im 'register'), nicht erst auf Nachfrage. Das Backend
-#     weiss dadurch VOR jedem Auftrag, ob der Client überhaupt patchen kann.
-#   * Jeder Handler antwortet IMMER - auch wenn er selbst scheitert.
-#     Ein stiller Handler ist von aussen nicht von einem fehlenden zu
-#     unterscheiden, und genau diese Verwechslung hat zuletzt viel Zeit
-#     gekostet.
-#   * Während eines Scans laufend Fortschrittsmeldungen, damit niemand
-#     minutenlang auf einen stehenden Balken schaut.
+#   * Every source returns a result WITH a state (ok / error text), never
+#     just an empty list.
+#   * The agent reports its capabilities already at registration
+#     (PATCH_PROTOCOL in 'register'), not only on request. This lets the
+#     backend know BEFORE each job whether the client can patch at all.
+#   * Every handler ALWAYS answers - even when it fails itself.
+#     A silent handler cannot be told from a missing one, and exactly this
+#     confusion cost a lot of time recently.
+#   * Continuous progress messages during a scan, so nobody stares at a
+#     stalled bar for minutes.
 #
-# Quellen: Windows Update (COM-API), winget, apt, dnf.
-# Stufen:  security | critical | important | moderate | low | feature | other
+# Sources: Windows Update (COM API), winget, apt, dnf.
+# Levels:  security | critical | important | moderate | low | feature | other
 # ==========================================================================
 
-# Fähigkeitsstufe dieses Agenten. Wird beim Anmelden mitgeschickt; das
-# Backend entscheidet daran, ob es einen Patch-Auftrag überhaupt schickt.
-#   1 = erste Fassung (patch-scan/patch-apply, kein patch-ping)
-#   2 = diese Fassung (Selbstauskunft, Fortschritt, Fehler je Quelle)
+# Capability level of this agent. Sent at registration; the backend decides
+# from it whether to send a patch job at all.
+#   1 = first version (patch-scan/patch-apply, no patch-ping)
+#   2 = this version (self-report, progress, error per source)
 PATCH_PROTOCOL = 2
 
 PATCH_EVENTS = ("patch-ping", "patch-scan", "patch-apply", "patch-selftest")
@@ -10436,17 +10432,17 @@ def _patch_log(msg: str) -> None:
 
 
 # --------------------------------------------------------------------------
-# Werkzeuge
+# Tools
 # --------------------------------------------------------------------------
 
 def _winget_exe() -> "str | None":
     """
-    Pfad zu winget.exe.
+    Path to winget.exe.
 
-    Der Agent läuft als Dienst unter SYSTEM. Dort liegt winget NICHT im PATH:
-    die App-Execution-Aliase unter %LOCALAPPDATA%\\Microsoft\\WindowsApps gibt
-    es nur für angemeldete Benutzer. Ein blosses "winget" endete deshalb im
-    FileNotFoundError - der früher stillschweigend zu "keine Updates" wurde.
+    The agent runs as a service under SYSTEM. There winget is NOT on the PATH:
+    the app-execution aliases under %LOCALAPPDATA%\\Microsoft\\WindowsApps exist
+    only for logged-in users. A bare "winget" therefore ended in a
+    FileNotFoundError - which previously turned silently into "no updates".
     """
     if not IS_WINDOWS:
         return None
@@ -10468,18 +10464,18 @@ def _winget_exe() -> "str | None":
 def _source(name: str, ok: bool, patches=None, error: str = "",
             note: str = "") -> dict:
     """
-    Einheitliches Ergebnis EINER Quelle.
+    Uniform result of ONE source.
 
-    'ok=False' heisst: die Quelle konnte nicht befragt werden. Das ist
-    ausdrücklich etwas anderes als 'ok=True' mit leerer Liste ("befragt,
-    nichts gefunden"). Genau diese Unterscheidung fehlte vorher.
+    'ok=False' means: the source could not be queried. That is explicitly
+    different from 'ok=True' with an empty list ("queried, nothing found").
+    Exactly this distinction was missing before.
     """
     return {"source": name, "ok": bool(ok), "patches": patches or [],
             "count": len(patches or []), "error": error[:500], "note": note[:300]}
 
 
 def _is_admin() -> bool:
-    """Läuft der Agent mit den Rechten, die zum Installieren nötig sind?"""
+    """Does the agent run with the rights needed to install?"""
     try:
         if IS_WINDOWS:
             import ctypes
@@ -10492,9 +10488,8 @@ def _is_admin() -> bool:
 # --------------------------------------------------------------------------
 # Windows Update (COM)
 # --------------------------------------------------------------------------
-# Über die COM-API statt über das Modul PSWindowsUpdate: das ist auf den
-# meisten Systemen nicht installiert, und eine Ferninstallation richtet mehr
-# Schaden an als sie hilft.
+# Via the COM API instead of the PSWindowsUpdate module: that is not installed
+# on most systems, and installing it remotely does more harm than good.
 
 _WU_SEARCH_PS = r"""
 $ErrorActionPreference = 'Stop'
@@ -10518,8 +10513,8 @@ try {
       reboot    = [int]$u.InstallationBehavior.RebootBehavior
     }
   }
-  # Immer ein Array ausgeben: ohne den Komma-Operator macht PowerShell aus
-  # einem einzelnen Element ein Objekt und aus null Elementen gar nichts.
+  # Always output an array: without the comma operator PowerShell turns a
+  # single element into an object and zero elements into nothing.
   ConvertTo-Json -InputObject @($out) -Compress -Depth 3
 } catch {
   Write-Output ('{"__error__":"' + ($_.Exception.Message -replace '"','') + '"}')
@@ -10541,7 +10536,7 @@ try {
     }
   }
   if ($coll.Count -eq 0) {
-    Write-Output '{"installed":0,"reboot":false,"code":0,"note":"nichts passendes gefunden"}'
+    Write-Output '{"installed":0,"reboot":false,"code":0,"note":"nothing matching found"}'
     exit
   }
   $dl = $session.CreateUpdateDownloader(); $dl.Updates = $coll; $dl.Download() | Out-Null
@@ -10557,12 +10552,11 @@ try {
 
 def _ps(script: str, timeout: int = 600):
     """
-    PowerShell ausführen.
+    Run PowerShell.
 
-    Die Ausgabekodierung wird ausdrücklich auf UTF-8 gestellt. Ohne das
-    liefert PowerShell die Konsolen-Codepage (deutsch: cp850) - Update-Titel
-    mit Umlauten kamen als Buchstabensalat an oder brachten das Einlesen
-    ganz zum Scheitern.
+    The output encoding is explicitly set to UTF-8. Without it, PowerShell
+    uses the console code page (German: cp850) - update titles with umlauts
+    arrived as garbled text or made the parsing fail entirely.
     """
     prelude = "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
     return _run(["powershell", "-NoProfile", "-NonInteractive",
@@ -10572,11 +10566,11 @@ def _ps(script: str, timeout: int = 600):
 
 def _level_from_windows(severity: str, categories: str) -> str:
     """
-    Schweregrad einer Windows-Aktualisierung bestimmen.
+    Determine the severity of a Windows update.
 
-    Die Kategorie hat Vorrang vor MsrcSeverity: Microsoft lässt den
-    Schweregrad bei vielen Sicherheitsupdates leer. Wer nur nach
-    MsrcSeverity filtert, verpasst genau die Updates, die er wollte.
+    The category takes precedence over MsrcSeverity: Microsoft leaves the
+    severity empty for many security updates. Filtering only by MsrcSeverity
+    misses exactly the updates one wanted.
     """
     cats = (categories or "").lower()
     sev = (severity or "").strip().lower()
@@ -10587,7 +10581,7 @@ def _level_from_windows(severity: str, categories: str) -> str:
     if sev in ("critical", "important", "moderate", "low"):
         return sev
     if "definition" in cats:
-        return "security"          # Virendefinitionen: sicherheitsrelevant
+        return "security"          # virus definitions: security-relevant
     if "driver" in cats:
         return "other"
     if "feature pack" in cats or "upgrade" in cats:
@@ -10597,12 +10591,12 @@ def _level_from_windows(severity: str, categories: str) -> str:
 
 def _scan_windows_os() -> dict:
     if not IS_WINDOWS:
-        return _source("windows-update", True, note="kein Windows")
+        return _source("windows-update", True, note="not Windows")
     try:
         res = _ps(_WU_SEARCH_PS, timeout=420)
     except subprocess.TimeoutExpired:
         return _source("windows-update", False,
-                       error="Zeitüberschreitung bei der Windows-Update-Abfrage (>7 min)")
+                       error="Timeout on the Windows Update query (>7 min)")
     except Exception as e:
         return _source("windows-update", False, error=f"{e.__class__.__name__}: {e}")
 
@@ -10611,14 +10605,14 @@ def _scan_windows_os() -> dict:
         err = (res.stderr or "").strip()[:400]
         if err:
             return _source("windows-update", False,
-                           error=f"PowerShell meldete: {err}")
-        return _source("windows-update", True, note="keine Ausgabe - nichts gefunden")
+                           error=f"PowerShell reported: {err}")
+        return _source("windows-update", True, note="no output - nothing found")
 
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
         return _source("windows-update", False,
-                       error=f"Antwort war kein JSON: {raw[:200]}")
+                       error=f"Response was not JSON: {raw[:200]}")
 
     if isinstance(data, dict):
         if data.get("__error__"):
@@ -10638,7 +10632,7 @@ def _scan_windows_os() -> dict:
             "source": "windows-update",
             "level": _level_from_windows(u.get("severity"), u.get("categories")),
             "size": int(u.get("size") or 0),
-            # RebootBehavior: 0 = nie, 1 = immer, 2 = kann sein
+            # RebootBehavior: 0 = never, 1 = always, 2 = maybe
             "needs_reboot": 1 if int(u.get("reboot") or 0) else 0,
         })
     return _source("windows-update", True, out)
@@ -10650,28 +10644,26 @@ def _scan_windows_os() -> dict:
 
 def _winget_columns(header: str) -> "dict | None":
     """
-    Spaltenanfänge aus der Kopfzeile ableiten - ohne die Spalten beim Namen
-    zu nennen.
+    Derive column starts from the header row - without naming the columns.
 
-    Der frühere Weg suchte die Wörter "Id" und "Available". Auf einem
-    deutschen Windows heissen die Spalten "Kennung" und "Verfügbar", auf
-    einem französischen wieder anders: die Kopfzeile wurde nie erkannt und
-    der Scan meldete grundsätzlich null Anwendungsupdates.
+    The earlier approach searched for the words "Id" and "Available". On a
+    German Windows the columns are called "Kennung" and "Verfügbar", on a
+    French one again differently: the header was never recognized and the
+    scan reported zero application updates across the board.
 
-    Womit man rechnen kann, ist die Formatierung: winget trennt seine
-    Spalten immer durch MINDESTENS zwei Leerzeichen und richtet die Werte
-    darunter linksbündig an derselben Position aus. Wir lesen also nur die
-    Startspalten ab und ignorieren, was in der Überschrift steht.
+    What one can rely on is the formatting: winget always separates its
+    columns by AT LEAST two spaces and aligns the values below left-justified
+    at the same position. So we only read the start columns and ignore what
+    the heading says.
 
-    Spaltenfolge bei winget stabil: Name, Kennung, Version, Verfügbar, Quelle.
+    Column order in winget is stable: name, id, version, available, source.
     """
     starts = [m.start() for m in re.finditer(r"(?<=\s)\S", "  " + header)]
-    # "  " vorangestellt, damit auch die erste Spalte erkannt wird; die
-    # Verschiebung um zwei Zeichen wieder herausrechnen.
+    # "  " prepended so the first column is recognized too; the shift of two
+    # characters is factored back out.
     starts = sorted({max(0, s - 2) for s in starts})
-    # Nur echte Spaltenanfänge behalten: solche, vor denen zwei Leerzeichen
-    # stehen (innerhalb einer Überschrift wie "Verfügbare Version" steht nur
-    # eines).
+    # Keep only real column starts: those preceded by two spaces (within a
+    # heading like "Verfügbare Version" there is only one).
     cols = [0] + [s for s in starts if s >= 2 and header[s - 2:s] == "  "]
     cols = sorted(set(cols))
     if len(cols) < 4:
@@ -10682,7 +10674,7 @@ def _winget_columns(header: str) -> "dict | None":
 
 def _scan_winget() -> dict:
     if not IS_WINDOWS:
-        return _source("winget", True, note="kein Windows")
+        return _source("winget", True, note="not Windows")
     exe = _winget_exe()
     if not exe:
         return _source("winget", False, error=(
@@ -10693,26 +10685,25 @@ def _scan_winget() -> dict:
                     "--accept-source-agreements", "--disable-interactivity"],
                    timeout=240)
     except subprocess.TimeoutExpired:
-        return _source("winget", False, error="Zeitüberschreitung bei winget (>4 min)")
+        return _source("winget", False, error="Timeout on winget (>4 min)")
     except Exception as e:
         return _source("winget", False, error=f"{e.__class__.__name__}: {e}")
 
     lines = [l.rstrip() for l in (res.stdout or "").splitlines()]
-    # Die Trennzeile dient nur dazu, die Kopfzeile zu FINDEN: sie besteht in
-    # jeder Sprache aus Bindestrichen. Die Spaltenpositionen kommen dann aus
-    # der Zeile darüber.
+    # The separator line only serves to FIND the header: in every language it
+    # consists of dashes. The column positions then come from the line above.
     sep_idx = next((i for i, l in enumerate(lines)
                     if l.strip() and set(l.strip()) == {"-"}
                     and len(l.strip()) > 20), None)
     if sep_idx is None or sep_idx == 0:
-        # Kein Tabellenkopf: entweder wirklich nichts zu tun, oder winget hat
-        # sich beschwert. Beides unterscheidbar machen statt zu schweigen.
+        # No table header: either really nothing to do, or winget complained.
+        # Make both distinguishable instead of staying silent.
         text = " ".join(l.strip() for l in lines if l.strip())
         if res.returncode != 0:
             return _source("winget", False,
-                           error=f"winget endete mit Code {res.returncode}: {text[:300]}")
+                           error=f"winget ended with code {res.returncode}: {text[:300]}")
         return _source("winget", True,
-                       note="keine Tabelle in der Ausgabe - nichts zu aktualisieren")
+                       note="no table in the output - nothing to update")
 
     cols = _winget_columns(lines[sep_idx - 1])
     if not cols:
@@ -10729,8 +10720,8 @@ def _scan_winget() -> dict:
         cur = line[cols["cur"]:cols["avail"]].strip()
         avail_field = line[cols["avail"]:cols["end"]] if cols["end"] else line[cols["avail"]:]
         avail = avail_field.strip().split(" ")[0] if avail_field.strip() else ""
-        # Fusszeilen ("2 Upgrades verfügbar.") laufen quer über die Spalten:
-        # in der Kennung-Spalte stünde dann Text mit Leerzeichen.
+        # Footer lines ("2 upgrades available.") run across the columns:
+        # the id column would then contain text with spaces.
         if not pkg or not name or " " in pkg:
             continue
         if not avail or avail.lower() in ("unknown", "unbekannt"):
@@ -10739,9 +10730,8 @@ def _scan_winget() -> dict:
             "uid": pkg, "name": name,
             "current_version": cur, "available_version": avail,
             "source": "winget",
-            # winget kennt keine Schweregrade. Als 'security' zu raten wäre
-            # gefährlich - dann würden Sicherheitsregeln beliebige Apps
-            # mitaktualisieren.
+            # winget has no severity levels. Guessing 'security' would be
+            # dangerous - then security rules would update arbitrary apps too.
             "level": "other",
             "size": 0, "needs_reboot": 0,
         })
@@ -10758,9 +10748,9 @@ def _has(binary: str) -> bool:
 
 def _scan_apt() -> dict:
     """
-    LC_ALL=C erzwingt englische Ausgabe - sonst heisst es auf deutschen
-    Systemen "aktualisierbar von:" statt "upgradable from:". Beide
-    Schreibweisen werden trotzdem erkannt, falls die Locale nicht greift.
+    LC_ALL=C forces English output - otherwise German systems say
+    "aktualisierbar von:" instead of "upgradable from:". Both spellings are
+    recognized anyway, in case the locale does not take effect.
     """
     env = {**os.environ, "LC_ALL": "C", "LANG": "C",
            "DEBIAN_FRONTEND": "noninteractive"}
@@ -10768,10 +10758,10 @@ def _scan_apt() -> dict:
     try:
         upd = _run(["apt-get", "update", "-qq"], timeout=240, env=env)
         if upd.returncode != 0:
-            # Kein Abbruch: die Paketliste kann veraltet, aber brauchbar sein.
-            note = f"apt-get update meldete Code {upd.returncode}"
+            # No abort: the package list may be outdated but usable.
+            note = f"apt-get update reported code {upd.returncode}"
     except Exception as e:
-        note = f"apt-get update übersprungen ({e})"
+        note = f"apt-get update skipped ({e})"
     try:
         res = _run(["apt", "list", "--upgradable"], timeout=180, env=env)
     except Exception as e:
@@ -10790,8 +10780,8 @@ def _scan_apt() -> dict:
             "current_version": m.group("cur").strip(),
             "available_version": m.group("avail"),
             "source": "apt",
-            # Debian/Ubuntu kennzeichnen Sicherheitsaktualisierungen über die
-            # Quelle ("...-security"). Das ist die einzige verlässliche Angabe.
+            # Debian/Ubuntu mark security updates via the source
+            # ("...-security"). That is the only reliable indicator.
             "level": "security" if "security" in m.group("repo").lower() else "other",
             "size": 0, "needs_reboot": 0,
         })
@@ -10800,13 +10790,13 @@ def _scan_apt() -> dict:
 
 def _scan_dnf() -> dict:
     try:
-        # check-update endet planmässig mit Code 100, wenn es Updates gibt.
+        # check-update ends with code 100 by design when there are updates.
         res = _run(["dnf", "-q", "check-update"], timeout=240)
     except Exception as e:
         return _source("dnf", False, error=f"{e.__class__.__name__}: {e}")
     if res.returncode not in (0, 100):
         return _source("dnf", False, error=(
-            f"dnf check-update endete mit Code {res.returncode}: "
+            f"dnf check-update ended with code {res.returncode}: "
             f"{(res.stderr or '').strip()[:300]}"))
 
     sec = set()
@@ -10835,11 +10825,11 @@ def _scan_dnf() -> dict:
 
 
 # --------------------------------------------------------------------------
-# Selbstauskunft
+# Self-report
 # --------------------------------------------------------------------------
 
 def _patch_sources() -> list:
-    """Welche Quellen kommen auf DIESEM System überhaupt in Frage?"""
+    """Which sources are even applicable on THIS system?"""
     if IS_WINDOWS:
         src = ["windows-update"]
         if _winget_exe():
@@ -10855,9 +10845,9 @@ def _patch_sources() -> list:
 
 def _patch_capabilities() -> dict:
     """
-    Wozu ist dieser Agent in Sachen Patching in der Lage? Wird beim Anmelden
-    und bei jedem 'patch-ping' gemeldet - das Backend muss dadurch nicht mehr
-    raten, ob ein Auftrag überhaupt Sinn ergibt.
+    What is this agent capable of regarding patching? Reported at registration
+    and on every 'patch-ping' - this way the backend no longer has to guess
+    whether a job makes sense at all.
     """
     return {
         "protocol": PATCH_PROTOCOL,
@@ -10873,16 +10863,16 @@ def _patch_capabilities() -> dict:
 
 
 # --------------------------------------------------------------------------
-# Sammeln und Installieren
+# Collecting and installing
 # --------------------------------------------------------------------------
 
 def _collect_patches(progress=None) -> dict:
     """
-    Alle Quellen befragen (blockierend, läuft im Thread).
+    Query all sources (blocking, runs in a thread).
 
-    'progress' ist ein Rückruf(stage, detail, done, total) für die
-    Fortschrittsmeldungen. Er darf niemals eine Ausnahme nach aussen tragen -
-    ein kaputter Fortschrittsbalken darf keinen Scan abbrechen.
+    'progress' is a callback(stage, detail, done, total) for the progress
+    messages. It must never carry an exception outward - a broken progress
+    bar must not abort a scan.
     """
     def tell(stage, detail, done, total):
         if not progress:
@@ -10911,11 +10901,11 @@ def _collect_patches(progress=None) -> dict:
             result = _source(name, False, error=f"{e.__class__.__name__}: {e}")
         sources.append({k: v for k, v in result.items() if k != "patches"})
         patches += result["patches"]
-        state = f"{result['count']}" if result["ok"] else f"FEHLER: {result['error'][:120]}"
+        state = f"{result['count']}" if result["ok"] else f"ERROR: {result['error'][:120]}"
         _patch_log(f"{name}: {state}")
         tell("scanned", name, idx + 1, total)
 
-    # Doppelte (gleiche Quelle + gleiche Kennung) entfernen.
+    # Remove duplicates (same source + same id).
     seen, unique = set(), []
     for p in patches:
         key = (p["source"], p["uid"])
@@ -10934,11 +10924,11 @@ def _collect_patches(progress=None) -> dict:
 
 def _apply_patches(items: list, progress=None) -> dict:
     """
-    Ausgewählte Aktualisierungen installieren.
+    Install selected updates.
 
-    'items' sind Einträge aus dem letzten Scan ({uid, source, name}). Es wird
-    NIE etwas installiert, das nicht ausdrücklich benannt wurde - kein
-    "alles aktualisieren" per Fernsteuerung.
+    'items' are entries from the last scan ({uid, source, name}). NOTHING is
+    ever installed that was not explicitly named - no "update everything" by
+    remote control.
     """
     def tell(stage, detail, done, total):
         if not progress:
@@ -10952,7 +10942,7 @@ def _apply_patches(items: list, progress=None) -> dict:
     total = len(items)
     done = 0
 
-    # --- Windows Update: alle in EINEM Durchgang, das ist deutlich schneller
+    # --- Windows Update: all in ONE pass, which is much faster
     wu = [i for i in items if i.get("source") == "windows-update"]
     if wu and IS_WINDOWS:
         names = ", ".join(str(i.get("name") or i.get("uid"))[:40] for i in wu[:3])
@@ -10976,7 +10966,7 @@ def _apply_patches(items: list, progress=None) -> dict:
         done += len(wu)
         tell("installed", f"Windows Update: {len(wu)}", done, total)
 
-    # --- alles Übrige einzeln
+    # --- everything else individually
     for item in items:
         src = item.get("source")
         uid = item.get("uid")
@@ -10988,7 +10978,7 @@ def _apply_patches(items: list, progress=None) -> dict:
             if src == "winget":
                 exe = _winget_exe()
                 if not exe:
-                    raise RuntimeError("winget ist auf diesem Client nicht verfügbar")
+                    raise RuntimeError("winget is not available on this client")
                 r = _run([exe, "upgrade", "--id", uid, "--exact", "--silent",
                           "--accept-package-agreements", "--accept-source-agreements",
                           "--disable-interactivity"], timeout=3600)
@@ -11000,7 +10990,7 @@ def _apply_patches(items: list, progress=None) -> dict:
             elif src == "dnf":
                 r = _run(["dnf", "-y", "upgrade", uid], timeout=3600)
             else:
-                raise RuntimeError(f"Unbekannte Quelle: {src}")
+                raise RuntimeError(f"Unknown source: {src}")
 
             if r.returncode == 0:
                 installed.append(name)
@@ -11013,8 +11003,7 @@ def _apply_patches(items: list, progress=None) -> dict:
         tell("installed", str(name), done, total)
 
     if IS_WINDOWS:
-        # Ein ausstehender Neustart lässt sich zuverlässig an diesem
-        # Registrierungsschlüssel ablesen.
+        # A pending reboot can be reliably read from this registry key.
         try:
             chk = _ps("if (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\"
                       "CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired')"
@@ -11030,12 +11019,11 @@ def _apply_patches(items: list, progress=None) -> dict:
 
 
 # --------------------------------------------------------------------------
-# Ereignis-Handler
+# Event handlers
 # --------------------------------------------------------------------------
-# Grundregel: JEDER Handler antwortet, auch wenn er selbst scheitert. Ein
-# stiller Handler ist von aussen nicht von einem fehlenden zu unterscheiden -
-# das Backend meldet dann fälschlich "Agent zu alt", obwohl in Wahrheit eine
-# Ausnahme geflogen ist.
+# Basic rule: EVERY handler answers, even when it fails itself. A silent
+# handler cannot be told from a missing one - the backend then wrongly
+# reports "agent too old" when in truth an exception was thrown.
 
 async def _patch_reply(event: str, payload: dict) -> None:
     try:
@@ -11046,8 +11034,8 @@ async def _patch_reply(event: str, payload: dict) -> None:
 
 def _patch_progress_sender(request_id: str, kind: str):
     """
-    Baut einen Rückruf, der aus dem Arbeits-Thread heraus Fortschritt meldet.
-    Die Emission muss zurück auf den Event-Loop - deshalb
+    Builds a callback that reports progress from the worker thread. The
+    emission must go back onto the event loop - hence
     run_coroutine_threadsafe.
     """
     loop = _AGENT_LOOP
@@ -11065,7 +11053,7 @@ def _patch_progress_sender(request_id: str, kind: str):
 
 @sio.on("patch-ping", namespace="/agent")
 async def on_patch_ping(data):
-    """Selbstauskunft. Antwortet sofort, ohne irgendetwas zu starten."""
+    """Self-report. Answers immediately without starting anything."""
     request_id = (data or {}).get("requestId")
     _patch_log("capability query received")
     try:
@@ -11079,12 +11067,12 @@ async def on_patch_ping(data):
 @sio.on("patch-selftest", namespace="/agent")
 async def on_patch_selftest(data):
     """
-    Kurzer Funktionstest OHNE vollständigen Scan: prüft, ob die Quellen
-    ansprechbar sind. Dauert Sekunden statt Minuten und beantwortet die
-    Frage "liegt es am Agenten oder am System?".
+    Short functional test WITHOUT a full scan: checks whether the sources are
+    reachable. Takes seconds instead of minutes and answers the question
+    "is it the agent or the system?".
     """
     request_id = (data or {}).get("requestId")
-    _patch_log("Selbsttest angefordert")
+    _patch_log("self-test requested")
     checks = []
 
     def check(name, fn):
@@ -11100,13 +11088,13 @@ async def on_patch_selftest(data):
                     "if ($s) { 'ok' } } catch { 'ERR ' + $_.Exception.Message }",
                     timeout=90)
             txt = (r.stdout or "").strip()
-            return {"ok": txt.startswith("ok"), "detail": txt[:300] or "keine Ausgabe"}
+            return {"ok": txt.startswith("ok"), "detail": txt[:300] or "no output"}
         check("Windows-Update-COM", wu)
 
         def wg():
             exe = _winget_exe()
             if not exe:
-                return {"ok": False, "detail": "winget.exe nicht gefunden"}
+                return {"ok": False, "detail": "winget.exe not found"}
             r = _run([exe, "--version"], timeout=60)
             return {"ok": r.returncode == 0,
                     "detail": (r.stdout or r.stderr or "").strip()[:200] or exe}
@@ -11117,7 +11105,7 @@ async def on_patch_selftest(data):
                 check(tool, lambda t=tool: {
                     "ok": True, "detail": shutil.which(t) or t})
 
-    check("Rechte", lambda: {"ok": _is_admin(),
+    check("Privileges", lambda: {"ok": _is_admin(),
                              "detail": "elevated" if _is_admin() else
                                        "NOT elevated - installing will fail"})
 
@@ -11128,17 +11116,17 @@ async def on_patch_selftest(data):
 
 @sio.on("patch-scan", namespace="/agent")
 async def on_patch_scan(data):
-    """Nach verfügbaren Aktualisierungen suchen und melden."""
+    """Search for available updates and report them."""
     request_id = (data or {}).get("requestId")
-    _patch_log("Suche nach Aktualisierungen gestartet")
+    _patch_log("search for updates started")
     progress = _patch_progress_sender(request_id, "scan")
     try:
         result = await _AGENT_LOOP.run_in_executor(
             None, functools.partial(_collect_patches, progress))
-        _patch_log(f"Suche beendet: {len(result['patches'])} Aktualisierung(en)")
+        _patch_log(f"search finished: {len(result['patches'])} update(s)")
         await _patch_reply("patch-scan-result", {"requestId": request_id, **result})
     except Exception as e:
-        _patch_log(f"Suche fehlgeschlagen: {e.__class__.__name__}: {e}")
+        _patch_log(f"search failed: {e.__class__.__name__}: {e}")
         await _patch_reply("patch-scan-result", {
             "requestId": request_id,
             "error": f"{e.__class__.__name__}: {e}",
@@ -11147,47 +11135,45 @@ async def on_patch_scan(data):
 
 @sio.on("patch-apply", namespace="/agent")
 async def on_patch_apply(data):
-    """Benannte Aktualisierungen installieren."""
+    """Install named updates."""
     request_id = (data or {}).get("requestId")
     items = (data or {}).get("items") or []
     if not items:
         await _patch_reply("patch-apply-result", {
-            "requestId": request_id, "error": "Keine Aktualisierungen angegeben"})
+            "requestId": request_id, "error": "No updates specified"})
         return
 
-    _patch_log(f"Installiere {len(items)} Aktualisierung(en)")
-    await _emit_action_log("patch", "started", f"{len(items)} Aktualisierung(en)")
+    _patch_log(f"installing {len(items)} update(s)")
+    await _emit_action_log("patch", "started", f"{len(items)} update(s)")
     progress = _patch_progress_sender(request_id, "apply")
     try:
         result = await _AGENT_LOOP.run_in_executor(
             None, functools.partial(_apply_patches, items, progress))
-        note = (f"{len(result['installed'])} installiert, "
-                f"{len(result['failed'])} fehlgeschlagen")
+        note = (f"{len(result['installed'])} installed, "
+                f"{len(result['failed'])} failed")
         _patch_log(note)
         await _emit_action_log("patch", "finished", note)
         await _patch_reply("patch-apply-result", {"requestId": request_id, **result})
     except Exception as e:
         msg = f"{e.__class__.__name__}: {e}"
-        _patch_log(f"Installation fehlgeschlagen: {msg}")
+        _patch_log(f"installation failed: {msg}")
         await _emit_action_log("patch", "failed", msg)
         await _patch_reply("patch-apply-result", {"requestId": request_id, "error": msg})
 
 
-# Beim Laden einmal ausgeben, WELCHE Patch-Ereignisse dieser Agent kennt.
-# Damit steht in der Agent-Konsole schwarz auf weiss, ob die neue Fassung
-# wirklich läuft - genau die Frage, die sich aus der Ferne sonst nicht
-# beantworten lässt.
-_patch_log(f"Modul geladen - Protokoll {PATCH_PROTOCOL}, "
-           f"Ereignisse: {', '.join(PATCH_EVENTS)}")
+# On load, print once WHICH patch events this agent knows. This way the agent
+# console shows in black and white whether the new version is really running -
+# exactly the question that otherwise cannot be answered remotely.
+_patch_log(f"module loaded - protocol {PATCH_PROTOCOL}, "
+           f"events: {', '.join(PATCH_EVENTS)}")
 
 
 if __name__ == "__main__":
-    # Helfer-Modus: Der Agent hat sich selbst in der Benutzersitzung gestartet,
-    # um dort den Bildschirm aufzunehmen (siehe _ScreenHelper). In diesem Modus
-    # wird KEINE Verbindung zum Backend aufgebaut - der Helfer redet nur mit
-    # dem Haupt-Agenten auf 127.0.0.1.
-    # WICHTIG: auf dem OBEN gesetzten Loop laufen (nicht asyncio.run(), das einen
-    # neuen Loop anlegen würde) -> derselbe Loop, auf dem 'sio' erstellt wurde.
+    # Helper mode: the agent started itself in the user session to capture the
+    # screen there (see _ScreenHelper). In this mode NO connection to the
+    # backend is made - the helper only talks to the main agent on 127.0.0.1.
+    # IMPORTANT: run on the loop set ABOVE (not asyncio.run(), which would create
+    # a new loop) -> the same loop on which 'sio' was created.
     asyncio.set_event_loop(_AGENT_LOOP)
     try:
         _AGENT_LOOP.run_until_complete(main())
@@ -11196,9 +11182,9 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except BaseException:
-        # CRASH-SCHUTZ: Traceback in last_crash.txt sichern (wird beim nächsten
-        # erfolgreichen Registrieren ans Backend gemeldet und dem Nutzer
-        # angezeigt), kurz warten und den Agenten NEU STARTEN.
+        # CRASH GUARD: save the traceback to last_crash.txt (reported to the
+        # backend on the next successful registration and shown to the user),
+        # wait briefly and RESTART the agent.
         import traceback
         tb = traceback.format_exc()
         try:
@@ -11207,11 +11193,11 @@ if __name__ == "__main__":
                 f.write(time.strftime("%Y-%m-%d %H:%M:%S") + "\n" + tb)
         except OSError:
             pass
-        # NEUSTART-SCHUTZ: Stuerzt der Agent immer wieder SOFORT ab, wuerde
-        # ein 5-Sekunden-Takt die Maschine dauerhaft belasten und das Log
-        # zumuellen. Deshalb wird mitgezaehlt, wie oft kurz hintereinander
-        # neu gestartet wurde, und die Wartezeit waechst bis auf 10 Minuten.
-        # Aufgegeben wird trotzdem NIE - der Agent kommt immer wieder.
+        # RESTART GUARD: if the agent crashes IMMEDIATELY over and over, a
+        # 5-second cadence would permanently load the machine and flood the log.
+        # So it counts how often it restarted in quick succession, and the wait
+        # grows up to 10 minutes. It still NEVER gives up - the agent keeps
+        # coming back.
         _restart_state = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                       "restart_count.txt")
         _count, _last = 0, 0.0
@@ -11221,8 +11207,8 @@ if __name__ == "__main__":
                 _count, _last = int(_parts[0]), float(_parts[1])
         except (OSError, ValueError, IndexError):
             pass
-        # Laeuft der Agent laenger als 10 Minuten stabil, zaehlt der naechste
-        # Absturz wieder als Einzelfall.
+        # If the agent runs stably for more than 10 minutes, the next crash
+        # counts as a one-off again.
         _count = _count + 1 if (time.time() - _last) < 600 else 1
         try:
             with open(_restart_state, "w", encoding="utf-8") as f:
@@ -11230,7 +11216,7 @@ if __name__ == "__main__":
         except OSError:
             pass
         _wait = min(5 * (2 ** min(_count - 1, 7)), 600)
-        _print(f"[agent] ABSTURZ Nr. {_count} - Neustart in {_wait} Sekunden:\n" + tb)
+        _print(f"[agent] CRASH no. {_count} - restarting in {_wait} seconds:\n" + tb)
         try:
             time.sleep(_wait)
         except Exception:
