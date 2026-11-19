@@ -1,15 +1,15 @@
 """
 main.py
 -------
-Der zentrale Einstiegspunkt des Backends. Verbindet drei Dinge zu EINER
-Anwendung, die mit einem einzigen Befehl gestartet wird:
+The central entry point of the backend. Connects three things into ONE
+application that is started with a single command:
 
-  1. FastAPI          -> die REST-API (/api/...)
-  2. Socket.IO         -> die Echtzeit-Verbindungen (/socket.io/...)
-  3. Statische Dateien -> das komplette Frontend (HTML/CSS/JS) aus dem
-                          "frontend"-Ordner, unter der Wurzel "/"
+  1. FastAPI          -> the REST API (/api/...)
+  2. Socket.IO         -> the real-time connections (/socket.io/...)
+  3. static files      -> the complete frontend (HTML/CSS/JS) from the
+                          "frontend" folder, under the root "/"
 
-Das bedeutet: du brauchst NUR diesen einen Python-Prozess zu starten
+This means: you only need to start this ONE Python process
 (see run.py) - no separate web server, no Node/npm needed to view the
 dashboard in the browser. Just open http://localhost:4000
 """
@@ -26,10 +26,10 @@ from app import loghub as _loghub
 _loghub.install()  # idempotent: captures backend output (if not started via run.py)
 from app.config import CORS_ORIGIN
 from app.sockets import sio
-# Der Import selbst ist die erste Gefahrenstelle: Eine einzige Datei mit
-# einem Syntaxfehler laesst hier ALLES scheitern, noch bevor _mount()
-# ueberhaupt zum Zuge kaeme. Deshalb zuerst der gewoehnliche Sammelimport -
-# und wenn der stolpert, werden die Module einzeln nachgeholt.
+# The import itself is the first danger spot: a single file with a syntax
+# error makes EVERYTHING fail here, before _mount() even gets a chance. So
+# first the ordinary bulk import - and if that stumbles, the modules are
+# fetched individually.
 from router import (
     modules_routes,
     nodes_routes,
@@ -47,76 +47,76 @@ from router import (
     source_routes,
     notes_routes,
     diag_routes,
-    dist_routes,       # frueher Modul "dist" - jetzt Core (Verteilung unter /dist)
-)  # noqa: E501 - Sammelimport, Absicherung siehe _import_router() unten
+    dist_routes,       # formerly module "dist" - now core (distribution under /dist)
+)  # noqa: E501 - bulk import, safeguard see _import_router() below
 
 
 def _import_router(name):
     """
-    Holt einen Router einzeln nach.
+    Fetches a router individually.
 
-    Wird nur gebraucht, wenn der Sammelimport oben scheitert - dann steht in
-    der Container-Ausgabe genau, WELCHE Datei das Problem hat, statt eines
-    Stacktraces, in dem der Name untergeht.
+    Only needed when the bulk import above fails - then the container output
+    says exactly WHICH file has the problem, instead of a stack trace in which
+    the name gets lost.
     """
     import importlib
     try:
         return importlib.import_module(f"router.{name}")
     except Exception as exc:
         from app.errors import report, Codes
-        report(Codes.BOOT_ROUTER, exc, f"Router-Datei '{name}.py' ist defekt",
-               folge="Dieser Bereich fehlt, das Backend startet trotzdem")
+        report(Codes.BOOT_ROUTER, exc, f"Router file '{name}.py' is broken",
+               consequence="This section is missing, the backend starts anyway")
         return None
 
 # 1) Initialize the database (creates tables, creates admin/admin if needed)
-# Vorher: Ist der externe Datenbank-Modus aktiv, den Stand von extern laden
+# Before: if external database mode is active, load the state from external
 # (afterwards init_db migrations run normally on the loaded state).
 from app import rebrand as _rebrand
-_rebrand.before_db()        # Umbenennung RAPALLE.net -> BYTERA: Container/dbconfig nachziehen
+_rebrand.before_db()        # rename RAPALLE.net -> BYTERA: migrate containers/dbconfig
 from app import dbsync as _dbsync
 _dbsync.startup_restore_if_external()
 db.init_db()
 _rebrand.after_db()
-# EIN Ablageort fuer alle Dateien (src/backend/storage): alte Orte (media/,
-# temp/dist, storage/deployment, dist/enrollment, ...) einmalig dorthin schieben.
+# ONE location for all files (src/backend/storage): move old locations (media/,
+# temp/dist, storage/deployment, dist/enrollment, ...) there once.
 try:
     from app import storage_layout as _storage_layout
     _storage_layout.migrate()
 except Exception as _e:
-    print(f"[storage] Umzug uebersprungen: {_e}")
-# Hintergrund-Jobs: Verlaufstabelle + beim letzten Stopp laufende Jobs abschliessen
+    print(f"[storage] migration skipped: {_e}")
+# Background jobs: history table + finish jobs that were running at the last stop
 try:
     from app import bgjobs as _bgjobs_boot
     _bgjobs_boot.startup_recover()
 except Exception as _e:
-    print(f"[bgjobs] Start: {_e}")         # Einstellungen, gespeicherte Skripte, repo.txt, Standard-Logos
+    print(f"[bgjobs] start: {_e}")         # settings, stored scripts, repo.txt, default logos
 
-# (Aufbewahrungsfristen: siehe Modul 'privacy')
+# (retention periods: see module 'privacy')
 
 # 2) Create the FastAPI app and mount all route modules
 api = FastAPI(title="BYTERA RMM Backend")
 
-# Modul-Manager: findet module.json, laedt aktivierte Module im Startup-Event.
-# WICHTIG: direkt nach dem Erzeugen der App, noch VOR allen anderen Middlewares -
-# seine GuardMiddleware muss die innerste sein, damit sie Abstuerze aus
-# Modul-Routen sieht, bevor _RequestWatch & Co. daraus einen 500er machen.
+# Module manager: finds module.json, loads enabled modules in the startup event.
+# IMPORTANT: right after creating the app, still BEFORE all other middlewares -
+# its GuardMiddleware must be the innermost so it sees crashes from module
+# routes before _RequestWatch & co. turn them into a 500.
 from app import modules as _modules
 _modules.init(api, sio)
-from app import node_manager as _node_manager   # registriert den Socket.IO-Namespace /node
+from app import node_manager as _node_manager   # registers the Socket.IO namespace /node
 
 # ---------------------------------------------------------------------------
-# Beobachtung jeder einzelnen Anfrage
+# Observation of every single request
 # ---------------------------------------------------------------------------
-# Zweck: Nach einem Absturz soll im Protokoll stehen, WELCHE Anfrage zuletzt
-# lief. Genau diese Angabe fehlte bisher - im Container-Log standen nur
-# Zugriffszeilen von uvicorn, die erst NACH der Antwort geschrieben werden.
-# Stirbt der Prozess mitten in einer Anfrage, taucht sie dort also nie auf.
+# Purpose: after a crash the log should say WHICH request ran last. Exactly
+# this was missing - the container log only had uvicorn access lines, which
+# are written AFTER the response. If the process dies mid-request, it never
+# shows up there.
 #
-# Diese Middleware schreibt deshalb:
+# This middleware therefore writes:
 #   * every request that takes unusually long (with duration and path),
 #   * every exception with a full stack trace,
 #   * and it records which requests are running RIGHT NOW. The loop guard
-#     nimmt diese Liste in seinen Stack-Abzug auf.
+#     includes this list in its stack dump.
 import time as _t
 import traceback as _traceback
 from starlette.middleware.base import BaseHTTPMiddleware as _BaseMW
@@ -130,7 +130,7 @@ try:
 except ValueError:
     SLOW_REQUEST_S = 2.0
 
-# Was gerade in Bearbeitung ist: Kennung -> (Pfad, Startzeit)
+# What is currently being processed: id -> (path, start time)
 INFLIGHT: dict[int, tuple[str, float]] = {}
 _inflight_seq = 0
 
@@ -146,22 +146,21 @@ class _RequestWatch(_BaseMW):
         try:
             response = await call_next(request)
         except Exception as exc:
-            # Eine Ausnahme darf NIE die Verbindung einfach abreissen lassen -
-            # der Browser wartet sonst bis in sein eigenes Zeitlimit. Lieber
-            # eine ehrliche 500 MIT KENNCODE: Damit kann der Benutzer die
-            # Meldung weitergeben und man findet die Stelle im Protokoll
-            # sofort wieder, ohne nach Uhrzeiten zu suchen.
+            # An exception must NEVER simply tear down the connection -
+            # otherwise the browser waits until its own timeout. Better an
+            # honest 500 WITH A CODE: with it the user can pass on the message
+            # and one finds the spot in the log again immediately, without
+            # searching by timestamps.
             duration = _t.monotonic() - started
             from app.errors import report as _report, Codes as _Codes
             code = _report(_Codes.API_UNHANDLED, exc, path,
-                           dauer=f"{duration:.1f}s",
+                           duration=f"{duration:.1f}s",
                            client=getattr(request.client, "host", "?"))
             return _JSONResp(
                 status_code=500,
-                content={"detail": f"Interner Fehler ({code}) in "
-                                   f"{request.url.path}. Der Kenncode steht im "
-                                   f"Server-Protokoll – dort ist auch die "
-                                   f"Ursache vermerkt.",
+                content={"detail": f"Internal error ({code}) in "
+                                   f"{request.url.path}. The code is in the "
+                                   f"server log - the cause is noted there too.",
                          "error_code": code})
         finally:
             duration = _t.monotonic() - started
@@ -170,7 +169,7 @@ class _RequestWatch(_BaseMW):
                 try:
                     from app.errors import report as _report, Codes as _Codes
                     _report(_Codes.API_SLOW, None, path,
-                            dauer=f"{duration:.1f}s")
+                            duration=f"{duration:.1f}s")
                 except Exception:
                     pass
         return response
@@ -184,26 +183,26 @@ api.add_middleware(_RequestWatch)
 from app.hostlock import HostLockMiddleware as _HostLock
 api.add_middleware(_HostLock)
 
-# --- Fehlertexte in der Sprache des Benutzers ------------------------------
-# Das Backend wirft seine HTTPExceptions weiterhin mit deutschem Text. Dieser
-# Handler uebersetzt den Text kurz vor dem Senden - EINE Stelle statt ueber 200
-# verstreuter Aufrufe. Die Sprache kommt aus dem Profil des angemeldeten
-# Benutzers (users.language); ist niemand angemeldet, gilt die Server-Sprache.
-# Unbekannte Texte bleiben unveraendert, es kann also nichts verlorengehen.
+# --- Error texts in the user's language ------------------------------------
+# The backend still throws its HTTPExceptions with text in one language. This
+# handler translates the text just before sending - ONE place instead of 200+
+# scattered calls. The language comes from the profile of the logged-in user
+# (users.language); if nobody is logged in, the server language applies.
+# Unknown texts stay unchanged, so nothing can get lost.
 from fastapi import HTTPException as _HTTPExc
 from fastapi.responses import JSONResponse as _JSONResponse
 from app.i18n import translate_detail as _tr_detail, server_lang as _srv_lang
 
 
 def _lang_of_request(request) -> str:
-    """Sprache des anfragenden Benutzers, sonst Server-Sprache."""
+    """Language of the requesting user, otherwise the server language."""
     try:
         from app.auth import get_current_user
         user = get_current_user(request.headers.get("authorization"))
         if user and user.get("language"):
             return str(user["language"])
     except Exception:
-        # Kein/ungueltiges Token: Das ist normal (Login, oeffentliche Seiten).
+        # No/invalid token: this is normal (login, public pages).
         pass
     return _srv_lang()
 
@@ -230,29 +229,29 @@ from app.hostapps import HostDispatch as _HostDispatch
 api.add_middleware(_HostDispatch)
 
 def _mount(name, module) -> None:
-    """Bindet einen Router ein und ueberlebt es, wenn er kaputt ist."""
+    """Mounts a router and survives it being broken."""
     try:
         api.include_router(module.router)
     except Exception as exc:
         from app.errors import report, Codes
         report(Codes.BOOT_ROUTER, exc,
-               f"Router '{name}' konnte nicht eingebunden werden",
-               folge=f"Die Endpunkte von {name} fehlen, der Rest laeuft")
+               f"Router '{name}' could not be mounted",
+               consequence=f"The endpoints of {name} are missing, the rest runs")
 
 
-# Jeder Router einzeln eingebunden.
+# Each router mounted individually.
 #
-# Frueher standen hier 34 nackte include_router()-Zeilen. Scheitert eine
-# davon - eine kaputte Datei nach einem Update, ein fehlendes Modul -, wirft
-# der Import beim Start, und das GESAMTE Backend startet nicht. Der Container
-# landet dann in der Notfall-Fehlerseite, und alle 34 Bereiche sind weg, weil
-# einer defekt war.
+# Previously there were 34 bare include_router() lines here. If one of them
+# fails - a broken file after an update, a missing module - the import throws
+# at startup and the ENTIRE backend does not start. The container then lands
+# on the emergency error page, and all 34 sections are gone because one was
+# broken.
 #
-# _mount() bindet jeden Router einzeln ein und meldet einen Fehlschlag mit
-# Kenncode. Ein defekter Bereich fehlt dann - alle anderen laufen.
-# Modul-Verwaltung (Core): Modul-App-API + Frontend-Dateien aktiver Module
+# _mount() mounts each router individually and reports a failure with a code.
+# A broken section is then missing - all others run.
+# Module management (Core): module app API + frontend files of active modules
 _mount("modules_routes", modules_routes)
-_mount("nodes_routes", nodes_routes)      # Nodes (eigener Prozess auf dem Client)
+_mount("nodes_routes", nodes_routes)      # nodes (separate process on the client)
 _mount("docker_routes", docker_routes)
 _mount("auth_routes", auth_routes)
 _mount("users_routes", users_routes)
@@ -264,18 +263,18 @@ _mount("audit_routes", audit_routes)
 _mount("admin_routes", admin_routes)
 _mount("agent_update_routes", agent_update_routes)
 _mount("update_routes", update_routes)
-# Datenbank-Verwaltung (lokal/extern/Docker-DB): Modul "sql" (src/modules/backend/sql)
+# Database management (local/external/Docker DB): module "sql" (src/modules/backend/sql)
 _mount("source_routes", source_routes)
-# Benachrichtigungen (Regeln, SMTP, Webhooks): Modul "notify" (src/modules/backend/notify)
-_mount("notes_routes", notes_routes)       # Client-Notizen (Sichtbarkeit + Protokoll)
-# VPN AUSGEBAUT (2026-09-20): Der WireGuard-Teil ist vollstaendig entfernt.
-# Grund: Sein Datenweg hing im Event-Loop (siehe unten) und hat das Backend
-# reihenweise in den Loop-Waechter laufen lassen. Port-Weiterleitung und
-# Relay-Explorer bleiben - die brauchen kein VPN.
+# Notifications (rules, SMTP, webhooks): module "notify" (src/modules/backend/notify)
+_mount("notes_routes", notes_routes)       # client notes (visibility + log)
+# VPN REMOVED (2026-09-20): the WireGuard part is completely gone.
+# Reason: its data path hung in the event loop (see below) and repeatedly sent
+# the backend into the loop guard. Port forwarding and the relay explorer
+# stay - they need no VPN.
 _mount("diag_routes", diag_routes)
-_mount("dist_routes", dist_routes)         # Verteilung /dist (Core)
-# Hintergrund-Jobs (Scans, Erkennungen ...): laufen im Backend, nicht in der
-# Browser-Sitzung - Neuladen/andere Benutzer sehen denselben Stand (app/bgjobs.py)
+_mount("dist_routes", dist_routes)         # distribution /dist (Core)
+# Background jobs (scans, detections ...): run in the backend, not in the
+# browser session - reload/other users see the same state (app/bgjobs.py)
 # Encryption towards agents/clients (info, status, end-to-end REST envelope)
 security_routes = _import_router("security_routes")
 if security_routes is not None:
@@ -283,16 +282,16 @@ if security_routes is not None:
 bgjobs_routes = _import_router("bgjobs_routes")
 if bgjobs_routes is not None:
     _mount("bgjobs_routes", bgjobs_routes)
-# Aktivierung + Modul-Store (Settings -> Aktivierung / Modul-Store)
+# Activation + module store (Settings -> Activation / Module store)
 store_routes = _import_router("store_routes")
 if store_routes is not None:
     _mount("store_routes", store_routes)
-# Auto-Migration von einem anderen BYTERA-Backend (Settings -> Migration)
+# Auto-migration from another BYTERA backend (Settings -> Migration)
 migration_routes = _import_router("migration_routes")
 if migration_routes is not None:
     _mount("migration_routes", migration_routes)
 
-# (Guacamole-WebSocket-Tunnel registriert das Modul 'guacamole' selbst.)
+# (the Guacamole WebSocket tunnel is registered by the module 'guacamole' itself.)
 
 
 # ------------------------------------------------------------------
@@ -352,14 +351,14 @@ async def versions():
     """
     Central version info (no auth - contains no secrets):
     backend and agent version from the respective version.txt files.
-    'boot_id' identifiziert den laufenden Prozess (Auto-Reload nach Restart).
+    'boot_id' identifies the running process (auto-reload after a restart).
     """
     return {"backend": get_backend_version(), "agent": get_agent_version(), "boot_id": BOOT_ID}
 
 
 @api.get("/api/boot-id")
 async def boot_id():
-    """Leichter Endpunkt, den das Frontend pollt, um Backend-Neustarts zu erkennen."""
+    """Lightweight endpoint the frontend polls to detect backend restarts."""
     return {"boot_id": BOOT_ID}
 
 
@@ -477,7 +476,7 @@ def _check_website(url: str) -> tuple[bool, str | None]:
 
 
 async def _notify_uptime(site: dict, ok: bool, error: str | None) -> None:
-    """Baut die Notification und verschickt sie an Webhooks + Dashboards."""
+    """Builds the notification and sends it to webhooks + dashboards."""
     client = db.get_client(site["client_id"]) or {}
     tenant_name = location_name = None
     try:
@@ -506,26 +505,26 @@ async def _notify_uptime(site: dict, ok: bool, error: str | None) -> None:
         client=client.get("hostname"), service="Uptime-Monitor", level=level,
     )
 
-    # 1) Alle Webhooks (Modul "notify"; ist es aus, passiert nichts)
+    # 1) All webhooks (module "notify"; if it is off, nothing happens)
     try:
         from app import notifier as _notifier
         await _notifier.send_all_webhooks(notification)
     except Exception as e:
-        print(f"[uptime] Webhooks fehlgeschlagen: {e}")
+        print(f"[uptime] webhooks failed: {e}")
 
-    # 2) Normale In-App-Notification an alle verbundenen Dashboards
+    # 2) Normal in-app notification to all connected dashboards
     try:
         await sio.emit("notify", {
             "message": f"{head}\n{body_txt}",
             "level": level,
         }, namespace="/dashboard")
     except Exception as e:
-        print(f"[uptime] Dashboard-Notify fehlgeschlagen: {e}")
+        print(f"[uptime] dashboard notify failed: {e}")
 
     db.add_audit_entry("system", "website.uptime", target=site["client_id"],
                        details=f"{site['name']} -> {'UP' if ok else 'DOWN'}")
 
-    # 3) Benachrichtigungs-Regeln (website_up / website_down)
+    # 3) Notification rules (website_up / website_down)
     try:
         from app import notifier as _notifier
         await _notifier.fire_event("website_up" if ok else "website_down",
@@ -533,7 +532,7 @@ async def _notify_uptime(site: dict, ok: bool, error: str | None) -> None:
                                    notification=notification,
                                    dedupe_key=f"{site['id']}:{'up' if ok else 'down'}")
     except Exception as e:
-        print(f"[uptime] Regel-Dispatch fehlgeschlagen: {e}")
+        print(f"[uptime] rule dispatch failed: {e}")
 
 
 async def _uptime_monitor_engine():
@@ -585,26 +584,26 @@ async def _start_background_tasks():
         _asyncio.get_running_loop().create_task(_tls.run(socket_app))
     except Exception as _e:
         print(f"[security] start: {_e}")
-    try:                                   # Arbeitsspeicher klein halten (app/memtrim.py)
+    try:                                   # keep memory footprint small (app/memtrim.py)
         from app import memtrim as _memtrim
         _memtrim.start(_asyncio.get_running_loop())
     except Exception as _e:
         print(f"[startup] memtrim: {_e}")
-    # Verteilung /dist (Core, frueher Modul "dist"): Kern-Ordner anlegen und
-    # vorhandene Agent-/Client-Pakete nach /dist spiegeln.
+    # Distribution /dist (Core, formerly module "dist"): create core folders and
+    # mirror existing agent/client packages into /dist.
     try:
         from app import dist_store as _dist_store, dist_sync as _dist_sync
         _dist_store.ensure_dirs()
         _n = _dist_sync.sync_packages()
         if _n:
-            print(f"[dist] {_n} Paket(e) nach /dist gespiegelt")
+            print(f"[dist] {_n} package(s) mirrored into /dist")
     except Exception as _e:
-        print(f"[dist] Start uebersprungen: {_e}")
-    # Aktivierte Module laden. Ein Fehler betrifft NUR das jeweilige Modul.
+        print(f"[dist] start skipped: {_e}")
+    # Load enabled modules. An error affects ONLY the respective module.
     try:
         await _modules.load_enabled()
     except Exception as _e:
-        print(f"[module] Laden uebersprungen: {_e}")
+        print(f"[module] loading skipped: {_e}")
     # If the backend process was previously ended by a crash and automatically
     # restarted by run.py, this is recorded here - after a successful startup -
     # recorded in the audit log (counterpart to 'backend.crash').
@@ -621,37 +620,37 @@ async def _start_background_tasks():
     from app import diagnostics as _diag
     _diag.install()
     _diag.report_previous_shutdown()
-    # Signaturen der Socket-Handler pruefen, bevor irgendjemand verbindet.
+    # Check the signatures of the socket handlers before anyone connects.
     try:
         from app import sockets as _sockets
         _sockets.verify_handlers()
     except Exception as _e:
-        print(f"[sockets] Signaturpruefung uebersprungen: {_e}")
+        print(f"[sockets] signature check skipped: {_e}")
     _diag.restore_from_settings()
-    # Der Loop-Waechter laeuft in einem EIGENEN Thread. Das ist Absicht:
-    # Steht die Ereignisschleife still, kaeme eine async-Ueberwachung selbst
-    # nicht mehr zum Zug und wuerde ausgerechnet den Fall verschweigen, den
-    # sie melden soll. Ein Thread misst von aussen.
-    _supervise("loop-herzschlag", _diag.loop_heartbeat)
+    # The loop guard runs in its OWN thread. That is intentional: if the event
+    # loop stalls, an async monitor would itself no longer get a turn and would
+    # hide exactly the case it is meant to report. A thread measures from
+    # outside.
+    _supervise("loop-heartbeat", _diag.loop_heartbeat)
     _diag.start_watchdog()
-    _supervise("diagnose-messwerte", _diag.sampler_loop)
-    _supervise("tabellen-groesse", _diag.table_size_watch)
+    _supervise("diagnostics-samples", _diag.sampler_loop)
+    _supervise("table-size", _diag.table_size_watch)
 
     _supervise("uptime-monitor", _uptime_monitor_engine)
     # Warranty check loop: now runs in the "notify" module (ctx.spawn)
     _supervise("server-auto-update", _server_auto_update_engine)
     _supervise("db-sync", _db_sync_engine)
-    # Wartungsmodus: abgelaufene Zeitfenster beenden und an Agents melden.
+    # Maintenance mode: end expired time windows and report to agents.
     from app.sockets import maintenance_expiry_loop as _maint_loop
-    _supervise("wartungsmodus-ablauf", _maint_loop)
+    _supervise("maintenance-expiry", _maint_loop)
 
 
-    # Frueher wurde hier vpn.start() angeworfen (wireguard-go + TUN-Geraet).
-    # Der TUN-Leser hing per add_reader DIREKT im Event-Loop und erzeugte pro
-    # IP-Paket einen asyncio-Task - bei echtem Tunnel-Verkehr tausende pro
-    # Sekunde in genau der Schleife, die auch alle Agenten, die Shell und den
-    # Remote-Screen bedient. Das war die Hauptquelle der Loop-Blockaden.
-    # Der VPN-Start ist ersatzlos entfallen.
+    # Previously vpn.start() was kicked off here (wireguard-go + TUN device).
+    # The TUN reader hung via add_reader DIRECTLY in the event loop and created
+    # one asyncio task per IP packet - with real tunnel traffic thousands per
+    # second in exactly the loop that also serves all agents, the shell and the
+    # remote screen. That was the main source of the loop blockages.
+    # The VPN start was removed without replacement.
 
 
 # ----------------------------------------------------------------------
@@ -736,7 +735,7 @@ async def _server_auto_update_engine():
         try:
             await update_routes.auto_update_tick()
         except Exception as e:
-            print(f"[auto-update] Engine-Fehler: {e}")
+            print(f"[auto-update] engine error: {e}")
         await _asyncio.sleep(1800)
 
 
@@ -808,33 +807,33 @@ async def _frontend_version(user: dict = _Depends(_current_user)):
 
 class _RevalidatingStatic(StaticFiles):
     """
-    StaticFiles mit passenden Cache-Headern fuer die Frontend-Dateien.
+    StaticFiles with suitable cache headers for the frontend files.
 
-    Ausgangslage: StaticFiles schickt von Haus aus NUR Last-Modified und ETag,
-    aber kein Cache-Control. Ohne Cache-Control cachen Browser heuristisch -
-    je nach Alter der Datei durchaus stundenlang, ohne auch nur nachzufragen.
-    Bei ES-Modulen ist das tueckisch: Nach einem Update lief im Browser weiter
-    der alte Code und rief Endpunkte auf, die es serverseitig nicht mehr gibt.
+    Starting point: StaticFiles sends ONLY Last-Modified and ETag by default,
+    but no Cache-Control. Without Cache-Control browsers cache heuristically -
+    depending on the file age for hours, without even asking. With ES modules
+    this is treacherous: after an update the browser kept running the old code
+    and called endpoints that no longer exist on the server.
 
-    Deshalb stand hier ueberall 'no-cache' ("vor Benutzung rueckfragen").
-    Das hat aber einen Preis, der erst im Betrieb hinter einem Proxy auffiel:
-    Das Dashboard besteht aus mehreren Dutzend ES-Modulen. Bei JEDEM Laden
-    ergab das mehrere Dutzend Rueckfragen innerhalb weniger Sekunden - ein
-    Muster, das Rate-Limiter (Cloudflare & Co.) als Burst einstufen und mit
-    429 abweisen. Dann fehlen einzelne Module, und der Browser arbeitet mit
-    alten Resten weiter ("does not provide an export named ...").
+    That is why everything here used 'no-cache' ("revalidate before use").
+    But that has a price that only showed up in operation behind a proxy: the
+    dashboard consists of several dozen ES modules. On EVERY load this produced
+    several dozen revalidation requests within a few seconds - a pattern that
+    rate limiters (Cloudflare & co.) classify as a burst and reject with 429.
+    Then individual modules are missing and the browser keeps working with old
+    remnants ("does not provide an export named ...").
 
-    Kompromiss:
-      *.html                 -> no-cache. Das ist EINE Datei; sie muss immer
-                               frisch sein, denn sie zieht alles andere nach.
-      *.js/.mjs/.css/.json   -> kurzes max-age. Innerhalb dieser Zeitspanne
-                               kommt ein Reload ganz ohne Anfragen aus, was
-                               den Burst beseitigt. Danach wird wieder
-                               revalidiert, Updates kommen also weiter an.
-      alles andere           -> unveraendert (Bilder, Schriften).
+    Compromise:
+      *.html                 -> no-cache. That is ONE file; it must always be
+                               fresh, because it pulls in everything else.
+      *.js/.mjs/.css/.json   -> short max-age. Within this span a reload works
+                               entirely without requests, which removes the
+                               burst. Afterwards it revalidates again, so
+                               updates still arrive.
+      everything else        -> unchanged (images, fonts).
 
-    Die Dauer laesst sich ueber die Einstellung 'static_cache_seconds' aendern;
-    0 stellt das alte Verhalten (immer rueckfragen) wieder her.
+    The duration can be changed via the setting 'static_cache_seconds';
+    0 restores the old behavior (always revalidate).
     """
 
     REVALIDATE = (".js", ".mjs", ".css", ".json", ".map")
@@ -852,9 +851,9 @@ class _RevalidatingStatic(StaticFiles):
 
     async def get_response(self, path: str, scope):
         low = path.lower()
-        # Schutz gegen fehlende Exporte (app/frontend_guard.py): Passt eine
-        # Datei nicht zur Version, werden Platzhalter angehaengt, damit nicht
-        # der GESAMTE Modulbaum (inkl. Anmeldung) ausfaellt.
+        # Protection against missing exports (app/frontend_guard.py): if a file
+        # does not match the version, placeholders are appended so that the
+        # ENTIRE module tree (incl. login) does not fail.
         if low.endswith(".js"):
             try:
                 from app import frontend_guard
@@ -876,8 +875,8 @@ class _RevalidatingStatic(StaticFiles):
 
 
     async def _patched_response(self, path: str, scope, extra: str):
-        """Datei + Platzhalter ausliefern (mit eigener ETag, damit der Browser
-        keine alte, ungepatchte Fassung aus dem Cache nimmt)."""
+        """Serve file + placeholder (with its own ETag, so the browser does not
+        take an old, unpatched version from the cache)."""
         import hashlib
         from starlette.responses import Response as _Resp
         try:
@@ -897,9 +896,9 @@ class _RevalidatingStatic(StaticFiles):
 
 @api.get("/api/frontend/health")
 async def _frontend_health():
-    """Ohne Anmeldung abrufbar (nur Dateinamen): Welche Frontend-Dateien
-    importieren Funktionen, die es in der Zieldatei nicht gibt? Wird vom
-    sicheren Lader (js/boot.js) im Notfall-Modus angezeigt."""
+    """Retrievable without login (file names only): which frontend files
+    import functions that do not exist in the target file? Shown by the safe
+    loader (js/boot.js) in emergency mode."""
     from app import frontend_guard
     return frontend_guard.health()
 

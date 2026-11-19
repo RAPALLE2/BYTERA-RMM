@@ -3,15 +3,15 @@ routers/clients_routes.py
 ----------------------------
 Everything about the managed devices (clients) themselves.
 
-Endpunkte:
-  GET    /api/clients                 -> alle Clients + Online-Status + Live-Metriken
-  GET    /api/clients/{id}            -> ein einzelner Client
-  PUT    /api/clients/{id}            -> Client bearbeiten (Edit-Dialog:
-                                          Tenant/Location/Name/Farbe/aktiv/...)
+Endpoints:
+  GET    /api/clients                 -> all clients + online status + live metrics
+  GET    /api/clients/{id}            -> a single client
+  PUT    /api/clients/{id}            -> edit client (edit dialog:
+                                          tenant/location/name/color/active/...)
   DELETE /api/clients/{id}            -> delete client
   POST   /api/clients/{id}/exec       -> run a shell command on the client (terminal)
-  POST   /api/clients/bulk-exec       -> Shell-Befehl auf MEHREREN Clients gleichzeitig
-  GET    /api/clients/{id}/fs         -> Ordnerinhalt auf dem Client auflisten (File Station)
+  POST   /api/clients/bulk-exec       -> shell command on SEVERAL clients at once
+  GET    /api/clients/{id}/fs         -> list folder contents on the client (file station)
 """
 
 import asyncio
@@ -34,20 +34,20 @@ def _require_client_perm(user: dict, client_id: str, perm: str) -> None:
     """Checks a client-related permission; raises 404 instead of 403 if the
     client is not visible to the user at all (hidden clients stay hidden)."""
     if not can_access_client(user, client_id):
-        raise HTTPException(404, "Client nicht gefunden")
+        raise HTTPException(404, "Client not found")
     require_perm(user, perm, client_id)
 
 router = APIRouter(prefix="/api/clients", tags=["clients"])
 
 
 # ==================================================================
-# Client-Websites (Quick Access + Favoriten + Uptime-Monitoring)
+# Client websites (quick access + favorites + uptime monitoring)
 # ==================================================================
 
 # Allowed notification modes for uptime monitoring:
-#   'up'     -> Benachrichtigung, wenn ein Scan ERFOLGREICH war (bei Statuswechsel)
-#   'down'   -> Benachrichtigung, wenn ein Scan FEHLGESCHLAGEN ist (bei Statuswechsel)
-#   'always' -> Benachrichtigung nach JEDEM Scan (Erfolg und Fehler)
+#   'up'     -> notification when a scan SUCCEEDED (on status change)
+#   'down'   -> notification when a scan FAILED (on status change)
+#   'always' -> notification after EVERY scan (success and failure)
 _NOTIFY_MODES = {"up", "down", "always"}
 
 
@@ -57,8 +57,8 @@ class WebsiteBody(BaseModel):
     favorite: bool = False
     monitor_enabled: bool = False
     monitor_notify: str = "down"              # 'up' | 'down' | 'always'
-    monitor_interval_seconds: int = 300       # Delay zwischen den Scans
-    open_mode: str = "external"               # 'external' Tab | 'internal' Browser-Fenster
+    monitor_interval_seconds: int = 300       # delay between scans
+    open_mode: str = "external"               # 'external' tab | 'internal' browser window
 
 
 class WebsiteUpdateBody(BaseModel):
@@ -73,23 +73,23 @@ class WebsiteUpdateBody(BaseModel):
 
 def _validate_website(url: str | None, notify: str | None, interval: int | None) -> None:
     if url is not None and not (url.startswith("http://") or url.startswith("https://")):
-        raise HTTPException(400, "Die URL muss mit http:// oder https:// beginnen")
+        raise HTTPException(400, "The URL must start with http:// or https://")
     if notify is not None and notify not in _NOTIFY_MODES:
-        raise HTTPException(400, "monitor_notify muss 'up', 'down' oder 'always' sein")
+        raise HTTPException(400, "monitor_notify must be 'up', 'down' or 'always'")
     if interval is not None and interval < 10:
-        raise HTTPException(400, "Das Scan-Intervall muss mindestens 10 Sekunden betragen")
+        raise HTTPException(400, "The scan interval must be at least 10 seconds")
 
 
 def _validate_open_mode(mode: str | None) -> None:
     if mode is not None and mode not in ("external", "internal"):
-        raise HTTPException(400, "open_mode muss 'external' oder 'internal' sein")
+        raise HTTPException(400, "open_mode must be 'external' or 'internal'")
 
 
-# Wichtig: Literal-Route VOR den /{client_id}/...-Routen definieren.
+# Important: define the literal route BEFORE the /{client_id}/... routes.
 @router.get("/websites/favorites")
 def get_favorite_websites(user: dict = Depends(get_current_user)):
-    """Alle als Favorit angehefteten Websites - gefiltert auf Clients,
-    that the user is allowed to see at all."""
+    """All websites pinned as favorites - filtered to clients the user is
+    allowed to see at all."""
     favs = db.list_favorite_websites()
     visible = visible_client_ids(user, [w["client_id"] for w in favs])
     return [w for w in favs if w["client_id"] in visible]
@@ -98,7 +98,7 @@ def get_favorite_websites(user: dict = Depends(get_current_user)):
 @router.get("/{client_id}/websites")
 def get_client_websites(client_id: str, user: dict = Depends(get_current_user)):
     if not db.get_client(client_id) or not can_access_client(user, client_id):
-        raise HTTPException(404, "Client nicht gefunden")
+        raise HTTPException(404, "Client not found")
     _require_client_perm(user, client_id, "c_websites_view")
     return db.list_client_websites(client_id)
 
@@ -107,7 +107,7 @@ def get_client_websites(client_id: str, user: dict = Depends(get_current_user)):
 def create_client_website(client_id: str, body: WebsiteBody,
                                 user: dict = Depends(get_current_user)):
     if not db.get_client(client_id):
-        raise HTTPException(404, "Client nicht gefunden")
+        raise HTTPException(404, "Client not found")
     _require_client_perm(user, client_id, "c_websites_edit")
     _validate_website(body.url, body.monitor_notify, body.monitor_interval_seconds)
     _validate_open_mode(body.open_mode)
@@ -130,7 +130,7 @@ def update_client_website(client_id: str, website_id: str, body: WebsiteUpdateBo
     _require_client_perm(user, client_id, "c_websites_edit")
     site = db.get_client_website(website_id)
     if not site or site["client_id"] != client_id:
-        raise HTTPException(404, "Website nicht gefunden")
+        raise HTTPException(404, "Website not found")
 
     fields = body.model_dump(exclude_unset=True)
     _validate_website(fields.get("url"), fields.get("monitor_notify"),
@@ -151,7 +151,7 @@ def delete_client_website(client_id: str, website_id: str,
     _require_client_perm(user, client_id, "c_websites_edit")
     site = db.get_client_website(website_id)
     if not site or site["client_id"] != client_id:
-        raise HTTPException(404, "Website nicht gefunden")
+        raise HTTPException(404, "Website not found")
     db.delete_client_website(website_id)
     db.add_audit_entry(user["username"], "website.deleted", target=client_id,
                        details=site.get("name"))
@@ -161,9 +161,9 @@ def delete_client_website(client_id: str, website_id: str,
 @router.get("/{client_id}/screen-history")
 def get_screen_history(client_id: str, user: dict = Depends(get_current_user)):
     """
-    Sitzungsverlauf der Fernwartung (wie die Verbindungsliste bei AnyDesk):
-    aus dem Audit-Log zusammengesetzt - Beginn, Ende, Dauer, wer, und was in der
-    Sitzung passiert ist (Dateien, Rechte, Ton). Neueste zuerst, max. 50.
+    Session history of the remote maintenance (like the connection list in
+    AnyDesk): assembled from the audit log - start, end, duration, who, and what
+    happened in the session (files, permissions, audio). Newest first, max. 50.
     """
     _require_client_perm(user, client_id, "c_screen_view")
     rows = sorted(db.list_audit_for_target(client_id, "screen.", 600), key=lambda r: r["ts"])
@@ -199,17 +199,15 @@ def get_client_metrics_history(client_id: str, hours: int = 0,
     fill the graphs with history data immediately after a page reload, instead
     of starting from 0.
 
-    Zeitfenster: 'hours' aus der Anfrage, sonst die eingestellte
-    Aufbewahrungsdauer, sonst das Standardfenster der Datenbankschicht
-    (24 Stunden).
+    Time window: 'hours' from the request, otherwise the configured retention
+    period, otherwise the default window of the database layer (24 hours).
 
-    WICHTIG - hier lag der Absturz vom 23.08.: Frueher bedeutete
-    metrics_retention_hours = 0 (der Auslieferungszustand) "KOMPLETTE
-    Historie zurueckgeben". Bei einer Tabelle, die mit jedem Heartbeat
-    waechst und nie aufgeraeumt wird, brauchte diese Abfrage nach einigen
-    Wochen 125 Sekunden und legte das ganze Backend still. "Unbegrenzt
-    aufbewahren" ist eine sinnvolle Datenschutz-Einstellung - "unbegrenzt
-    AUSLESEN" war schlicht ein Fehler. Beides wird jetzt getrennt.
+    IMPORTANT - this was the crash of 23.08.: previously
+    metrics_retention_hours = 0 (the shipping state) meant "return the COMPLETE
+    history". With a table that grows with every heartbeat and is never cleaned
+    up, after a few weeks this query took 125 seconds and froze the whole
+    backend. "Keep indefinitely" is a sensible privacy setting - "READ OUT
+    indefinitely" was simply a bug. Both are now separated.
     """
     retention_hours = db.get_int_setting("metrics_retention_hours")
     window = hours if hours and hours > 0 else retention_hours
@@ -219,8 +217,8 @@ def get_client_metrics_history(client_id: str, hours: int = 0,
     points = db.get_metrics_history(client_id, since_ts)
     return {"points": points, "count": len(points),
             "window_hours": window or db.METRICS_DEFAULT_WINDOW_H,
-            # Ehrlich mitteilen, wenn ausgeduennt wurde - sonst wundert man
-            # sich ueber Luecken im Diagramm.
+            # Honestly report when thinned - otherwise one wonders about gaps
+            # in the chart.
             "thinned": len(points) >= db.METRICS_MAX_POINTS}
 
 
@@ -228,7 +226,7 @@ class ExecBody(BaseModel):
     command: str
     session: str | None = None   # terminal session (for a persistent working directory)
     shell: str = "auto"          # 'cmd' | 'powershell' | 'auto'
-    elevated: bool = False       # als Administrator (nur Windows)
+    elevated: bool = False       # as administrator (Windows only)
 
 
 class BulkExecBody(BaseModel):
@@ -246,20 +244,20 @@ class UpdateClientBody(BaseModel):
     notes: str | None = None
     status_override: str | None = None   # e.g. "maintenance" or null to reset
     active: bool | None = None
-    # WICHTIG: fehlte bisher! Pydantic verwirft unbekannte Felder - dadurch
+    # IMPORTANT: was missing before! Pydantic discards unknown fields - so
     # a VM/LXC classification chosen in the edit dialog was NEVER saved and
     # the dialog showed "Physical device" again after every reload.
     device_type: str | None = None       # physical | vm | lxc
-    # Automatisches Agent-Update pro Client: 'global' (folgt den Settings),
-    # 'on' (immer) oder 'off' (nie).
+    # Automatic agent update per client: 'global' (follows the settings),
+    # 'on' (always) or 'off' (never).
     auto_update: str | None = None
     # Confirmation of the device-type auto-detection (1 = user has decided)
     device_type_ack: int | None = None
     # Icon in sidebar/panel/topology ('' = automatic from the detected kind)
     icon_type: str | None = None
-    # Favorisierter Arbeitsordner (erscheint im Web-Explorer in der Wurzelansicht)
+    # Favorite working folder (appears in the web explorer in the root view)
     fav_dir: str | None = None
-    # Garantie-Ende (Unix-ms). 0/None = keine Garantie hinterlegt.
+    # Warranty end (Unix ms). 0/None = no warranty stored.
     warranty_until: int | None = None
     # 1 = essential/critical device: the icon turns RED instead of gray when offline.
     essential: int | None = None
@@ -269,10 +267,12 @@ class UpdateClientBody(BaseModel):
 
 
 def _with_live_state(c: dict) -> dict:
-    """Reichert einen Client-Datensatz aus der DB um Online-Status + Live-Metriken an."""
+    """Enriches a client record from the DB with online status + live metrics."""
     return {
         **c,
-        "online": state.is_online(c["id"]),
+        # Debounced status: a short reconnect dropout is NOT shown as offline
+        # (see ConnectionState.ui_online / disconnect).
+        "online": state.ui_online(c["id"]),
         "metrics": state.live_metrics.get(c["id"]),
     }
 
@@ -284,7 +284,7 @@ def get_clients(user: dict = Depends(get_current_user)):
     # Hostname map over ALL clients (including invisible ones): a VM/LXC whose
     # physical host is not visible to the user is shown in the frontend in a
     # pseudo-folder with the name of the host - for that we need
-    # das Frontend den Host-Namen, auch wenn der Host selbst gefiltert wird.
+    # the frontend needs the host name even if the host itself is filtered out.
     name_by_id = {c["id"]: c.get("hostname") for c in clients}
     out = []
     for c in clients:
@@ -301,28 +301,28 @@ def get_clients(user: dict = Depends(get_current_user)):
 def get_client(client_id: str, user: dict = Depends(get_current_user)):
     c = db.get_client(client_id)
     if not c or not can_access_client(user, client_id):
-        raise HTTPException(404, "Client nicht gefunden")
+        raise HTTPException(404, "Client not found")
     return _with_live_state(c)
 
 
 @router.put("/{client_id}")
 def update_client(client_id: str, body: UpdateClientBody, user: dict = Depends(get_current_user)):
     if not db.get_client(client_id):
-        raise HTTPException(404, "Client nicht gefunden")
+        raise HTTPException(404, "Client not found")
 
     # Apply only the fields actually sent
     fields = body.model_dump(exclude_unset=True)
 
-    # Rechte: Das Garantie-Datum hat ein EIGENES Recht ('set_warranty'), damit
-    # es z.B. der Einkauf/das Lager pflegen kann, ohne den Client sonst
-    # to edit. All other fields still require
-    # 'manage_clients' (das 'set_warranty' automatisch mit abdeckt).
+    # Permissions: the warranty date has its OWN permission ('set_warranty'), so
+    # that e.g. purchasing/the warehouse can maintain it without otherwise being
+    # able to edit the client. All other fields still require
+    # 'manage_clients' (which automatically also covers 'set_warranty').
     if "warranty_until" in fields:
         _require_client_perm(user, client_id, "set_warranty")
     if any(k != "warranty_until" for k in fields):
         _require_client_perm(user, client_id, "manage_clients")
     if "active" in fields:
-        fields["active"] = int(fields["active"])  # SQLite kennt kein echtes Bool
+        fields["active"] = int(fields["active"])  # SQLite has no real bool
     if "device_type" in fields and fields["device_type"] not in ("physical", "vm", "lxc", None):
         raise HTTPException(400, "Invalid device type (physical|vm|lxc)")
     if "icon_type" in fields:
@@ -354,9 +354,9 @@ def _hostname(client_id: str) -> str:
 @router.post("/{client_id}/exec")
 async def exec_on_client(client_id: str, body: ExecBody, background: bool = False,
                          user: dict = Depends(get_current_user)):
-    """Befehl/Skript auf dem Client ausfuehren - als BACKEND-JOB (app/bgjobs.py):
-    Neuladen oder Schliessen des Fensters bricht ihn nicht ab, das Ergebnis
-    bleibt in der Aufgaben-Anzeige. ?background=1 -> Job sofort zurueck."""
+    """Run a command/script on the client - as a BACKEND JOB (app/bgjobs.py):
+    reloading or closing the window does not abort it, the result stays in the
+    task view. ?background=1 -> return the job immediately."""
     _require_client_perm(user, client_id, "c_terminal")
     # Every executed command lands in the audit log (as desired: "who did what and when")
     _mode = f"[{body.shell}{'/admin' if body.elevated else ''}] " if body.shell != "auto" or body.elevated else ""
@@ -376,10 +376,10 @@ async def exec_on_client(client_id: str, body: ExecBody, background: bool = Fals
             job.log(str(r["stdout"])[-20000:])
         if r.get("stderr"):
             job.log("[stderr] " + str(r["stderr"])[-8000:])
-        job.update(detail=f"Exit-Code {r.get('code')}" if r.get("code") not in (None, 0) else "fertig")
+        job.update(detail=f"exit code {r.get('code')}" if r.get("code") not in (None, 0) else "done")
         return result
 
-    return await bgjobs.run("client.exec", None, title=f"Befehl auf {_hostname(client_id)}: {first}",
+    return await bgjobs.run("client.exec", None, title=f"Command on {_hostname(client_id)}: {first}",
                             user=user, work=work, background=background, client_id=client_id,
                             client_perm="c_terminal", on_cancel=bgjobs.hard_cancel,
                             meta={"client": client_id, "command": body.command[:500]})
@@ -389,12 +389,12 @@ async def exec_on_client(client_id: str, body: ExecBody, background: bool = Fals
 async def bulk_exec(body: BulkExecBody, background: bool = False, user: dict = Depends(get_current_user)):
     """
     Runs the same command on several clients at once (bulk terminal).
-    Alle Anfragen laufen parallel (asyncio.gather), das Ergebnis ist eine
-    Zuordnung Client-ID -> Ergebnis (oder Fehlermeldung, falls einer offline ist).
+    All requests run in parallel (asyncio.gather); the result is a mapping
+    client ID -> result (or error message if one is offline).
     """
     # Global permission required for the bulk shell ...
     require_perm(user, "bulk_shell")
-    # … und pro Ziel-Client das Terminal-Recht (Rest wird verworfen).
+    # ... and per target client the terminal permission (the rest is discarded).
     allowed_ids = [cid for cid in body.client_ids
                    if user_has_permission(user, "c_terminal", cid)]
 
@@ -407,7 +407,7 @@ async def bulk_exec(body: BulkExecBody, background: bool = False, user: dict = D
     async def work(job):
         total = len(allowed_ids)
         cnt = {"done": 0, "ok": 0, "failed": 0}
-        job.update(phase="exec", pct=0, detail=f"0/{total} Clients", total=total, **cnt)
+        job.update(phase="exec", pct=0, detail=f"0/{total} clients", total=total, **cnt)
 
         async def run_one(client_id: str) -> tuple[str, dict]:
             try:
@@ -418,14 +418,14 @@ async def bulk_exec(body: BulkExecBody, background: bool = False, user: dict = D
                 res = (client_id, {"ok": False, "error": str(e)})
                 cnt["failed"] += 1
             cnt["done"] += 1
-            job.log(f"{_hostname(client_id)}: {'OK' if res[1]['ok'] else 'FEHLER ' + res[1].get('error', '')}")
+            job.log(f"{_hostname(client_id)}: {'OK' if res[1]['ok'] else 'ERROR ' + res[1].get('error', '')}")
             job.update(pct=cnt["done"] / max(1, total) * 100,
-                       detail=f"{cnt['done']}/{total} Clients · {cnt['ok']} ok · {cnt['failed']} Fehler", **cnt)
+                       detail=f"{cnt['done']}/{total} clients - {cnt['ok']} ok - {cnt['failed']} failed", **cnt)
             return res
 
         return dict(await asyncio.gather(*(run_one(cid) for cid in allowed_ids)))
 
-    return await bgjobs.run("client.bulk_exec", None, title=f"Bulk-Befehl auf {len(allowed_ids)} Clients: {first}",
+    return await bgjobs.run("client.bulk_exec", None, title=f"Bulk command on {len(allowed_ids)} clients: {first}",
                             user=user, perm="bulk_shell", work=work, background=background,
                             on_cancel=bgjobs.hard_cancel,
                             meta={"clients": allowed_ids, "command": body.command[:500]})
@@ -443,7 +443,7 @@ async def list_client_fs(client_id: str, path: str = "", user: dict = Depends(ge
 
 @router.get("/{client_id}/processes")
 async def list_client_processes(client_id: str, user: dict = Depends(get_current_user)):
-    """Liefert die laufende Prozessliste eines Clients (Task-Manager)."""
+    """Returns the running process list of a client (task manager)."""
     _require_client_perm(user, client_id, "c_taskmanager_view")
     try:
         processes = await request_proc_list(client_id)
@@ -458,7 +458,7 @@ class KillBody(BaseModel):
 
 @router.post("/{client_id}/processes/kill")
 async def kill_client_process(client_id: str, body: KillBody, user: dict = Depends(get_current_user)):
-    """Beendet einen Prozess auf einem Client."""
+    """Kills a process on a client."""
     _require_client_perm(user, client_id, "c_taskmanager_kill")
     try:
         result = await request_proc_kill(client_id, body.pid)
@@ -486,12 +486,12 @@ async def read_client_file(client_id: str, path: str, user: dict = Depends(get_c
 
 # ------------------------------------------------------------------
 # Writing file operations on a client (upload/folder/delete/...)
-# Alle brauchen das Recht "use_explorer".
+# All of these require the "use_explorer" permission.
 # ------------------------------------------------------------------
 
 class FsWriteBody(BaseModel):
-    path: str          # Zielpfad inkl. Dateiname
-    data: str          # base64-kodierter Inhalt
+    path: str          # target path incl. file name
+    data: str          # base64-encoded content
 
 
 class FsPathBody(BaseModel):
@@ -553,24 +553,24 @@ async def rename_client_path(client_id: str, body: FsRenameBody, user: dict = De
 async def update_client_agent(client_id: str, wait: bool = False, background: bool = False,
                               user: dict = Depends(get_current_user)):
     """
-    Weist den Agenten an, sich selbst zu aktualisieren (laedt das aktuelle
-    Agent-Paket, ersetzt agent.py, startet den Dienst neu). Nach dem Neustart
-    meldet der Agent "updated" zurueck.
+    Tells the agent to update itself (downloads the current agent package,
+    replaces agent.py, restarts the service). After the restart the agent
+    reports "updated" back.
 
-    WICHTIG: Die Anfrage kehrt SOFORT zurueck (Auftrag angenommen). Frueher hielt
-    sie bis zu 55 s offen und wartete auf die Bestaetigung - Reverse Proxies
-    (nginx/NPM, Traefik, ...) brechen solche Anfragen vorher ab und das Dashboard
-    zeigte "Update fehlgeschlagen: Fehler 504", obwohl das Update evtl. lief.
-    Den Fortschritt fragt das Dashboard ueber GET .../update-agent/status ab
-    (zusaetzlich kommen die Socket-Ereignisse client:action-log / client:updated).
+    IMPORTANT: the request returns IMMEDIATELY (order accepted). Previously it
+    kept open for up to 55 s waiting for the confirmation - reverse proxies
+    (nginx/NPM, Traefik, ...) abort such requests before that and the dashboard
+    showed "Update failed: error 504", even though the update may have been
+    running. The dashboard polls the progress via GET .../update-agent/status
+    (in addition the socket events client:action-log / client:updated arrive).
 
-    ?wait=true stellt das alte, blockierende Verhalten fuer Skripte/REST-API her.
+    ?wait=true restores the old, blocking behavior for scripts/REST API.
     """
     _require_client_perm(user, client_id, "manage_agent")
     if not state.is_online(client_id):
-        raise HTTPException(409, "Der Agent ist nicht verbunden.")
+        raise HTTPException(409, "The agent is not connected.")
     running = bgjobs.active("agent.update", client_id)
-    if running:                                  # laeuft schon -> anhaengen
+    if running:                                  # already running -> attach
         return await bgjobs.respond(running, False, background or not wait)
 
     client = db.get_client(client_id)
@@ -584,13 +584,13 @@ async def update_client_agent(client_id: str, wait: bool = False, background: bo
     ok = await send_to_agent(client_id, "update-agent", {})
     if not ok:
         state.update_jobs.pop(client_id, None)
-        raise HTTPException(503, "Client ist offline")
+        raise HTTPException(503, "Client is offline")
     db.add_audit_entry(user["username"], "agent.update_triggered", target=client_id,
                        details=(client or {}).get("hostname"))
 
-    # Das Backend verfolgt das Update als Job (Neuladen/andere Benutzer sehen es)
+    # The backend tracks the update as a job (reload/other users see it)
     job, new = bgjobs.start("agent.update", client_id,
-                            title=f"Agent-Update {(client or {}).get('hostname') or client_id}",
+                            title=f"Agent update {(client or {}).get('hostname') or client_id}",
                             user=user, runner=_agent_update_runner(client_id), client_id=client_id,
                             client_perm="manage_agent",
                             meta={"client": client_id})
@@ -609,8 +609,8 @@ _STAGE_TEXT = {"sent": "command sent", "received": "agent received the command",
 
 def _agent_update_runner(client_id: str):
     async def runner(job):
-        # Update-Skript: Download + Pakete + bis zu 180 s Gesundheitspruefung
-        # (danach ggf. Rollback) -> grosszuegig warten.
+        # Update script: download + packages + up to 180 s health check
+        # (rollback afterwards if needed) -> wait generously.
         deadline = time.monotonic() + 420.0
         last = None
         while time.monotonic() < deadline:
@@ -625,19 +625,19 @@ def _agent_update_runner(client_id: str):
                 last = (stage, uj.get("detail"))
                 job.log(f"{_STAGE_TEXT.get(stage, stage)}{(': ' + uj['detail']) if uj.get('detail') else ''}")
             job.update(phase=stage, detail=_STAGE_TEXT.get(stage, stage)
-                       + ("" if state.is_online(client_id) else " · Agent getrennt (Neustart)"))
+                       + ("" if state.is_online(client_id) else " - agent disconnected (restart)"))
             if stage == "error":
-                raise HTTPException(502, uj.get("detail") or "Agent meldet einen Fehler beim Update")
+                raise HTTPException(502, uj.get("detail") or "Agent reports an error during the update")
             await asyncio.sleep(1.0)
-        raise HTTPException(504, "Der Agent hat innerhalb von 7 Minuten kein erfolgreiches Update "
-                                 "bestaetigt - Log auf dem Client: /var/log/bytera-agent-update.log "
-                                 "(Linux) bzw. C:\\ProgramData\\ByteraRmmAgent-update.log (Windows).")
+        raise HTTPException(504, "The agent did not confirm a successful update within 7 minutes "
+                                 "- log on the client: /var/log/bytera-agent-update.log "
+                                 "(Linux) resp. C:\\ProgramData\\ByteraRmmAgent-update.log (Windows).")
     return runner
 
 
 @router.get("/{client_id}/update-agent/status")
 def update_client_agent_status(client_id: str, user: dict = Depends(get_current_user)):
-    """Fortschritt des zuletzt angestossenen Agent-Updates dieses Clients."""
+    """Progress of the most recently triggered agent update of this client."""
     _require_client_perm(user, client_id, "manage_agent")
     job = state.update_jobs.get(client_id)
     client = db.get_client(client_id) or {}
@@ -659,7 +659,7 @@ def update_client_agent_status(client_id: str, user: dict = Depends(get_current_
 
 
 class UpdateAllBody(BaseModel):
-    # Offline-Clients zum Update vormerken: Sie werden aktualisiert, sobald
+    # Earmark offline clients for the update: they are updated as soon as
     # they connect to the backend the next time.
     include_offline: bool = False
 
@@ -704,26 +704,26 @@ async def update_all_agents(body: UpdateAllBody | None = None, background: bool 
         targets.append(cid)
 
     db.add_audit_entry(user["username"], "agent.update_all_triggered",
-                       details=f"geplant={len(targets)}, offline={offline}, "
-                               f"vorgemerkt={queued}")
+                       details=f"scheduled={len(targets)}, offline={offline}, "
+                               f"queued={queued}")
 
-    # Gestaffelt ausrollen, NICHT alle auf einmal.
+    # Roll out staggered, NOT all at once.
     #
     # Why: an "update-agent" triggers far more on the agent than a short
     # signal. It downloads update.sh or update.ps1 and then the new
-    # agent.py von genau diesem Backend, beendet sich und verbindet neu.
+    # agent.py from exactly this backend, exits and reconnects.
     # If this happens on all devices in the same second, the server gets
     # simultaneously: N downloads, N disconnects and shortly after N sign-ins
     # - while someone reloads the dashboard in the browser. Exactly this
     # combination was in the log: the server was busy for a few seconds, the
     # health check ran into its 5-second limit and Cloudflare into its timeout.
     #
-    # The admission gate in sockets.py only eases the return. That
-    # Losschicken muss hier gebremst werden - vorher entsteht die Welle.
+    # The admission gate in sockets.py only eases the return. The sending-out
+    # must be throttled here - otherwise the wave forms.
     out = {"ok": True, "triggered": len(targets), "offline": offline,
            "queued_offline": queued, "skipped_no_permission": no_perm}
     if targets:
-        # Ausrollen + Warten auf die Rueckkehr als BACKEND-JOB (Aufgaben-Anzeige)
+        # Roll out + wait for the return as a BACKEND JOB (task view)
         async def work(job):
             job.update(phase="rollout", pct=0, detail=f"0/{len(targets)} triggered", total=len(targets))
             return await _rollout_agent_updates(targets, user["username"], job)
@@ -735,9 +735,9 @@ async def update_all_agents(body: UpdateAllBody | None = None, background: bool 
     return out
 
 
-# Wie viele Agenten gleichzeitig aktualisiert werden und wie lange danach
-# is waited. Adjustable via environment variables, so one can turn it up on
-# powerful hardware without changing code.
+# How many agents are updated at once and how long is waited afterwards.
+# Adjustable via environment variables, so one can turn it up on powerful
+# hardware without changing code.
 def _rollout_settings() -> tuple[int, float]:
     import os
     try:
@@ -762,7 +762,7 @@ async def _rollout_agent_updates(client_ids: list[str], username: str, job=None)
     batch_size, pause = _rollout_settings()
     triggered: list[str] = []
     print(f"[update] Rollout for {len(client_ids)} agents "
-          f"({batch_size} gleichzeitig, {pause:.0f}s Pause)")
+          f"({batch_size} at once, {pause:.0f}s pause)")
 
     total = len(client_ids)
     for start in range(0, len(client_ids), batch_size):
@@ -783,9 +783,9 @@ async def _rollout_agent_updates(client_ids: list[str], username: str, job=None)
                     if job:
                         job.log(f"{_hostname(cid)}: update triggered")
             except Exception as e:
-                print(f"[update] {cid} nicht erreicht: {e}")
+                print(f"[update] {cid} not reached: {e}")
                 if job:
-                    job.log(f"{_hostname(cid)}: nicht erreicht ({e})")
+                    job.log(f"{_hostname(cid)}: not reached ({e})")
         if job:
             n = min(start + batch_size, total)
             job.update(pct=n / total * 50, detail=f"{n}/{total} triggered ({batch_size} each, {pause:.0f}s pause)")
@@ -808,24 +808,24 @@ async def _await_agents_reconnect(client_ids: list[str], username: str,
     `state.update_confirmed` (set only on the reconnect AFTER an update).
     Additionally we watch the offline->online transition directly, in case an
     agent reports no `updated` flag."""
-    # Phase 1: auf das Offline-Gehen warten. Phase 2: auf das erneute Online-Sein.
-    waiting_offline = set(client_ids)   # muss erst weg (Update-Neustart)
-    waiting_online = set()              # war offline, muss wieder kommen
+    # Phase 1: wait for going offline. Phase 2: wait for being online again.
+    waiting_offline = set(client_ids)   # must leave first (update restart)
+    waiting_online = set()              # was offline, must come back
     total = len(client_ids)
     deadline = time.monotonic() + timeout_seconds
 
     while (waiting_offline or waiting_online) and time.monotonic() < deadline:
         await asyncio.sleep(1.0)
 
-        # Phase 1: Clients, die (a) offline gegangen sind -> Phase 2, oder
+        # Phase 1: clients that (a) went offline -> phase 2, or
         # (b) have already reported back via update reconnect -> done.
         for cid in list(waiting_offline):
             if cid in state.update_confirmed:
-                # Hat den kompletten Zyklus schon durchlaufen (offline+online).
+                # Has already completed the full cycle (offline+online).
                 state.update_confirmed.pop(cid, None)
                 waiting_offline.discard(cid)
             elif not state.is_online(cid):
-                # Jetzt offline (Update-Neustart) -> auf Wiederkehr warten.
+                # Now offline (update restart) -> wait for the return.
                 waiting_offline.discard(cid)
                 waiting_online.add(cid)
 
@@ -835,11 +835,11 @@ async def _await_agents_reconnect(client_ids: list[str], username: str,
                 state.update_confirmed.pop(cid, None)
                 waiting_online.discard(cid)
                 if job:
-                    job.log(f"{_hostname(cid)}: wieder verbunden")
+                    job.log(f"{_hostname(cid)}: reconnected")
         if job:
             back = total - len(waiting_offline) - len(waiting_online)
             job.update(phase="reconnect", pct=50 + back / total * 50,
-                       detail=f"{back}/{total} wieder verbunden")
+                       detail=f"{back}/{total} reconnected")
 
     missing = waiting_offline | waiting_online
     reconnected = total - len(missing)
@@ -860,13 +860,13 @@ async def _await_agents_reconnect(client_ids: list[str], username: str,
                    f"reconnected. Did not report back: {', '.join(missing_names)}{extra}.")
         level = "warning"
         db.add_audit_entry(username, "agent.update_all_completed",
-                           details=f"{reconnected}/{total} wieder verbunden")
+                           details=f"{reconnected}/{total} reconnected")
 
     try:
         await sio.emit("notify", {"message": message, "level": level},
                        namespace="/dashboard")
     except Exception as e:
-        print(f"[update-all] Dashboard-Notify fehlgeschlagen: {e}")
+        print(f"[update-all] dashboard notify failed: {e}")
     if job:
         job.update(detail=message)
     return {"triggered": total, "reconnected": reconnected,
@@ -882,18 +882,18 @@ async def uninstall_client_agent(client_id: str, background: bool = False,
 
       1. Send the uninstall command to the agent (stops the service and deletes
          ALL agent data on the client, see agent.py / uninstall.sh|ps1).
-      2. Bis zu 60 Sekunden warten, bis der Client wirklich offline geht
-         (= der Agent-Prozess ist beendet, die Socket-Verbindung getrennt).
-      3a. Geht er in dieser Zeit offline -> Client aus der Datenbank entfernen
-          (verschwindet aus dem Dashboard) und Erfolg melden.
-      3b. Ist er nach 60 s IMMER NOCH online -> Fehlermeldung; der Client wird
-          NICHT entfernt (die Deinstallation ist offenbar fehlgeschlagen).
+      2. Wait up to 60 seconds until the client really goes offline
+         (= the agent process has ended, the socket connection is cut).
+      3a. If it goes offline in that time -> remove the client from the database
+          (disappears from the dashboard) and report success.
+      3b. If it is STILL online after 60 s -> error message; the client is NOT
+          removed (the uninstall apparently failed).
     """
     _require_client_perm(user, client_id, "manage_agent")
 
     client = db.get_client(client_id)
     if not client:
-        raise HTTPException(404, "Client nicht gefunden")
+        raise HTTPException(404, "Client not found")
 
     # The agent must be connected so it can receive and execute the uninstall
     # command. An already offline/dead client is removed via the normal
@@ -909,7 +909,7 @@ async def uninstall_client_agent(client_id: str, background: bool = False,
     async def work(job):
         return await _uninstall_work(job, client_id, client, user)
 
-    return await bgjobs.run("agent.uninstall", client_id, title=f"Agent deinstallieren: {client.get('hostname') or client_id}",
+    return await bgjobs.run("agent.uninstall", client_id, title=f"Uninstall agent: {client.get('hostname') or client_id}",
                             user=user, work=work, background=background, client_id=client_id,
                             client_perm="manage_agent",
                             meta={"client": client_id})
@@ -917,20 +917,20 @@ async def uninstall_client_agent(client_id: str, background: bool = False,
 
 async def _uninstall_work(job, client_id: str, client: dict, user: dict):
     # 1. Trigger the uninstall
-    job.update(phase="send", detail="Deinstallations-Auftrag wird gesendet")
+    job.update(phase="send", detail="sending the uninstall order")
     ok = await send_to_agent(client_id, "uninstall-agent", {})
     if not ok:
-        raise HTTPException(503, "Client ist offline")
+        raise HTTPException(503, "Client is offline")
     db.add_audit_entry(user["username"], "agent.uninstall_triggered", target=client_id,
                        details=client.get("hostname"))
 
     # 2. Wait for "offline" (max. 60 s, check every 2 s).
-    job.update(phase="wait", detail="warte, bis der Agent offline geht (max. 60 s)")
+    job.update(phase="wait", detail="waiting for the agent to go offline (max. 60 s)")
     deadline = time.monotonic() + 60.0
     while time.monotonic() < deadline:
         await asyncio.sleep(2.0)
         if not state.is_online(client_id):
-            # 3a. Wirklich weg -> aus dem Dashboard entfernen.
+            # 3a. Really gone -> remove from the dashboard.
             db.delete_client(client_id)
             db.add_audit_entry(user["username"], "agent.uninstalled", target=client_id,
                                details=client.get("hostname"))
@@ -939,7 +939,7 @@ async def _uninstall_work(job, client_id: str, client: dict, user: dict):
             await sio.emit("clients:changed", namespace="/dashboard")
             return {"ok": True, "removed": True, "hostname": client.get("hostname")}
 
-    # 3b. Timeout: Agent ist nicht offline gegangen -> Fehler, Client bleibt.
+    # 3b. Timeout: agent did not go offline -> error, client stays.
     db.add_audit_entry(user["username"], "agent.uninstall_timeout", target=client_id,
                        details=client.get("hostname"))
     raise HTTPException(
@@ -957,12 +957,12 @@ def get_rdp_file(client_id: str, user: dict = Depends(get_current_user)):
     whereupon the native Windows RDP client (mstsc) connects.
 
     This is the reliable way for headless VMs: RDP creates its own graphics
-    session that can then be remote-controlled - unlike our
-    Bildschirm-Streaming, das eine bereits vorhandene Sitzung voraussetzt.
+    session that can then be remote-controlled - unlike our screen streaming,
+    which requires an already existing session.
     """
     client = db.get_client(client_id)
     if not client or not can_access_client(user, client_id):
-        raise HTTPException(404, "Client nicht gefunden")
+        raise HTTPException(404, "Client not found")
     require_perm(user, "c_screen", client_id)
 
     host = client.get("ip")
@@ -972,17 +972,17 @@ def get_rdp_file(client_id: str, user: dict = Depends(get_current_user)):
     # Minimal, common .rdp configuration. The user enters credentials when
     # connecting (we store no passwords in the file).
     rdp_content = "\r\n".join([
-        "screen mode id:i:2",              # Vollbild
+        "screen mode id:i:2",              # fullscreen
         "use multimon:i:0",
         "desktopwidth:i:1280",
         "desktopheight:i:720",
         "session bpp:i:32",
         f"full address:s:{host}",
         "audiomode:i:0",
-        "redirectclipboard:i:1",           # Zwischenablage teilen
+        "redirectclipboard:i:1",           # share clipboard
         "autoreconnection enabled:i:1",
-        "authentication level:i:0",        # keine strikte Server-Auth (Lab-freundlich)
-        "prompt for credentials:i:1",      # Anmeldedaten abfragen
+        "authentication level:i:0",        # no strict server auth (lab-friendly)
+        "prompt for credentials:i:1",      # ask for credentials
         "negotiate security layer:i:1",
         "",
     ])
@@ -997,18 +997,18 @@ def get_rdp_file(client_id: str, user: dict = Depends(get_current_user)):
 
 
 # ------------------------------------------------------------------
-# OFFLINE-WARTESCHLANGE: Aktionen "sobald der Agent online ist"
-# (z.B. Shell-Befehl oder Software-Installation). Ist der Agent gerade
-# online, kann der Aufrufer run_now=1 setzen - dann laeuft die Aktion sofort.
+# OFFLINE QUEUE: actions "as soon as the agent is online" (e.g. shell command
+# or software installation). If the agent is currently online, the caller can
+# set run_now=1 - then the action runs immediately.
 # ------------------------------------------------------------------
 
 class QueueBody(BaseModel):
     kind: str = "shell"            # 'shell' | 'software'
     label: str = ""
-    command: str = ""              # fuer kind='shell'
+    command: str = ""              # for kind='shell'
     elevated: bool = False
     timeout: int = 300
-    package_id: str = ""           # fuer kind='software'
+    package_id: str = ""           # for kind='software'
 
 
 @router.get("/api/clients/{client_id}/queue")
@@ -1024,22 +1024,22 @@ async def client_queue_add(client_id: str, body: QueueBody,
     if body.kind == "shell":
         cmd = (body.command or "").strip()
         if not cmd:
-            raise HTTPException(400, "Befehl fehlt")
+            raise HTTPException(400, "Command missing")
         payload = {"command": cmd, "elevated": bool(body.elevated),
                    "timeout": max(10, min(int(body.timeout or 300), 3600))}
-        label = body.label or (cmd[:60] + ("…" if len(cmd) > 60 else ""))
+        label = body.label or (cmd[:60] + ("..." if len(cmd) > 60 else ""))
     elif body.kind == "software":
         if not body.package_id:
-            raise HTTPException(400, "package_id fehlt")
+            raise HTTPException(400, "package_id missing")
         payload = {"package_id": body.package_id}
-        label = body.label or f"Software installieren ({body.package_id})"
+        label = body.label or f"Install software ({body.package_id})"
     else:
-        raise HTTPException(400, "Unbekannte Aktionsart")
+        raise HTTPException(400, "Unknown action kind")
     row = await db.call(db.queue_add, client_id, body.kind, label, payload,
                         user.get("username"))
     db.add_audit_entry(user.get("username"), "queue.add", client_id, label)
-    # Agent gerade online? Dann die Warteschlange sofort anstossen, indem wir
-    # den normalen Abarbeiter benutzen (gleiches Verhalten wie beim Anmelden).
+    # Agent currently online? Then kick the queue immediately by using the
+    # normal worker (same behavior as on registration).
     if state.is_online(client_id):
         from app.sockets import kick_offline_queue
         await kick_offline_queue(client_id)
@@ -1055,9 +1055,9 @@ async def client_queue_delete(client_id: str, qid: str,
 
 
 # ------------------------------------------------------------------
-# BLACKBOX "letzter Stand" (Screenshot + Metrik-Deltas + Logs des Agents,
-# gespeichert von sockets.on_blackbox_snap). Gedacht fuer die Diagnose,
-# NACHDEM ein Client offline gegangen ist.
+# BLACKBOX "last state" (screenshot + metric deltas + agent logs, stored by
+# sockets.on_blackbox_snap). Intended for diagnostics AFTER a client has gone
+# offline.
 # ------------------------------------------------------------------
 
 @router.get("/api/clients/{client_id}/blackbox")
@@ -1090,15 +1090,15 @@ async def client_blackbox_shot(client_id: str, user: dict = Depends(get_current_
     from app.paths import STORAGE_DIR
     p = STORAGE_DIR / "blackbox" / client_id / "screenshot.jpg"
     if not p.exists():
-        raise HTTPException(404, "Kein Screenshot vorhanden")
+        raise HTTPException(404, "No screenshot available")
     return _FR(p, media_type="image/jpeg",
                headers={"Cache-Control": "no-cache"})
 
 
 # ------------------------------------------------------------------
 # TEMPORARY USER with a one-time password (Linux + Windows).
-# Das Passwort erzeugt der AGENT und es wird hier nur durchgereicht -
-# weder gespeichert noch geloggt (Audit nur Benutzername + Verfall).
+# The password is generated by the AGENT and only passed through here -
+# neither stored nor logged (audit only username + expiry).
 # ------------------------------------------------------------------
 
 class TempUserBody(BaseModel):
@@ -1117,19 +1117,19 @@ async def client_tempuser(client_id: str, body: TempUserBody,
     except RuntimeError as exc:
         raise HTTPException(409, str(exc))
     except (TimeoutError, asyncio.TimeoutError):
-        raise HTTPException(504, "Agent hat nicht rechtzeitig geantwortet")
+        raise HTTPException(504, "Agent did not answer in time")
     if not res.get("ok"):
-        raise HTTPException(500, res.get("error") or "Anlegen fehlgeschlagen")
+        raise HTTPException(500, res.get("error") or "Creation failed")
     db.add_audit_entry(user.get("username"), "client.tempuser", client_id,
-                       f"{res.get('username')} (Verfall: {body.expiry})")
+                       f"{res.get('username')} (expiry: {body.expiry})")
     return {"username": res.get("username"), "password": res.get("password"),
             "note": res.get("note") or ""}
 
 
 # ------------------------------------------------------------------
-# WARTUNGSMODUS (Core): Alarme aus, Schutzmechanismen ausgesetzt
-# (USB-Sperre, Patch-Zeitfenster ...). duration: "30m","1h","2h","4h",
-# "8h","24h", "manual" (bis manuell beendet) oder "off" (beenden).
+# MAINTENANCE MODE (Core): alarms off, protection mechanisms suspended
+# (USB lock, patch window ...). duration: "30m","1h","2h","4h",
+# "8h","24h", "manual" (until ended manually) or "off" (end).
 # ------------------------------------------------------------------
 
 _MAINT_MIN = {"30m": 30, "1h": 60, "2h": 120, "4h": 240, "8h": 480, "24h": 1440, "manual": 0}
@@ -1137,7 +1137,7 @@ _MAINT_MIN = {"30m": 30, "1h": 60, "2h": 120, "4h": 240, "8h": 480, "24h": 1440,
 
 class MaintenanceBody(BaseModel):
     duration: str = "1h"
-    client_ids: list[str] = []      # nur fuer die Sammel-Route
+    client_ids: list[str] = []      # only for the bulk route
 
 
 async def _set_maint(client_id: str, duration: str, user: dict) -> dict:
@@ -1147,7 +1147,7 @@ async def _set_maint(client_id: str, duration: str, user: dict) -> dict:
     await db.call(db.set_maintenance, client_id,
                   None if duration == "off" else _MAINT_MIN[duration])
     db.add_audit_entry(user.get("username"), "client.maintenance", client_id,
-                       "beendet" if duration == "off" else f"an ({duration})")
+                       "ended" if duration == "off" else f"on ({duration})")
     from app.sockets import push_maintenance
     return await push_maintenance(client_id)
 
