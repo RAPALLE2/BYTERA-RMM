@@ -731,18 +731,29 @@ def _dependents(mid: str, only_enabled: bool = True) -> list[str]:
     return out
 
 
-def _dep_order(mid: str, seen: list[str] | None = None) -> list[str]:
-    """Dependencies first, then the module itself."""
+def _dep_order(mid: str, seen: list[str] | None = None, _stack: list[str] | None = None) -> list[str]:
+    """Dependencies first, then the module itself.
+
+    `seen` is the finished order (used for de-duplication); `_stack` is the
+    current recursion path and is the ONLY thing cycles are detected against.
+    Keeping the two apart is what allows a diamond (e.g. workbay -> spaces and
+    workbay -> collab -> spaces) - a module reached twice via different paths is
+    not a cycle, only a module that depends on itself through the path is.
+    """
     seen = seen if seen is not None else []
+    _stack = _stack if _stack is not None else []
+    if mid in seen:
+        return seen                       # already ordered via another path - fine
+    if mid in _stack:
+        raise ModuleError(f"Circular dependency at '{mid}'")
+    _stack.append(mid)
     mod = get(mid)
     for dep in mod.requires:
         if dep not in _registry:
             raise ModuleError(f"'{mid}' needs the unknown module '{dep}'")
-        if dep in seen:
-            raise ModuleError(f"Circular dependency at '{dep}'")
-        _dep_order(dep, seen)
-    if mid not in seen:
-        seen.append(mid)
+        _dep_order(dep, seen, _stack)
+    _stack.pop()
+    seen.append(mid)
     return seen
 
 
