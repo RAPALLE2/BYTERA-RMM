@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "id": "tenant-link",
-  "name": "Mandant-Freigabe",
-  "version": "1.0.0",
-  "description": "Gegenstück auf einem Mandanten-Backend: erlaubt einem Haupt-RMM, dieses Backend einzubetten und per Autologin zu öffnen (frame-ancestors/CORS für die angegebenen Haupt-RMM-Adressen). Der Login läuft über die normale Anmeldung – jeder Benutzer hinterlegt seine Zugangsdaten im Haupt-RMM.",
+  "name": "Tenant Sharing",
+  "version": "1.1.0",
+  "description": "Counterpart on a tenant backend: lets an approved main RMM embed this backend and open it via auto-login. Pairing with confirmation - the tenant admin either issues a one-time pairing code or approves an incoming request. Active pairings control frame-ancestors for the approved main RMM addresses. The login runs through the normal sign-in; every user stores their credentials in the main RMM.",
   "author": "BYTERA",
   "category": "System",
   "icon": "🔗",
@@ -16,13 +16,26 @@
   "hooks": {
     "startup": "on_startup"
   },
+  "apps": [
+    {
+      "id": "tenant-link",
+      "label": "Tenant Sharing",
+      "icon": "🔗",
+      "title": "Tenant Sharing",
+      "entry": "app.js",
+      "export": "renderTenantLink",
+      "perm": "manage_modules",
+      "w": 860,
+      "h": 640
+    }
+  ],
   "settings": [
     {
       "key": "parents",
       "type": "string",
-      "label": "Erlaubte Haupt-RMM-Adressen",
+      "label": "Legacy: extra main RMM addresses",
       "default": "",
-      "help": "Kommagetrennt, z. B. https://rmm.firma.de. Leer = nur gleiche Herkunft (keine Einbettung von außen)."
+      "help": "Comma-separated, e.g. https://rmm.company.com. Optional - normally managed via pairings in the Tenant Sharing app. Empty = only approved pairings."
     }
   ]
 }

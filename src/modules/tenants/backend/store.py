@@ -80,7 +80,7 @@ def new_id() -> str:
     return secrets.token_hex(6)
 
 
-# ------------------------------------------------------------------ Mandanten
+# ------------------------------------------------------------------ Tenants
 def list_tenants() -> list[dict]:
     return list(_load()["tenants"].values())
 
@@ -90,10 +90,53 @@ def get(tid: str) -> dict | None:
 
 
 def public(t: dict) -> dict:
-    return {k: v for k, v in t.items()}
+    """Tenant record without secrets - safe for the admin UI."""
+    out = {k: v for k, v in t.items() if k != "pair_key_enc"}
+    out["paired"] = bool(t.get("pair_key_enc"))
+    out["pair_status"] = t.get("pair_status", "")
+    return out
 
 
-# ------------------------------------------------------------------ Zugangsdaten je Benutzer
+# ------------------------------------------------------------------ pairing (tenant-link)
+def set_pair(tid: str, pair_key: str, parent_url: str, pair_name: str, status: str) -> dict | None:
+    def upd(d):
+        t = d["tenants"].get(tid)
+        if not t:
+            return None
+        if pair_key:
+            t["pair_key_enc"] = enc(pair_key)
+        if parent_url:
+            t["parent_url"] = parent_url
+        if pair_name:
+            t["pair_name"] = pair_name
+        t["pair_status"] = status
+        return t
+    return update(upd)
+
+
+def set_pair_status(tid: str, status: str) -> None:
+    def upd(d):
+        t = d["tenants"].get(tid)
+        if t:
+            t["pair_status"] = status
+    update(upd)
+
+
+def clear_pair(tid: str) -> None:
+    def upd(d):
+        t = d["tenants"].get(tid)
+        if t:
+            t.pop("pair_key_enc", None)
+            t["pair_status"] = ""
+    update(upd)
+
+
+def pair_key(tid: str) -> str:
+    t = get(tid)
+    return dec(t.get("pair_key_enc", "")) if t else ""
+
+
+# ------------------------------------------------------------------ per-user credentials
 def _ckey(tid: str, uid: str) -> str:
     return f"{tid}:{uid}"
 

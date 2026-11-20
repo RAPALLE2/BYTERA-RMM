@@ -113,6 +113,7 @@ export async function renderTenants(body, win) {
           <div style="display:flex;align-items:center;gap:8px"><span style="font-size:20px">${dot(t.color)}</span><b style="font-size:15px">${esc(t.name)}</b></div>
           ${t.note ? `<div style="font-size:12px;color:var(--subtext)">${esc(t.note)}</div>` : ""}
           <div style="font-size:11.5px;color:var(--subtext)">${esc((t.url || "").replace(/^https?:\/\//, ""))}</div>
+          ${t.paired ? `<div style="font-size:11.5px;color:${t.pair_status === "active" ? "var(--success,#22c55e)" : "var(--warning,#f59e0b)"}">${t.pair_status === "active" ? `${icon("check", 12)} verified pairing` : `${icon("warn", 12)} pairing ${esc(t.pair_status || "pending")}`}</div>` : ""}
           <div style="font-size:12px">${t.has_credentials ? `${icon("check", 13)} signed in as <b>${esc(t.username)}</b>` : `${icon("warn", 13)} no credentials`}</div>
           <div style="display:flex;gap:6px;margin-top:auto">
             <button class="btn-primary btn-sm" data-open="${esc(t.id)}">${t.has_credentials ? "Open" : "Sign in & open"}</button>
@@ -235,6 +236,7 @@ async function adminDialog(done) {
       <div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px">
         <div style="display:flex;align-items:center;gap:8px"><b>${esc(t.name)}</b>
           <span style="font-size:11.5px;color:var(--subtext)">${esc((t.url || "").replace(/^https?:\/\//, ""))}</span>
+          ${t.paired ? `<span title="Pairing status" style="font-size:10.5px;padding:1px 7px;border-radius:999px;background:var(--panel-2);color:${t.pair_status === "active" ? "var(--success,#22c55e)" : t.pair_status === "pending" ? "var(--warning,#f59e0b)" : "var(--danger,#ef4444)"}">${esc(t.pair_status || "paired")}</span>` : ""}
           <span style="flex:1"></span>
           <button class="btn btn-sm" data-edit="${esc(t.id)}">Edit</button>
           <button class="btn btn-sm btn-danger" data-del="${esc(t.id)}">Delete</button></div>
@@ -268,9 +270,11 @@ function tenantForm(t, dir, done) {
       <label>Note</label><input data-f="note" value="${esc(t.note || "")}">
       <label>Verify TLS</label><label style="display:flex;gap:6px;align-items:center;font-size:12.5px"><input type="checkbox" data-f="verify_tls" ${t.verify_tls ? "checked" : ""}> Verify the tenant certificate</label>
       <label>Connect via</label><select data-f="via"><option value="">Backend (RMM server)</option>${t.via ? `<option value="${esc(t.via)}" selected>Node (loading …)</option>` : ""}</select>
+      <label>This RMM address</label><input data-f="parent_url" value="${esc(t.parent_url || "")}" placeholder="${esc(location.origin)}" title="Registered on the tenant for frame-ancestors during pairing">
     </div>
     <div style="font-size:11.5px;color:var(--subtext);margin-top:6px">Login and API calls (e.g. spaces) run through a node - needed when the tenant is only reachable in the node network.
       The embedded dashboard is still loaded by your browser directly from the backend URL.</div>
+    <div data-pair style="margin-top:10px"></div>
     <div style="font-weight:600;margin:12px 0 4px;font-size:12.5px">Visible to (empty = everyone)</div>
     <div style="display:flex;gap:6px;margin-bottom:6px"><input data-filter placeholder="Filter users/groups" style="flex:1"></div>
     <div data-allow style="max-height:200px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:6px"></div>
@@ -301,11 +305,46 @@ function tenantForm(t, dir, done) {
       const o = document.createElement("option"); o.value = t.via; o.selected = true; o.textContent = "Node (offline)"; sel.appendChild(o);
     }
   }).catch(() => {});
+  // Pairing (tenant-link): only for an already-saved tenant (needs its id).
+  const parentUrl = () => $('[data-f="parent_url"]').value.trim();
+  const renderPair = async () => {
+    const box = $("[data-pair]");
+    if (!ed) { box.innerHTML = `<div style="font-size:11.5px;color:var(--subtext);border-top:1px solid var(--border);padding-top:8px">Pairing with confirmation becomes available once this tenant is saved.</div>`; return; }
+    box.innerHTML = `<div style="font-size:11.5px;color:var(--subtext)">Checking pairing …</div>`;
+    let d; try { d = await tq(`/admin/${t.id}/pair`); } catch (e) { box.innerHTML = `<div style="color:var(--danger);font-size:12px">${esc(e.message)}</div>`; return; }
+    const pill = d.paired
+      ? (d.status === "active" ? `<span style="color:var(--success,#22c55e)">● paired &amp; active</span>`
+        : d.status === "pending" ? `<span style="color:var(--warning,#f59e0b)">● pending approval</span>`
+          : `<span style="color:var(--danger,#ef4444)">● revoked</span>`)
+      : `<span style="color:var(--subtext)">○ not paired (legacy open)</span>`;
+    box.innerHTML = `<div style="border-top:1px solid var(--border);padding-top:10px;margin-top:4px">
+      <div style="font-weight:600;font-size:12.5px;margin-bottom:4px">Pairing &nbsp;${pill}</div>
+      <div style="font-size:11.5px;color:var(--subtext);margin-bottom:8px">A paired tenant must approve this RMM before it can be opened. The tenant admin issues a pairing code or approves your request in their <b>Tenant Sharing</b> app.${d.error ? ` <span style="color:var(--danger)">(${esc(d.error === "removed" ? "pairing removed on the tenant" : d.error)})</span>` : ""}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn btn-sm btn-primary" data-pcode>Pair with code</button>
+        <button class="btn btn-sm" data-preq>Request pairing</button>
+        ${d.paired ? `<button class="btn btn-sm btn-danger" data-punpair>Unpair</button>` : ""}</div></div>`;
+    box.querySelector("[data-pcode]").addEventListener("click", async () => {
+      const code = await uiPrompt("Pairing code", { description: "Paste the code from the tenant's Tenant Sharing app." });
+      if (!code) return;
+      try { await tq(`/admin/${t.id}/pair/claim`, { method: "POST", body: { code: code.trim(), parent_url: parentUrl() } }); window.notify?.("Paired", "success"); renderPair(); }
+      catch (e) { window.notify?.(e.message, "error", 6000); }
+    });
+    box.querySelector("[data-preq]").addEventListener("click", async () => {
+      try { await tq(`/admin/${t.id}/pair/request`, { method: "POST", body: { parent_url: parentUrl() } }); window.notify?.("Pairing requested - waiting for the tenant to approve", "success", 5000); renderPair(); }
+      catch (e) { window.notify?.(e.message, "error", 6000); }
+    });
+    box.querySelector("[data-punpair]")?.addEventListener("click", async () => {
+      if (!(await uiConfirm("Remove the pairing key from this RMM? You can pair again later.", { okText: "Unpair", danger: true }))) return;
+      try { await tq(`/admin/${t.id}/pair`, { method: "DELETE" }); renderPair(); } catch (e) { window.notify?.(e.message, "error"); }
+    });
+  };
+  renderPair();
   $("[data-x]").addEventListener("click", () => ov.remove());
   $("[data-ok]").addEventListener("click", async () => {
     const payload = { name: $('[data-f="name"]').value.trim(), url: $('[data-f="url"]').value.trim(),
       color: $('[data-f="color"]').value, note: $('[data-f="note"]').value.trim(), verify_tls: $('[data-f="verify_tls"]').checked,
-      via: $('[data-f="via"]').value,
+      via: $('[data-f="via"]').value, parent_url: $('[data-f="parent_url"]').value.trim(),
       allow: [...allow].map((x) => { const [type, id] = x.split(":"); return { type, id }; }) };
     try { if (ed) await tq(`/admin/${t.id}`, { method: "PUT", body: payload }); else await tq("/admin", { method: "POST", body: payload }); ov.remove(); done(); window.notify?.("Saved", "success", 1500); }
     catch (e) { window.notify?.(e.message, "error", 6000); }

@@ -55,14 +55,14 @@ async def _request(tenant: dict, method: str, url: str, headers: dict | None = N
 async def _login(tenant: dict, username: str, password: str, realm: str, code: str = "") -> str:
     base = _base(tenant)
     if not base:
-        raise TenantError("Keine Mandanten-URL hinterlegt")
+        raise TenantError("No tenant URL configured")
     body = {"username": username, "password": password, "realm": realm or "local"}
     if code:
         body["code"] = code
     try:
         r = await _request(tenant, "POST", base + "/api/auth/login", json_body=body, timeout=20)
     except httpx.HTTPError as e:
-        raise TenantError(f"Mandant nicht erreichbar: {e}") from None
+        raise TenantError(f"Tenant not reachable: {e}") from None
     if r.status_code != 200:
         detail = ""
         try:
@@ -71,11 +71,11 @@ async def _login(tenant: dict, username: str, password: str, realm: str, code: s
             detail = r.text[:200]
         if detail == "2fa_required":
             raise TenantError("2fa_required", 401)
-        raise TenantError(f"Anmeldung am Mandanten fehlgeschlagen: {detail or r.status_code}", r.status_code)
+        raise TenantError(f"Login to the tenant failed: {detail or r.status_code}", r.status_code)
     data = r.json()
     tok = data.get("access_token") or data.get("token")
     if not tok:
-        raise TenantError("Mandant lieferte keinen Token")
+        raise TenantError("Tenant returned no token")
     return tok
 
 
@@ -100,4 +100,65 @@ async def api(tenant: dict, token: str, method: str, path: str, **kw) -> httpx.R
         return await _request(tenant, method, base + path, headers=headers,
                               json_body=kw.pop("json", None), content=kw.pop("content", None))
     except httpx.HTTPError as e:
-        raise TenantError(f"Mandant nicht erreichbar: {e}") from None
+        raise TenantError(f"Tenant not reachable: {e}") from None
+
+
+# ------------------------------------------------------------------ tenant-link (pairing)
+# These talk to the counterpart module "tenant-link" on the tenant backend.
+# claim/request need no user token (the code is the secret / the admin approves);
+# status proves the main RMM's identity with the stored pair_key.
+async def _tl(tenant: dict, method: str, path: str, json_body=None, headers=None) -> httpx.Response:
+    base = _base(tenant)
+    if not base:
+        raise TenantError("No tenant URL configured")
+    try:
+        return await _request(tenant, method, base + path, headers=headers or {}, json_body=json_body, timeout=20)
+    except httpx.HTTPError as e:
+        raise TenantError(f"Tenant not reachable: {e}") from None
+
+
+def _tl_detail(r: httpx.Response) -> str:
+    try:
+        return r.json().get("detail") or ""
+    except Exception:
+        return (r.text or "")[:200]
+
+
+async def tl_claim(tenant: dict, code: str, parent_name: str, parent_url: str) -> str:
+    """Redeem a pairing code on the tenant -> returns the pair_key."""
+    r = await _tl(tenant, "POST", "/api/tenant-link/pair/claim",
+                  json_body={"code": code, "name": parent_name, "parent_url": parent_url})
+    if r.status_code == 404:
+        raise TenantError("The tenant does not have the \"Tenant Sharing\" module active", 409)
+    if r.status_code != 200:
+        raise TenantError(_tl_detail(r) or f"Pairing failed ({r.status_code})", r.status_code)
+    key = r.json().get("pair_key")
+    if not key:
+        raise TenantError("Tenant returned no pairing key")
+    return key
+
+
+async def tl_request(tenant: dict, parent_name: str, parent_url: str) -> str:
+    """Ask the tenant for a pairing (needs admin approval there) -> returns the pair_key."""
+    r = await _tl(tenant, "POST", "/api/tenant-link/pair/request",
+                  json_body={"name": parent_name, "parent_url": parent_url})
+    if r.status_code == 404:
+        raise TenantError("The tenant does not have the \"Tenant Sharing\" module active", 409)
+    if r.status_code != 200:
+        raise TenantError(_tl_detail(r) or f"Pairing request failed ({r.status_code})", r.status_code)
+    key = r.json().get("pair_key")
+    if not key:
+        raise TenantError("Tenant returned no pairing key")
+    return key
+
+
+async def tl_status(tenant: dict, pair_key: str) -> dict:
+    """Check the pairing on the tenant. -> {status, embeddable, name}. 401 -> pairing removed."""
+    r = await _tl(tenant, "GET", "/api/tenant-link/status", headers={"X-Tenant-Link-Key": pair_key})
+    if r.status_code == 401:
+        raise TenantError("pairing_removed", 401)
+    if r.status_code == 404:
+        raise TenantError("The tenant does not have the \"Tenant Sharing\" module active", 409)
+    if r.status_code != 200:
+        raise TenantError(_tl_detail(r) or f"Status check failed ({r.status_code})", r.status_code)
+    return r.json()

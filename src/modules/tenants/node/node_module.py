@@ -16,7 +16,7 @@ _MAX = 50 * 1024 * 1024
 def fetch(ctx, data: dict) -> dict:
     url = str(data.get("url") or "")
     if urlparse(url).scheme not in ("http", "https"):
-        raise RuntimeError("Nur http und https")
+        raise RuntimeError("Only http and https")
     method = str(data.get("method") or "GET").upper()
     body = base64.b64decode(data["body"]) if data.get("body") else None
     sslctx = ssl.create_default_context()
@@ -33,7 +33,7 @@ def fetch(ctx, data: dict) -> dict:
         out = {"status": resp.getcode() or 200, "headers": [[k, v] for k, v in resp.headers.items()],
                "final": resp.geturl()}
     if len(raw) > _MAX:
-        raise RuntimeError("Antwort zu gross")
+        raise RuntimeError("Response too large")
     out["body"] = base64.b64encode(raw).decode()
     return out
 
