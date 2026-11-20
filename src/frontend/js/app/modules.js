@@ -236,7 +236,7 @@ export function openModuleApp(appId, props = null) {
   const a = info.app;
   openWindow({ key: a.key || a.id, appId: a.id, title: a.title || a.label || a.id,
                w: a.w || 800, h: a.h || 600, props: props || {},
-               pinned: !!a.pinned, singleton: !!a.singleton });
+               pinned: !!a.pinned, singleton: !!a.singleton, corner: a.corner || null });
   return true;
 }
 

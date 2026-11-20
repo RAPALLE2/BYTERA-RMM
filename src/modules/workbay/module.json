@@ -19,9 +19,10 @@
       "entry": "workbay.js",
       "export": "renderWorkbay",
       "w": 380,
-      "h": 300,
+      "h": 340,
       "pinned": true,
-      "singleton": true
+      "singleton": true,
+      "corner": "bottom-left"
     }
   ]
 }

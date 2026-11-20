@@ -214,7 +214,7 @@ window.addEventListener("resize", () => {
 
 export function openWindow({ key, appId, title, props = {}, clientColor = null, w = 640, h = 460,
                             x = null, y = null, minimized = false, maximized = false, focus = true,
-                            singleton = false, pinned = false, newInstance = null }) {
+                            singleton = false, pinned = false, newInstance = null, corner = null }) {
   // Repair old keys still persisted with '#' (CSS-selector safe).
   key = String(key).replace(/#/g, "--");
   const existing = state.windows.find((win) => win.key === key);
@@ -272,6 +272,18 @@ export function openWindow({ key, appId, title, props = {}, clientColor = null, 
   state.focusOrder.push(key);
 
   createWindowElement(win); // build the DOM element ONCE
+  // Pin to a screen corner if asked (e.g. Work Bay -> bottom-left). Needs the
+  // element's real size, so it runs after createWindowElement; clamp applies it.
+  if (corner && win._el) {
+    const lay = layer();
+    if (lay) {
+      const ew = win._el.offsetWidth, eh = win._el.offsetHeight, pad = 12;
+      if (corner.includes("left")) win.x = pad;
+      if (corner.includes("right")) win.x = Math.max(0, lay.clientWidth - ew - pad);
+      if (corner.includes("top")) win.y = pad;
+      if (corner.includes("bottom")) win.y = Math.max(0, lay.clientHeight - eh - pad);
+    }
+  }
   if (win.maximized) {
     // Restore maximized: remember the saved normal geometry, then maximize.
     win._restore = { x: win.x, y: win.y, w: win.w, h: win.h };
