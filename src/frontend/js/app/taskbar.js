@@ -84,7 +84,9 @@ export function renderTaskbar() {
   if (!container) return;
 
   const activeKey = state.focusOrder[state.focusOrder.length - 1];
-  const count = state.windows.length;
+  // Parked windows (stored in the Work Bay) are hidden from the taskbar.
+  const visible = state.windows.filter((w) => !w.parked);
+  const count = visible.length;
   const avail = container.clientWidth || 0;
   const iconOnly = count >= ICON_ONLY_FROM
     || (avail > 0 && count * MIN_LABEL_WIDTH > avail);
@@ -92,7 +94,7 @@ export function renderTaskbar() {
   container.classList.toggle("icons-only", iconOnly);
 
   // Knöpfe von Fenstern entfernen, die es nicht mehr gibt.
-  const alive = new Set(state.windows.map((w) => w.key));
+  const alive = new Set(visible.map((w) => w.key));
   for (const [key, btn] of [..._btnCache]) {
     if (!alive.has(key)) {
       btn.remove();
@@ -100,7 +102,7 @@ export function renderTaskbar() {
     }
   }
 
-  state.windows.forEach((win, index) => {
+  visible.forEach((win, index) => {
     const isActive = win.key === activeKey && !win.minimized;
     let btn = _btnCache.get(win.key);
 

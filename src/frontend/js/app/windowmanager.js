@@ -23,6 +23,46 @@ import { bindContextMenu } from "./contextmenu.js";
 const cleanupFns = {};
 export function registerCleanup(key, fn) { cleanupFns[key] = fn; }
 
+// --- Work Bay: parking windows + drop targets -----------------------------
+// A "drop target" (e.g. the Work Bay) registers itself; dragging a window onto
+// it, or picking "Park in Work Bay", parks that window: it is hidden from the
+// desktop and the taskbar and shown as an item inside the target instead.
+// Parked windows stay in state.windows with win.parked = true.
+const _dropTargets = new Map();   // key -> { el, onDrop }
+export function registerWindowDropTarget(key, el, onDrop) { _dropTargets.set(key, { el, onDrop }); }
+export function unregisterWindowDropTarget(key) { _dropTargets.delete(key); }
+export function listParkedWindows() { return state.windows.filter((w) => w.parked); }
+
+export function parkWindow(key) {
+  const win = state.windows.find((w) => w.key === key);
+  if (!win || win.parked) return;
+  win.parked = true;
+  if (win.snap) { win.snap = null; updateSnapDividers(); }
+  if (win._el) win._el.style.display = "none";
+  notifyChanged();
+}
+export function unparkWindow(key) {
+  const win = state.windows.find((w) => w.key === key);
+  if (!win || !win.parked) return;
+  win.parked = false;
+  win.minimized = false;
+  if (win._el) win._el.style.display = "flex";
+  focusWindow(key);   // also calls notifyChanged()
+}
+// Which registered drop target (if any) is under this screen point? The dragged
+// window is briefly made click-through so elementFromPoint sees what's beneath.
+function _dropTargetAt(x, y, draggedEl, selfKey) {
+  const prev = draggedEl ? draggedEl.style.pointerEvents : null;
+  if (draggedEl) draggedEl.style.pointerEvents = "none";
+  const hit = document.elementFromPoint(x, y);
+  if (draggedEl) draggedEl.style.pointerEvents = prev || "";
+  for (const [key, tgt] of _dropTargets) {
+    if (key === selfKey) continue;
+    if (tgt.el && hit && (tgt.el === hit || tgt.el.contains(hit))) return { key, ...tgt };
+  }
+  return null;
+}
+
 // appId of the window apps -> device action in the bytera:// scheme.
 const _APP_TO_ACTION = {
   vnc: "remotescreen", explorer: "explorer", taskmanager: "tasks",
@@ -98,6 +138,8 @@ export function setOnWindowsChanged(fn) { onWindowsChanged = fn; }
 
 function notifyChanged() {
   if (onWindowsChanged) onWindowsChanged();
+  // Let other views (e.g. the Work Bay dock) react to window changes too.
+  try { window.dispatchEvent(new CustomEvent("rmm-windows-changed")); } catch { /* ignore */ }
 }
 
 let cascade = 0; // gives new windows a slightly offset position
@@ -570,8 +612,14 @@ function makeDraggable(handle, windowEl, win) {
     function onUp(ev) {
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
-      const zone = dragging ? zoneForPointer(ev.clientX, ev.clientY) : null;
       showSnapPreview(null);
+      // Dropped onto a drop target (the Work Bay)? Park the window there
+      // instead of snapping. The bay itself cannot be parked.
+      if (dragging && win.appId !== "workbay") {
+        const tgt = _dropTargetAt(ev.clientX, ev.clientY, windowEl, win.key);
+        if (tgt) { parkWindow(win.key); try { tgt.onDrop?.(win.key); } catch { /* ignore */ } return; }
+      }
+      const zone = dragging ? zoneForPointer(ev.clientX, ev.clientY) : null;
       if (zone) snapWindowTo(win.key, zone);
       notifyChanged();   // save the new position
     }
@@ -1041,6 +1089,13 @@ export function windowMenu(key) {
     ] },
     { label: win.pinned ? "Unpin (no longer on top)" : "Always on top", icon: "📌",
       onClick: () => { togglePin(key); } },
+    ...(state.windows.some((w) => w.appId === "workbay") && win.appId !== "workbay"
+      ? [{ label: "Park in Work Bay", icon: "🗃️", onClick: () => {
+            parkWindow(key);
+            const bay = state.windows.find((w) => w.appId === "workbay");
+            if (bay) focusWindow(bay.key);
+          } }]
+      : []),
     { separator: true },
     { label: "Open in new window", icon: "🗔", onClick: () => {
       openWindow({ key: win.appId + "-" + Math.random().toString(36).slice(2, 7), appId: win.appId,

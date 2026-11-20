@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "id": "workbay",
+  "name": "Work Bay",
+  "version": "1.0.0",
+  "description": "A small always-on-top mini window: a personal scratch note and a clipboard (per user, stored via Spaces / the Notepad module) plus a tray you can park windows into, so apps stay out of the taskbar and off the desktop and sit cleanly in here instead.",
+  "author": "BYTERA",
+  "category": "extras",
+  "icon": "🗃️",
+  "requires": ["spaces", "collab"],
+  "entry": "module",
+  "hooks": { "startup": "on_startup" },
+  "apps": [
+    {
+      "id": "workbay",
+      "label": "Work Bay",
+      "icon": "🗃️",
+      "title": "Work Bay",
+      "entry": "workbay.js",
+      "export": "renderWorkbay",
+      "w": 380,
+      "h": 300,
+      "pinned": true,
+      "singleton": true
+    }
+  ]
+}

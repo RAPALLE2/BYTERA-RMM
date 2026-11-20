@@ -1,22 +1,22 @@
 // metriccatalog.js
 // ----------------
-// Modulare Bibliothek von Metrik-"Presets", die sich als Dashboard-Widgets
-// anzeigen lassen. Jedes Preset weiß, wie es aus dem aktuellen Client-Zustand
-// einen Wert (oder eine Verteilung) berechnet - egal ob als Zahl, Donut,
-// Linien-Chart, Pie oder Tabelle dargestellt.
+// Modular library of metric "presets" that can be shown as dashboard widgets.
+// Each preset knows how to compute a value (or a distribution) from the
+// current client state - whether shown as a number, donut, line chart, pie
+// or table.
 //
-// Zwei Arten:
-//   - scope "fleet":   ein aggregierter Wert über ALLE Clients
-//                      (z.B. Gesamt-Stromverbrauch, Gesamt-CPU-Kapazität)
-//   - scope "perhost": ein Wert PRO Client (für Tabellen / Pie / Bar),
-//                      z.B. CPU-Modell, RAM-Takt, Ping-Zeit
+// Two kinds:
+//   - scope "fleet":   one aggregated value over ALL clients
+//                      (e.g. total power draw, total CPU capacity)
+//   - scope "perhost": one value PER client (for tables / pie / bar),
+//                      e.g. CPU model, RAM speed, ping time
 //
-// Darstellungsarten (kind), die ein Preset unterstützt, stehen in .charts.
+// The chart kinds a preset supports are listed in .charts.
 
 import { formatBytes } from "./utils.js";
 import { getFleetIncludeVirtual } from "./persist.js";
 import { t } from "./i18n.js";
-// (getFleetIncludeVirtual entfernt - Zählweise ist jetzt pro Widget einstellbar)
+// (getFleetIncludeVirtual removed - the counting mode is now per widget)
 
 const fmtPct = (v) => `${Math.round(v)}%`;
 const fmtW = (v) => `${Math.round(v)} W`;
@@ -25,33 +25,33 @@ const fmtMHz = (v) => `${(v / 1000).toFixed(2)} GHz`;
 const fmtC = (v) => `${v} °C`;
 const fmtBps = (v) => `${formatBytes(v)}/s`;
 
-// Aktive (nicht-Kind-)Clients.
-// Pro-Widget-Einstellung: Zählt dieses Widget ALLE Geräte, nur physische oder
-// nur virtuelle (VMs & LXCs)? Wird von dashwidgets/clientmetrics vor dem
-// Rendern gesetzt (setHostScope) und danach zurückgesetzt.
-// Default null = globale Profil-Einstellung greift.
+// Active (non-child) clients.
+// Per-widget setting: does this widget count ALL devices, only physical or
+// only virtual ones (VMs & LXCs)? Set by dashwidgets/clientmetrics before
+// rendering (setHostScope) and reset afterwards.
+// Default null = the global profile setting applies.
 let _hostScope = null;   // null | "all" | "physical" | "virtual"
 export function setHostScope(scope) { _hostScope = scope; }
 export function clearHostScope() { _hostScope = null; }
 
-// Virtuell = explizit als VM/LXC markiert ODER einem Host untergeordnet.
+// Virtual = explicitly marked as VM/LXC OR subordinate to a host.
 const isVirtualClient = (c) => !!c.parent_client_id || (c.device_type || "physical") !== "physical";
 
-// Status-Farben: physisch und VM/LXC bekommen VERWANDTE, aber sichtbar
-// Basisfarben der Status-Kategorien (physisch). Die VM/LXC-Variante wird
-// daraus per virtualShade() abgeleitet - wie bei allen anderen Widgets auch.
-const STATUS_BASE = { Online: "#3ecf8e", Offline: "#64748b", Wartung: "#f5a524" };
+// Status colors: physical and VM/LXC get RELATED but visibly different
+// base colors of the status categories (physical). The VM/LXC variant is
+// derived from it via virtualShade() - as with every other widget.
+const STATUS_BASE = { Online: "#3ecf8e", Offline: "#64748b", Maintenance: "#f5a524" };
 
-// Online/Offline(/Wartung)-Zeilen. Bei Zählweise "alle Geräte" wird jede
-// Kategorie in physisch und VM/LXC aufgeteilt (aus 2 werden 4 bzw. aus 3
-// werden 6 Kategorien); leere Kategorien fallen weg.
-// items = Hostnamen für die Hover-Tooltips.
+// Online/Offline(/Maintenance) rows. With the "all devices" counting mode
+// each category is split into physical and VM/LXC (2 become 4, or 3 become
+// 6 categories); empty categories are dropped.
+// items = hostnames for the hover tooltips.
 function statusRows(s, withMaintenance) {
   const statusOf = (c) => (withMaintenance && c.status_override === "maintenance")
-    ? "Wartung" : (c.online ? "Online" : "Offline");
-  const order = withMaintenance ? ["Online", "Wartung", "Offline"] : ["Online", "Offline"];
+    ? "Maintenance" : (c.online ? "Online" : "Offline");
+  const order = withMaintenance ? ["Online", "Maintenance", "Offline"] : ["Online", "Offline"];
   const rows = distByDevice(hosts(s), statusOf, (label) => STATUS_BASE[label] || "#64748b");
-  // Stabile Reihenfolge (Online zuerst), unabhängig von der Gruppengröße.
+  // Stable order (Online first), independent of group size.
   const rank = (r) => order.findIndex((o) => r.label.startsWith(o));
   return rows.sort((a, b) => (rank(a) - rank(b)) || (a.kind === "phys" ? -1 : 1));
 }
@@ -64,38 +64,38 @@ function effectiveHostScope() {
 
 function hosts(state) {
   let list = state.clients || [];
-  // Zählweise bestimmen: eine explizit gesetzte Pro-Widget-Zählweise hat
-  // Vorrang; sonst greift die globale Profil-Einstellung "VMs & LXCs als
-  // vollwertig mitzählen" (getFleetIncludeVirtual).
-  //   physical   -> nur physische Geräte
-  //   virtual    -> nur VMs & LXCs
-  //   all        -> alle Geräte (VMs/LXCs zählen mit)
+  // Determine the counting mode: an explicitly set per-widget mode takes
+  // precedence; otherwise the global profile setting "count VMs & LXCs as
+  // full devices" (getFleetIncludeVirtual) applies.
+  //   physical   -> physical devices only
+  //   virtual    -> VMs & LXCs only
+  //   all        -> all devices (VMs/LXCs included)
   const scope = effectiveHostScope();
   if (scope === "physical") {
-    // WICHTIG: Nur echte VMs/LXCs bzw. Kind-Clients ausschließen. Alles ohne
-    // gesetzten Typ gilt als physisch (Default), damit Geräte nie
-    // versehentlich ganz verschwinden.
+    // IMPORTANT: exclude only real VMs/LXCs / child clients. Anything without
+    // a set type counts as physical (default) so devices never
+    // disappear entirely by accident.
     list = list.filter((c) => !isVirtualClient(c));
   } else if (scope === "virtual") {
     list = list.filter(isVirtualClient);
   }
-  // BUGFIX: Früher wurden Kind-Clients (parent_client_id gesetzt, z.B. eine
-  // VM, die einem physischen Host untergeordnet ist) IMMER herausgefiltert -
-  // dadurch fehlten sie im Dashboard auch bei Zählweise "alle Geräte".
-  // Bei scope "all" zählen jetzt wirklich ALLE Geräte mit.
+  // BUGFIX: child clients (parent_client_id set, e.g. a VM subordinate to a
+  // physical host) used to ALWAYS be filtered out -
+  // so they were missing from the dashboard even in "all devices" mode.
+  // With scope "all", ALL devices are now really counted.
   return list;
 }
 function onlineHosts(state) { return hosts(state).filter((c) => c.online && c.metrics); }
 
 // -----------------------------------------------------------------
-// GERÄTEART IN JEDEM WIDGET
-// Physische Geräte und VMs/LXCs sollen sich in JEDEM Diagramm farblich
-// unterscheiden - aber erkennbar zusammengehörig bleiben. Deshalb wird die
-// Farbe der VM/LXC-Variante aus der Basisfarbe ABGELEITET (leichte Hue-
-// Drehung + heller + etwas weniger gesättigt) statt frei gewählt.
+// DEVICE KIND IN EVERY WIDGET
+// Physical devices and VMs/LXCs should differ in color in EVERY chart -
+// but stay recognizably related. So the color of the VM/LXC variant is
+// DERIVED from the base color (slight hue rotation + lighter + a little
+// less saturated) instead of chosen freely.
 // -----------------------------------------------------------------
 const deviceKind = (c) => (isVirtualClient(c) ? "virt" : "phys");
-export const DEVICE_LABEL = { phys: "physisch", virt: "VM/LXC" };
+export const DEVICE_LABEL = { phys: "physical", virt: "VM/LXC" };
 
 function _hexToHsl(hex) {
   const m = String(hex).trim().replace("#", "");
@@ -124,34 +124,34 @@ function _hslToHex(h, sN, l) {
   return `#${to(r)}${to(g)}${to(b)}`;
 }
 
-// Ableitung der VM/LXC-Farbe aus der Basisfarbe (physisch).
+// Derive the VM/LXC color from the base color (physical).
 export function virtualShade(hex) {
   try {
     const [h, sN, l] = _hexToHsl(hex);
     return _hslToHex(h + 26, Math.max(0.28, sN * 0.85), Math.min(0.78, l + 0.10));
   } catch { return hex; }
 }
-// Farbe einer Kategorie je nach Geräteart.
+// Color of a category depending on the device kind.
 const kindColor = (base, kind) => (kind === "virt" ? virtualShade(base) : base);
 
-// Aufteilen NUR sinnvoll, wenn das Widget überhaupt beide Arten zählt.
+// Splitting only makes sense when the widget counts both kinds at all.
 const splitActive = () => effectiveHostScope() === "all";
 
 const clientName = (c) => c.hostname || c.id;
 
-// Generische Verteilung MIT Geräteart-Aufteilung.
-//   keyFn(c)   -> Kategorie-Schlüssel (z.B. "Windows")
-// Ergebnis: [{label, value, color, items, kind}]
-// Bei Zählweise "alle Geräte" wird jede Kategorie in "… (physisch)" und
-// "… (VM/LXC)" geteilt; sonst bekommt die Kategorie den zur Zählweise
-// passenden Farbton.
+// Generic distribution WITH device-kind split.
+//   keyFn(c)   -> category key (e.g. "Windows")
+// Result: [{label, value, color, items, kind}]
+// With the "all devices" mode each category is split into "… (physical)"
+// and "… (VM/LXC)"; otherwise the category gets the color tone matching
+// the counting mode.
 function distByDevice(list, keyFn, palette = CATEGORY_PALETTE) {
   const baseOf = typeof palette === "function"
     ? palette
     : (label, i) => palette[i % palette.length];
   const map = new Map();
   for (const c of list) {
-    const key = keyFn(c) || "unbekannt";
+    const key = keyFn(c) || "unknown";
     if (!map.has(key)) map.set(key, { phys: [], virt: [] });
     map.get(key)[deviceKind(c)].push(clientName(c));
   }
@@ -161,7 +161,7 @@ function distByDevice(list, keyFn, palette = CATEGORY_PALETTE) {
   entries.forEach(([label, g], i) => {
     const base = baseOf(label, i);
     if (splitActive()) {
-      rows.push({ label: `${label} (physisch)`, value: g.phys.length, color: base, items: g.phys, kind: "phys" });
+      rows.push({ label: `${label} (physical)`, value: g.phys.length, color: base, items: g.phys, kind: "phys" });
       rows.push({ label: `${label} (VM/LXC)`, value: g.virt.length, color: virtualShade(base), items: g.virt, kind: "virt" });
     } else {
       const kind = effectiveHostScope() === "virtual" ? "virt" : "phys";
@@ -169,46 +169,46 @@ function distByDevice(list, keyFn, palette = CATEGORY_PALETTE) {
                   items: [...g.phys, ...g.virt], kind });
     }
   });
-  // Leere Kategorien (z.B. "Windows (VM/LXC)" ohne solche Geräte) weglassen -
-  // sonst stünden in Tabellen/Balken sinnlose Null-Zeilen.
+  // Drop empty categories (e.g. "Windows (VM/LXC)" with no such devices) -
+  // otherwise tables/bars would show pointless zero rows.
   return rows.filter((r) => r.value > 0);
 }
-// Gleiche Daten im Donut-Format ({label, count, color, items}).
+// Same data in donut format ({label, count, color, items}).
 const segByDevice = (list, keyFn, palette) =>
   distByDevice(list, keyFn, palette)
     .map((r) => ({ label: r.label, count: r.value, color: r.color, items: r.items, kind: r.kind }));
 
-// Basispalette für Kategorien (identisch mit der Pie-/Donut-Palette, damit
-// aufgeteilte und nicht aufgeteilte Widgets gleich aussehen).
+// Base palette for categories (identical to the pie/donut palette so that
+// split and non-split widgets look the same).
 const CATEGORY_PALETTE = [
   "#4da6ff", "#3ecf8e", "#f5a524", "#ff4d6d", "#a78bfa",
   "#22d3ee", "#fb923c", "#e879f9", "#84cc16", "#f43f5e",
 ];
 
-// Farben für Zeilen, die für GENAU EINEN Client stehen (alle "je Client"-
-// Widgets: Balken, Tabellen, Listen, Säulen). Physisch = Blau, VM/LXC = der
-// abgeleitete Türkis-Ton.
+// Colors for rows that stand for EXACTLY ONE client (all "per client"
+// widgets: bars, tables, lists, columns). Physical = blue, VM/LXC = the
+// derived teal tone.
 const HOST_BASE = "#4da6ff";
 const HOST_COLORS = { phys: HOST_BASE, virt: virtualShade(HOST_BASE) };
 
-// Summe/ Mittel-Helfer über online Clients.
+// Sum / average helpers over online clients.
 const sum = (arr, f) => arr.reduce((s, c) => s + (f(c) || 0), 0);
 const avg = (arr, f) => (arr.length ? sum(arr, f) / arr.length : 0);
 
 // -----------------------------------------------------------------
-// Preset-Definitionen. id ist stabil (wird in Widgets gespeichert).
-// value(state)  -> Zahl (für number/gauge/donut/line)
-// donut(state)  -> {value, max, label, sub}  (optional, für Donut/Gauge)
-// rows(state)   -> [{label, value, raw}]      (für table/pie/bar)
-// charts        -> erlaubte Darstellungen
-// unit/format   -> Anzeige
+// Preset definitions. id is stable (stored in widgets).
+// value(state)  -> number (for number/gauge/donut/line)
+// donut(state)  -> {value, max, label, sub}  (optional, for donut/gauge)
+// rows(state)   -> [{label, value, raw}]      (for table/pie/bar)
+// charts        -> allowed chart kinds
+// unit/format   -> display
 // -----------------------------------------------------------------
 export const PRESETS = [
   // ---------- SOFTWARE-PATCHING ----------
-  // Die Zahlen kommen fertig aus dem Backend: patching.refresh_summary()
-  // schreibt sie als Spalten auf den Client, damit hier keine Zusatzabfrage
-  // je Widget nötig ist. 'other' (winget & Co. ohne Einstufung) wird bewusst
-  // getrennt ausgewiesen und nicht in "kritisch" eingerechnet.
+  // The numbers come ready from the backend: patching.refresh_summary()
+  // writes them as columns on the client, so no extra query per widget is
+  // needed here. 'other' (winget & co. without a rating) is deliberately
+  // shown separately and not counted into "critical".
   {
     id: "fleet.patchesTotal", scope: "fleet", group: "Updates",
     get label() { return t("mk_fleet_patchesTotal"); }, charts: ["number", "stat", "line"],
@@ -225,15 +225,15 @@ export const PRESETS = [
     value: (s) => hosts(s).filter((c) => (c.patch_count || 0) > 0).length,
     donut: (s) => ({
       value: hosts(s).filter((c) => (c.patch_count || 0) > 0).length,
-      max: hosts(s).length || 1, label: "Betroffen",
+      max: hosts(s).length || 1, label: "Affected",
       sub: `${hosts(s).length} Clients`,
     }),
     rows: (s) => {
       const all = hosts(s);
       const off = all.filter((c) => (c.patch_count || 0) > 0).length;
       return [
-        { label: "Updates offen", value: off, color: "#f5a524" },
-        { label: "Aktuell", value: all.length - off, color: "#3ecf8e" },
+        { label: "Pending updates", value: off, color: "#f5a524" },
+        { label: "Up to date", value: all.length - off, color: "#3ecf8e" },
       ];
     },
   },
@@ -246,8 +246,8 @@ export const PRESETS = [
       const crit = sum(h, (c) => c.patch_critical || 0);
       const rest = Math.max(0, sum(h, (c) => c.patch_count || 0) - sec - crit);
       return [
-        { label: "Sicherheit", value: sec, color: "#ff4d6d" },
-        { label: "Kritisch", value: crit, color: "#f5a524" },
+        { label: "Security", value: sec, color: "#ff4d6d" },
+        { label: "Critical", value: crit, color: "#f5a524" },
         { get label() { return t("u_ubrige"); }, value: rest, color: "#4da6ff" },
       ].filter((r) => r.value > 0);
     },
@@ -265,10 +265,10 @@ export const PRESETS = [
       .map((c) => ({
         label: c.hostname || c.id,
         value: c.patch_count || 0,
-        // Sicherheitslücken sichtbar machen, nicht nur die Gesamtzahl.
+        // Make security gaps visible, not just the total count.
         raw: (c.patch_security || 0)
-          ? `${c.patch_count} offen (${c.patch_security} Sicherheit)`
-          : `${c.patch_count} offen`,
+          ? `${c.patch_count} pending (${c.patch_security} security)`
+          : `${c.patch_count} pending`,
         color: (c.patch_security || 0) ? "#ff4d6d"
           : (c.patch_critical || 0) ? "#f5a524" : "#4da6ff",
       }))
@@ -278,10 +278,10 @@ export const PRESETS = [
     id: "host.patchScanAge", scope: "perhost", group: "Updates",
     get label() { return t("mk_host_patchScanAge"); }, charts: ["table", "bar"],
     rows: (s) => hosts(s).map((c) => {
-      if (!c.patch_last_scan) return { label: c.hostname || c.id, value: 999, raw: "nie gesucht" };
+      if (!c.patch_last_scan) return { label: c.hostname || c.id, value: 999, raw: "never scanned" };
       const d = Math.floor((Date.now() - c.patch_last_scan) / 86400000);
       return { label: c.hostname || c.id, value: d,
-               raw: d === 0 ? "heute" : `vor ${d} Tag(en)` };
+               raw: d === 0 ? "today" : `${d} day(s) ago` };
     }).sort((a, b) => b.value - a.value),
   },
 
@@ -294,7 +294,7 @@ export const PRESETS = [
     id: "fleet.online", scope: "fleet", group: "Flotte", get label() { return t("mk_fleet_online"); },
     charts: ["donut", "pie", "number"],
     value: (s) => hosts(s).filter((c) => c.online).length,
-    donut: (s) => ({ value: hosts(s).filter((c) => c.online).length, max: hosts(s).length, label: "Online", sub: `${hosts(s).length} gesamt` }),
+    donut: (s) => ({ value: hosts(s).filter((c) => c.online).length, max: hosts(s).length, label: "Online", sub: `${hosts(s).length} total` }),
     rows: (s) => statusRows(s, false),
   },
   {
@@ -362,7 +362,7 @@ export const PRESETS = [
   {
     id: "fleet.gpuDist", scope: "fleet", group: "Verteilung", get label() { return t("mk_fleet_gpuDist"); },
     charts: ["pie", "table"],
-    rows: (s) => distByDevice(hosts(s), (c) => (c.metrics?.gpuModels?.[0]) || "unbekannt"),
+    rows: (s) => distByDevice(hosts(s), (c) => (c.metrics?.gpuModels?.[0]) || "unknown"),
   },
   {
     id: "fleet.archDist", scope: "fleet", group: "Verteilung", get label() { return t("mk_fleet_archDist"); },
@@ -374,16 +374,16 @@ export const PRESETS = [
     charts: ["pie", "table"],
     rows: (s) => distByDevice(hosts(s), (c) => c.agent_version || t("unknown")),
   },
-  // ---------- FLOTTEN-ÜBERSICHT (interaktive Donuts wie im Dashboard) ----------
-  // Diese drei Presets sind die frühere feste "Flotten-Übersicht" - jetzt als
-  // normale Widgets: frei verschiebbar, editierbar, löschbar, neu einfügbar.
-  // segments(state) liefert Gruppen INKLUSIVE der betroffenen Client-Namen
-  // (für den Hover-Tooltip); rows() erlaubt zusätzlich pie/bar/table.
+  // ---------- FLEET OVERVIEW (interactive donuts like on the dashboard) ----------
+  // These three presets are the former fixed "fleet overview" - now as
+  // normal widgets: freely movable, editable, deletable, re-insertable.
+  // segments(state) returns groups INCLUDING the affected client names
+  // (for the hover tooltip); rows() additionally allows pie/bar/table.
   {
     id: "fleet.statusDonut", scope: "fleet", group: "Flotten-Übersicht",
     get label() { return t("u_agenten_on_off"); }, charts: ["fleetdonut", "pie", "bar", "table"],
-    // Gleiche Aufteilung wie fleet.online (inkl. Wartung): bei "alle Geräte"
-    // wird jede Status-Kategorie in physisch und VM/LXC getrennt.
+    // Same split as fleet.online (incl. maintenance): in "all devices" mode
+    // each status category is separated into physical and VM/LXC.
     segments: (s) => statusRows(s, true)
       .map((r) => ({ label: r.label, count: r.value, color: r.color, items: r.items })),
     rows: (s) => statusRows(s, true),
@@ -401,22 +401,22 @@ export const PRESETS = [
     rows: (s) => distByDevice(hosts(s), (c) => c.agent_version || t("unknown")),
   },
   {
-    // Kompakte "Flotten-Übersicht" als EIN Widget: Online/Offline, Betriebs-
-    // systeme und Agent-Versionen als drei kleine Kreisdiagramme.
+    // Compact "fleet overview" as ONE widget: online/offline, operating
+    // systems and agent versions as three small pie charts.
     id: "fleet.overview", scope: "fleet", group: "Flotte", get label() { return t("mk_fleet_overview"); },
     charts: ["overview"],
     sections: (s) => [
       { title: "Online / Offline", rows: statusRows(s, false) },
-      { title: "Betriebssysteme", rows: distByDevice(hosts(s), (c) => osKey(c)) },
-      { title: "Agent-Versionen", rows: distByDevice(hosts(s), (c) => c.agent_version || t("unknown")) },
+      { title: "Operating systems", rows: distByDevice(hosts(s), (c) => osKey(c)) },
+      { title: "Agent versions", rows: distByDevice(hosts(s), (c) => c.agent_version || t("unknown")) },
     ],
   },
 
-  // ---------- PER-HOST (Tabellen / Pie / Bar) ----------
-  // ---------- GARANTIE ----------
+  // ---------- PER-HOST (tables / pie / bar) ----------
+  // ---------- WARRANTY ----------
   {
     id: "fleet.warrantyExpiring", scope: "fleet", group: "Garantie",
-    label: "Garantien, die in 90 Tagen ablaufen", charts: ["number"],
+    label: "Warranties expiring within 90 days", charts: ["number"],
     value: (s) => hosts(s).filter((c) => {
       if (!c.warranty_until) return false;
       const d = (c.warranty_until - Date.now()) / 86400000;
@@ -427,10 +427,10 @@ export const PRESETS = [
     id: "fleet.warrantyStatus", scope: "fleet", group: "Garantie",
     get label() { return t("mc_warranty_dist"); }, charts: ["donut", "pie", "table", "bar"],
     rows: (s) => {
-      // Die Kategorie wird als ÜBERSETZTER Text gebildet, Farbe und Reihenfolge
-      // haengen aber an einem internen Schluessel. Vorher war der deutsche Text
-      // gleichzeitig Anzeige, Farb-Schluessel UND Sortierschluessel - auf
-      // Englisch waeren damit Farben und Sortierung verlorengegangen.
+      // The category is built as TRANSLATED text, but color and order hang
+      // on an internal key. Previously the German text was display, color key
+      // AND sort key at the same time - in English colors and ordering would
+      // have been lost that way.
       const days = (c) => (c.warranty_until - Date.now()) / 86400000;
       const bucketKey = (c) => !c.warranty_until ? "none"
         : days(c) < 0 ? "expired"
@@ -451,9 +451,9 @@ export const PRESETS = [
     },
   },
   {
-    // Garantie-Übersicht ALLER Clients als eigene, kompakte Liste
-    // (Darstellung "warrantylist" in dashwidgets.js). Sortierung: was zuerst
-    // abläuft, steht oben; Geräte ohne Datum ganz unten.
+    // Warranty overview of ALL clients as its own compact list
+    // (the "warrantylist" rendering in dashwidgets.js). Sort: what expires
+    // first is at the top; devices without a date at the very bottom.
     id: "fleet.warrantyOverview", scope: "fleet", group: "Garantie",
     get label() { return t("u_garantie_ubersicht_alle_clients"); },
     charts: ["warrantylist", "table", "bar"],
@@ -483,12 +483,12 @@ export const PRESETS = [
   },
   {
     id: "host.warranty", scope: "perhost", group: "Garantie",
-    label: "Garantie-Restlaufzeit je Client", charts: ["table", "bar"],
+    label: "Warranty time left per client", charts: ["table", "bar"],
     rows: (s) => hosts(s).filter((c) => c.warranty_until).map((c) => {
       const d = Math.floor((c.warranty_until - Date.now()) / 86400000);
       const date = new Date(c.warranty_until).toLocaleDateString("de-DE");
       return { label: c.hostname || c.id, value: Math.max(0, d),
-               raw: d < 0 ? `abgelaufen (${date})` : `${d} Tage (bis ${date})` };
+               raw: d < 0 ? `expired (${date})` : `${d} days (until ${date})` };
     }).sort((a, b) => a.value - b.value),
   },
 
@@ -579,7 +579,7 @@ export const PRESETS = [
     charts: ["table"],
     rows: (s) => hosts(s).map((c) => ({ label: c.hostname, raw: ({ vm: "VM", lxc: "LXC", physical: t("mc_physical") }[c.device_type || "physical"]) })),
   },
-  // ---------- RAM/GPU/Disk-Aggregate über die Flotte ----------
+  // ---------- RAM/GPU/Disk aggregates across the fleet ----------
   {
     id: "fleet.ramLoadAvg", scope: "fleet", group: "RAM", get label() { return t("mk_fleet_ramLoadAvg"); },
     charts: ["gauge", "donut", "number"], unit: "%", format: fmtPct, max: 100,
@@ -590,7 +590,7 @@ export const PRESETS = [
     id: "fleet.gpuLoadAvg", scope: "fleet", group: "GPU", get label() { return t("mk_fleet_gpuLoadAvg"); },
     charts: ["gauge", "donut", "number"], unit: "%", format: fmtPct, max: 100,
     value: (s) => Math.round(avg(onlineHosts(s).filter((c) => (c.metrics.gpus || [])[0]), (c) => c.metrics.gpus[0].load || 0)),
-    donut: (s) => ({ value: Math.round(avg(onlineHosts(s).filter((c) => (c.metrics.gpus || [])[0]), (c) => c.metrics.gpus[0].load || 0)), max: 100, label: "GPU Ø", sub: `${onlineHosts(s).filter((c) => (c.metrics.gpus || [])[0]).length} mit GPU` }),
+    donut: (s) => ({ value: Math.round(avg(onlineHosts(s).filter((c) => (c.metrics.gpus || [])[0]), (c) => c.metrics.gpus[0].load || 0)), max: 100, label: "GPU Ø", sub: `${onlineHosts(s).filter((c) => (c.metrics.gpus || [])[0]).length} with GPU` }),
   },
   {
     id: "fleet.gpuPowerTotal", scope: "fleet", group: "GPU", get label() { return t("mk_fleet_gpuPowerTotal"); },
@@ -641,8 +641,8 @@ export const PRESETS = [
   },
   {
     id: "host.fan", scope: "perhost", group: "Sensorik", get label() { return t("mk_host_fan"); },
-    charts: ["table", "bar"], format: (v) => `${v} U/min`,
-    rows: (s) => onlineHosts(s).filter((c) => c.metrics.fanSpeed != null).map((c) => ({ label: c.hostname, value: c.metrics.fanSpeed, raw: `${c.metrics.fanSpeed} U/min` })).sort((a, b) => b.value - a.value),
+    charts: ["table", "bar"], format: (v) => `${v} RPM`,
+    rows: (s) => onlineHosts(s).filter((c) => c.metrics.fanSpeed != null).map((c) => ({ label: c.hostname, value: c.metrics.fanSpeed, raw: `${c.metrics.fanSpeed} RPM` })).sort((a, b) => b.value - a.value),
   },
   {
     id: "host.diskRW", scope: "perhost", group: "Disk", get label() { return t("mk_host_diskRW"); },
@@ -687,32 +687,32 @@ export const PRESETS = [
 ];
 
 // -----------------------------------------------------------------
-// GERÄTEART AUCH IN ALLEN "JE CLIENT"-WIDGETS
-// Jede Zeile eines perhost-Presets steht für genau EINEN Client. Statt jedem
-// Preset einzeln eine Farblogik zu verpassen, wird hier EINMAL zentral
-// nachgerüstet: Zeilen bekommen die Farbe ihrer Geräteart (physisch = Blau,
-// VM/LXC = der daraus abgeleitete Türkis-Ton) und ein 📦-Kennzeichen im Label.
-// Damit sind Balken, Säulen, Tabellen, Listen und Pies aller Client-Widgets
-// nach Geräteart unterscheidbar.
+// DEVICE KIND IN ALL "PER CLIENT" WIDGETS TOO
+// Each row of a perhost preset stands for exactly ONE client. Instead of
+// giving each preset its own color logic, it is retrofitted ONCE centrally
+// here: rows get the color of their device kind (physical = blue,
+// VM/LXC = the derived teal tone) and a 📦 marker in the label.
+// This makes bars, columns, tables, lists and pies of all client widgets
+// distinguishable by device kind.
 // -----------------------------------------------------------------
 for (const preset of PRESETS) {
   if (preset.scope !== "perhost" || typeof preset.rows !== "function") continue;
   const inner = preset.rows;
   preset.rows = (s) => {
     const rows = inner(s) || [];
-    // Zuordnung Zeile -> Client über den Hostnamen (alle perhost-Presets
-    // verwenden c.hostname als label).
+    // Map row -> client via the hostname (all perhost presets use
+    // c.hostname as the label).
     const byName = new Map();
     for (const c of (s.clients || [])) byName.set(c.hostname || c.id, c);
     return rows.map((r) => {
-      if (r.color) return r;                    // eigene Farbe hat Vorrang
+      if (r.color) return r;                    // an own color takes precedence
       const c = byName.get(r.label);
       if (!c) return r;
       const kind = deviceKind(c);
       return {
         ...r, kind,
         color: HOST_COLORS[kind],
-        // Kennzeichen nur, wenn das Widget beide Arten zeigt.
+        // Marker only when the widget shows both kinds.
         label: kind === "virt" && splitActive() ? `📦 ${r.label}` : r.label,
       };
     });
@@ -721,7 +721,7 @@ for (const preset of PRESETS) {
 
 export function presetById(id) { return PRESETS.find((p) => p.id === id) || null; }
 
-// Nach Gruppe sortierte Presets (für den Auswahl-Dialog).
+// Presets sorted by group (for the picker dialog).
 export function presetsByGroup() {
   const map = new Map();
   for (const p of PRESETS) {
@@ -731,13 +731,13 @@ export function presetsByGroup() {
   return [...map.entries()];
 }
 
-// --- Hilfsfunktionen ---
+// --- Helpers ---
 function osKey(c) {
   const p = (c.platform || "").toLowerCase();
   if (p.includes("win")) return "Windows";
   if (p.includes("darwin") || p.includes("mac")) return "macOS";
   if (p.includes("linux")) return "Linux";
-  return c.platform || "unbekannt";
+  return c.platform || "unknown";
 }
 function fmtUptime(sec) {
   if (!sec) return "—";
@@ -747,11 +747,11 @@ function fmtUptime(sec) {
   return `${m}m`;
 }
 
-// Gruppennamen werden NUR für die Anzeige übersetzt. Der Wert von
-// preset.group bleibt unverändert, weil er als Schlüssel dient:
-// presetAvailable() prüft ihn gegen HIDE_GROUPS_VM/_LXC. Würde man ihn
-// übersetzen, greifen diese Filter still nicht mehr und VMs bekämen
-// plötzlich GPU- und Hardware-Panels angeboten.
+// Group names are translated for DISPLAY ONLY. The value of preset.group
+// stays unchanged because it serves as a key:
+// presetAvailable() checks it against HIDE_GROUPS_VM/_LXC. Translating it
+// would silently break those filters and VMs would suddenly be offered
+// GPU and hardware panels.
 export function groupLabel(group) {
   const keys = {"CPU": "mg_cpu", "GPU": "mg_gpu", "RAM": "mg_ram", "Disk": "mg_disk", "Netzwerk": "mg_netzwerk", "Strom & Sensoren": "mg_strom_sensoren", "Hardware": "mg_hardware", "System": "mg_system", "Identität": "mg_identit_t", "Flotten-Übersicht": "mg_fleet_overview", "Garantie": "mg_warranty", "Flotte": "mg_flotte", "Verteilung": "mg_verteilung", "Strom": "mg_strom", "Sensorik": "mg_sensorik", "Temperatur": "mg_temperatur", "Updates": "mg_updates"};
   return keys[group] ? t(keys[group]) : group;
